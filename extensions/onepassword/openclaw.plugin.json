@@ -26,7 +26,7 @@
       "args": ["./onepassword-secret-ref-resolver.js"],
       "timeoutMs": 90000,
       "noOutputTimeoutMs": 90000,
-      "maxOutputBytes": 8388608,
+      "maxOutputBytes": 16777216,
       "passEnv": [
         "HOME",
         "USERPROFILE",

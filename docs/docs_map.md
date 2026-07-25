@@ -3161,8 +3161,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Requirements
   - H2: Resolve config secrets with the plugin
   - H2: The 1password skill for agents
-  - H2: Browser sign-in with 1Password for Claude
   - H2: Official 1Password MCP server
+  - H2: Browser sign-in with 1Password for Claude
   - H2: Security notes
   - H2: Troubleshooting
 

@@ -102,7 +102,7 @@ export default definePluginEntry({
           resolveOpClient: resolveCurrentOpClient,
           auditStore: audit,
           registerAdditionalCommands: (command) =>
-            registerOnePasswordSecretRefCommands({ command, config }),
+            registerOnePasswordSecretRefCommands({ command, config, tokenFile }),
         });
       },
       {

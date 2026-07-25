@@ -124,16 +124,7 @@ async function readShebangInterpreter(targetPath) {
   }
 }
 
-async function assertTrustedPath(targetPath, validatedScripts = new Set()) {
-  const resolvedPath = await fs.realpath(targetPath);
-  const targetStat = await fs.stat(resolvedPath);
-  if (!targetStat.isFile()) {
-    throw new Error(`path is not a regular file: ${resolvedPath}`);
-  }
-  await fs.access(resolvedPath, fsSync.constants.X_OK);
-
-  // The CLI receives the service-account token. Validate its resolved parent chain so another
-  // local account cannot replace the executable between discovery and a later secret read.
+async function assertTrustedPathChain(resolvedPath, targetType, options = {}) {
   const validatedEntries = [];
   let currentPath = resolvedPath;
   let first = true;
@@ -157,12 +148,14 @@ async function assertTrustedPath(targetPath, validatedScripts = new Set()) {
     ) {
       throw new Error(`path changed during permission verification: ${currentPath}`);
     }
-    if ((first && stat.isDir) || (!first && !stat.isDir)) {
+    const expectedDirectory = !first || targetType === "directory";
+    if (stat.isDir !== expectedDirectory) {
       throw new Error(`unexpected path type: ${currentPath}`);
     }
-    // TrustedInstaller legitimately owns Windows system directories. The requested executable
-    // itself still needs fs-safe's local-owner verdict.
-    const allowWindowsTrustedInstaller = !first;
+    // TrustedInstaller legitimately owns Windows system paths. Targets remain strict unless a
+    // caller validates a pinned system executable through the dedicated resolver below.
+    const allowWindowsTrustedInstaller =
+      !first || (first && options.allowWindowsTargetTrustedInstaller === true);
     if (!isTrustedOwner(stat, permissions, process.platform, allowWindowsTrustedInstaller)) {
       throw new Error(`path is not owned by the current user or root: ${currentPath}`);
     }
@@ -174,7 +167,7 @@ async function assertTrustedPath(targetPath, validatedScripts = new Set()) {
         stat.isDir &&
         isSafeWindowsDirectoryAclSummary(
           permissions.aclSummary,
-          currentPath !== path.dirname(resolvedPath),
+          targetType === "directory" || currentPath !== path.dirname(resolvedPath),
         );
       // Windows directories commonly allow adding new children or carry inherit-only full
       // control for each child's eventual owner. Higher ancestors cannot replace the checked
@@ -200,6 +193,19 @@ async function assertTrustedPath(targetPath, validatedScripts = new Set()) {
       throw new Error(`path changed after permission verification: ${entry.path}`);
     }
   }
+}
+
+async function assertTrustedPath(targetPath, validatedScripts = new Set(), options = {}) {
+  const resolvedPath = await fs.realpath(targetPath);
+  const targetStat = await fs.stat(resolvedPath);
+  if (!targetStat.isFile()) {
+    throw new Error(`path is not a regular file: ${resolvedPath}`);
+  }
+  await fs.access(resolvedPath, fsSync.constants.X_OK);
+
+  // The CLI receives the service-account token. Validate its resolved parent chain so another
+  // local account cannot replace the executable between discovery and a later secret read.
+  await assertTrustedPathChain(resolvedPath, "file", options);
   if (process.platform === "win32" && path.extname(resolvedPath).toLowerCase() !== ".exe") {
     throw new Error(`Windows executable must be an .exe file: ${resolvedPath}`);
   }
@@ -226,6 +232,24 @@ export async function resolveTrustedExecutablePath(targetPath) {
     throw new Error(`Executable path must be absolute: ${targetPath}`);
   }
   return await assertTrustedPath(targetPath);
+}
+
+export async function resolveTrustedWindowsSystemExecutablePath(targetPath) {
+  if (!path.isAbsolute(targetPath)) {
+    throw new Error(`Executable path must be absolute: ${targetPath}`);
+  }
+  return await assertTrustedPath(targetPath, new Set(), {
+    allowWindowsTargetTrustedInstaller: true,
+  });
+}
+
+export async function resolveTrustedOnePasswordDirectoryPath(targetPath) {
+  if (!path.isAbsolute(targetPath)) {
+    throw new Error(`Directory path must be absolute: ${targetPath}`);
+  }
+  const resolvedPath = await fs.realpath(targetPath);
+  await assertTrustedPathChain(resolvedPath, "directory");
+  return resolvedPath;
 }
 
 export async function resolveTrustedOnePasswordCli(options = {}) {

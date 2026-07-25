@@ -91,14 +91,22 @@ openclaw onepassword secretref setup \
 Use `--provider-key <provider=id>` for another model provider, or
 `--target <path=id>` for any registered
 [SecretRef credential target](/reference/secretref-credential-surface).
-The command writes a plan; inspect it, then apply and reload:
+The command requires at least one target and writes a plan. Inspect it, check
+the local `op` and token-file prerequisites, then apply and reload:
 
 ```bash
+openclaw onepassword secretref status
 openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --dry-run --allow-exec
 openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --allow-exec
 openclaw secrets audit --check --allow-exec
 openclaw secrets reload
 ```
+
+Before apply, status can report that the provider itself is not configured yet;
+`prerequisites ready: yes` confirms that the trusted `op` executable and an
+accepted non-empty token file are ready. After apply, `ready: yes` confirms both the
+provider wiring and prerequisites. Missing or unsafe prerequisites produce
+actionable next steps without printing the token or raw resolver errors.
 
 Manual provider configuration uses the existing plugin id:
 
@@ -141,12 +149,13 @@ OpenClaw's shared exec-id grammar in a plugin-local opaque form and decodes them
 only inside the resolver. Very long references should use stable 1Password IDs;
 they are shorter and reduce the number of 1Password API requests.
 
-The SecretRef resolver accepts at most 16 IDs per request, runs at most four
-`op read` processes concurrently, never uses desktop-app integration, and does
-not expose an agent tool for arbitrary reads. Before passing the service-account
-token, both plugin surfaces resolve the executable and reject paths that another
-local account can replace; Windows ACL verification must also succeed. Check its
-provider wiring with:
+The SecretRef resolver runs at most four `op read` processes concurrently,
+disables the 1Password CLI cache so reloads observe rotated values, never uses
+desktop-app integration, and does not expose an agent tool for arbitrary reads.
+Before passing the service-account token, both plugin surfaces
+resolve the executable and reject paths that another local account can replace;
+Windows ACL verification must also succeed. Check provider wiring and local
+readiness with:
 
 ```bash
 openclaw onepassword secretref status --json

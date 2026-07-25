@@ -3,9 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveSecretPlanTargetByPath } from "openclaw/plugin-sdk/secret-ref-runtime";
+import {
+  DEFAULT_SECRET_FILE_MAX_BYTES,
+  tryReadSecretFileSync,
+} from "openclaw/plugin-sdk/secret-file-runtime";
+import { pluginSecretRefSetup } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import {
+  resolveTrustedOnePasswordCli,
+  resolveTrustedOnePasswordDirectoryPath,
+} from "../onepassword-op-path.js";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
+import { createPrivateWindowsPlanFile } from "./private-plan-file.js";
 
 type CommandLike = {
   command(name: string): CommandLike;
@@ -17,22 +26,6 @@ type CommandLike = {
     defaultValue?: string[],
   ): CommandLike;
   action<TOptions>(fn: (options: TOptions) => void | Promise<void>): CommandLike;
-};
-
-type SecretRef = {
-  source: "exec";
-  provider: string;
-  id: string;
-};
-
-type SecretsPlanTarget = {
-  type: string;
-  path: string;
-  pathSegments: string[];
-  agentId?: string;
-  providerId?: string;
-  accountId?: string;
-  ref: SecretRef;
 };
 
 type OnePasswordExecProviderConfig = {
@@ -54,18 +47,13 @@ type ConfigTargetSecretMapping = {
   secretId: string;
 };
 
-type SecretsApplyPlan = {
-  version: 1;
-  protocolVersion: 1;
-  generatedAt: string;
-  generatedBy: "manual";
-  providerUpserts: Record<string, OnePasswordExecProviderConfig>;
-  targets: SecretsPlanTarget[];
-};
+type SecretsApplyPlan = ReturnType<typeof pluginSecretRefSetup.buildPlan>;
 
 type RegisterOnePasswordSecretRefCommandsParams = {
   command: CommandLike;
   config: OpenClawConfig;
+  tokenFile: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 type StatusOptions = {
@@ -93,10 +81,27 @@ type ProviderStatus = {
   };
 };
 
+type SecretRefReadiness = {
+  opCommand: string;
+  opBinaryPath: string | null;
+  opStatus: "ready" | "not-found" | "untrusted";
+  tokenFile: string;
+  tokenFileStatus: "ready" | "missing-or-unsafe";
+  prerequisitesReady: boolean;
+};
+
+type ReadinessDependencies = {
+  resolveTrustedCli?: typeof resolveTrustedOnePasswordCli;
+  readTokenFile?: (filePath: string) => string | undefined;
+};
+
+type WritePlanFileDependencies = {
+  platform?: NodeJS.Platform;
+  createPrivateWindowsFile?: (filePath: string, content: string) => Promise<void>;
+  resolveTrustedPlanDirectory?: typeof resolveTrustedOnePasswordDirectoryPath;
+};
+
 const ONEPASSWORD_PROVIDER_ALIAS = "onepassword";
-const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
-const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
 function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -114,29 +119,56 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function parseDotPath(pathname: string): string[] {
-  return pathname
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
+type CommandShell = "cmd" | "posix" | "powershell";
+
+function quoteCliArg(value: string, shell: CommandShell): string {
+  if (/\r|\n/u.test(value)) {
+    throw new Error("Command argument cannot contain CR or LF");
+  }
+  if (shell === "cmd") {
+    if (/[%!]/u.test(value)) {
+      throw new Error("Interactive Command Prompt cannot safely quote paths containing % or !");
+    }
+    const escaped = value.replaceAll('"', '\\"');
+    return /[ \t"&|<>^()]/u.test(value) ? `"${escaped}"` : escaped || '""';
+  }
+  if (shell === "powershell") {
+    return `'${value.replaceAll("'", "''")}'`;
+  }
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function toDotPath(segments: string[]): string {
-  return segments.join(".");
+function renderApplyCommands(
+  planPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const render = (shell: CommandShell, extraIndent = "") => {
+    const quotedPlanPath = quoteCliArg(planPath, shell);
+    return [
+      `${extraIndent}openclaw secrets apply --from ${quotedPlanPath} --dry-run --allow-exec`,
+      `${extraIndent}openclaw secrets apply --from ${quotedPlanPath} --allow-exec`,
+    ];
+  };
+  if (platform !== "win32") {
+    return render("posix");
+  }
+  // Windows cannot reveal which parent shell will receive these copy-paste commands.
+  // Print native variants instead of emitting syntax that is unsafe in the other shell.
+  const powershellCommands = ["PowerShell:", ...render("powershell", "  ")];
+  if (/[%!]/u.test(planPath)) {
+    return [
+      ...powershellCommands,
+      "Command Prompt: unavailable for paths containing % or !; use PowerShell.",
+    ];
+  }
+  return [...powershellCommands, "Command Prompt:", ...render("cmd", "  ")];
 }
 
 function assertValidProviderAlias(value: string): void {
-  if (!SECRET_PROVIDER_ALIAS_PATTERN.test(value)) {
-    throw new Error(
-      `Invalid provider alias "${value}". Use lowercase letters, numbers, underscores, or hyphens.`,
-    );
-  }
-}
-
-function assertValidModelProviderId(label: string, value: string): void {
-  if (!MODEL_PROVIDER_ID_PATTERN.test(value)) {
-    throw new Error(`Invalid ${label} model provider id: ${value}`);
-  }
+  pluginSecretRefSetup.assertValidProviderAlias(value);
 }
 
 function normalizeOnePasswordSecretId(label: string, value: string): string {
@@ -188,9 +220,6 @@ function resolveStatusProviderAlias(config: OpenClawConfig, requestedAlias?: str
     assertValidProviderAlias(explicitAlias);
     return explicitAlias;
   }
-  if (readProviderStatus(config, ONEPASSWORD_PROVIDER_ALIAS).configured) {
-    return ONEPASSWORD_PROVIDER_ALIAS;
-  }
   const configuredAliases = Object.entries(config.secrets?.providers ?? {})
     .filter(([, provider]) => isOnePasswordIntegrationProvider(provider))
     .map(([alias]) => alias)
@@ -203,24 +232,52 @@ function resolveStatusProviderAlias(config: OpenClawConfig, requestedAlias?: str
   return configuredAliases[0] ?? ONEPASSWORD_PROVIDER_ALIAS;
 }
 
-function resolveOpCommand(): string {
-  return normalizeOptionalString(process.env.CLAW_1PASSWORD_OP) ?? "op";
-}
+async function inspectSecretRefReadiness(
+  params: { env: NodeJS.ProcessEnv; tokenFile: string },
+  dependencies: ReadinessDependencies = {},
+): Promise<SecretRefReadiness> {
+  const resolveTrustedCli = dependencies.resolveTrustedCli ?? resolveTrustedOnePasswordCli;
+  const readTokenFile =
+    dependencies.readTokenFile ??
+    ((filePath: string) =>
+      tryReadSecretFileSync(filePath, "1Password service account token", {
+        maxBytes: DEFAULT_SECRET_FILE_MAX_BYTES,
+        rejectHardlinks: false,
+        rejectSymlink: true,
+      }));
+  const configuredOpCommand = normalizeOptionalString(params.env.CLAW_1PASSWORD_OP);
+  const opCommand = configuredOpCommand ?? "op";
+  const { opBinaryPath, opStatus } = await (async () => {
+    try {
+      const resolvedPath =
+        (await resolveTrustedCli({
+          ...(configuredOpCommand ? { configuredPath: configuredOpCommand } : {}),
+          pathEnv: params.env.PATH,
+        })) ?? null;
+      return {
+        opBinaryPath: resolvedPath,
+        opStatus: resolvedPath ? ("ready" as const) : ("not-found" as const),
+      };
+    } catch {
+      return { opBinaryPath: null, opStatus: "untrusted" as const };
+    }
+  })();
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function isConfiguredOpCommandAvailable(command: string): Promise<boolean | undefined> {
-  if (!path.isAbsolute(command)) {
-    return undefined;
-  }
-  return pathExists(command);
+  const tokenFileStatus: SecretRefReadiness["tokenFileStatus"] = (() => {
+    try {
+      return readTokenFile(params.tokenFile) ? "ready" : "missing-or-unsafe";
+    } catch {
+      return "missing-or-unsafe";
+    }
+  })();
+  return {
+    opCommand,
+    opBinaryPath,
+    opStatus,
+    tokenFile: params.tokenFile,
+    tokenFileStatus,
+    prerequisitesReady: opStatus === "ready" && tokenFileStatus === "ready",
+  };
 }
 
 function buildProviderConfig(): OnePasswordExecProviderConfig {
@@ -233,79 +290,11 @@ function buildProviderConfig(): OnePasswordExecProviderConfig {
   };
 }
 
-function createModelApiKeyTarget(params: {
-  providerAlias: string;
-  providerId: string;
-  secretId: string;
-}): SecretsPlanTarget {
-  assertValidModelProviderId("target", params.providerId);
-  return {
-    type: "models.providers.apiKey",
-    path: `models.providers.${params.providerId}.apiKey`,
-    pathSegments: ["models", "providers", params.providerId, "apiKey"],
-    providerId: params.providerId,
-    ref: {
-      source: "exec",
-      provider: params.providerAlias,
-      id: params.secretId,
-    },
-  };
-}
-
 function parseTargetSpecifier(value: string): {
   path: string;
   agentId?: string;
 } {
-  if (value.startsWith("auth-profiles:")) {
-    const remainder = value.slice("auth-profiles:".length);
-    const separatorIndex = remainder.indexOf(":");
-    const agentId = separatorIndex >= 0 ? remainder.slice(0, separatorIndex) : "";
-    const targetPath = separatorIndex >= 0 ? remainder.slice(separatorIndex + 1) : "";
-    if (!agentId || !targetPath) {
-      throw new Error(`Invalid --target auth-profiles target: ${value}`);
-    }
-    return { agentId, path: targetPath };
-  }
-  return {
-    path: value.startsWith("openclaw:") ? value.slice("openclaw:".length) : value,
-  };
-}
-
-function createConfigSecretTarget(params: {
-  providerAlias: string;
-  path: string;
-  agentId?: string;
-  secretId: string;
-}): SecretsPlanTarget {
-  const pathSegments = parseDotPath(params.path);
-  const normalizedPath = toDotPath(pathSegments);
-  if (
-    pathSegments.length === 0 ||
-    normalizedPath !== params.path ||
-    pathSegments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment))
-  ) {
-    throw new Error(`Invalid --target config path: ${params.path}`);
-  }
-  const resolved = resolveSecretPlanTargetByPath({
-    configFile: params.agentId ? "auth-profiles.json" : "openclaw.json",
-    pathSegments,
-  });
-  if (!resolved) {
-    throw new Error(`Unknown or unsupported 1Password setup target path: ${params.path}`);
-  }
-  return {
-    type: resolved.targetType,
-    path: normalizedPath,
-    pathSegments,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(resolved.providerId ? { providerId: resolved.providerId } : {}),
-    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
-    ref: {
-      source: "exec",
-      provider: params.providerAlias,
-      id: params.secretId,
-    },
-  };
+  return pluginSecretRefSetup.parseTargetSpecifier("1Password", value);
 }
 
 function parseProviderKeyMappings(values: string[] | undefined): ProviderSecretMapping[] {
@@ -317,7 +306,7 @@ function parseProviderKeyMappings(values: string[] | undefined): ProviderSecretM
       );
     }
     const providerId = value.slice(0, separator).trim();
-    assertValidModelProviderId("--provider-key", providerId);
+    pluginSecretRefSetup.assertValidModelProviderId("--provider-key", providerId);
     const secretId = normalizeOnePasswordSecretId(
       `--provider-key ${providerId}`,
       value.slice(separator + 1).trim(),
@@ -375,53 +364,19 @@ function collectProviderSecrets(options: {
   return providerSecrets;
 }
 
-function assertNoDuplicatePlanTargets(targets: SecretsPlanTarget[]): void {
-  const seen = new Set<string>();
-  for (const target of targets) {
-    const key = target.agentId
-      ? `auth-profiles:${target.agentId}:${target.path}`
-      : `openclaw:${target.path}`;
-    if (seen.has(key)) {
-      throw new Error(`Duplicate secret target path in 1Password setup: ${target.path}`);
-    }
-    seen.add(key);
-  }
-}
-
 function buildPlan(params: {
   providerAlias: string;
   providerConfig: OnePasswordExecProviderConfig;
   providerSecrets: ProviderSecretMapping[];
   configTargetSecrets?: ConfigTargetSecretMapping[];
 }): SecretsApplyPlan {
-  const targets = [
-    ...params.providerSecrets.map((entry) =>
-      createModelApiKeyTarget({
-        providerAlias: params.providerAlias,
-        providerId: entry.providerId,
-        secretId: entry.secretId,
-      }),
-    ),
-    ...(params.configTargetSecrets ?? []).map((entry) =>
-      createConfigSecretTarget({
-        providerAlias: params.providerAlias,
-        path: entry.path,
-        ...(entry.agentId ? { agentId: entry.agentId } : {}),
-        secretId: entry.secretId,
-      }),
-    ),
-  ];
-  assertNoDuplicatePlanTargets(targets);
-  return {
-    version: 1,
-    protocolVersion: 1,
-    generatedAt: new Date().toISOString(),
-    generatedBy: "manual",
-    providerUpserts: {
-      [params.providerAlias]: params.providerConfig,
-    },
-    targets,
-  };
+  const plan = pluginSecretRefSetup.buildPlan({ productName: "1Password", ...params });
+  if (plan.targets.length === 0) {
+    throw new Error(
+      "No SecretRef targets selected. Pass --openai-id, --anthropic-id, --openrouter-id, --provider-key, or --target.",
+    );
+  }
+  return plan;
 }
 
 async function promptOptionalSecretId(label: string): Promise<string | undefined> {
@@ -462,21 +417,42 @@ async function promptProviderSecrets(options: SetupOptions): Promise<ProviderSec
   });
 }
 
-async function runStatus(config: OpenClawConfig, options: StatusOptions): Promise<void> {
+async function runStatus(
+  params: RegisterOnePasswordSecretRefCommandsParams,
+  options: StatusOptions,
+): Promise<void> {
+  const config = params.config;
   const providerAlias = resolveStatusProviderAlias(config, options.providerAlias);
   const provider = readProviderStatus(config, providerAlias);
-  const opCommand = resolveOpCommand();
+  const providerReady = isOnePasswordIntegrationProvider(
+    config.secrets?.providers?.[providerAlias],
+  );
+  const readiness = await inspectSecretRefReadiness({
+    env: params.env ?? process.env,
+    tokenFile: params.tokenFile,
+  });
+  const issues = [
+    ...(providerReady
+      ? []
+      : [provider.configured ? "provider-misconfigured" : "provider-not-configured"]),
+    ...(readiness.opStatus === "ready" ? [] : [`op-${readiness.opStatus}`]),
+    ...(readiness.tokenFileStatus === "ready" ? [] : ["token-file-missing-or-unsafe"]),
+  ];
   const result = {
     providerAlias,
     provider,
-    opCommand,
-    opCommandAvailable: await isConfiguredOpCommandAvailable(opCommand),
+    providerReady,
+    ...readiness,
+    ready: providerReady && readiness.prerequisitesReady,
+    issues,
   };
   if (options.json) {
     writeJson(result);
     return;
   }
-  writeLine(`1Password provider: ${provider.configured ? "configured" : "not configured"}`);
+  writeLine(
+    `1Password provider: ${providerReady ? "ready" : provider.configured ? "misconfigured" : "not configured"}`,
+  );
   if (provider.source) {
     writeLine(`Source: ${provider.source}`);
   }
@@ -488,32 +464,136 @@ async function runStatus(config: OpenClawConfig, options: StatusOptions): Promis
       `Plugin integration: ${provider.pluginIntegration.pluginId}:${provider.pluginIntegration.integrationId}`,
     );
   }
-  writeLine(`op command: ${result.opCommand}`);
-  if (result.opCommandAvailable !== undefined) {
-    writeLine(`op command exists: ${result.opCommandAvailable ? "yes" : "no"}`);
+  writeLine(`op command: ${readiness.opCommand}`);
+  writeLine(`op status: ${readiness.opStatus}`);
+  if (readiness.opBinaryPath) {
+    writeLine(`op binary: ${readiness.opBinaryPath}`);
   }
-  writeLine("Auth: onepassword service-account token file");
+  writeLine(`token file: ${readiness.tokenFileStatus}`);
+  writeLine(`prerequisites ready: ${readiness.prerequisitesReady ? "yes" : "no"}`);
+  writeLine(`ready: ${result.ready ? "yes" : "no"}`);
+  if (issues.length === 0) {
+    return;
+  }
+  writeLine("");
+  writeLine("Next actions:");
+  if (!providerReady) {
+    writeLine("  Generate and apply a 1Password SecretRef setup plan.");
+  }
+  if (readiness.opStatus === "not-found") {
+    writeLine("  Install the official 1Password CLI or set CLAW_1PASSWORD_OP.");
+  } else if (readiness.opStatus === "untrusted") {
+    writeLine("  Use an absolute 1Password CLI path that is not replaceable by another user.");
+  }
+  if (readiness.tokenFileStatus !== "ready") {
+    writeLine(`  Create a non-empty service-account token file at ${readiness.tokenFile}.`);
+  }
 }
 
-async function writePlanFile(plan: SecretsApplyPlan, requestedPath?: string): Promise<string> {
-  const planPath =
+async function verifyPosixPlanFilePermissions(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+): Promise<void> {
+  await handle.chmod(0o600);
+  if (((await handle.stat()).mode & 0o777) !== 0o600) {
+    throw new Error("Unable to verify owner-only permissions for the generated plan file.");
+  }
+}
+
+async function closePlanHandle(
+  handle: Awaited<ReturnType<typeof fs.open>> | undefined,
+): Promise<void> {
+  await handle?.close().catch(() => undefined);
+}
+
+async function writePlanFile(
+  plan: SecretsApplyPlan,
+  requestedPath?: string,
+  dependencies: WritePlanFileDependencies = {},
+): Promise<string> {
+  const requestedPlanPath =
     normalizeOptionalString(requestedPath) ??
     path.join(resolvePreferredOpenClawTmpDir(), `openclaw-1password-secrets-${randomUUID()}.json`);
+  const content = `${JSON.stringify(plan, null, 2)}\n`;
+  const requestedPlanPathAbsolute = path.resolve(requestedPlanPath);
+  const planDirectory = await (
+    dependencies.resolveTrustedPlanDirectory ?? resolveTrustedOnePasswordDirectoryPath
+  )(path.dirname(requestedPlanPathAbsolute));
+  // Write through the canonical directory returned by the trust check. Reusing the requested
+  // alias would let another local account retarget a writable parent symlink after validation.
+  const planPath = path.join(planDirectory, path.basename(requestedPlanPathAbsolute));
+  const platform = dependencies.platform ?? process.platform;
+  // Validate the exact canonical path before the exclusive write. Follow-up command rendering
+  // must not fail after leaving a plan behind that the next setup attempt cannot overwrite.
+  renderApplyCommands(planPath, platform);
+  if (platform === "win32") {
+    try {
+      await (dependencies.createPrivateWindowsFile ?? createPrivateWindowsPlanFile)(
+        planPath,
+        content,
+      );
+      return planPath;
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+        throw new Error(`Plan path already exists; choose a new --plan-out path: ${planPath}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  }
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let identity: { dev: bigint; ino: bigint } | undefined;
   try {
-    await fs.writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
+    handle = await fs.open(planPath, "wx", 0o600);
+    identity = await handle.stat({ bigint: true });
+    await verifyPosixPlanFilePermissions(handle);
+    const pathStat = await fs.lstat(planPath, { bigint: true });
+    const handleStat = await handle.stat({ bigint: true });
+    if (
+      pathStat.isSymbolicLink() ||
+      !sameFileIdentity(identity, handleStat) ||
+      !sameFileIdentity(identity, pathStat)
+    ) {
+      throw new Error("Generated plan path changed during permission setup.");
+    }
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
   } catch (error) {
+    await closePlanHandle(handle);
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
       throw new Error(`Plan path already exists; choose a new --plan-out path: ${planPath}`, {
         cause: error,
       });
     }
+    if (identity) {
+      await removePlanFileIfUnchanged(planPath, identity);
+    }
     throw error;
+  } finally {
+    await closePlanHandle(handle);
   }
   return planPath;
+}
+
+function sameFileIdentity(
+  left: { dev: number | bigint; ino: number | bigint },
+  right: { dev: number | bigint; ino: number | bigint },
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function removePlanFileIfUnchanged(
+  filePath: string,
+  identity: { dev: number | bigint; ino: number | bigint },
+): Promise<void> {
+  try {
+    const current = await fs.lstat(filePath, { bigint: true });
+    if (!current.isSymbolicLink() && sameFileIdentity(current, identity)) {
+      await fs.rm(filePath, { force: true });
+    }
+  } catch {
+    // The original error is authoritative; cleanup is best effort.
+  }
 }
 
 async function runSetup(options: SetupOptions): Promise<void> {
@@ -533,8 +613,10 @@ async function runSetup(options: SetupOptions): Promise<void> {
   writeLine("");
   writeLine("Next steps:");
   writeLine("  openclaw plugins enable onepassword");
-  writeLine(`  openclaw secrets apply --from ${planPath} --dry-run --allow-exec`);
-  writeLine(`  openclaw secrets apply --from ${planPath} --allow-exec`);
+  writeLine("  openclaw onepassword secretref status");
+  for (const command of renderApplyCommands(planPath)) {
+    writeLine(`  ${command}`);
+  }
   writeLine("  openclaw secrets audit --check --allow-exec");
   writeLine("  openclaw secrets reload");
 }
@@ -548,7 +630,7 @@ export function registerOnePasswordSecretRefCommands(
     .description("Show 1Password SecretRef provider status")
     .option("--json", "Print JSON status")
     .option("--provider-alias <alias>", "Secret provider alias to inspect")
-    .action((options: StatusOptions) => runStatus(params.config, options));
+    .action((options: StatusOptions) => runStatus(params, options));
   secretRef
     .command("setup")
     .description("Create a 1Password SecretRef setup plan")
@@ -580,9 +662,11 @@ export const testing = {
   buildPlan,
   buildProviderConfig,
   collectProviderSecrets,
-  createModelApiKeyTarget,
-  createConfigSecretTarget,
   parseConfigTargetMappings,
   parseProviderKeyMappings,
+  quoteCliArg,
+  renderApplyCommands,
+  inspectSecretRefReadiness,
+  createPrivateWindowsPlanFile,
   writePlanFile,
 };

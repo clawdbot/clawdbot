@@ -3,7 +3,7 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { tryReadSecretFileSync } from "@openclaw/fs-safe/secret";
+import { DEFAULT_SECRET_FILE_MAX_BYTES, tryReadSecretFileSync } from "@openclaw/fs-safe/secret";
 import { execa } from "execa";
 import { resolveTrustedOnePasswordCli } from "./onepassword-op-path.js";
 import { resolveOnePasswordSecretReference } from "./onepassword-secret-id.js";
@@ -12,7 +12,6 @@ const OP_READ_CONCURRENCY = 4;
 const OP_READ_TIMEOUT_MS = 7_000;
 const MAX_SECRET_REFS_PER_REQUEST = 32;
 const MAX_SECRET_VALUE_BYTES = 64 * 1024;
-const MAX_TOKEN_BYTES = 16 * 1024;
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -131,7 +130,7 @@ function readServiceAccountToken() {
   );
   try {
     const token = tryReadSecretFileSync(tokenFile, "1Password service account token", {
-      maxBytes: MAX_TOKEN_BYTES,
+      maxBytes: DEFAULT_SECRET_FILE_MAX_BYTES,
       rejectHardlinks: false,
       rejectSymlink: true,
     });

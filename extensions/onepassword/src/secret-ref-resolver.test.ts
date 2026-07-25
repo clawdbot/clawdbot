@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
@@ -94,8 +95,12 @@ describe("plugin manifest", () => {
     const opReadConcurrency = readIntegerConstant("OP_READ_CONCURRENCY");
     const opReadTimeoutMs = readIntegerConstant("OP_READ_TIMEOUT_MS");
     const maxRefsPerRequest = readIntegerConstant("MAX_SECRET_REFS_PER_REQUEST");
+    const maxSecretValueBytes = readIntegerConstant("MAX_SECRET_VALUE_BYTES");
     const worstCaseBatchTimeoutMs =
       Math.ceil(maxRefsPerRequest / opReadConcurrency) * opReadTimeoutMs;
+    const worstCaseEscapedValueBytes = Buffer.byteLength(
+      JSON.stringify("\0".repeat(maxSecretValueBytes)),
+    );
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
       commandAliases?: Array<{ name?: string; cliCommand?: string }>;
       secretProviderIntegrations?: Record<string, Record<string, unknown>>;
@@ -120,7 +125,7 @@ describe("plugin manifest", () => {
       args: ["./onepassword-secret-ref-resolver.js"],
       timeoutMs: 90_000,
       noOutputTimeoutMs: 90_000,
-      maxOutputBytes: 8 * 1024 * 1024,
+      maxOutputBytes: 16 * 1024 * 1024,
       passEnv: expect.arrayContaining([
         "HOME",
         "USERPROFILE",
@@ -145,6 +150,9 @@ describe("plugin manifest", () => {
     expect(integration).not.toHaveProperty("trustedDirs");
     expect(integration?.timeoutMs).toBeGreaterThan(worstCaseBatchTimeoutMs);
     expect(integration?.noOutputTimeoutMs).toBeGreaterThan(worstCaseBatchTimeoutMs);
+    expect(integration?.maxOutputBytes).toBeGreaterThan(
+      maxRefsPerRequest * worstCaseEscapedValueBytes,
+    );
     expect(resolverSource).toContain("#!/usr/bin/env node");
     expect(resolverSource).toContain('from "execa"');
     expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
@@ -431,6 +439,24 @@ process.stdout.write("not-a-real-value");
       },
       env: { CLAW_1PASSWORD_OP: process.execPath },
       token: null,
+    });
+
+    expect(result).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "1Password SecretRef resolver failed.\n",
+    });
+  });
+
+  it("rejects an oversized broker service-account token file", async () => {
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "onepassword",
+        ids: ["op://Engineering/OpenRouter/apiKey"],
+      },
+      env: { CLAW_1PASSWORD_OP: process.execPath },
+      token: "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1),
     });
 
     expect(result).toEqual({

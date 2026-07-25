@@ -63,7 +63,7 @@ export function encodeOnePasswordSecretId(value) {
   return encoded;
 }
 
-export function decodeOnePasswordSecretId(value) {
+function decodeOnePasswordSecretId(value) {
   if (!value.startsWith(ENCODED_SECRET_ID_PREFIX)) {
     return value;
   }

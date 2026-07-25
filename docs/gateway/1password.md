@@ -45,11 +45,17 @@ openclaw onepassword secretref setup \
   --anthropic-id op://Automation/Anthropic/credential \
   --plan-out ./openclaw-1password-secrets-plan.json
 
+openclaw onepassword secretref status
 openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --dry-run --allow-exec
 openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --allow-exec
 openclaw secrets audit --check --allow-exec
 openclaw secrets reload
 ```
+
+The setup command requires at least one target. Before the plan is applied,
+status may report that the provider is not configured while still reporting
+`prerequisites ready: yes`; after apply, `ready: yes` confirms the provider,
+trusted `op` executable, and accepted non-empty token file are all ready.
 
 The plugin accepts native
 `op://<vault>/<item>/<field>` and
@@ -112,8 +118,11 @@ One-time passcodes are filled by 1Password on the same page; never relay verific
   desktop approval or macOS permission dialogs.
 - Before passing the service-account token, the plugin resolves the `op`
   executable and rejects paths that are writable by another local account or
-  have unverifiable Windows ACLs. An absolute `CLAW_1PASSWORD_OP` override is
-  subject to the same check.
+  have unverifiable Windows ACLs or ownership. An absolute
+  `CLAW_1PASSWORD_OP` override is subject to the same check.
+- A resolver request is limited to 32 references. Reads run four at a time with
+  a seven-second per-read timeout; the provider-wide 90-second timeout covers
+  the full supported batch plus process and permission-check overhead.
 - Never place secret values in `openclaw.json`, logs, or chat. Scope the service
   account to only the vaults and items OpenClaw needs.
 

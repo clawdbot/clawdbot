@@ -177,7 +177,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: channel DM policy factory and its account/patch callback contracts.
       // +1: typed owner-required error for session store path resolution.
       // +1: native approval messaging target resolver.
-      4722,
+      // +1: shared plugin SecretRef setup plan helper.
+      4723,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
