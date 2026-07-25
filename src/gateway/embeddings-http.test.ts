@@ -29,13 +29,13 @@ let createEmbeddingProviderMock: ReturnType<
         model: string;
         embedQuery: (text: string) => Promise<number[]>;
         embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void>;
+        close: () => Promise<void> | void;
       };
     }>
   >
 >;
 let embedBatchMock: ReturnType<typeof vi.fn<(texts: string[]) => Promise<number[][]>>>;
-let closeEmbeddingProviderMock: ReturnType<typeof vi.fn<() => Promise<void>>>;
+let closeEmbeddingProviderMock: ReturnType<typeof vi.fn<() => Promise<void> | void>>;
 let clearMemoryEmbeddingProviders: typeof import("../plugins/memory-embedding-providers.js").clearMemoryEmbeddingProviders;
 let registerMemoryEmbeddingProvider: typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider;
 let clearEmbeddingProviders: typeof import("../plugins/embedding-providers.js").clearEmbeddingProviders;
@@ -594,6 +594,19 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     });
 
     expect(res.status).toBe(500);
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
+  });
+
+  it("supports synchronous provider cleanup", async () => {
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+    closeEmbeddingProviderMock.mockImplementationOnce(() => undefined);
+
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input: "hello",
+    });
+
+    expect(res.status).toBe(200);
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
   });
 });

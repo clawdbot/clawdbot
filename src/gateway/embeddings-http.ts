@@ -372,11 +372,13 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         },
       });
     } finally {
-      await provider.close?.().catch((closeErr: unknown) => {
+      try {
+        await provider.close?.();
+      } catch (closeErr) {
         logWarn(
           `openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`,
         );
-      });
+      }
     }
   } catch (err) {
     logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
