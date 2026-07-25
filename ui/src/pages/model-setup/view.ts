@@ -7,6 +7,7 @@ import {
 } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/model-setup.css";
+import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import type {
   ModelSetupActivationState,
   ModelSetupPageState,
@@ -62,9 +63,11 @@ type ModelSetupViewProps = {
   activation: ModelSetupActivationState;
   verify: ModelSetupVerifyState;
   wizard: ModelSetupWizardState;
+  wizardMode: "auth" | "prepare";
   wizardValue: unknown;
   canAdmin: boolean;
   canVerify: boolean;
+  canPrepare: boolean;
   gatewayTooOld: boolean;
   actionsDisabled: boolean;
   manualProviderId: string;
@@ -76,6 +79,7 @@ type ModelSetupViewProps = {
   onVerify: () => void;
   onActivateCandidate: (candidate: Candidate) => void;
   onStartAuth: (option: AuthOption) => void;
+  onStartPrepare: (option: ModelSetupPrepareOption) => void;
   onManualProviderChange: (providerId: string) => void;
   onManualApiKeyChange: (apiKey: string) => void;
   onManualConnect: () => void;
@@ -355,6 +359,47 @@ function renderSignIn(props: ModelSetupViewProps, result: SystemAgentSetupDetect
   `;
 }
 
+function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
+  if (!props.canPrepare) {
+    return nothing;
+  }
+  const options = listModelSetupPrepareOptions(result);
+  if (options.length === 0) {
+    return nothing;
+  }
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2>${t("modelSetup.prepare.title")}</h2>
+      </div>
+      <p class="muted">${t("modelSetup.prepare.intro")}</p>
+      <div class="model-setup__rows">
+        ${options.map(
+          (option) => html`
+            <div class="model-setup__row" data-prepare-choice=${option.id}>
+              <div class="model-setup__provider-copy">
+                ${renderProviderIcon(props, option)}
+                <div>
+                  <strong>${option.label}</strong>
+                  ${option.hint ? html`<div class="muted">${option.hint}</div>` : nothing}
+                </div>
+              </div>
+              <button
+                type="button"
+                class="btn"
+                ?disabled=${props.actionsDisabled}
+                @click=${() => props.onStartPrepare(option)}
+              >
+                ${t("modelSetup.prepare.button")}
+              </button>
+            </div>
+          `,
+        )}
+      </div>
+    </section>
+  `;
+}
+
 function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
   const targetId = `manual:${props.manualProviderId}`;
@@ -448,7 +493,8 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   }
   return html`
     ${current} ${renderEmptyState(props, result)} ${renderCandidateRows(props, result)}
-    ${renderUnavailable(result)} ${renderSignIn(props, result)} ${renderManual(props, result)}
+    ${renderUnavailable(result)} ${renderPrepare(props, result)} ${renderSignIn(props, result)}
+    ${renderManual(props, result)}
   `;
 }
 
@@ -496,6 +542,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       ${body}
     </div>
     ${renderModelSetupWizard({
+      mode: props.wizardMode,
       state: props.wizard,
       value: props.wizardValue,
       onValueChange: props.onWizardValueChange,

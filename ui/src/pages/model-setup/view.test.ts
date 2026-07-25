@@ -75,9 +75,11 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     activation: { phase: "idle" },
     verify: { phase: "idle" },
     wizard: { phase: "idle" },
+    wizardMode: "auth",
     wizardValue: undefined,
     canAdmin: true,
     canVerify: true,
+    canPrepare: true,
     gatewayTooOld: false,
     actionsDisabled: false,
     manualProviderId: "openai",
@@ -93,6 +95,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
     onStartAuth: vi.fn(),
+    onStartPrepare: vi.fn(),
     onManualProviderChange: vi.fn(),
     onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
@@ -156,6 +159,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Detected, but not auto-tested");
     expect(text(container)).toContain("No active login");
     expect(text(container)).toContain("Sign in with a provider");
+    expect(text(container)).toContain("Set up a local model");
     expect(text(container)).toContain("Connect with an API key or token");
     expect(container.querySelector<HTMLSelectElement>(".model-setup__manual select")?.value).toBe(
       "openai",
@@ -176,6 +180,44 @@ describe("renderModelSetup", () => {
         ?.textContent,
     ).toContain("O");
     expect(container.querySelectorAll("img")).toHaveLength(0);
+  });
+
+  it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
+    const onStartPrepare = vi.fn();
+    const container = mount(props({ onStartPrepare }));
+
+    const ollama = container.querySelector<HTMLButtonElement>(
+      '[data-prepare-choice="ollama"] button',
+    );
+    const llamaCpp = container.querySelector<HTMLButtonElement>(
+      '[data-prepare-choice="llama-cpp"] button',
+    );
+    expect(ollama?.textContent).toContain("Set up / Download model");
+    expect(llamaCpp).not.toBeNull();
+    ollama?.click();
+    expect(onStartPrepare).toHaveBeenCalledWith(expect.objectContaining({ id: "ollama" }));
+
+    const withUsableOllama = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            candidates: [
+              ...detected.candidates,
+              {
+                kind: "provider-auto:ollama",
+                label: "Ollama",
+                detail: "available locally",
+                modelRef: "ollama/qwen3:8b",
+                recommended: false,
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(withUsableOllama.querySelector('[data-prepare-choice="ollama"]')).toBeNull();
   });
 
   it("renders recommended install cards only when candidates and sign-ins are empty", () => {
