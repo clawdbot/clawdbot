@@ -1,5 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
 import type { RealtimeVoiceBrowserSessionBroker } from "./provider-types.js";
 
 export function listRealtimeVoiceBrowserSessionBrokers(
@@ -9,7 +9,10 @@ export function listRealtimeVoiceBrowserSessionBrokers(
   if (!normalizedProviderId) {
     return [];
   }
-  return (getActivePluginRegistry()?.realtimeVoiceBrowserSessionBrokers ?? [])
+  // Browser-session credentials and their HTTP exchange handler must come from
+  // the same pinned registry. The general active registry can change after the
+  // Gateway binds, which would mint credentials that the live route cannot see.
+  return (getActivePluginHttpRouteRegistry()?.realtimeVoiceBrowserSessionBrokers ?? [])
     .map((entry) => entry.broker)
     .filter(
       (broker) => normalizeOptionalLowercaseString(broker.providerId) === normalizedProviderId,
