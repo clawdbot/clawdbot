@@ -14,7 +14,7 @@ describe("mattermost actions contract", () => {
     unsupportedAction: "poll",
     cases: [
       {
-        name: "configured account exposes send, react, and read",
+        name: "configured account exposes send and react while reads stay opt in",
         cfg: {
           channels: {
             mattermost: {
@@ -24,11 +24,11 @@ describe("mattermost actions contract", () => {
             },
           },
         } as OpenClawConfig,
-        expectedActions: ["send", "react", "read"],
+        expectedActions: ["send", "react"],
         expectedCapabilities: ["presentation"],
       },
       {
-        name: "reactions can be disabled while send and read stay available",
+        name: "disabled reactions do not enable message reads",
         cfg: {
           channels: {
             mattermost: {
@@ -39,7 +39,7 @@ describe("mattermost actions contract", () => {
             },
           },
         } as OpenClawConfig,
-        expectedActions: ["send", "read"],
+        expectedActions: ["send"],
         expectedCapabilities: ["presentation"],
       },
       {

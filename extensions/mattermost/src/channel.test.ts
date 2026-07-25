@@ -664,7 +664,7 @@ describe("mattermostPlugin", () => {
       });
     };
 
-    it("exposes react when mattermost is configured", () => {
+    it("keeps message reads hidden until they are explicitly enabled", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -677,7 +677,7 @@ describe("mattermostPlugin", () => {
 
       const actions = getDescribedActions(cfg);
       expect(actions).toContain("react");
-      expect(actions).toContain("read");
+      expect(actions).not.toContain("read");
       expect(actions).toContain("send");
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "read" })).toBe(true);
@@ -713,7 +713,7 @@ describe("mattermostPlugin", () => {
       expect(discovery?.schema).toBeUndefined();
     });
 
-    it("hides react when actions.reactions is false", () => {
+    it("keeps read opt in when reactions are disabled", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -727,24 +727,24 @@ describe("mattermostPlugin", () => {
 
       const actions = getDescribedActions(cfg);
       expect(actions).not.toContain("react");
-      expect(actions).toContain("read");
+      expect(actions).not.toContain("read");
       expect(actions).toContain("send");
     });
 
-    it("hides read when actions.messages is false", () => {
+    it("exposes read when actions.messages is true", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
             enabled: true,
             botToken: "test-token-placeholder",
             baseUrl: "https://chat.example.com",
-            actions: { messages: false },
+            actions: { messages: true },
           },
         },
       };
 
       const actions = getDescribedActions(cfg);
-      expect(actions).not.toContain("read");
+      expect(actions).toContain("read");
       expect(actions).toContain("react");
       expect(actions).toContain("send");
     });
@@ -816,8 +816,8 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      expect(getDescribedActions(cfg, "default")).toEqual(["send", "read"]);
-      expect(getDescribedActions(cfg, "work")).toEqual(["send", "react", "read"]);
+      expect(getDescribedActions(cfg, "default")).toEqual(["send"]);
+      expect(getDescribedActions(cfg, "work")).toEqual(["send", "react"]);
     });
 
     it("blocks react when default account disables reactions and accountId is omitted", async () => {
@@ -884,8 +884,33 @@ describe("mattermostPlugin", () => {
       expect(fetchImpl).not.toHaveBeenCalled();
     });
 
+    it("blocks read when actions.messages is not configured", async () => {
+      const cfg = createMattermostTestConfig(`read-disabled-${++reactionActionSequence}`);
+      const fetchImpl = vi.fn<typeof fetch>();
+
+      await expect(
+        withMockedGlobalFetch(fetchImpl, async () =>
+          mattermostPlugin.actions?.handleAction?.(
+            createMattermostActionContext({
+              action: "read",
+              params: { target: "channel:CURRENT" },
+              cfg,
+              accountId: "default",
+              conversationReadOrigin: "direct-operator",
+            }),
+          ),
+        ),
+      ).rejects.toThrow("Mattermost message reads are disabled in config");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
     it("reads posts into the shared JSON result with normalized timestamps", async () => {
       const cfg = createMattermostTestConfig(`read-action-${++reactionActionSequence}`);
+      const mattermostConfig = cfg.channels?.mattermost;
+      if (!mattermostConfig) {
+        throw new Error("expected Mattermost config fixture");
+      }
+      mattermostConfig.actions = { messages: true };
       const fetchImpl = vi.fn<typeof fetch>(async (input) => {
         const url = requestUrl(input);
         if (!url.includes("/api/v4/channels/CURRENT/posts?per_page=2")) {
@@ -931,6 +956,11 @@ describe("mattermostPlugin", () => {
 
     it("rejects invalid read cursors and limits before provider access", async () => {
       const cfg = createMattermostTestConfig(`read-validation-${++reactionActionSequence}`);
+      const mattermostConfig = cfg.channels?.mattermost;
+      if (!mattermostConfig) {
+        throw new Error("expected Mattermost config fixture");
+      }
+      mattermostConfig.actions = { messages: true };
       const fetchImpl = vi.fn<typeof fetch>();
 
       for (const params of [

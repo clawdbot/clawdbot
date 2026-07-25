@@ -74,7 +74,7 @@ export type MattermostAccountConfig = {
   replyToModeByChatType?: Partial<Record<MattermostChatTypeKey, MattermostReplyToMode>>;
   /** Action toggles for this account. */
   actions?: {
-    /** Enable channel message reads. Default: true. */
+    /** Enable channel message reads. Default: false. */
     messages?: boolean;
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;

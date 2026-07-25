@@ -186,7 +186,7 @@ function describeMattermostMessageTool({
     actions.push("react");
   }
   const hasMessageCapableAccount = enabledAccounts.some(
-    (account) => account.config.actions?.messages ?? baseMessages ?? true,
+    (account) => account.config.actions?.messages ?? baseMessages ?? false,
   );
   if (hasMessageCapableAccount) {
     actions.push("read");
@@ -402,7 +402,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`Mattermost account "${resolvedAccountId}" is disabled`);
       }
       const messagesEnabled =
-        account.config.actions?.messages ?? mattermostConfig?.actions?.messages ?? true;
+        account.config.actions?.messages ?? mattermostConfig?.actions?.messages ?? false;
       if (!messagesEnabled) {
         throw new Error("Mattermost message reads are disabled in config");
       }
