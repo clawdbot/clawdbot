@@ -13,6 +13,7 @@
   "channel-setup",
   "channel-streaming",
   "setup-tools",
+  "archive",
   "approval-auth-runtime",
   "approval-client-runtime",
   "approval-delivery-runtime",

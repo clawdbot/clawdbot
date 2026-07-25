@@ -153,7 +153,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
       // +1: account-aware channel DM policy setup descriptors.
       // +1: dependency-light CLI argv parsing for machine-output metadata.
-      143,
+      // +1: bounded archive extraction and single-entry reads.
+      144,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -189,7 +190,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: process-local sessions.changed plugin notification payload.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
-      4740,
+      // +7: bounded archive extraction, entry reads, errors, and policy types.
+      4747,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -219,7 +221,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: authoritative model-picker session-apply operation.
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
-      2869,
+      // +2: bounded archive extraction and single-entry reads.
+      2871,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

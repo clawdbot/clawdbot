@@ -14,8 +14,12 @@ export {
   loadZipArchiveWithPreflight,
   mergeExtractedTreeIntoDestination,
   prepareArchiveDestinationDir,
+  readArchiveEntry,
   resolveArchiveKind,
   resolvePackedRootDir,
   withStagedArchiveDestination,
   type ArchiveLogger,
+  type ArchiveEntryKind,
+  type ArchiveExtractLimits,
+  type ExtractArchiveOptions,
 } from "@openclaw/fs-safe/archive";
