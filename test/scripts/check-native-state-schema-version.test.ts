@@ -6,15 +6,15 @@ import {
 
 describe("native state schema version guard", () => {
   it("keeps the checked-in Swift and TypeScript contracts aligned", () => {
-    expect(checkNativeStateSchemaVersion()).toBe(5);
+    expect(checkNativeStateSchemaVersion()).toBe(6);
   });
 
   it("fails when a deliberate Swift fixture drifts behind TypeScript", () => {
     expect(() =>
       compareNativeStateSchemaVersions({
-        swiftSource: "private static let maximumSupportedSchemaVersion: Int64 = 4\n",
-        typescriptSource: "export const OPENCLAW_STATE_SCHEMA_VERSION = 5;\n",
+        swiftSource: "private static let maximumSupportedSchemaVersion: Int64 = 5\n",
+        typescriptSource: "export const OPENCLAW_STATE_SCHEMA_VERSION = 6;\n",
       }),
-    ).toThrow("Native state schema version drift: Swift supports 4, TypeScript owns 5");
+    ).toThrow("Native state schema version drift: Swift supports 5, TypeScript owns 6");
   });
 });

@@ -1,15 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  MEMORY_INDEX_SOURCES_TABLE,
-  MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
-} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
-import {
-  assertSqliteSchemaContains,
-  type SqliteSchemaCompatibility,
-} from "../infra/sqlite-schema-contract.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -18,24 +10,13 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   assertExistingAgentSchemaOwner,
+  assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
-
-const OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY = {
-  allowedColumnDefinitions: {
-    "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
-  },
-  optionalCanonicalTriggerGroups: [
-    {
-      tableName: MEMORY_INDEX_SOURCES_TABLE,
-      triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
-    },
-  ],
-} satisfies SqliteSchemaCompatibility;
 
 /** Require exact agent ownership without requiring the latest schema. */
 export function assertOpenClawAgentDatabaseOwner(
@@ -84,12 +65,7 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  assertSqliteSchemaContains(
-    database,
-    options.pathname,
-    OPENCLAW_AGENT_SCHEMA_SQL,
-    OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY,
-  );
+  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
 }
 
 /** Upgrade or repair a supported owned schema before strict offline maintenance. */
