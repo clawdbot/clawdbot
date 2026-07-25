@@ -475,14 +475,17 @@ export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload:
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  nonDeliverableTerminalTurn?: boolean;
   sessionCtx: ExternalFailureConversationContext;
   cfg?: OpenClawConfig;
 }): ReplyPayload {
   return markAgentRunFailureReplyPayload({
     text: resolveExternalRunFailureTextForConversation({
-      text: params.isHeartbeat
-        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      text: params.nonDeliverableTerminalTurn
+        ? "The agent run failed before producing a reply."
+        : params.isHeartbeat
+          ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
       sessionCtx: params.sessionCtx,
       isGenericRunnerFailure: true,
       cfg: params.cfg,

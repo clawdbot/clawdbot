@@ -76,6 +76,9 @@ export async function settleAgentFallbackCycle(params: {
   const terminalErrorMessage =
     deferredLifecycleError ??
     userFacingErrorPayload ??
+    (runResult.meta?.nonDeliverableTerminalTurn
+      ? "The agent run failed before producing a reply."
+      : undefined) ??
     (embeddedError ? "Agent run failed" : undefined);
   const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
     if (settledLifecycleTerminal) {
@@ -142,7 +145,11 @@ export async function settleAgentFallbackCycle(params: {
     });
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", exhaustionError);
-  } else if (deferredLifecycleError || embeddedError) {
+  } else if (
+    deferredLifecycleError ||
+    embeddedError ||
+    runResult.meta?.nonDeliverableTerminalTurn
+  ) {
     const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
     terminalRunFailed = true;
     cycle.modelPatch.captureFailure(embeddedError ?? terminalError);

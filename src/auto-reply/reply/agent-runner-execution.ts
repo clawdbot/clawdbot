@@ -428,6 +428,7 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
   const terminalFailurePayload = terminalRunFailed
     ? buildTerminalAgentRunFailureReplyPayload({
         isHeartbeat: params.isHeartbeat,
+        nonDeliverableTerminalTurn: runResult.meta?.nonDeliverableTerminalTurn,
         sessionCtx: params.sessionCtx,
         cfg: params.followupRun.run.config,
       })

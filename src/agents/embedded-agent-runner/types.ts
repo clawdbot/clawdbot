@@ -202,6 +202,8 @@ export type EmbeddedAgentRunMeta = {
   toolSummary?: ToolSummaryTrace;
   completion?: CompletionTrace;
   contextManagement?: ContextManagementTrace;
+  /** True when the agent turn ended without a committed user-visible delivery. */
+  nonDeliverableTerminalTurn?: true;
 };
 
 export type EmbeddedAgentRunResult = {

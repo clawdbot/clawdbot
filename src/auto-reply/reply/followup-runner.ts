@@ -1555,6 +1555,9 @@ export function createFollowupRunner(params: {
         const terminalErrorMessage =
           deferredLifecycleError ??
           userFacingErrorPayload ??
+          (runResult.meta?.nonDeliverableTerminalTurn
+            ? "The agent run failed before producing a reply."
+            : undefined) ??
           (runResult.meta?.error ? "Agent run failed" : undefined);
         const terminalMetadata = fallbackResult.terminal.metadata;
         if (fallbackExhausted) {
@@ -1567,7 +1570,11 @@ export function createFollowupRunner(params: {
           });
           replyOperation.fail("run_failed", exhaustionError);
           terminalRunFailed = true;
-        } else if (deferredLifecycleError || runResult.meta?.error) {
+        } else if (
+          deferredLifecycleError ||
+          runResult.meta?.error ||
+          runResult.meta?.nonDeliverableTerminalTurn
+        ) {
           const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
           emitSettledLifecycleError(terminalError, terminalMetadata);
           replyOperation.fail("run_failed", terminalError);
@@ -1813,6 +1820,7 @@ export function createFollowupRunner(params: {
         ? isInteractive && !hasCompletedTerminalDelivery
           ? buildTerminalAgentRunFailureReplyPayload({
               isHeartbeat: opts?.isHeartbeat,
+              nonDeliverableTerminalTurn: runResult.meta?.nonDeliverableTerminalTurn,
               sessionCtx: failureConversationContext,
               cfg: runtimeConfig,
             })
@@ -1981,7 +1989,10 @@ export function createFollowupRunner(params: {
           ];
         }
       }
-      if (run.sourceReplyDeliveryMode === "message_tool_only") {
+      if (
+        run.sourceReplyDeliveryMode === "message_tool_only" &&
+        !runResult.meta?.nonDeliverableTerminalTurn
+      ) {
         const suppressionDeliverablePayloads = deliveryPayloads.filter(
           (payload) =>
             getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,

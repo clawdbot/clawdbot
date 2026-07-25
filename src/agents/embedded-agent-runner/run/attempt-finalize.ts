@@ -2,6 +2,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
+  NON_DELIVERABLE_TERMINAL_TURN_REASON,
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
@@ -114,5 +115,8 @@ export function finalizeEmbeddedAttempt(
     terminalError: terminal.terminalError,
   });
 
+  if (terminal.terminalError === NON_DELIVERABLE_TERMINAL_TURN_REASON) {
+    result.nonDeliverableTerminalTurn = true;
+  }
   return result;
 }
