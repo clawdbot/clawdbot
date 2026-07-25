@@ -1066,6 +1066,58 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(validRespond)?.[0]).toBe(true);
   });
 
+  it("dedupes equivalent message.action account selections across request fields", async () => {
+    const context = makeContext();
+    const envelopeRespond = vi.fn();
+    const nestedRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const envelopeRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "default",
+        idempotencyKey: "idem-action-equivalent-account",
+      } as never,
+      respond: envelopeRespond,
+      context,
+      req: { type: "req", id: "envelope", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+    const nestedRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi", accountId: "default" },
+        idempotencyKey: "idem-action-equivalent-account",
+      } as never,
+      respond: nestedRespond,
+      context,
+      req: { type: "req", id: "nested", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    });
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await Promise.all([envelopeRequest, nestedRequest]);
+
+    expect(firstRespondCall(envelopeRespond)?.[0]).toBe(true);
+    expect(firstRespondCall(nestedRespond)?.[0]).toBe(true);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps an agent runtime delegated even with a direct-operator marker", async () => {
     const sessionKey = "agent:main:slack:channel:C1";
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce({

@@ -196,10 +196,15 @@ function resolveMessageOperationDedupeScope(params: {
     }
     return normalizeOptionalAccountId(raw) ?? `invalid:${raw}`;
   };
-  return JSON.stringify([
-    normalizeOptionalLowercaseString(params.channel) ?? null,
-    ...params.accountIds.map(normalizeAccountScope),
-  ]);
+  const accountScopes = params.accountIds
+    .map(normalizeAccountScope)
+    .filter((value): value is string => value !== null);
+  const distinctAccountScopes = [...new Set(accountScopes)];
+  const accountScope =
+    distinctAccountScopes.length <= 1
+      ? (distinctAccountScopes[0] ?? null)
+      : { conflict: distinctAccountScopes.toSorted() };
+  return JSON.stringify([normalizeOptionalLowercaseString(params.channel) ?? null, accountScope]);
 }
 
 async function resolveRequestedChannel(params: {
