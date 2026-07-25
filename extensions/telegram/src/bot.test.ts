@@ -18,11 +18,8 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../src/test-utils/openclaw-test-state.js";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
