@@ -258,7 +258,9 @@ export class SessionManager extends SessionManagerBranching {
 
   static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
-    const header = entries.find((entry) => entry.type === "session");
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
     return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
   }
 

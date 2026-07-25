@@ -58,7 +58,9 @@ export class SessionManagerCore {
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
-    const header = entries.find((entry) => entry.type === "session");
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
     if (header?.cwd) {
       this.cwd = header.cwd;
     }

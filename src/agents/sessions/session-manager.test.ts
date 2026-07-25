@@ -164,6 +164,30 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("skips malformed null rows while opening a persisted transcript", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-malformed-row",
+      sessionKey: "agent:main:dashboard:sqlite-malformed-row",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    replaceTranscriptEventsSync(scope, [
+      null,
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: scope.sessionId,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: dir,
+      },
+    ] as never);
+
+    const manager = SessionManager.open(scope, dir);
+    expect(manager.getSessionId()).toBe(scope.sessionId);
+    expect(manager.getHeader()?.cwd).toBe(dir);
+  });
+
   it("persists explicit leaf controls across SQLite reopen", async () => {
     const dir = await makeTempDir();
     const scope = {

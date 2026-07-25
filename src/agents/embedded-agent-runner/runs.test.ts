@@ -34,6 +34,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   retainEmbeddedAgentRunAbortabilityForRunId,
   resolveActiveEmbeddedRunHandleSessionId,
+  resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
@@ -1008,6 +1009,19 @@ describe("embedded-agent runner run registry", () => {
 
     expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
+  it("clears a relative compatibility file key after normalization", () => {
+    const handle = createRunHandle();
+    const sessionFile = "relative-session-token";
+
+    setActiveEmbeddedRun("session-relative", handle, "agent:main:relative", sessionFile);
+    expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile)).toBe(
+      "session-relative",
+    );
+
+    clearActiveEmbeddedRun("session-relative", handle, "agent:main:relative", sessionFile);
+    expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile)).toBeUndefined();
   });
 
   it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {

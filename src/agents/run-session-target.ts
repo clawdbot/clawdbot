@@ -10,6 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { resolveDefaultAgentId } from "./agent-scope.js";
 
 /** Identifies a run transcript target without naming the current storage artifact. */
 export type AgentRunSessionTarget = {
@@ -42,10 +43,13 @@ export async function resolveAgentRunSessionTarget(params: {
   );
   const legacySessionFile = normalizeOptionalString(params.sessionFile);
   const legacyMarker = parseSqliteSessionFileMarker(legacySessionFile);
+  const plainCompatibilitySessionKey =
+    legacySessionFile === params.sessionId ? legacySessionFile : undefined;
   if (
     !hasCompleteTypedTarget &&
     legacySessionFile &&
     !legacyMarker &&
+    !plainCompatibilitySessionKey &&
     !legacySessionFile.startsWith("agent:") &&
     !legacySessionFile.startsWith("in-memory:") &&
     legacySessionFile !== params.sessionKey
@@ -57,7 +61,9 @@ export async function resolveAgentRunSessionTarget(params: {
   const agentId = targetAgentId ?? legacyMarker?.agentId ?? params.agentId;
   const sessionId = targetSessionId ?? legacyMarker?.sessionId ?? params.sessionId;
   const compatibilitySessionKey =
-    legacySessionFile?.startsWith("agent:") || legacySessionFile?.startsWith("in-memory:")
+    plainCompatibilitySessionKey ||
+    legacySessionFile?.startsWith("agent:") ||
+    legacySessionFile?.startsWith("in-memory:")
       ? legacySessionFile
       : undefined;
   const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
@@ -133,7 +139,8 @@ export async function resolveAgentRunSessionTarget(params: {
   ) {
     throw new Error("Compatibility session key conflicts with the supplied agent identity");
   }
-  const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
+  const effectiveAgentId =
+    agentId ?? resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(params.config ?? {}));
   if (sessionTarget && sessionKey) {
     const storePath =
       targetStorePath ??

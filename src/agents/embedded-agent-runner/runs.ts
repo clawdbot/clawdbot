@@ -311,13 +311,14 @@ export function isEmbeddedRunAbandoned(params: {
 }
 
 function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
-  const normalizedSessionFile = sessionFile?.trim();
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
   if (normalizedSessionFile) {
-    const sessionFileKey = normalizedSessionFile;
-    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
-      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
+    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile) === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(normalizedSessionFile);
     }
   }
+  // Always sweep every alias because callers may clear without the same
+  // compatibility token used when the active run was registered.
   for (const [sessionFileKey, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
     if (activeSessionId === sessionId) {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
