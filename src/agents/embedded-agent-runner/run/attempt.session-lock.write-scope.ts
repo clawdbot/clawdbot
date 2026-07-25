@@ -1,3 +1,5 @@
+import type { OwnedSessionTranscriptPublishedEntry } from "../../../config/sessions/transcript-write-context.js";
+
 type PhysicalWriteLockScope = {
   active: boolean;
   completion: Promise<void>;
