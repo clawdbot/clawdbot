@@ -59,6 +59,33 @@ describe("listToolsTolerant (#112667)", () => {
     }
   });
 
+  it("rejects an untyped tool schema that is not provably object-only (#113162 review)", async () => {
+    const NON_OBJECT_TOOL = {
+      name: "ambiguous",
+      inputSchema: { oneOf: [{ type: "string" }, { type: "number" }] },
+    } as unknown as Tool;
+    const { client, close } = await connectClient(async () => ({ tools: [NON_OBJECT_TOOL] }));
+    try {
+      await expect(listToolsTolerant(client)).rejects.toThrow(/Invalid input|expected/);
+    } finally {
+      await close();
+    }
+  });
+
+  it("accepts an untyped tool schema with object-only keywords (#113162 review)", async () => {
+    const PROPS_TOOL = {
+      name: "props_tool",
+      inputSchema: { properties: { symbol: { type: "string" } }, required: ["symbol"] },
+    } as unknown as Tool;
+    const { client, close } = await connectClient(async () => ({ tools: [PROPS_TOOL] }));
+    try {
+      const page = await listToolsTolerant(client);
+      expect(page.tools.map((tool) => tool.name)).toEqual(["props_tool"]);
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps the conforming tools on a server that also advertises a oneOf tool", async () => {
     const { client, close } = await connectClient(async () => ({
       tools: [ONE_OF_TOOL, CONFORMING_TOOL],

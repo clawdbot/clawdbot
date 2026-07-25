@@ -3,18 +3,50 @@ import { z } from "zod";
 
 // The SDK's ToolSchema requires `inputSchema.type` to be the literal "object", so
 // a server that describes its object argument some other legal way -- a root-level
-// `oneOf`/`anyOf`/`$ref`, ordinary in JSON Schema 2020-12 -- fails client-side
-// result validation and takes every other tool on that server down with it. This
-// mirrors ListToolsResultSchema but only drops the requirement that the type be
-// stated at the root: a schema that declares some other type (`array`, `string`)
-// is still not a tool argument object, and is still rejected.
+// `oneOf`/`anyOf`/`allOf` of objects, ordinary in JSON Schema 2020-12 -- fails
+// client-side result validation and takes every other tool on that server down with
+// it. We relax that ONE requirement, but only for schemas that still PROVABLY
+// describe an object: a stated non-object type, or an untyped schema with no object
+// evidence (so it could permit an array/string/any), stays rejected -- preserving
+// the MCP contract that tool arguments are objects.
 
-const UntypedObjectJsonSchema = z.looseObject({ type: z.literal("object").optional() });
+/** True when `schema` provably describes an object argument (see the note above). */
+function describesObjectArguments(schema: unknown): boolean {
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    return false;
+  }
+  const s = schema as Record<string, unknown>;
+  if (s.type === "object") {
+    return true;
+  }
+  if (typeof s.type === "string") {
+    return false; // a stated non-object type is not a tool argument object
+  }
+  if (Array.isArray(s.type)) {
+    return s.type.length > 0 && s.type.every((entry) => entry === "object");
+  }
+  if ("properties" in s || "required" in s || "additionalProperties" in s) {
+    return true;
+  }
+  for (const key of ["oneOf", "anyOf", "allOf"] as const) {
+    const branches = s[key];
+    if (
+      Array.isArray(branches) &&
+      branches.length > 0 &&
+      branches.every(describesObjectArguments)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const ObjectArgumentJsonSchema = z.custom<Record<string, unknown>>(describesObjectArguments);
 
 const RelaxedToolSchema = z.looseObject({
   name: z.string(),
-  inputSchema: UntypedObjectJsonSchema.optional(),
-  outputSchema: UntypedObjectJsonSchema.optional(),
+  inputSchema: ObjectArgumentJsonSchema.optional(),
+  outputSchema: ObjectArgumentJsonSchema.optional(),
 });
 
 export const RelaxedListToolsResultSchema = z.looseObject({
