@@ -73,6 +73,19 @@ function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: 
     .digest("hex")}`;
 }
 
+/**
+ * Twilio signs the complete callback URL. Give the post-DTMF redirect a fresh
+ * URL identity so it is not mistaken for a retry of the webhook that created
+ * the realtime stream. The nonce is not trusted by itself; the request still
+ * has to pass Twilio signature verification before the realtime handler uses
+ * it to mint a new stream token.
+ */
+function createDtmfResumeWebhookUrl(webhookUrl: string): string {
+  const url = new URL(webhookUrl);
+  url.searchParams.set("dtmfResume", crypto.randomUUID());
+  return url.toString();
+}
+
 type StreamSendResult = {
   sent: boolean;
 };
@@ -697,10 +710,17 @@ export class TwilioProvider implements VoiceCallProvider {
       await waitForRealtimeStreamEnd(input.providerCallId, streamEnded);
     }
 
+    // The redirect occurs after Twilio has played the tones. It must not reuse
+    // the original webhook URL: Twilio can send the same call parameters, and
+    // replay protection would correctly return empty TwiML instead of creating
+    // the replacement realtime stream. A fresh, signed callback URL preserves
+    // replay protection for actual duplicate deliveries while identifying this
+    // controlled transition as a new request.
+    const resumeWebhookUrl = createDtmfResumeWebhookUrl(webhookUrl);
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play digits="${escapeXml(input.digits)}" />
-  <Redirect method="POST">${escapeXml(webhookUrl)}</Redirect>
+  <Redirect method="POST">${escapeXml(resumeWebhookUrl)}</Redirect>
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "sendDtmf");

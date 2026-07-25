@@ -535,7 +535,7 @@ describe("TwilioProvider", () => {
     }
   });
 
-  it("sends DTMF by updating the call and redirecting back to the webhook", async () => {
+  it("sends DTMF with a unique signed callback URL for realtime resumption", async () => {
     const { provider, apiRequest } = configureTelephonyTwiMlFallback({
       providerCallId: "CA-dtmf",
     });
@@ -554,6 +554,7 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain('<Play digits="ww123#"');
     expect(params.Twiml).toContain("<Redirect");
     expect(params.Twiml).toContain("https://example.ngrok.app/voice/twilio");
+    expect(params.Twiml).toMatch(/dtmfResume=[0-9a-f-]{36}/);
   });
 
   it("clears buffered stream audio before redirecting a live call to DTMF", async () => {
