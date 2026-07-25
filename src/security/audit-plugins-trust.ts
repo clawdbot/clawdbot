@@ -363,7 +363,7 @@ export async function collectPluginsTrustFindings(params: {
           continue;
         }
         contexts.push({
-          label: `agents.list.${entry.id}`,
+          label: `agents.entries.${entry.id}`,
           agentId: entry.id,
           tools: entry.tools,
         });

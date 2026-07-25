@@ -1,5 +1,5 @@
 // Defines core dangerous config flag metadata for security audits.
-import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
+import { listAgentEntriesWithSource, type ListedAgentEntry } from "../agents/agent-scope-config.js";
 import { DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
@@ -41,10 +41,13 @@ function formatDangerousConfigFlagValue(value: DangerousFlagValue): string {
   return value === null ? "null" : String(value);
 }
 
-function getAgentDangerousFlagPathSegment(
-  source: ReturnType<typeof listAgentEntriesWithSource>[number]["source"],
-): string {
-  return source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+function getAgentDangerousFlagPathSegment(listed: ListedAgentEntry): string {
+  if (listed.source.kind === "entries") {
+    return `agents.entries.${listed.source.key}`;
+  }
+  return typeof listed.entry.id === "string" && listed.entry.id.length > 0
+    ? `agents.entries.${listed.entry.id}`
+    : `agents.list.${listed.source.index}`;
 }
 
 function collectExactPluginConfigContractMatches({
@@ -98,10 +101,11 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
       : undefined,
     "agents.defaults.sandbox.docker",
   );
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+  for (const listed of listAgentEntriesWithSource(cfg)) {
+    const agent = listed.entry;
     collectSandboxDockerDangerousFlags(
       isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
-      `${getAgentDangerousFlagPathSegment(source)}.sandbox.docker`,
+      `${getAgentDangerousFlagPathSegment(listed)}.sandbox.docker`,
     );
   }
 

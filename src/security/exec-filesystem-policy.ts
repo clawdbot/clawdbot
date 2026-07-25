@@ -57,7 +57,7 @@ export function collectExecFilesystemPolicyDriftHits(
       continue;
     }
     contexts.push({
-      scopeLabel: `agents.list.${agent.id}.tools`,
+      scopeLabel: `agents.entries.${agent.id}.tools`,
       agentId: agent.id,
       tools: agent.tools,
     });

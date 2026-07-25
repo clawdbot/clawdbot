@@ -333,7 +333,7 @@ export function collectExecPolicyScopeSnapshots(params: {
         approvals: params.approvals,
         scopeExecConfig: agentConfig?.tools?.exec,
         globalExecConfig,
-        configPath: `agents.list.${agentId}.tools.exec`,
+        configPath: `agents.entries.${agentId}.tools.exec`,
         hostPath: params.hostPath,
         hostDefaults: params.hostDefaults,
         hostDefaultSource: params.hostDefaultSource,
