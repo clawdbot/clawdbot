@@ -2,6 +2,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+export function isSidePanelTarget(target: { url: string }): boolean {
+  try {
+    return new URL(target.url).pathname.endsWith("/sidepanel.html");
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveChromiumExecutable(): Promise<string | undefined> {
+  const override = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
+  const candidates = [override, "/usr/bin/chromium-browser", "/usr/bin/chromium"].filter(
+    (candidate): candidate is string => Boolean(candidate),
+  );
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Continue to Playwright's managed Chromium.
+    }
+  }
+  return undefined;
+}
+
 export async function copyCopilotSidepanelExtension(tempDirs: {
   make: (prefix: string) => string;
 }): Promise<string> {

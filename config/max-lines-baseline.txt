@@ -702,7 +702,6 @@ src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/config/sessions/transcript.ts
-src/config/validation.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
@@ -818,7 +817,6 @@ src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
 src/gateway/server.cron.test.ts
-src/gateway/server.impl.ts
 src/gateway/server.sessions.compaction.test.ts
 src/gateway/server.sessions.create.test.ts
 src/gateway/server.sessions.list-changed.test.ts
