@@ -13,9 +13,11 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import {
   formatInboundMediaUnavailableText,
   formatLocationText,
+  shouldDebounceTextInbound,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
@@ -427,9 +429,24 @@ export async function attachWebInboxToSocket(
     }
     return successor.getCurrentSock();
   };
+  type InboundTurnSettlement = {
+    promise: Promise<void>;
+    resolve: () => void;
+    settled: boolean;
+  };
   type QueuedInboundMessageMetadata = {
     admission: AdmittedWebInboundCallbackMessage["admission"];
     debounceKey?: string;
+    debounceCompletion?: {
+      key: string;
+      conversationKey: string;
+      promise: Promise<void>;
+      resolve: () => void;
+      flushing: boolean;
+      settled: boolean;
+    };
+    debounceEligible?: boolean;
+    turnSettlement?: InboundTurnSettlement;
     turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
@@ -438,7 +455,14 @@ export async function attachWebInboxToSocket(
   const durableInboundQueue =
     options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
-  const pendingDebounceKeys = new Set<string>();
+  const pendingDebounceCompletionsByKey = new Map<
+    string,
+    Set<NonNullable<QueuedInboundMessage["debounceCompletion"]>>
+  >();
+  const pendingDebounceCompletionsByConversation = new Map<
+    string,
+    Set<NonNullable<QueuedInboundMessage["debounceCompletion"]>>
+  >();
   const activeInboundFlushes = new Set<Promise<void>>();
   const pendingMessageHandlers = new Set<Promise<void>>();
   let durableIngressActive = false;
@@ -455,11 +479,12 @@ export async function attachWebInboxToSocket(
       resolve();
     }
   };
-  const waitForDebounceWorkOrIdle = (handlers: ReadonlyArray<Promise<void>>) => {
-    if (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
-      return Promise.resolve();
-    }
-    if (pendingMessageHandlers.size === 0) {
+  const getPendingDebounceCompletions = () =>
+    [...pendingDebounceCompletionsByKey.values()].flatMap((completions) => Array.from(completions));
+  const hasFlushableDebounceWork = () =>
+    getPendingDebounceCompletions().some((completion) => !completion.flushing);
+  const waitForHandlerProgressOrDebounceWork = (handlers: ReadonlyArray<Promise<void>>) => {
+    if (hasFlushableDebounceWork() || activeInboundFlushes.size > 0) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
@@ -472,10 +497,11 @@ export async function attachWebInboxToSocket(
     });
   };
   let nextReceiveOrder = 0;
+  const messagesUpsertQueue = new KeyedAsyncQueue();
   const publishPendingWorkState = (at = Date.now()) => {
     options.onPendingWorkChanged?.(
       pendingMessageHandlers.size +
-        pendingDebounceKeys.size +
+        pendingDebounceCompletionsByKey.size +
         activeInboundFlushes.size +
         (durableIngressActive ? 1 : 0),
       at,
@@ -497,8 +523,33 @@ export async function attachWebInboxToSocket(
     }
     return `${admission.accountId}:${admission.conversation.id}:${senderKey}`;
   };
+  const buildInboundDebounceConversationKey = (msg: QueuedInboundMessage): string => {
+    const admission = requireWhatsAppInboundAdmission(msg);
+    return `${admission.accountId}:${admission.conversation.id}`;
+  };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
-    options.shouldDebounce?.(msg) ?? true;
+    shouldDebounceTextInbound({
+      text: msg.payload.commandBody ?? msg.payload.body,
+      cfg: options.cfg,
+      hasMedia: Boolean(msg.payload.media),
+      allowDebounce: !msg.payload.location && !msg.quote,
+    }) &&
+    (options.shouldDebounce?.(msg) ?? true);
+  // Eligible raw text claims need independent durable lanes until the channel
+  // buffer adopts them together. The conversation queue and flush barrier below
+  // preserve ordering when full normalization or a custom predicate vetoes them.
+  const canEnterDebounceBeforeConversationAdoption = (msg: WAMessage): boolean => {
+    if (inboundDebounceMs <= 0) {
+      return false;
+    }
+    const rawMessage = msg.message ?? undefined;
+    return shouldDebounceTextInbound({
+      text: extractText(rawMessage),
+      cfg: options.cfg,
+      hasMedia: Boolean(extractMediaKind(rawMessage)),
+      allowDebounce: !extractLocationData(rawMessage) && !describeReplyContext(rawMessage),
+    });
+  };
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
       const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
@@ -507,6 +558,109 @@ export async function attachWebInboxToSocket(
       }
       return (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
+
+  const createInboundTurnSettlement = (): InboundTurnSettlement => {
+    let resolvePromise!: () => void;
+    const settlement: InboundTurnSettlement = {
+      promise: new Promise<void>((resolve) => {
+        resolvePromise = resolve;
+      }),
+      resolve: () => {
+        if (settlement.settled) {
+          return;
+        }
+        settlement.settled = true;
+        resolvePromise();
+      },
+      settled: false,
+    };
+    return settlement;
+  };
+
+  const waitForInboundTurnSettlement = async (
+    settlement: InboundTurnSettlement,
+    abortSignal?: AbortSignal,
+  ): Promise<void> => {
+    if (!abortSignal) {
+      await settlement.promise;
+      return;
+    }
+    if (abortSignal.aborted) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        abortSignal.removeEventListener("abort", finish);
+        resolve();
+      };
+      abortSignal.addEventListener("abort", finish, { once: true });
+      void settlement.promise.then(finish, finish);
+    });
+  };
+
+  const registerDebounceCompletion = (params: {
+    key: string;
+    conversationKey: string;
+  }): NonNullable<QueuedInboundMessage["debounceCompletion"]> => {
+    let resolvePromise!: () => void;
+    const completion: NonNullable<QueuedInboundMessage["debounceCompletion"]> = {
+      ...params,
+      promise: new Promise<void>((resolve) => {
+        resolvePromise = resolve;
+      }),
+      resolve: () => {
+        if (completion.settled) {
+          return;
+        }
+        completion.settled = true;
+        resolvePromise();
+        const keyCompletions = pendingDebounceCompletionsByKey.get(completion.key);
+        keyCompletions?.delete(completion);
+        if (keyCompletions?.size === 0) {
+          pendingDebounceCompletionsByKey.delete(completion.key);
+        }
+        const conversationCompletions = pendingDebounceCompletionsByConversation.get(
+          completion.conversationKey,
+        );
+        conversationCompletions?.delete(completion);
+        if (conversationCompletions?.size === 0) {
+          pendingDebounceCompletionsByConversation.delete(completion.conversationKey);
+        }
+        publishPendingWorkState();
+      },
+      flushing: false,
+      settled: false,
+    };
+    const keyCompletions = pendingDebounceCompletionsByKey.get(params.key) ?? new Set();
+    keyCompletions.add(completion);
+    pendingDebounceCompletionsByKey.set(params.key, keyCompletions);
+    const conversationCompletions =
+      pendingDebounceCompletionsByConversation.get(params.conversationKey) ?? new Set();
+    conversationCompletions.add(completion);
+    pendingDebounceCompletionsByConversation.set(params.conversationKey, conversationCompletions);
+    return completion;
+  };
+
+  const flushPriorConversationDebounce = async (
+    conversationKey: string,
+    retainedKey?: string,
+  ): Promise<void> => {
+    const completions = [
+      ...(pendingDebounceCompletionsByConversation.get(conversationKey) ?? []),
+    ].filter((completion) => completion.key !== retainedKey || completion.flushing);
+    const keys = new Set(completions.map((completion) => completion.key));
+    await Promise.all([...keys].map((key) => debouncer.flushKey(key)));
+    await Promise.all(completions.map((completion) => completion.promise));
+    if (!retainedKey) {
+      return;
+    }
+    // The retained buffer may cross into onFlush while the awaits above yield. Recheck before
+    // enqueueing: if it is flushing, this message must form a later batch after adoption settles.
+    const racedRetainedCompletions = [
+      ...(pendingDebounceCompletionsByConversation.get(conversationKey) ?? []),
+    ].filter((completion) => completion.key === retainedKey && completion.flushing);
+    await Promise.all(racedRetainedCompletions.map((completion) => completion.promise));
+  };
 
   const buildFlushIngressLifecycle = (entries: QueuedInboundMessage[]) => {
     const lifecycles = entries
@@ -518,20 +672,69 @@ export async function attachWebInboxToSocket(
         lifecycle: undefined,
         settle: async () => {},
         abandon: async () => {},
+        waitForSettlement: async () => {},
       };
     }
     let handedOff = false;
-    const adoptAll = async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAdopted();
+    let settled = false;
+    let terminalTask: Promise<void> | undefined;
+    let resolveSettlement!: () => void;
+    const settlement = new Promise<void>((resolve) => {
+      resolveSettlement = resolve;
+    });
+    const markSettled = () => {
+      if (settled) {
+        return;
       }
+      settled = true;
+      resolveSettlement();
     };
+    const runTerminalTask = (
+      operation: (lifecycle: WhatsAppIngressLifecycle) => void | Promise<void>,
+    ): Promise<void> => {
+      terminalTask ??= (async () => {
+        const results = await Promise.allSettled(
+          lifecycles.map((lifecycle) => Promise.resolve().then(() => operation(lifecycle))),
+        );
+        markSettled();
+        const failures = results
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          .map((result) => result.reason);
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "multiple WhatsApp ingress claims failed to settle");
+        }
+      })();
+      return terminalTask;
+    };
+    const adoptAll = () => runTerminalTask((lifecycle) => lifecycle.onAdopted());
+    const abandonAll = () => runTerminalTask((lifecycle) => lifecycle.onAbandoned());
+    const abortSignal =
+      lifecycles.length === 1
+        ? firstLifecycle.abortSignal
+        : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal));
+    const abandonOnAbort = () => {
+      void abandonAll().catch((error: unknown) => {
+        try {
+          inboundLogger.error(
+            { error: String(error) },
+            "failed abandoning aborted WhatsApp ingress claims",
+          );
+        } catch {
+          // Claim settlement remains authoritative when failure reporting is unavailable.
+        }
+      });
+    };
+    if (abortSignal.aborted) {
+      abandonOnAbort();
+    } else {
+      abortSignal.addEventListener("abort", abandonOnAbort, { once: true });
+    }
     return {
       lifecycle: {
-        abortSignal:
-          lifecycles.length === 1
-            ? firstLifecycle.abortSignal
-            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+        abortSignal,
         onAdopted: async () => {
           handedOff = true;
           await adoptAll();
@@ -549,9 +752,7 @@ export async function attachWebInboxToSocket(
         },
         onAbandoned: async () => {
           handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
+          await abandonAll();
         },
       } satisfies WhatsAppIngressLifecycle,
       // Gated or otherwise terminal no-dispatch turns still own every merged claim.
@@ -563,10 +764,11 @@ export async function attachWebInboxToSocket(
       abandon: async () => {
         if (!handedOff) {
           handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
+          await abandonAll();
         }
+      },
+      waitForSettlement: async () => {
+        await settlement;
       },
     };
   };
@@ -574,8 +776,14 @@ export async function attachWebInboxToSocket(
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
-    shouldDebounce: shouldDebounceInboundMessage,
+    shouldDebounce: (msg) => msg.debounceEligible === true,
+    serializeImmediate: true,
     onFlush: async (entries) => {
+      for (const entry of entries) {
+        if (entry.debounceCompletion) {
+          entry.debounceCompletion.flushing = true;
+        }
+      }
       let finishFlush!: () => void;
       const flushTask = new Promise<void>((resolve) => {
         finishFlush = resolve;
@@ -583,13 +791,16 @@ export async function attachWebInboxToSocket(
       activeInboundFlushes.add(flushTask);
       publishPendingWorkState();
       notifyDebounceWork();
+      let waitForSettlement = async () => {};
       try {
         const orderedEntries = orderDebouncedInboundEntries(entries);
         const last = orderedEntries.at(-1);
         if (!last) {
           return;
         }
-        const { lifecycle, settle, abandon } = buildFlushIngressLifecycle(orderedEntries);
+        const flushLifecycle = buildFlushIngressLifecycle(orderedEntries);
+        const { lifecycle, settle, abandon } = flushLifecycle;
+        waitForSettlement = flushLifecycle.waitForSettlement;
         try {
           if (orderedEntries.length === 1) {
             await options.onMessage(attachWhatsAppIngressLifecycle(last, lifecycle));
@@ -654,11 +865,25 @@ export async function attachWebInboxToSocket(
           throw error;
         }
       } finally {
-        for (const entry of entries) {
-          if (entry.debounceKey) {
-            pendingDebounceKeys.delete(entry.debounceKey);
+        // Durable adoption can remain deferred after dispatch returns. Keep the
+        // ordering completion pending without holding the debouncer's key task.
+        const resolveOrderingCompletions = () => {
+          for (const entry of entries) {
+            entry.debounceCompletion?.resolve();
+            entry.turnSettlement?.resolve();
           }
-        }
+        };
+        void waitForSettlement().then(resolveOrderingCompletions, (error: unknown) => {
+          resolveOrderingCompletions();
+          try {
+            inboundLogger.error(
+              { error: String(error) },
+              "failed waiting for WhatsApp ingress adoption settlement",
+            );
+          } catch {
+            // Bookkeeping must complete even if failure reporting is unavailable.
+          }
+        });
         activeInboundFlushes.delete(flushTask);
         finishFlush();
         publishPendingWorkState();
@@ -1294,7 +1519,7 @@ export async function attachWebInboxToSocket(
       receiveOrder?: number;
       turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     },
-  ) => {
+  ): Promise<void> => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
       const currentSock = getCurrentSock();
@@ -1449,10 +1674,25 @@ export async function attachWebInboxToSocket(
       receiveOrder: durable.receiveOrder,
     });
     const debounceKey = buildInboundDebounceKey(inboundMessage);
+    const debounceConversationKey = buildInboundDebounceConversationKey(inboundMessage);
+    const debounceEligible =
+      inboundDebounceMs > 0 && Boolean(debounceKey) && shouldDebounceInboundMessage(inboundMessage);
+    inboundMessage.debounceEligible = debounceEligible;
+    const turnSettlement = debounceEligible ? undefined : createInboundTurnSettlement();
+    if (turnSettlement) {
+      inboundMessage.turnSettlement = turnSettlement;
+    }
+    await flushPriorConversationDebounce(
+      debounceConversationKey,
+      debounceEligible ? (debounceKey ?? undefined) : undefined,
+    );
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
-      if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
-        pendingDebounceKeys.add(debounceKey);
+      if (debounceEligible) {
+        inboundMessage.debounceCompletion = registerDebounceCompletion({
+          key: debounceKey,
+          conversationKey: debounceConversationKey,
+        });
         publishPendingWorkState();
         notifyDebounceWork();
       }
@@ -1475,7 +1715,19 @@ export async function attachWebInboxToSocket(
         },
       );
     }
-    await debouncer.enqueue(inboundMessage);
+    try {
+      await debouncer.enqueue(inboundMessage);
+    } catch (error) {
+      inboundMessage.debounceCompletion?.resolve();
+      turnSettlement?.resolve();
+      throw error;
+    }
+    if (turnSettlement) {
+      await waitForInboundTurnSettlement(
+        turnSettlement,
+        durable.turnAdoptionLifecycle?.abortSignal,
+      );
+    }
   };
 
   const processDurableInboundMessage = async (
@@ -1540,12 +1792,15 @@ export async function attachWebInboxToSocket(
     return "deferred";
   };
 
+  const durableConversationQueue = new KeyedAsyncQueue();
+
   const durableInboundMonitor = createWhatsAppIngressMonitor({
     queue: durableInboundQueue,
     dispatch: async (msg, payload, lifecycle) => {
       const remoteJid = msg.key?.remoteJid;
       const id = msg.key?.id;
-      return {
+      const conversationKey = remoteJid?.trim() || id?.trim() || "invalid-whatsapp-conversation";
+      return await durableConversationQueue.enqueue(conversationKey, async () => ({
         kind: await processDurableInboundMessage(msg, {
           ...payload,
           ...(remoteJid && id
@@ -1553,7 +1808,7 @@ export async function attachWebInboxToSocket(
             : {}),
           lifecycle,
         }),
-      };
+      }));
     },
     pollIntervalMs: WHATSAPP_INGRESS_DRAIN_INTERVAL_MS,
     onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
@@ -1569,10 +1824,14 @@ export async function attachWebInboxToSocket(
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
-    for (const msg of upsert.messages ?? []) {
+    // Stamp the whole transport batch before any async policy work. receiveOrder
+    // preserves intra-socket ordering without changing wall-clock age semantics.
+    const receivedMessages = (upsert.messages ?? []).map((msg) => {
+      return { msg, receiveOrder: nextReceiveOrder++, receivedAt: Date.now() };
+    });
+    for (const { msg, receiveOrder, receivedAt } of receivedMessages) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
-      const receiveOrder = nextReceiveOrder++;
       if (
         await maybeResolveWhatsAppApprovalReaction({
           cfg: options.loadConfig?.() ?? options.cfg,
@@ -1588,7 +1847,6 @@ export async function attachWebInboxToSocket(
         continue;
       }
 
-      const receivedAt = Date.now();
       const skipStaleAppend = shouldSkipStaleAppend(msg, upsert.type);
       const skipRecentOutboundEcho = shouldSkipRecentOutboundEcho(msg);
       const remoteJid = msg.key?.remoteJid;
@@ -1647,6 +1905,7 @@ export async function attachWebInboxToSocket(
             skipRecentOutboundEcho,
             receivedAt,
             receiveOrder,
+            allowConcurrentDebounce: canEnterDebounceBeforeConversationAdoption(msg),
           });
           appendError = undefined;
           break;
@@ -1693,20 +1952,43 @@ export async function attachWebInboxToSocket(
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
-    const task = handleMessagesUpsert(upsert).catch((err: unknown) => {
-      inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
-      inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
-    });
+    // Baileys listeners are fire-and-forget. Preserve emitter order through
+    // durable admission so a later callback cannot persist and drain first.
+    const task = messagesUpsertQueue
+      .enqueue("messages.upsert", () => handleMessagesUpsert(upsert))
+      .catch((err: unknown) => {
+        try {
+          inboundLogger.error({ error: String(err) }, "messages.upsert handler error");
+        } catch {
+          // Logging must not poison the serialized admission tail.
+        }
+        try {
+          inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
+        } catch {
+          // Logging must not poison the serialized admission tail.
+        }
+      });
     pendingMessageHandlers.add(task);
     publishPendingWorkState();
-    void task.finally(() => {
-      pendingMessageHandlers.delete(task);
-      publishPendingWorkState();
-    });
+    void task.then(
+      () => {
+        pendingMessageHandlers.delete(task);
+        publishPendingWorkState();
+      },
+      () => {
+        pendingMessageHandlers.delete(task);
+        publishPendingWorkState();
+      },
+    );
   };
   const drainDebouncedInboundMessages = async () => {
-    while (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
-      const debounceKeys = Array.from(pendingDebounceKeys);
+    for (;;) {
+      const debounceKeys = [...pendingDebounceCompletionsByKey.entries()]
+        .filter(([, completions]) => [...completions].some((completion) => !completion.flushing))
+        .map(([key]) => key);
+      if (debounceKeys.length === 0 && activeInboundFlushes.size === 0) {
+        return;
+      }
       if (debounceKeys.length > 0) {
         await Promise.all(debounceKeys.map((key) => debouncer.flushKey(key)));
       }
@@ -1725,28 +2007,27 @@ export async function attachWebInboxToSocket(
     // cannot deadlock inside the debounce window. Debounce semantics stay intact.
     for (;;) {
       await drainDebouncedInboundMessages();
-      if (pendingMessageHandlers.size === 0) {
-        break;
-      }
       const handlers = Array.from(pendingMessageHandlers);
-      await Promise.race([Promise.allSettled(handlers), waitForDebounceWorkOrIdle(handlers)]);
-      if (
-        pendingMessageHandlers.size === 0 &&
-        pendingDebounceKeys.size === 0 &&
-        activeInboundFlushes.size === 0
-      ) {
+      if (handlers.length === 0) {
         break;
       }
+      // This phase owns transport callbacks only. Post-flush adoption remains
+      // pending for the lifecycle-settlement loop below.
+      await waitForHandlerProgressOrDebounceWork(handlers);
     }
     await drainDebouncedInboundMessages();
     // A flush can adopt one claim and wake the next row in the same lane.
     // Alternate until neither the monitor nor debounce layer can create more work.
     for (;;) {
       await durableInboundMonitor.waitForIdle();
-      if (pendingDebounceKeys.size === 0 && activeInboundFlushes.size === 0) {
+      await drainDebouncedInboundMessages();
+      const pendingCompletions = getPendingDebounceCompletions();
+      if (pendingCompletions.length === 0) {
         break;
       }
-      await drainDebouncedInboundMessages();
+      // Post-flush completions stay pending through durable adoption. Await the
+      // actual lifecycle so close timers and abort I/O retain event-loop progress.
+      await Promise.all(pendingCompletions.map((completion) => completion.promise));
     }
     await durableInboundMonitor.stop();
   };

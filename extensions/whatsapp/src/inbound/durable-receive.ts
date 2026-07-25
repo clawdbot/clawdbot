@@ -57,7 +57,10 @@ export function createWhatsAppDurableInboundMessageId(params: {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
 
-function inspectWhatsAppIngressMessage(message: WAMessage): WhatsAppIngressFacts {
+function inspectWhatsAppIngressMessage(
+  message: WAMessage,
+  options: { allowConcurrentDebounce?: boolean; claimedLaneKey?: string } = {},
+): WhatsAppIngressFacts {
   const remoteJid = message.key?.remoteJid?.trim();
   const id = message.key?.id?.trim();
   if (!remoteJid || !id) {
@@ -66,13 +69,81 @@ function inspectWhatsAppIngressMessage(message: WAMessage): WhatsAppIngressFacts
       "WhatsApp ingress message is missing key.remoteJid or key.id",
     );
   }
+  const eventId = createWhatsAppDurableInboundMessageId({ remoteJid, id });
+  const allowedLaneKeys = new Set([remoteJid, eventId]);
+  const claimedLaneKey = options.claimedLaneKey?.trim();
   return {
-    eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }),
-    laneKey: remoteJid,
+    eventId,
+    laneKey:
+      claimedLaneKey && allowedLaneKeys.has(claimedLaneKey)
+        ? claimedLaneKey
+        : options.allowConcurrentDebounce
+          ? eventId
+          : remoteJid,
   };
 }
 
 export type WhatsAppDurableInboundQueue = ChannelIngressQueue<WhatsAppDurableInboundPayload>;
+
+type WhatsAppDurableInboundRecord = Awaited<
+  ReturnType<WhatsAppDurableInboundQueue["listPending"]>
+>[number];
+
+function compareWhatsAppIngressOrder(
+  left: WhatsAppDurableInboundRecord,
+  right: WhatsAppDurableInboundRecord,
+): number {
+  const receivedAtDiff = left.receivedAt - right.receivedAt;
+  if (receivedAtDiff !== 0) {
+    return receivedAtDiff;
+  }
+  const leftOrder = left.payload.receiveOrder;
+  const rightOrder = right.payload.receiveOrder;
+  if (leftOrder === undefined || rightOrder === undefined) {
+    if (leftOrder === undefined && rightOrder !== undefined) {
+      return -1;
+    }
+    if (leftOrder !== undefined && rightOrder === undefined) {
+      return 1;
+    }
+  } else {
+    const receiveOrderDiff = leftOrder - rightOrder;
+    if (receiveOrderDiff !== 0) {
+      return receiveOrderDiff;
+    }
+  }
+  return left.id.localeCompare(right.id);
+}
+
+function orderWhatsAppDurableInboundQueue(
+  queue: WhatsAppDurableInboundQueue,
+): WhatsAppDurableInboundQueue {
+  return {
+    ...queue,
+    // The shared drain requests its complete pending snapshot before building candidateIds.
+    // Reorder that same snapshot here; do not widen a caller's requested queue scan.
+    listPending: async (options) =>
+      (await queue.listPending(options)).toSorted(compareWhatsAppIngressOrder),
+    claimNext: async (options) => {
+      const candidateIds = options?.candidateIds ? [...options.candidateIds] : undefined;
+      if (!candidateIds) {
+        return await queue.claimNext(options);
+      }
+      // The shared queue's same-millisecond fallback is event id. Claim one
+      // candidate at a time so persisted transport order remains authoritative.
+      for (const candidateId of candidateIds) {
+        const claim = await queue.claimNext({
+          ...options,
+          candidateIds: [candidateId],
+        });
+        if (claim) {
+          return claim;
+        }
+      }
+      return null;
+    },
+  };
+}
 
 /** Account-scoped queue shared with the pre-drain WhatsApp receive journal. */
 export function createWhatsAppDurableInboundQueue(accountId: string): WhatsAppDurableInboundQueue {
@@ -91,8 +162,14 @@ export async function enqueueWhatsAppDurableInbound(params: {
   skipRecentOutboundEcho?: boolean;
   receivedAt?: number;
   receiveOrder?: number;
+  allowConcurrentDebounce?: boolean;
 }) {
-  const facts = inspectWhatsAppIngressMessage(params.message);
+  const facts = inspectWhatsAppIngressMessage(
+    params.message,
+    params.allowConcurrentDebounce === undefined
+      ? {}
+      : { allowConcurrentDebounce: params.allowConcurrentDebounce },
+  );
   const receivedAt = params.receivedAt ?? Date.now();
   return await params.queue.enqueue(
     facts.eventId,
@@ -116,7 +193,7 @@ function resolveWhatsAppIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-/** Shared monitor with per-conversation lanes and completion at reply-lane adoption. */
+/** Shared monitor with durable lane claims completed only at reply-lane adoption. */
 export function createWhatsAppIngressMonitor(params: {
   queue: WhatsAppDurableInboundQueue;
   dispatch: (
@@ -135,8 +212,12 @@ export function createWhatsAppIngressMonitor(params: {
     WhatsAppDurableInboundPayload,
     WhatsAppDurableInboundPayload
   >({
-    queue: params.queue,
-    inspect: (message) => inspectWhatsAppIngressMessage(message),
+    queue: orderWhatsAppDurableInboundQueue(params.queue),
+    inspect: (message, context) =>
+      inspectWhatsAppIngressMessage(
+        message,
+        context.phase === "claim" ? { claimedLaneKey: context.claimedLaneKey } : {},
+      ),
     payload: {
       version: WHATSAPP_DURABLE_INBOUND_PAYLOAD_VERSION,
       serialize: (message, { receivedAt }) => ({
@@ -172,6 +253,9 @@ export function createWhatsAppIngressMonitor(params: {
     drain: {
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
       deriveLaneKey: (record) => {
+        if (record.laneKey) {
+          return record.laneKey;
+        }
         try {
           return inspectWhatsAppIngressMessage(
             deserializeWhatsAppDurableInboundMessage(record.payload.message),

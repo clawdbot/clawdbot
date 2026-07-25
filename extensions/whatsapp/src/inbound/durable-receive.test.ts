@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WAMessage } from "baileys";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
@@ -14,6 +14,7 @@ import {
   createWhatsAppIngressMonitor,
   enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
+  type WhatsAppIngressLifecycle,
 } from "./durable-receive.js";
 
 const REMOTE_JID = "1@s.whatsapp.net";
@@ -185,6 +186,69 @@ describe("createWhatsAppIngressMonitor", () => {
       expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      await monitor.stop();
+    });
+  });
+
+  it("orders legacy and debounce-eligible claims before adoption", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
+        channelId: "whatsapp",
+        accountId: "acct",
+        stateDir,
+      });
+      const legacyId = eventId("legacy-order");
+      const firstId = eventId("order-0");
+      const secondId = eventId("order-2");
+      expect(secondId < firstId).toBe(true);
+      await queue.enqueue(legacyId, payload("legacy-order"), {
+        laneKey: legacyId,
+        receivedAt: 1,
+      });
+      await enqueueWhatsAppDurableInbound({
+        queue,
+        message: message("order-0"),
+        receivedAt: 1,
+        receiveOrder: 0,
+        allowConcurrentDebounce: true,
+      });
+      await enqueueWhatsAppDurableInbound({
+        queue,
+        message: message("order-2"),
+        receivedAt: 1,
+        receiveOrder: 1,
+        allowConcurrentDebounce: true,
+      });
+
+      const dispatched: string[] = [];
+      const lifecycles: WhatsAppIngressLifecycle[] = [];
+      const monitor = createWhatsAppIngressMonitor({
+        queue,
+        pollIntervalMs: 10,
+        dispatch: async (inbound, _payload, lifecycle) => {
+          const id = inbound.key.id;
+          if (!id) {
+            throw new Error("expected transport id");
+          }
+          dispatched.push(id);
+          lifecycles.push(lifecycle);
+          return { kind: "deferred" as const };
+        },
+      });
+
+      monitor.start();
+      await vi.waitFor(() => expect(dispatched).toEqual(["legacy-order", "order-0", "order-2"]));
+
+      expect((await queue.listClaims()).map((row) => row.id).toSorted()).toEqual(
+        [legacyId, firstId, secondId].toSorted(),
+      );
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      await Promise.all(
+        lifecycles.map((lifecycle) => Promise.resolve().then(() => lifecycle.onAdopted())),
+      );
+      await monitor.waitForIdle();
+      expect(await queue.listClaims()).toEqual([]);
       await monitor.stop();
     });
   });
