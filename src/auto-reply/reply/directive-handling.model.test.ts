@@ -638,6 +638,8 @@ async function resolveModelInfoReply(
     aliasIndex: baseAliasIndex(),
     allowedModelKeys: new Set(),
     allowedModelCatalog: [],
+    currentThinkLevel: "medium",
+    runtimePolicySessionKey: "agent:main:main",
     resetModelOverride: false,
     ...overrides,
   });
@@ -648,8 +650,63 @@ describe("/model chat UX", () => {
     const reply = await resolveModelInfoReply();
 
     expect(reply?.text).toContain("Current:");
+    expect(reply?.text).toContain("Think: medium (change with /think <level>)");
     expect(reply?.text).toContain("Browse: /models");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("includes the thinking level in channel-specific model summaries", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [
+      {
+        pluginId: "test",
+        plugin: {
+          id: "telegram",
+          commands: {
+            buildModelBrowseChannelData: () => ({ telegram: { inlineKeyboard: [] } }),
+          },
+        },
+        source: "test",
+      },
+    ] as never;
+    setActivePluginRegistry(registry);
+
+    const reply = await resolveModelInfoReply({ surface: "telegram" });
+
+    expect(reply?.channelData).toBeDefined();
+    expect(reply?.text).toContain("Think: medium (change with /think <level>)");
+  });
+
+  it("shows the effective thinking level for the selected runtime", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        resolveThinkingProfile: ({ agentRuntime }) => ({
+          levels: [
+            { id: "off" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            { id: "max" },
+            ...(agentRuntime === "openclaw" ? ([{ id: "ultra" }] as const) : []),
+          ],
+        }),
+      },
+    ]);
+
+    const reply = await resolveModelInfoReply({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-luna",
+      currentThinkLevel: "ultra",
+      sessionEntry: { agentRuntimeOverride: "codex" },
+    });
+
+    expect(reply?.text).toContain("Think: max (change with /think <level>)");
+    expect(reply?.text).not.toContain("Think: ultra");
   });
 
   it("treats /model list as a models browser alias, not a model id", async () => {

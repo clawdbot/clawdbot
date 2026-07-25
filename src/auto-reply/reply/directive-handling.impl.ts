@@ -119,7 +119,12 @@ export async function handleDirectiveOnly(
     commandAuthorized: params.commandAuthorized,
     senderIsOwner: params.senderIsOwner,
   });
-
+  const thinkingCatalog =
+    params.thinkingCatalog && params.thinkingCatalog.length > 0
+      ? params.thinkingCatalog
+      : allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : undefined;
   const modelInfo = await maybeHandleModelDirectiveInfo({
     directives,
     cfg: params.cfg,
@@ -133,6 +138,9 @@ export async function handleDirectiveOnly(
     policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
+    currentThinkLevel: currentThinkLevel ?? "off",
+    thinkingCatalog,
+    runtimePolicySessionKey,
     resetModelOverride,
     workspaceDir: params.workspaceDir,
     surface: params.surface,
@@ -186,12 +194,6 @@ export async function handleDirectiveOnly(
     sessionKey: runtimePolicySessionKey,
     sessionEntry: prospectiveSessionEntry,
   });
-  const thinkingCatalog =
-    params.thinkingCatalog && params.thinkingCatalog.length > 0
-      ? params.thinkingCatalog
-      : allowedModelCatalog.length > 0
-        ? allowedModelCatalog
-        : undefined;
   const fastModeState = resolveFastModeState({
     cfg: params.cfg,
     provider: resolvedProvider,
