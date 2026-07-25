@@ -20,7 +20,7 @@ function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
 
 function result(
   sessions: GatewaySessionRow[],
-  options: { hasMore?: boolean } = {},
+  options: Pick<SessionsListResult, "hasMore" | "nextOffset" | "offset"> = {},
 ): SessionsListResult {
   return {
     ts: 1,
@@ -34,7 +34,7 @@ function result(
 
 function contextFor(listResult: SessionsListResult) {
   const client = {};
-  const list = vi.fn(async () => listResult);
+  const list = vi.fn(async (_options?: { offset?: number; search?: string }) => listResult);
   const context = {
     basePath: "",
     gateway: {
@@ -126,7 +126,7 @@ describe("loadChatRoute", () => {
       ["/chat/main/telegram/12345", "agent:main:telegram:12345"],
       ["/chat/ops/signal/direct/%2B15551212", "agent:ops:signal:direct:+15551212"],
       ["/chat/main/cron/nightly/run/8821", "agent:main:cron:nightly:run:8821"],
-    ]) {
+    ] as const) {
       await expect(
         loadChatRoute(
           context,
@@ -145,7 +145,15 @@ describe("loadChatRoute", () => {
   });
 
   it("falls back from an unmatched short-looking segment to its literal key", async () => {
-    const { context } = contextFor(result([]));
+    const { context, list } = contextFor(result([]));
+    list
+      .mockResolvedValueOnce(
+        result([row({ key: "agent:main:telegram:noise" })], {
+          hasMore: true,
+          nextOffset: 20,
+        }),
+      )
+      .mockResolvedValueOnce(result([], { offset: 20, hasMore: false }));
     await expect(
       loadChatRoute(
         context,
@@ -159,6 +167,62 @@ describe("loadChatRoute", () => {
       draft: undefined,
       face: "chat",
     });
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("queries the full supplied prefix so longer disambiguation links can resolve", async () => {
+    const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
+    const { context, list } = contextFor(result([target]));
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/deploy-monitor-123456780a", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey: target.key,
+      draft: undefined,
+      face: "chat",
+    });
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
+  });
+
+  it("stops prefix pagination at the fixed bound and reports an incomplete result", async () => {
+    const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
+    const { context, list } = contextFor(result([]));
+    for (let page = 0; page < 5; page += 1) {
+      list.mockResolvedValueOnce(
+        result(page === 0 ? [target] : [], {
+          hasMore: true,
+          nextOffset: (page + 1) * 20,
+          offset: page * 20,
+        }),
+      );
+    }
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/dashboard/main/deploy-12345678", search: "", hash: "" },
+        "dashboard",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "ambiguous",
+      shortId: "12345678",
+      truncated: true,
+      candidates: [{ href: expect.stringContaining("123456780aaa40008000000000000001") }],
+    });
+    expect(list).toHaveBeenCalledTimes(5);
+    expect(list.mock.calls.map(([options]) => options?.offset)).toEqual([
+      undefined,
+      20,
+      40,
+      60,
+      80,
+    ]);
   });
 
   it("builds distinct working links for ambiguous prefixes", async () => {
@@ -186,7 +250,7 @@ describe("loadChatRoute", () => {
     ]);
 
     for (const [candidate, expectedRow] of ambiguous.candidates.map(
-      (candidate, index) => [candidate, rows[index]] as const,
+      (entry, index) => [entry, rows[index]] as const,
     )) {
       await expect(
         loadChatRoute(

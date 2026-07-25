@@ -3798,7 +3798,7 @@ export const en: TranslationMap = {
     sessionRoute: {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",
-      additionalMatches: "Additional matches were omitted. Use a longer id prefix.",
+      additionalMatches: "Search results remain. Use a longer id prefix.",
     },
     sessionSharing: {
       menu: "Thread sharing",

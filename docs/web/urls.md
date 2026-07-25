@@ -49,6 +49,10 @@ Every other key uses the literal-key form. Each colon-delimited segment after
 `agent:main:cron:nightly:run:8821` becomes
 `/chat/main/cron/nightly/run/8821`.
 
+Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
+browsers cannot collapse them as relative path segments. A literal segment that
+starts with `~` doubles that leading character to keep the encoding reversible.
+
 Exactly one segment after the agent id matching an optional slug followed by 8
 to 32 hexadecimal characters is parsed as a short reference. Everything else
 is literal-key form. If that short reference has no UUID match, the same path is
@@ -75,7 +79,9 @@ synthesize one.
 
 If one short id matches more than one session, the UI does not guess. It shows a
 small disambiguation view with the matching display names, agents, and longer id
-prefixes. Use a longer prefix to make the URL unique.
+prefixes. Use a longer prefix to make the URL unique. Resolution examines at
+most five pages of search results; if more remain, the view says that the search
+was incomplete instead of guessing.
 
 As of this release, `?session=` and `?face=` are removed. There is no redirect,
 fallback reader, or dual URL format. The Sessions list keeps its own `?session=`

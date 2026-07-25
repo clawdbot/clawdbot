@@ -23,6 +23,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 
 const SESSION_REF_SEARCH_LIMIT = 20;
+const SESSION_REF_SEARCH_MAX_PAGES = 5;
 
 type SessionCandidate = {
   agentId: string;
@@ -61,19 +62,20 @@ export function resolveSessionPrefix(
   result: SessionsListResult,
   shortId: string,
 ): SessionPrefixResolution {
-  const prefix = shortId.toLowerCase().replaceAll("-", "");
-  const sessions = result.sessions.filter((row) => {
-    const keyUuid = controlUiSessionKeyUuid(row.key);
-    return keyUuid?.startsWith(prefix) === true;
-  });
-  if (result.hasMore === true || sessions.length > 1) {
+  const sessions = sessionPrefixMatches(result, shortId);
+  if (sessions.length > 1 || (sessions.length === 1 && result.hasMore === true)) {
     return { kind: "ambiguous", sessions, truncated: result.hasMore === true };
-  }
-  if (sessions.length === 0) {
-    return { kind: "not-found" };
   }
   const session = sessions[0];
   return session ? { kind: "unique", session } : { kind: "not-found" };
+}
+
+function sessionPrefixMatches(result: SessionsListResult, shortId: string): GatewaySessionRow[] {
+  const prefix = shortId.toLowerCase().replaceAll("-", "");
+  return result.sessions.filter((row) => {
+    const keyUuid = controlUiSessionKeyUuid(row.key);
+    return keyUuid?.startsWith(prefix) === true;
+  });
 }
 
 function abortError(signal: AbortSignal): Error {
@@ -132,14 +134,7 @@ async function querySessionPrefix(
     }
     let pending = cache.get(shortId);
     if (!pending) {
-      pending = context.sessions
-        .list({
-          archivedFilter: "all",
-          includeDerivedTitles: true,
-          limit: SESSION_REF_SEARCH_LIMIT,
-          search: shortId.slice(0, 8),
-        })
-        .then((result) => (result ? resolveSessionPrefix(result, shortId) : null));
+      pending = querySessionPrefixPages(context, shortId);
       cache.set(shortId, pending);
     }
     try {
@@ -154,6 +149,49 @@ async function querySessionPrefix(
     }
   }
   throw abortError(signal);
+}
+
+async function querySessionPrefixPages(
+  context: ApplicationContext,
+  shortId: string,
+): Promise<SessionPrefixResolution | null> {
+  const matches = new Map<string, GatewaySessionRow>();
+  let offset = 0;
+  for (let page = 0; ; page += 1) {
+    const result = await context.sessions.list({
+      archivedFilter: "all",
+      includeDerivedTitles: true,
+      limit: SESSION_REF_SEARCH_LIMIT,
+      search: shortId,
+      ...(offset > 0 ? { offset } : {}),
+    });
+    if (!result) {
+      return null;
+    }
+    for (const session of sessionPrefixMatches(result, shortId)) {
+      matches.set(session.key, session);
+    }
+    const sessions = [...matches.values()];
+    if (sessions.length > 1) {
+      return { kind: "ambiguous", sessions, truncated: result.hasMore === true };
+    }
+    if (result.hasMore !== true) {
+      const session = sessions[0];
+      return session ? { kind: "unique", session } : { kind: "not-found" };
+    }
+    if (page === SESSION_REF_SEARCH_MAX_PAGES - 1) {
+      return sessions.length === 0
+        ? { kind: "not-found" }
+        : { kind: "ambiguous", sessions, truncated: true };
+    }
+    const nextOffset = result.nextOffset ?? offset + result.sessions.length;
+    if (nextOffset <= offset) {
+      return sessions.length === 0
+        ? { kind: "not-found" }
+        : { kind: "ambiguous", sessions, truncated: true };
+    }
+    offset = nextOffset;
+  }
 }
 
 function draftFromLocation(location: RouteLocation): string | undefined {
@@ -285,7 +323,11 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   return html`
     <section class="card">
       <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
-      <p>${t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })}</p>
+      <p>
+        ${data.candidates.length > 1
+          ? t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })
+          : t("chat.sessionRoute.additionalMatches")}
+      </p>
       ${data.candidates.map(
         (candidate) => html`
           <p>
@@ -294,7 +336,7 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
           </p>
         `,
       )}
-      ${data.truncated
+      ${data.truncated && data.candidates.length > 1
         ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
         : null}
     </section>
