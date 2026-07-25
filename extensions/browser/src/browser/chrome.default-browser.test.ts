@@ -15,10 +15,12 @@ vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const accessSync = vi.fn();
   const existsSync = vi.fn();
+  const readdirSync = vi.fn();
   const readFileSync = vi.fn();
+  const statSync = vi.fn();
   return mockNodeBuiltinModule(
     async () => actual,
-    { accessSync, constants: actual.constants, existsSync, readFileSync },
+    { accessSync, constants: actual.constants, existsSync, readdirSync, readFileSync, statSync },
     { mirrorToDefault: true },
   );
 });
@@ -69,7 +71,7 @@ describe("browser default executable detection", () => {
 
   function mockExecutableAccessDeniedFor(inaccessiblePath: string): void {
     vi.mocked(fs.accessSync).mockImplementation((candidate) => {
-      if (String(candidate) === inaccessiblePath || !fs.existsSync(candidate)) {
+      if (String(candidate) === inaccessiblePath) {
         throw new Error("EACCES");
       }
     });
@@ -79,10 +81,13 @@ describe("browser default executable detection", () => {
     vi.mocked(execFileSync).mockReset();
     vi.mocked(fs.accessSync).mockReset();
     vi.mocked(fs.existsSync).mockReset();
-    vi.mocked(fs.accessSync).mockImplementation((candidate) => {
+    vi.mocked(fs.readdirSync).mockReset();
+    vi.mocked(fs.statSync).mockReset();
+    vi.mocked(fs.statSync).mockImplementation((candidate) => {
       if (!fs.existsSync(candidate)) {
         throw new Error("ENOENT");
       }
+      return { isFile: () => true } as fs.Stats;
     });
     vi.mocked(fs.readFileSync).mockReset();
     vi.mocked(os.homedir).mockReset();
@@ -121,6 +126,27 @@ describe("browser default executable detection", () => {
     });
     expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
       kind: "chrome",
+      path: executableCandidate,
+    });
+  });
+
+  it("skips directories in the Playwright browser cache", () => {
+    const browserCache = "/tmp/browsers";
+    const directoryCandidate = `${browserCache}/chromium-100/chrome-linux64/chrome`;
+    const executableCandidate = `${browserCache}/chromium-100/chrome-linux/chrome`;
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", browserCache);
+    vi.mocked(fs.readdirSync).mockReturnValue(["chromium-100"] as never);
+    vi.mocked(fs.statSync).mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value !== directoryCandidate && value !== executableCandidate) {
+        throw new Error("ENOENT");
+      }
+      return { isFile: () => value === executableCandidate } as fs.Stats;
+    });
+
+    const config = {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0];
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chromium",
       path: executableCandidate,
     });
   });
