@@ -917,46 +917,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
   });
 
-  it("ignores an expired claim on another board when reserving owner capacity", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const expired = await store.create({
-      title: "Expired product review",
-      status: "review",
-      agentId: "codex-main",
-      boardId: "product",
-    });
-    const claimed = await store.claim(expired.id, {
-      ownerId: "codex-main",
-      token: "expired-token",
-      ttlSeconds: 1,
-    });
-    const ready = await store.create({
-      title: "Ready ops work",
-      status: "ready",
-      agentId: "codex-main",
-      boardId: "ops",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-ops" });
-    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
-    expect(expiresAt).toBeDefined();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: {
-        now: expiresAt! + CLAIM_RECLAIM_GRACE_MS + 1,
-        maxStarts: 1,
-        boardId: "ops",
-      },
-    });
-
-    expect(result.started).toEqual([expect.objectContaining({ cardId: ready.id })]);
-    expect(run).toHaveBeenCalledOnce();
-    expect((await store.get(expired.id))?.metadata?.claim).toBeDefined();
-  });
-
-  it("ignores a reclaimable running card on another board for owner capacity", async () => {
+  it("keeps a running card in capacity until its claim is reclaimable", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const stale = await store.create({
       title: "Abandoned product run",
@@ -988,58 +949,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     const expiresAt = claimed.card.metadata?.claim?.expiresAt;
     expect(expiresAt).toBeDefined();
 
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: {
-        now: expiresAt! + CLAIM_RECLAIM_GRACE_MS + 1,
-        maxStarts: 1,
-        boardId: "ops",
-      },
-    });
-
-    expect(result.started).toEqual([expect.objectContaining({ cardId: ready.id })]);
-    expect(run).toHaveBeenCalledOnce();
-    await expect(store.get(stale.id)).resolves.toMatchObject({
-      status: "running",
-      execution: { status: "running" },
-      metadata: { claim: { ownerId: "codex-main" } },
-    });
-  });
-
-  it("keeps a live running card in the owner capacity slot", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const active = await store.create({
-      title: "Active product run",
-      status: "running",
-      agentId: "codex-main",
-      boardId: "product",
-      execution: {
-        id: "active-execution",
-        kind: "agent-session",
-        mode: "autonomous",
-        status: "running",
-        startedAt: 1,
-        updatedAt: 1,
-      },
-    });
-    const claimed = await store.claim(active.id, {
-      ownerId: "codex-main",
-      token: "active-token",
-      ttlSeconds: 60,
-    });
-    await store.create({
-      title: "Ready ops work",
-      status: "ready",
-      agentId: "codex-main",
-      boardId: "ops",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-ops" });
-    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
-    expect(expiresAt).toBeDefined();
-
-    const result = await dispatchAndStartWorkboardCards({
+    const withinGrace = await dispatchAndStartWorkboardCards({
       store,
       subagent: { run },
       options: {
@@ -1049,8 +959,31 @@ describe("dispatchAndStartWorkboardCards", () => {
       },
     });
 
-    expect(result.started).toEqual([]);
+    expect(withinGrace.started).toEqual([]);
     expect(run).not.toHaveBeenCalled();
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      status: "running",
+      execution: { status: "running" },
+      metadata: { claim: { ownerId: "codex-main" } },
+    });
+
+    const reclaimable = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        now: expiresAt! + CLAIM_RECLAIM_GRACE_MS + 1,
+        maxStarts: 1,
+        boardId: "ops",
+      },
+    });
+
+    expect(reclaimable.started).toEqual([expect.objectContaining({ cardId: ready.id })]);
+    expect(run).toHaveBeenCalledOnce();
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      status: "running",
+      execution: { status: "running" },
+      metadata: { claim: { ownerId: "codex-main" } },
+    });
   });
 
   it("keeps claimed review cards in the owner running slot", async () => {
