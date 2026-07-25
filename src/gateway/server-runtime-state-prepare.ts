@@ -13,6 +13,10 @@ import {
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import {
+  isReadinessCriterionSelected,
+  MODEL_ROUTE_READY_CRITERION_ID,
+} from "../readiness/activation.js";
 import { buildRuntimeReadiness, type PluginReadinessInput } from "../readiness/conditions.js";
 import { captureExecutionCapabilityReadinessSnapshot } from "../readiness/execution-capabilities.js";
 import { createSelectedReadinessResolver } from "../readiness/selection.js";
@@ -139,10 +143,7 @@ export async function prepareGatewayRuntimeState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
   } = bootstrap;
-  const buildReadinessRuntimeSnapshot = (
-    config: OpenClawConfig,
-    registry: typeof pluginBootstrap.pluginRegistry,
-  ) => ({
+  const makeState = (config: OpenClawConfig, registry: typeof pluginBootstrap.pluginRegistry) => ({
     config,
     registry,
     executionCapabilities: captureExecutionCapabilityReadinessSnapshot(config),
@@ -150,8 +151,12 @@ export async function prepareGatewayRuntimeState(params: {
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
-    buildReadinessRuntimeSnapshot,
-    readinessSnapshot: buildReadinessRuntimeSnapshot(cfgAtStart, pluginBootstrap.pluginRegistry),
+    makeState,
+    modelRouteReadinessStartupOptions: (config: OpenClawConfig) =>
+      isReadinessCriterionSelected(config, MODEL_ROUTE_READY_CRITERION_ID)
+        ? { enabled: true as const }
+        : {},
+    readinessSnapshot: makeState(cfgAtStart, pluginBootstrap.pluginRegistry),
   };
   // Unconfigured clean installs get no service; durable rows still need list/status projection.
   const hasConfiguredWorkerProfiles =
