@@ -1019,6 +1019,7 @@ describe.sequential("TUI PTY harness", () => {
         (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "after new"),
       );
       expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
+      await fixture.run.waitForOutput("PTY_RESPONSE: after new");
     },
     TEST_TIMEOUT_MS,
   );
