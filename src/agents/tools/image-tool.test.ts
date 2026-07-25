@@ -2774,13 +2774,42 @@ describe("image tool MiniMax VLM routing", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("clamps pathological maxImages to prevent unbounded gate bypass", async () => {
+  it("clamps pathological maxImages across the 100-image threshold", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
-    // Eleven unique small PNGs exceed the user-set maxImages=3 but are
-    // well below the DEFAULT_MAX_IMAGES=20 floor and the MAX_IMAGES_CAP=100.
-    // Without clamping, maxImages=1_000_000_000 would pass through and
-    // silently accept millions of image references.
+    // 101 unique tiny PNGs cross the clamped threshold (100) so the
+    // gate must fire. Without the clamp, maxImages=1_000_000_000 would
+    // pass through and silently accept millions of image references.
+    // Each image has a distinct red channel to bypass the URI dedup.
+    const tooMany = Array.from({ length: 101 }, (_, i) => {
+      const buf = Buffer.alloc(4, 255);
+      buf[0] = i;
+      return `data:image/png;base64,${encodePngRgba(buf, 1, 1).toString("base64")}`;
+    });
+    const result = await tool.execute("t1", {
+      prompt: "Describe.",
+      images: tooMany,
+      maxImages: 1_000_000_000,
+    });
+
+    // The gate fires because 101 > 100 (clamped), not 101 > 1_000_000_000.
+    expect(result.content).toEqual([
+      { type: "text", text: "Too many images: 101 provided, maximum is 100. Please reduce the number of images." },
+    ]);
+    expect(result.details).toMatchObject({
+      error: "too_many_images",
+      count: 101,
+      max: 100,
+    });
+    // No fetch — the gate exits before any image processing.
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts below-cap images when maxImages is pathological but count is safe", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    // 3 images with pathological maxImages=1_000_000_000: clamp gives
+    // 100, and 3 < 100 so the gate passes normally.
     const many = await tool.execute("t1", {
       prompt: "Describe.",
       images: [
@@ -2791,27 +2820,44 @@ describe("image tool MiniMax VLM routing", () => {
       maxImages: 1_000_000_000,
     });
 
-    // With 3 unique images and a clamped cap of 100, each image is loaded
-    // and described individually by the MiniMax VLM. The pathological
-    // maxImages=1_000_000_000 does not cause a crash or unexpected rejection.
     expect(fetch).toHaveBeenCalledTimes(3);
     expect((many.details as { images?: unknown[] } | undefined)?.images).toHaveLength(3);
   });
 
-  it("clamps pathological maxBytesMb to a safe upper bound", async () => {
+  it("clamps pathological maxBytesMb to the cap", async () => {
     // pickMaxBytes receives the megabytes value and converts to bytes.
     // A pathological model input (1e9 MB ≈ 1 PB) must not allocate.
     const api = (globalThis as Record<PropertyKey, unknown>)[
       Symbol.for("openclaw.imageToolTestApi")
-    ] as { pickMaxBytes: (cfg: undefined, maxBytesMb: number) => number | undefined } | undefined;
+    ] as { pickMaxBytes: (cfg: unknown, maxBytesMb: number) => number | undefined } | undefined;
     expect(api?.pickMaxBytes).toBeDefined();
-
-    const normal = api!.pickMaxBytes(undefined, 10);
-    expect(normal).toBe(10 * 1024 * 1024);
 
     const clamped = api!.pickMaxBytes(undefined, 1_000_000_000);
     // 1e9 MB clamped to MAX_IMAGE_MB_CAP=100 → 100 * 1024 * 1024 bytes
     expect(clamped).toBe(100 * 1024 * 1024);
+  });
+
+  it("passes below-cap maxBytesMb through pickMaxBytes unchanged", async () => {
+    const api = (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.imageToolTestApi")
+    ] as { pickMaxBytes: (cfg: unknown, maxBytesMb: number) => number | undefined } | undefined;
+    expect(api?.pickMaxBytes).toBeDefined();
+
+    const result = api!.pickMaxBytes(undefined, 50);
+    // 50 < 100 cap → pass through unchanged
+    expect(result).toBe(50 * 1024 * 1024);
+  });
+
+  it("falls through to configured mediaMaxMb when maxBytesMb is omitted", async () => {
+    const api = (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.imageToolTestApi")
+    ] as { pickMaxBytes: (cfg: unknown, maxBytesMb?: number) => number | undefined } | undefined;
+    expect(api?.pickMaxBytes).toBeDefined();
+
+    // No model-supplied value → falls through to operator config
+    const cfg = { agents: { defaults: { mediaMaxMb: 75 } } } as OpenClawConfig;
+    const result = api!.pickMaxBytes(cfg, undefined);
+    expect(result).toBe(75 * 1024 * 1024);
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

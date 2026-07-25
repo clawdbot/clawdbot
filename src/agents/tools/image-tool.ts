@@ -48,6 +48,7 @@ import {
 } from "../model-fallback-candidates.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
+import { logWarn } from "../../logger.js";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "./common.js";
 import {
   coerceImageAssistantText,
@@ -427,6 +428,9 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
   if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
     // Model-supplied maxBytesMb is clamped to prevent pathological allocations in
     // image compression pipelines. Operator config (mediaMaxMb) is not clamped here.
+    if (maxBytesMb > MAX_IMAGE_MB_CAP) {
+      logWarn(`image-tool: maxBytesMb clamped from ${maxBytesMb} to ${MAX_IMAGE_MB_CAP}`);
+    }
     return Math.floor(Math.min(maxBytesMb, MAX_IMAGE_MB_CAP) * 1024 * 1024);
   }
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
@@ -958,6 +962,9 @@ export function createImageTool(options?: {
       const maxImagesRaw = readPositiveIntegerParam(record, "maxImages");
       const maxImages =
         maxImagesRaw === undefined ? DEFAULT_MAX_IMAGES : Math.min(maxImagesRaw, MAX_IMAGES_CAP);
+      if (maxImagesRaw !== undefined && maxImagesRaw > MAX_IMAGES_CAP) {
+        logWarn(`image-tool: maxImages clamped from ${maxImagesRaw} to ${MAX_IMAGES_CAP}`);
+      }
       if (imageInputs.length > maxImages) {
         return {
           content: [
