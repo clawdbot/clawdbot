@@ -6,10 +6,12 @@ Record campaign-wide facts:
 
 - The operator's current requested target and minimum soak duration; update the active target without erasing earlier historical progress.
 - Exact current `origin/main` SHA and refresh time.
+- The single refresh coordinator; native-operation pauses and proof that each post-merge fetched baseline contains the recorded merge SHA.
 - At least ten named, meaningfully distinct active subsystem lanes.
 - Owned gateway ports, isolated state, health, CPU/memory/load, and remote lease state.
 - Actual live provider and selected model without credential material.
 - Soak start, elapsed time, pass/fail/skip counts, and whether completion was actually reached.
+- Both current author-limit workflows, complete author count, and actual author, repository-role, bot/app, branch-prefix, or override exemption, if one is proved.
 
 For each candidate use one explicit state:
 

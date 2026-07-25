@@ -4,7 +4,7 @@ Update the operator-requested report throughout the run. Never place credentials
 
 ## Campaign header
 
-Record the user-approved scope, current requested fix target, actual start time, requested soak duration, current immutable `origin/main` SHA, authorized landing policy, report location, and machine-load budget. Update the current baseline after every safe refresh. If the user changes the target, update the active goal and every current ledger denominator while preserving historical time-stamped progress; never treat the old target as campaign completion.
+Record the user-approved scope, current requested fix target, actual start time, requested soak duration, current immutable `origin/main` SHA, authorized landing policy, report location, and machine-load budget. Record the orchestrator responsible for serialized remote-ref updates. After each landing, record the post-merge fetched baseline only after proving that it contains the recorded merge commit. If the user changes the target, update the active goal and every current ledger denominator while preserving historical time-stamped progress; never treat the old target as campaign completion.
 
 ## Audit lane
 
@@ -22,6 +22,8 @@ lane:
 ```
 
 Maintain at least ten active, differently scoped lanes whenever independent worker execution is authorized. Treat permission to fetch, contact a provider, or run an externally hosted model as a separate network constraint. Track blocked worker, network, remote, and device capacity explicitly. A finished worker, future worker, unstarted process, sequential inspection, or duplicate subsystem is not an active lane. For a single-agent task, inspect ten distinct surfaces but report the actual concurrency and independent-verification limitation.
+
+Freeze one baseline per worker wave. A worker may inspect that immutable SHA without independently refreshing shared remote refs. During native PR preparation or merge, pause worker fetches and let the orchestrator own `origin/main`. After a verified landing, fetch again, prove the merge commit is contained in the fetched ref, broadcast that full new SHA, and then resume workers.
 
 ## Bug ledger
 

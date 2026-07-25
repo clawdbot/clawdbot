@@ -1,6 +1,6 @@
 # Current-source subsystem lanes
 
-Freeze `origin/main` before starting a wave. Inspect root and scoped `AGENTS.md`, owner boundaries, tests, callers, sibling implementations, package scripts, and current GitHub history. File locations are discovery starting points, not a claim that a particular file, scenario ID, route, or model still exists.
+Freeze `origin/main` before starting a wave. Let only the orchestrator update the shared remote ref; pause refreshes during native PR preparation and merge. Fetch again after landing, verify that the fetched baseline contains the canonical merge commit, and give each resumed worker that final frozen SHA. Inspect root and scoped `AGENTS.md`, owner boundaries, tests, callers, sibling implementations, package scripts, and current GitHub history. File locations are discovery starting points, not a claim that a particular file, scenario ID, route, or model still exists.
 
 Maintain at least ten distinct active investigations. Split any large area into smaller leaf tasks:
 
