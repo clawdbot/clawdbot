@@ -550,8 +550,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!this.execNode && !keepSelectedFolder && !this.pendingCloud.sessionKey) {
       const workspace = this.workspacePath();
       const storedWorkspaceMoved =
-        Boolean(preference?.folder) &&
-        preference?.folder === preference.workspace &&
+        preference !== null &&
+        Boolean(preference.folder) &&
+        preference.folder === preference.workspace &&
         preference.workspace !== workspace;
       // An old agent workspace path is not a custom folder. If the configured
       // workspace moved, use the current value instead of reviving the stale path.
