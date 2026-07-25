@@ -4,6 +4,7 @@ import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
+const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
 export type RealtimeServerEvent = {
   type?: string;
@@ -36,12 +37,33 @@ type PendingOfferRequest = {
   timeout: ReturnType<typeof globalThis.setTimeout>;
 };
 
+function resolveRealtimeTalkOfferUrl(offerUrl: string | undefined, gatewayUrl: string): string {
+  const target = offerUrl ?? OPENAI_REALTIME_CALLS_URL;
+  try {
+    return new URL(target).toString();
+  } catch {
+    // Relative broker routes belong to the connected Gateway, which may not
+    // share the Control UI document origin.
+  }
+  const gateway = new URL(gatewayUrl, window.location.href);
+  if (gateway.protocol === "ws:") {
+    gateway.protocol = "http:";
+  } else if (gateway.protocol === "wss:") {
+    gateway.protocol = "https:";
+  }
+  gateway.pathname = "/";
+  gateway.search = "";
+  gateway.hash = "";
+  return new URL(target, gateway).toString();
+}
+
 export class RealtimeTalkWebRtcOfferExchange {
   private pendingRequest: PendingOfferRequest | null = null;
 
   async readAnswer(params: {
     session: RealtimeTalkWebRtcSdpSessionResult;
     offer: RTCSessionDescriptionInit;
+    gatewayUrl: string;
     isCurrent: () => boolean;
   }): Promise<string | undefined> {
     const request = this.beginRequest();
@@ -49,7 +71,7 @@ export class RealtimeTalkWebRtcOfferExchange {
       let response: Response;
       try {
         response = await fetch(
-          params.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls",
+          resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
           {
             method: "POST",
             body: params.offer.sdp,

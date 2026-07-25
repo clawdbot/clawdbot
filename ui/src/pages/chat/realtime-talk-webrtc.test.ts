@@ -320,6 +320,37 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("resolves relative offer routes against the connected Gateway", async () => {
+    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "reservation-token",
+        offerUrl: "/plugins/codex/realtime/calls",
+      },
+      {
+        client: { gatewayUrl: "wss://gateway.example.test/control?tenant=a" } as never,
+        sessionKey: "main",
+        callbacks: {},
+      },
+    );
+
+    await transport.start();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://gateway.example.test/plugins/codex/realtime/calls",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer reservation-token",
+        }),
+      }),
+    );
+    transport.stop();
+  });
+
   it("aborts stalled WebRTC SDP answer body reads after the offer timeout", async () => {
     vi.useFakeTimers();
     let offerSignal: AbortSignal | undefined;

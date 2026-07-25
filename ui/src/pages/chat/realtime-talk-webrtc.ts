@@ -164,6 +164,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     const answerSdp = await this.offerExchange.readAnswer({
       session: this.session,
       offer,
+      gatewayUrl: this.ctx.client.gatewayUrl,
       isCurrent: () => this.isCurrentPeer(peer),
     });
     if (answerSdp === undefined) {
