@@ -234,15 +234,6 @@ export async function resolveTrustedExecutablePath(targetPath) {
   return await assertTrustedPath(targetPath);
 }
 
-export async function resolveTrustedWindowsSystemExecutablePath(targetPath) {
-  if (!path.isAbsolute(targetPath)) {
-    throw new Error(`Executable path must be absolute: ${targetPath}`);
-  }
-  return await assertTrustedPath(targetPath, new Set(), {
-    allowWindowsTargetTrustedInstaller: true,
-  });
-}
-
 export async function resolveTrustedOnePasswordDirectoryPath(targetPath) {
   if (!path.isAbsolute(targetPath)) {
     throw new Error(`Directory path must be absolute: ${targetPath}`);

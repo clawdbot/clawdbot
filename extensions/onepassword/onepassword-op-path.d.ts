@@ -1,7 +1,5 @@
 export function resolveTrustedExecutablePath(targetPath: string): Promise<string>;
 
-export function resolveTrustedWindowsSystemExecutablePath(targetPath: string): Promise<string>;
-
 export function resolveTrustedOnePasswordDirectoryPath(targetPath: string): Promise<string>;
 
 export function resolveTrustedOnePasswordCli(options?: {
