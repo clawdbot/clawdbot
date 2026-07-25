@@ -55,22 +55,18 @@ export function uriAction(label: string, uri: string): Action {
  * Create a postback action (sends data to webhook when tapped)
  */
 export function postbackAction(label: string, data: string, displayText?: string): Action {
+  const boundedData = truncateLineActionData(data);
+  if (boundedData !== data) {
+    // Callback data is opaque and echoed back by LINE. Never dispatch a value
+    // whose identity changed merely to satisfy the transport cap.
+    return unavailableAction("Action", "callback data exceeds LINE's limit.");
+  }
   return {
     type: "postback",
     label: truncateLineActionLabel(label),
-    data: truncateLineActionData(data),
+    data: boundedData,
     displayText: displayText === undefined ? undefined : truncateLineActionData(displayText),
   };
-}
-
-export function postbackOrUnavailableAction(label: string, data: string): Action {
-  const action = postbackAction(label, data);
-  if (action.type === "postback" && action.data === data) {
-    return action;
-  }
-  // Never expose the generic postback truncation for opaque card callbacks;
-  // a visible unavailable action is safer than dispatching altered data.
-  return unavailableAction("Action", "callback data exceeds LINE's limit.");
 }
 
 /**
@@ -86,10 +82,14 @@ export function datetimePickerAction(
     min?: string;
   },
 ): Action {
+  const boundedData = truncateLineActionData(data);
+  if (boundedData !== data) {
+    return unavailableAction("Action", "callback data exceeds LINE's limit.");
+  }
   return {
     type: "datetimepicker",
     label: truncateLineActionLabel(label),
-    data: truncateLineActionData(data),
+    data: boundedData,
     mode,
     initial: options?.initial,
     max: options?.max,

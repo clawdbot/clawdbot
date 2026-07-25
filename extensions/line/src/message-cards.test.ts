@@ -372,18 +372,19 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(loneHighSurrogate.test(action.label)).toBe(false);
   });
 
-  it("postbackAction truncates label and data on surrogate boundaries", () => {
+  it("postbackAction truncates labels but visibly disables overlong callback data", () => {
     // 299 ASCII chars + 😀 = 301 code units; the 300-unit slice cuts the emoji.
     const data = `${"d".repeat(299)}😀`;
-    const action = postbackAction(labelWithEmoji, data) as {
-      label: string;
-      data: string;
-    };
+    const action = postbackAction(labelWithEmoji, "data") as { label: string };
+    const unavailable = postbackAction("Label", data);
 
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);
-    expect(action.data).toBe("d".repeat(299));
-    expect(loneHighSurrogate.test(action.data)).toBe(false);
+    expect(unavailable).toEqual({
+      type: "message",
+      label: "Action unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    });
   });
 
   it("postbackAction truncates displayText on surrogate boundaries but keeps undefined", () => {
@@ -398,20 +399,21 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(withoutDisplay.displayText).toBeUndefined();
   });
 
-  it("datetimePickerAction truncates label and data on surrogate boundaries", () => {
+  it("datetimePickerAction truncates labels but visibly disables overlong callback data", () => {
     const data = `${"d".repeat(299)}😀`;
-    const action = datetimePickerAction(labelWithEmoji, data, "datetime") as {
-      label: string;
-      data: string;
-    };
+    const action = datetimePickerAction(labelWithEmoji, "data", "datetime") as { label: string };
+    const unavailable = datetimePickerAction("Pick", data, "datetime");
 
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);
-    expect(action.data).toBe("d".repeat(299));
-    expect(loneHighSurrogate.test(action.data)).toBe(false);
+    expect(unavailable).toEqual({
+      type: "message",
+      label: "Action unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    });
   });
 
-  it("/card action command uses surrogate-safe labels and postback data", async () => {
+  it("/card action command visibly disables overlong callback data", async () => {
     const registerCommand = (command: unknown) => {
       const { handler } = command as {
         handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
@@ -425,7 +427,13 @@ describe("action label/data surrogate-safe truncation", () => {
       channelData: {
         line: {
           flexMessage: {
-            contents: { footer: { contents: Array<{ action: { label: string; data: string } }> } };
+            contents: {
+              footer: {
+                contents: Array<{
+                  action: { type: string; label: string; text?: string };
+                }>;
+              };
+            };
           };
         };
       };
@@ -435,10 +443,11 @@ describe("action label/data surrogate-safe truncation", () => {
       "LINE flex-message footer action",
     ).action;
 
-    expect(action.label).toBe("1234567890123456789");
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
-    expect(action.data).toBe(`k=${"d".repeat(297)}`);
-    expect(loneHighSurrogate.test(action.data)).toBe(false);
+    expect(action).toEqual({
+      type: "message",
+      label: "Action unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    });
   });
 
   it("/card receipt altText truncates on a surrogate boundary", async () => {
@@ -498,7 +507,7 @@ describe("action label/data surrogate-safe truncation", () => {
     });
   });
 
-  it("buttons template payload uri actions truncate past the 1000-unit cap", () => {
+  it("buttons template payload visibly disables URIs past the 1000-unit cap", () => {
     const template = buildTemplateMessageFromPayload({
       type: "buttons",
       text: "Pick",
@@ -516,6 +525,23 @@ describe("action label/data surrogate-safe truncation", () => {
       type: "message",
       label: "Link unavailable",
       text: "Link unavailable: URL exceeds LINE's limit.",
+    });
+  });
+
+  it("buttons template payload visibly disables overlong postback data", () => {
+    const template = buildTemplateMessageFromPayload({
+      type: "buttons",
+      text: "Pick",
+      actions: [{ type: "postback", label: "Open", data: `action=open&token=${"x".repeat(300)}` }],
+    });
+    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
+      actions: Array<{ type: string; label?: string; text?: string }>;
+    };
+
+    expect(buttonsTemplate.actions[0]).toEqual({
+      type: "message",
+      label: "Action unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
     });
   });
 
