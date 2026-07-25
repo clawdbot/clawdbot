@@ -144,9 +144,9 @@ describeControlUiE2e("Control UI route CSS mocked Gateway E2E", () => {
       expect(skillsStyles.tableDisplay).toBe("block");
       expect(skillsStyles.taskListStyle).toBe("none");
 
-      const chatResponse = await page.goto(`${server.baseUrl}chat`);
+      const chatResponse = await page.goto(`${server.baseUrl}chat?session=main`);
       expect(chatResponse?.status()).toBe(200);
-      await page.locator(".chat-page").waitFor();
+      await page.locator("openclaw-chat-page").waitFor();
 
       const chatMarkdownStyles = await page.evaluate(() => {
         const probe = document.createElement("div");
