@@ -51,15 +51,11 @@ export function getRealtimeTranscriptionProvider(
   if (!normalized) {
     return undefined;
   }
-  const directProvider = resolvePluginCapabilityProvider({
+  return resolvePluginCapabilityProvider({
     key: "realtimeTranscriptionProviders",
     providerId: normalized,
     cfg,
   });
-  if (directProvider) {
-    return directProvider;
-  }
-  return buildProviderMaps(cfg).aliases.get(normalized);
 }
 
 /** Canonicalizes a configured provider id while preserving unknown ids. */

@@ -574,7 +574,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
         fixHint:
-          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -587,7 +587,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
         fixHint:
-          "Reduce the file size or tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -597,7 +597,7 @@ const bootstrapSizeCheck: HealthCheck = {
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
         fixHint:
-          "Reduce bootstrap file sizes or tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
+          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
       });
     }
     return findings;

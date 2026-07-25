@@ -19,71 +19,183 @@ import {
 } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
-export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
+type TaskDisplayFacts = {
+  active: boolean;
+  finishedDuration?: string;
+  startedMs: number;
+  timestamp: number;
+  title: string;
+  toolUseCount: number;
+  transcriptSessionKey?: string;
+};
+
+function taskDisplayFacts(task: TaskSummary): TaskDisplayFacts {
   const active = isActiveTask(task);
-  const title = taskTitle(task);
-  const detail = taskDetail(task);
-  const timestamp = taskTimestampMs(task.updatedAt ?? task.createdAt);
   const startedMs = taskTimestampMs(task.startedAt ?? task.createdAt);
   const endedMs = taskTimestampMs(task.endedAt);
-  const finishedDuration =
-    !active && endedMs > startedMs && startedMs > 0
-      ? formatDurationCompact(endedMs - startedMs, { spaced: true })
-      : undefined;
-  const toolUseCount = task.toolUseCount ?? 0;
-  const transcriptSessionKey = task.childSessionKey ?? task.sessionKey;
-  const cancelling = props.cancellingTaskIds.has(task.id);
+  return {
+    active,
+    finishedDuration:
+      !active && endedMs > startedMs && startedMs > 0
+        ? formatDurationCompact(endedMs - startedMs, { spaced: true })
+        : undefined,
+    startedMs,
+    timestamp: taskTimestampMs(task.updatedAt ?? task.createdAt),
+    title: taskTitle(task),
+    toolUseCount: task.toolUseCount ?? 0,
+    transcriptSessionKey: task.childSessionKey ?? task.sessionKey,
+  };
+}
+
+function renderTaskMeta(
+  task: TaskSummary,
+  props: BackgroundTasksProps,
+  facts: TaskDisplayFacts,
+): TemplateResult {
   const tone = STATUS_TONES[task.status];
-  const expanded = props.selectedTaskId === task.id;
-  const detailedTask = props.taskDetails.get(task.id);
-  const detailLoading = props.taskDetailLoadingIds.has(task.id);
-  const detailError = props.taskDetailErrors.get(task.id);
-  // List/events and lookup can race; newest activity owns mutable output.
-  const output = taskDetail(newestTaskSnapshot(task, detailedTask));
-  const disclosureLabel = expanded
-    ? t("chat.backgroundTasks.collapseTask", { title })
-    : t("chat.backgroundTasks.expandTask", { title });
+  const showTranscript = task.runtime !== "subagent" && facts.transcriptSessionKey;
+  return html`
+    <div class="chat-tasks-rail__task-meta">
+      <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
+        >${backgroundTaskStatusLabel(task)}</span
+      >
+      <span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+      <span>${taskRuntimeLabel(task)}</span>
+      ${facts.active && facts.startedMs > 0
+        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+            <span
+              ><openclaw-elapsed-time .startMs=${facts.startedMs}></openclaw-elapsed-time
+            ></span>`
+        : nothing}
+      ${facts.finishedDuration
+        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+            <span>${facts.finishedDuration}</span>`
+        : nothing}
+      ${!facts.active && facts.timestamp > 0
+        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+            <span title=${formatMs(facts.timestamp)}
+              >${formatRelativeTimestamp(facts.timestamp)}</span
+            >`
+        : nothing}
+      ${facts.toolUseCount > 0
+        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+            <span
+              >${facts.toolUseCount === 1
+                ? t("chat.backgroundTasks.toolUseOne")
+                : t("chat.backgroundTasks.toolUseMany", {
+                    count: String(facts.toolUseCount),
+                  })}</span
+            >`
+        : nothing}
+      ${facts.active && task.lastToolName
+        ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+            <span class="chat-tasks-rail__task-tool">${task.lastToolName}</span>`
+        : nothing}
+      ${showTranscript
+        ? html`
+            <button
+              class="chat-tasks-rail__task-transcript"
+              type="button"
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                props.onOpenSession(facts.transcriptSessionKey!);
+              }}
+            >
+              ${t("chat.backgroundTasks.viewTranscript")}
+            </button>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
+  const facts = taskDisplayFacts(task);
+  const detail = taskDetail(task);
+  const cancelling = props.cancellingTaskIds.has(task.id);
   return html`
     <div
-      class="chat-tasks-rail__task ${expanded ? "chat-tasks-rail__task--expanded" : ""}"
+      class="chat-tasks-rail__task"
       role="listitem"
       data-task-id=${task.id}
       @click=${(event: MouseEvent) => {
         const target = event.target;
-        if (
-          target instanceof Element &&
-          target.closest("button, a, .chat-tasks-rail__task-inspector")
-        ) {
+        if (target instanceof Element && target.closest("button, a")) {
           return;
         }
-        props.onToggleTask(task);
+        props.onSelectTask(task);
       }}
     >
       <div class="chat-tasks-rail__task-head">
         <button
           class="chat-tasks-rail__task-disclosure"
           type="button"
-          aria-label=${disclosureLabel}
-          aria-expanded=${String(expanded)}
-          @click=${() => props.onToggleTask(task)}
+          aria-label=${t("chat.backgroundTasks.expandTask", { title: facts.title })}
+          @click=${() => props.onSelectTask(task)}
         >
           ${task.status === "running"
             ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
             : nothing}
-          <openclaw-tooltip .content=${title}>
-            <span class="chat-tasks-rail__task-title">${title}</span>
+          <openclaw-tooltip .content=${facts.title}>
+            <span class="chat-tasks-rail__task-title">${facts.title}</span>
           </openclaw-tooltip>
           <span class="chat-tasks-rail__task-chevron" aria-hidden="true">
-            ${expanded ? icons.chevronDown : icons.chevronRight}
+            ${icons.chevronRight}
           </span>
         </button>
-        ${active && props.canCancel
+        ${facts.active && props.canCancel
           ? html`
-              <openclaw-tooltip .content=${t("chat.backgroundTasks.stopTask", { title })}>
+              <openclaw-tooltip
+                .content=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
+              >
                 <button
                   class="chat-tasks-rail__task-stop"
                   type="button"
-                  aria-label=${t("chat.backgroundTasks.stopTask", { title })}
+                  aria-label=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
+                  ?disabled=${cancelling || !props.connected}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    props.onCancel(task.id);
+                  }}
+                >
+                  ${cancelling ? icons.loader : icons.stop}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
+      </div>
+      ${renderTaskMeta(task, props, facts)}
+      ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
+    </div>
+  `;
+}
+
+export function renderTaskDetail(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
+  const detailedTask = props.taskDetails.get(task.id);
+  const newest = newestTaskSnapshot(task, detailedTask);
+  const facts = taskDisplayFacts(newest);
+  const output = taskDetail(newest);
+  const detailLoading = props.taskDetailLoadingIds.has(task.id);
+  const detailError = props.taskDetailErrors.get(task.id);
+  const cancelling = props.cancellingTaskIds.has(task.id);
+  return html`
+    <div class="chat-tasks-rail__detail" data-task-detail=${task.id}>
+      <div class="chat-tasks-rail__detail-summary">
+        <div class="chat-tasks-rail__detail-status-line">
+          ${newest.status === "running"
+            ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+            : nothing}
+          ${renderTaskMeta(newest, props, facts)}
+        </div>
+        ${facts.active && props.canCancel
+          ? html`
+              <openclaw-tooltip
+                .content=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
+              >
+                <button
+                  class="btn btn--ghost btn--sm chat-tasks-rail__detail-stop"
+                  type="button"
+                  aria-label=${t("chat.backgroundTasks.stopTask", { title: facts.title })}
                   ?disabled=${cancelling || !props.connected}
                   @click=${() => props.onCancel(task.id)}
                 >
@@ -93,80 +205,36 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
             `
           : nothing}
       </div>
-      <div class="chat-tasks-rail__task-meta">
-        <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
-          >${backgroundTaskStatusLabel(task)}</span
-        >
-        <span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-        <span>${taskRuntimeLabel(task)}</span>
-        ${active && startedMs > 0
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span><openclaw-elapsed-time .startMs=${startedMs}></openclaw-elapsed-time></span>`
-          : nothing}
-        ${finishedDuration
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span>${finishedDuration}</span>`
-          : nothing}
-        ${!active && timestamp > 0
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
-          : nothing}
-        ${toolUseCount > 0
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span
-                >${toolUseCount === 1
-                  ? t("chat.backgroundTasks.toolUseOne")
-                  : t("chat.backgroundTasks.toolUseMany", { count: String(toolUseCount) })}</span
-              >`
-          : nothing}
-        ${active && task.lastToolName
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span class="chat-tasks-rail__task-tool">${task.lastToolName}</span>`
-          : nothing}
-        ${transcriptSessionKey
-          ? html`
-              <button
-                class="chat-tasks-rail__task-transcript"
-                type="button"
-                @click=${() => props.onOpenSession(transcriptSessionKey)}
-              >
-                ${t("chat.backgroundTasks.viewTranscript")}
-              </button>
-            `
-          : nothing}
-      </div>
-      ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
-      ${expanded
-        ? html`
-            <div class="chat-tasks-rail__task-inspector" data-task-inspector=${task.id}>
-              ${detailLoading
-                ? html`<div class="chat-tasks-rail__task-inspector-state">
-                    ${t("chat.backgroundTasks.detailLoading")}
-                  </div>`
-                : detailError
-                  ? html`<div
-                      class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
-                    >
-                      ${detailError}
-                    </div>`
-                  : html`
-                      <div class="chat-tasks-rail__task-inspector-block">
-                        <div class="chat-tasks-rail__task-inspector-label">
-                          ${t("chat.backgroundTasks.prompt")}
-                        </div>
-                        <pre>
-${detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable")}</pre>
-                      </div>
-                      <div class="chat-tasks-rail__task-inspector-block">
-                        <div class="chat-tasks-rail__task-inspector-label">
-                          ${t("chat.backgroundTasks.output")}
-                        </div>
-                        <pre>${output ?? t("chat.backgroundTasks.outputPending")}</pre>
-                      </div>
-                    `}
-            </div>
-          `
+      ${newest.progressSummary
+        ? html`<div class="chat-tasks-rail__detail-activity">
+            <span>${newest.lastToolName ?? taskRuntimeLabel(newest)}</span>
+            <strong>${newest.progressSummary}</strong>
+          </div>`
         : nothing}
+      ${detailError
+        ? html`<div
+            class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
+          >
+            ${detailError}
+          </div>`
+        : nothing}
+      <div class="chat-tasks-rail__detail-blocks">
+        <section class="chat-tasks-rail__task-inspector-block">
+          <div class="chat-tasks-rail__task-inspector-label">
+            ${t("chat.backgroundTasks.prompt")}
+          </div>
+          <pre>
+${detailLoading
+              ? t("chat.backgroundTasks.detailLoading")
+              : (detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable"))}</pre>
+        </section>
+        <section class="chat-tasks-rail__task-inspector-block">
+          <div class="chat-tasks-rail__task-inspector-label">
+            ${t("chat.backgroundTasks.output")}
+          </div>
+          <pre>${output ?? t("chat.backgroundTasks.outputPending")}</pre>
+        </section>
+      </div>
     </div>
   `;
 }

@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   deliveryContextKey,
   deliveryContextFromSession,
-  mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "./delivery-context.js";
 import {
+  mergeDeliveryContext,
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
 } from "./delivery-context.shared.js";

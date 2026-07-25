@@ -362,6 +362,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
 
         agents: {
           defaults: {},
+          entries: { main: { default: true } },
         },
       });
 

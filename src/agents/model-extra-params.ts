@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "../shared/model-key.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 
 type ModelExtraParamSources = {
   defaultParams?: Record<string, unknown>;
@@ -28,9 +29,10 @@ export function resolveModelExtraParamSources(params: {
     ? (configuredModels?.[canonicalKey]?.params ??
       (legacyKey ? configuredModels?.[legacyKey]?.params : undefined))
     : undefined;
-  const agentParams = params.agentId
-    ? params.config?.agents?.list?.find((agent) => agent.id === params.agentId)?.params
-    : undefined;
+  const agentParams =
+    params.agentId && params.config
+      ? resolveAgentConfig(params.config, params.agentId)?.params
+      : undefined;
   return { defaultParams, modelParams, agentParams };
 }
 

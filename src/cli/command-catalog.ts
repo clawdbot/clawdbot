@@ -462,4 +462,5 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["skills", "list"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["skills", "search"], exact: true },
   { commandPath: ["skills", "update"], exact: true },
+  { commandPath: ["skills", "verify"], exact: true },
 ];

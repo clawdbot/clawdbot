@@ -84,6 +84,7 @@ describe("plugin runtime session creation", () => {
         sessionId: created.entry.sessionId,
         entry: {
           agentHarnessId: "codex",
+          delivery: { kind: "none" },
           modelSelectionLocked: true,
           label: "Native Codex thread",
           pluginExtensions: {
@@ -609,6 +610,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-workspace-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -656,6 +658,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -704,6 +707,7 @@ describe("plugin runtime session creation", () => {
       const existing = {
         sessionId: "foreign-initializer",
         updatedAt: Date.now(),
+        delivery: { kind: "none" as const },
         initializationPending: true as const,
         modelSelectionLocked: true,
         pluginOwnerId: "other-plugin",

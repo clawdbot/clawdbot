@@ -27,13 +27,6 @@ class HostedCatalogSnapshotWriteError extends Error {
   }
 }
 
-class HostedCatalogTrustConfigurationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "HostedCatalogTrustConfigurationError";
-  }
-}
-
 export type OfficialExternalProviderAuthChoice = {
   method?: string;
   choiceId?: string;
@@ -268,10 +261,6 @@ const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID = "clawhub-official";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-clawhub";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
-const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV =
-  "OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID";
-const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV =
-  "OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS: readonly OfficialExternalPluginCatalogFeedSigningKey[] =
   [];
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalPluginCatalogProfileConfig =
@@ -405,38 +394,11 @@ function resolveHostedCatalogFeedUrl(raw: string): URL {
   return parsed;
 }
 
-function resolveDefaultClawHubFeedVerificationFromEnv(
-  env?: NodeJS.ProcessEnv,
-): OfficialExternalPluginCatalogFeedVerification | undefined {
-  const keyId = normalizeOptionalString(
-    env?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV],
-  );
-  const publicKey = normalizeOptionalString(
-    env?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV],
-  );
-  if (!keyId && !publicKey) {
-    return undefined;
-  }
-  if (!keyId || !publicKey) {
-    throw new HostedCatalogTrustConfigurationError(
-      "default ClawHub feed trust requires both key id and public key env vars",
-    );
-  }
-  return {
-    mode: "signed",
-    keys: [{ keyId, publicKey }],
-  };
-}
-
 function resolveOfficialExternalPluginCatalogProfileConfig(
   config?: OfficialExternalPluginCatalogProfileConfig,
-  env?: NodeJS.ProcessEnv,
 ): Required<OfficialExternalPluginCatalogProfileConfig> {
   const configuredDefaultFeed =
     config?.feeds?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE];
-  const envVerification = configuredDefaultFeed?.verification
-    ? undefined
-    : resolveDefaultClawHubFeedVerificationFromEnv(env);
   const bundledVerification =
     DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS.length > 0
       ? {
@@ -444,7 +406,6 @@ function resolveOfficialExternalPluginCatalogProfileConfig(
           keys: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS,
         }
       : undefined;
-  const defaultVerification = envVerification ?? bundledVerification;
   const defaultFeed = DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds?.[
     DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
   ] ?? {
@@ -456,7 +417,7 @@ function resolveOfficialExternalPluginCatalogProfileConfig(
       ...config?.feeds,
       [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
         ...defaultFeed,
-        ...(defaultVerification ? { verification: defaultVerification } : {}),
+        ...(bundledVerification ? { verification: bundledVerification } : {}),
         ...configuredDefaultFeed,
       },
     },
@@ -471,7 +432,6 @@ function resolveHostedCatalogFeedSource(params: {
   feedUrl?: string;
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-  env?: NodeJS.ProcessEnv;
 }): {
   url: URL;
   hostnameAllowlist: string[];
@@ -499,12 +459,7 @@ function resolveHostedCatalogFeedSource(params: {
     const profileConfig =
       profileName === undefined
         ? undefined
-        : resolveOfficialExternalPluginCatalogProfileConfig(
-            params.catalogConfig,
-            profileName === DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
-              ? params.env
-              : undefined,
-          );
+        : resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
     const profile = profileName === undefined ? undefined : profileConfig?.feeds[profileName];
     if (profileName !== undefined && !profile) {
       throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
@@ -517,10 +472,7 @@ function resolveHostedCatalogFeedSource(params: {
     };
   }
   const profileName = explicitProfileName ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
-  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(
-    params.catalogConfig,
-    profileName === DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE ? params.env : undefined,
-  );
+  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
   const profile = profileConfig.feeds[profileName];
   if (!profile) {
     throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
@@ -1109,12 +1061,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       feedUrl: params?.feedUrl,
       feedProfile: params?.feedProfile,
       catalogConfig: params?.catalogConfig,
-      env: params?.env ?? process.env,
     });
   } catch (err) {
-    return err instanceof HostedCatalogTrustConfigurationError
-      ? emptyBundledFallbackResult(err)
-      : bundledFallbackResult(err);
+    return bundledFallbackResult(err);
   }
   const { url } = source;
   const snapshotStore = await resolveHostedCatalogSnapshotStore({

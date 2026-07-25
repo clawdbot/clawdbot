@@ -4,6 +4,7 @@ import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Insertable, Selectable } from "kysely";
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
@@ -82,14 +83,11 @@ export function resolveSessionStorePathForAcp(params: {
 }): { cfg: OpenClawConfig; agentId?: string; storePath: string } {
   const cfg = params.cfg ?? getRuntimeConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: parsed?.agentId,
-    env: params.env,
-  });
+  const agentId = parsed?.agentId ?? resolveDefaultAgentId(cfg);
   return {
     cfg,
-    ...(parsed?.agentId ? { agentId: parsed.agentId } : {}),
-    storePath,
+    agentId,
+    storePath: resolveStorePath(cfg.session?.store, { agentId, env: params.env }),
   };
 }
 

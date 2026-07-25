@@ -430,4 +430,139 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     ]);
     session.close();
   });
+
+  it("keeps out-of-order transcription items isolated and emits finals in commit order", async () => {
+    const partials: string[] = [];
+    const transcripts: string[] = [];
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const session = provider.createSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onPartial: (partial) => partials.push(partial),
+      onTranscript: (transcript) => transcripts.push(transcript),
+    });
+
+    const connecting = session.connect();
+    const socket = await waitForFakeSocket();
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "input_audio_buffer.committed",
+          item_id: "item-2",
+          previous_item_id: "item-1",
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "input_audio_buffer.committed",
+          item_id: "item-1",
+          previous_item_id: null,
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.delta",
+          item_id: "item-1",
+          delta: "first partial",
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.delta",
+          item_id: "item-2",
+          delta: "second partial",
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "item-2",
+          transcript: "second final",
+        }),
+      ),
+    );
+
+    expect(partials).toEqual(["first partial", "second partial"]);
+    expect(transcripts).toEqual([]);
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "item-1",
+          transcript: "first final",
+        }),
+      ),
+    );
+
+    expect(transcripts).toEqual(["first final", "second final"]);
+    session.close();
+  });
+
+  it("reports failed transcription items without blocking later committed turns", async () => {
+    const errors: string[] = [];
+    const transcripts: string[] = [];
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const session = provider.createSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onError: (error) => errors.push(error.message),
+      onTranscript: (transcript) => transcripts.push(transcript),
+    });
+
+    const connecting = session.connect();
+    const socket = await waitForFakeSocket();
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    for (const itemId of ["item-1", "item-2"]) {
+      socket.emit(
+        "message",
+        Buffer.from(JSON.stringify({ type: "input_audio_buffer.committed", item_id: itemId })),
+      );
+    }
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "item-2",
+          transcript: "second final",
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.failed",
+          item_id: "item-1",
+          error: { message: "first turn failed" },
+        }),
+      ),
+    );
+
+    expect(errors).toEqual(["first turn failed"]);
+    expect(transcripts).toEqual(["second final"]);
+    session.close();
+  });
 });

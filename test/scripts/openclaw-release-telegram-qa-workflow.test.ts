@@ -612,9 +612,14 @@ describe("release Telegram QA workflow", () => {
       "Telegram channel canary failed; skipping the remaining scenarios.",
     );
     expect(runStep?.run).toContain("--list-scenarios");
-    expect(runStep?.run).toContain('"$scenario_id" != "channel-canary"');
+    expect(runStep?.run).toContain('if [[ "$scenario_id" == "channel-canary" ]]; then');
+    expect(runStep?.run).toContain("has_channel_canary=true");
+    expect(runStep?.run).toContain("Candidate Telegram QA catalog has no default scenarios.");
     expect(runStep?.run).toContain(
       'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
+    );
+    expect(runStep?.run?.indexOf("--list-scenarios")).toBeLessThan(
+      runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary") ?? -1,
     );
     expect(
       runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),

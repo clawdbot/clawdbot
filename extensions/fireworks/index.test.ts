@@ -73,10 +73,23 @@ describe("fireworks provider plugin", () => {
     expect(models[0]?.input).toEqual(["text", "image"]);
     expect(models[0]?.contextWindow).toBe(262144);
     expect(models[0]?.maxTokens).toBe(262144);
+    expect(models[0]?.cost).toEqual({
+      input: 0.95,
+      output: 4,
+      cacheRead: 0.16,
+      cacheWrite: 0,
+    });
+    expect(models[1]?.name).toBe("Kimi K2.6 Fast");
     expect(models[1]?.reasoning).toBe(false);
     expect(models[1]?.input).toEqual(["text", "image"]);
-    expect(models[1]?.contextWindow).toBe(FIREWORKS_DEFAULT_CONTEXT_WINDOW);
+    expect(models[1]?.contextWindow).toBe(262144);
     expect(models[1]?.maxTokens).toBe(FIREWORKS_DEFAULT_MAX_TOKENS);
+    expect(models[1]?.cost).toEqual({
+      input: 2,
+      output: 8,
+      cacheRead: 0.3,
+      cacheWrite: 0,
+    });
   });
 
   it("resolves forward-compat Fireworks model ids from the default template", async () => {

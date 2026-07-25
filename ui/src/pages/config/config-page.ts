@@ -7,6 +7,7 @@ import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelCatalogEntry } from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -75,19 +76,6 @@ type ConfigPageSetting =
   | "chatFollowUpMode"
   | "catalogOpenTarget"
   | "composerHoldToRecord";
-
-const CONFIG_PAGE_I18N_KEYS = {
-  config: "config",
-  communications: "communications",
-  appearance: "appearance",
-  notifications: "notifications",
-  security: "security",
-  automation: "automation",
-  mcp: "mcp",
-  infrastructure: "infrastructure",
-  "ai-agents": "aiAgents",
-  advanced: "advanced",
-} as const satisfies Record<ConfigPageId, string>;
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -168,9 +156,7 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
 function configPageTitle(pageId: ConfigPageId): string {
   // The takeover sidebar is titled "Settings"; the general page header reads
   // like its sibling sections instead of repeating it.
-  return pageId === "config"
-    ? t("nav.settingsGeneral")
-    : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
+  return pageId === "config" ? t("nav.settingsGeneral") : titleForRoute(pageId);
 }
 
 function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
@@ -946,6 +932,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
+      forceShowAdvanced: this.pageId === "advanced",
       forceAdvancedSection: this.routeData?.advanced ? this.routeData.section : null,
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
       sessionObserverUtilityModel:

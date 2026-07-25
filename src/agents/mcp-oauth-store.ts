@@ -12,6 +12,7 @@ import {
   type OAuthClientInformationMixed,
   type OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -56,10 +57,6 @@ class McpOAuthStoreCorruptionError extends Error {
     super(`MCP OAuth store ${storeKey} is invalid: ${detail}`, options);
     this.name = "McpOAuthStoreCorruptionError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function assertOptionalString(

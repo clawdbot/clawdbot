@@ -29,6 +29,10 @@ import {
 } from "../internal/runtime.js";
 import { stripSystemPromptCacheBoundary } from "../internal/shared.js";
 import {
+  resolveOpenAICompletionsResponseFormat,
+  shouldOmitOllamaCompatResponseFormat,
+} from "../providers/openai-response-format.js";
+import {
   clearPendingCommentaryText,
   rememberPendingCommentaryTags,
   tagPendingCommentaryText,
@@ -1754,8 +1758,18 @@ export function buildOpenAICompletionsParams(
   if (options?.topP !== undefined) {
     params.top_p = options.topP;
   }
-  if (options?.responseFormat !== undefined) {
-    params.response_format = options.responseFormat;
+  const responseFormat = resolveOpenAICompletionsResponseFormat(
+    shouldOmitOllamaCompatResponseFormat({
+      provider: model.provider,
+      baseUrl: model.baseUrl,
+      hasTools: () => Boolean(context.tools?.length),
+    })
+      ? undefined
+      : options?.responseFormat,
+    compat.supportsJsonSchemaResponseFormat,
+  );
+  if (responseFormat !== undefined) {
+    params.response_format = responseFormat;
   }
   if (options?.frequencyPenalty !== undefined) {
     params.frequency_penalty = options.frequencyPenalty;

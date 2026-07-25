@@ -8,7 +8,7 @@ import {
   recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
   resolveUnmentionedGroupInboundPolicy,
-  recordDroppedChannelInboundHistory,
+  toHistoryMediaEntries,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
@@ -18,7 +18,7 @@ import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -33,6 +33,7 @@ import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
 import { resolveDiscordMessageStickers } from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
+import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
 import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
@@ -180,44 +181,28 @@ async function recordDiscordPendingHistoryEntry(params: {
   preflight: DiscordMessagePreflightParams;
   historyKey: string;
   message: DiscordMessagePreflightContext["message"];
-  entry?: HistoryEntry;
+  entry?: DiscordHistoryEntry;
 }) {
-  if (params.preflight.historyLimit <= 0) {
+  if (!params.entry || params.preflight.historyLimit <= 0) {
     return;
   }
-  await recordDroppedChannelInboundHistory({
-    input: {
-      id: params.message.id,
-      timestamp: params.entry?.timestamp,
-      rawText: params.entry?.body ?? "",
-      textForAgent: params.entry?.body,
-      raw: params.message,
-    },
-    admission: { kind: "drop", reason: "discord-preflight", recordHistory: true },
-    preflight: {
-      message: params.entry
-        ? {
-            rawBody: params.entry.body,
-            body: params.entry.body,
-            bodyForAgent: params.entry.body,
-            senderLabel: params.entry.sender,
-            envelopeFrom: params.entry.sender,
-          }
-        : undefined,
-      history: {
-        key: params.historyKey,
-        historyMap: params.preflight.guildHistories,
-        limit: params.preflight.historyLimit,
-        recordOnDrop: true,
-        mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
-        shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
-      },
-      media: () =>
-        resolveDiscordHistoryMediaForPendingRecord({
+  await createChannelHistoryWindow<DiscordHistoryEntry>({
+    historyMap: params.preflight.guildHistories,
+  }).recordWithMedia({
+    historyKey: params.historyKey,
+    entry: params.entry,
+    limit: params.preflight.historyLimit,
+    mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
+    messageId: params.message.id,
+    shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
+    media: async () =>
+      toHistoryMediaEntries(
+        await resolveDiscordHistoryMediaForPendingRecord({
           preflight: params.preflight,
           message: params.message,
         }),
-    },
+        { messageId: params.message.id },
+      ),
   });
 }
 
@@ -559,6 +544,8 @@ export async function preflightDiscordMessage(
     historyLimit: params.historyLimit,
     message,
     senderLabel: sender.label,
+    sender,
+    memberRoleIds,
   });
 
   const threadOwnerId = threadChannel

@@ -348,7 +348,8 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const config = snapshot.sourceConfig ?? snapshot.config;
-  const entry = config?.agents?.list?.[Number(listIndexSegment)];
+  const authoredList = snapshot.sourceConfigBeforeMigrations?.agents?.list;
+  const entry = Array.isArray(authoredList) ? authoredList[Number(listIndexSegment)] : undefined;
   if (!entry?.id) {
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
@@ -489,6 +490,8 @@ export async function executeSetup(
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
+      // The guarded setup transaction publishes the load-time injected main
+      // roster before any workspace provisioning or other follow-up effect.
       // The outer boundary covers injected implementations. The production
       // setup helper also uses this same seam for each of its internal writes.
       const applied = await ctx.commit(

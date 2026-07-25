@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
@@ -450,12 +451,6 @@ function extractEditorText(content: unknown): string | undefined {
     })
     .join("");
   return text || undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function isSessionHeader(event: unknown): boolean {

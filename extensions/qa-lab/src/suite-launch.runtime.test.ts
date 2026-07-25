@@ -1221,7 +1221,7 @@ describe("qa suite runtime launcher", () => {
     for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
       const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
       expect(blocked).toMatchObject({
-        execution: { channel: { id: "whatsapp" } },
+        execution: { channel: { id: "whatsapp", driver: "live", live: true } },
         result: { status: "blocked" },
       });
     }

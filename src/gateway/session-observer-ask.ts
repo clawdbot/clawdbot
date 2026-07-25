@@ -4,7 +4,9 @@ import { flushSessionActivityAssistantNote } from "../agents/session-activity-no
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   SessionObserverAskError,
+  type SessionObserverCompanionSnapshot,
   type SessionObserverService,
+  type SessionObserverSnapshot,
 } from "./session-observer-contract.js";
 import {
   sanitizeSessionObserverModelText,
@@ -27,13 +29,6 @@ const ASK_SYSTEM_PROMPT = [
   "Do not infer details that are absent from the observations; plainly say when you cannot know.",
   "Return only a concise plain-text answer in American English, with no markdown or JSON wrapper.",
 ].join(" ");
-
-type SessionObserverSnapshot = {
-  agentId: string;
-  runId?: string;
-  digest?: SessionObserverDigest;
-  notes: string[];
-};
 
 type SessionObserverAskRuntimeParams = {
   getConfig: SessionObserverDeps["getConfig"];
@@ -86,6 +81,19 @@ export function createSessionObserverAskRuntime(params: SessionObserverAskRuntim
       ...(digest?.runId ? { runId: digest.runId } : {}),
       ...(digest ? { digest } : {}),
       notes: [],
+    };
+  };
+
+  const getCompanionSnapshot = (sessionKey: string): SessionObserverCompanionSnapshot => {
+    const snapshot = getSnapshot(sessionKey);
+    const state = params.states.get(sessionKey);
+    if (!state) {
+      return { ...snapshot, notes: [] };
+    }
+    flushSessionActivityAssistantNote(state);
+    return {
+      ...snapshot,
+      notes: state.notes.map((note) => ({ sequence: note.sequence, text: note.text })),
     };
   };
 
@@ -266,6 +274,7 @@ export function createSessionObserverAskRuntime(params: SessionObserverAskRuntim
   return {
     ask,
     getSnapshot,
+    getCompanionSnapshot,
     dispose() {
       for (const controller of askControllers.values()) {
         controller.abort();

@@ -1,4 +1,4 @@
-import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
+import { isEmbeddedAgentRunInProgress } from "../../agents/embedded-agent-runner/runs.js";
 import { hasProjectedAgentRunForSession } from "../../infra/agent-events.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -116,11 +116,11 @@ export function resolveVisibleActiveSessionRunState(params: {
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
   });
+  const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
+  // Connection, worker-lifecycle, and embedded registries are independent owners.
+  // Settlement in one must not hide live work owned by another.
   return {
-    active:
-      runIds.length > 0 ||
-      hasProjectedRun ||
-      (sessionId !== undefined && isEmbeddedAgentRunActive(sessionId)),
+    active: runIds.length > 0 || hasProjectedRun || embeddedRunInProgress,
     runIds,
   };
 }

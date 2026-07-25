@@ -6,7 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -135,8 +135,12 @@ function toDatabaseOptions(scope: {
       `SQLite trajectory store path belongs to agent ${target.agentId}; requested agent ${requestedAgentId}.`,
     );
   }
+  const agentId = requestedAgentId ?? target.agentId;
+  if (!agentId) {
+    throw new Error("Trajectory store scope requires an explicit agent id.");
+  }
   return {
-    agentId: requestedAgentId ?? target.agentId ?? DEFAULT_AGENT_ID,
+    agentId,
     ...(scope.env ? { env: scope.env } : {}),
     ...(target.path ? { path: target.path } : {}),
   };

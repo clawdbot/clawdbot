@@ -2,9 +2,9 @@
 import { createHash } from "node:crypto";
 import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "../agents/workspace-legacy-state.js";
 import {
-  WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
   WORKSPACE_SETUP_STATE_VERSION,
+  isSafeWorkspaceAttestationFilename,
   registerWorkspaceStateAliasesInTransaction,
 } from "../agents/workspace-state-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -129,7 +129,7 @@ function parseAttestation(snapshot: SourceSnapshot): ParsedSource {
   const generatedHashes = new Map<string, string>();
   for (const line of lines.slice(2)) {
     const match = /^generated:([^:]+):([a-f0-9]{64})$/.exec(line);
-    if (!match?.[1] || !match[2] || !WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES.has(match[1])) {
+    if (!match?.[1] || !match[2] || !isSafeWorkspaceAttestationFilename(match[1])) {
       throw new Error("legacy workspace attestation has an invalid generated hash");
     }
     if (generatedHashes.has(match[1])) {

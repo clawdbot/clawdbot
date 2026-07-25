@@ -2318,6 +2318,7 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     const result = await retryRestartAbortedMainSessionRecoveryAfterOwnerRelease({
+      cfg: { agents: { entries: { main: { default: true } } } },
       expectedSessionId: "legacy-session",
       sessionKey: "main",
       storePath,
@@ -2327,7 +2328,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({
       expectedExistingSessionId: "legacy-session",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(
       sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
@@ -2562,7 +2563,7 @@ describe("main-session-restart-recovery", () => {
       .mockResolvedValueOnce({ runId: "run-resumed" });
 
     scheduleRestartAbortedMainSessionRecovery({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       delayMs: 0,
       maxRetries: 1,
       stateDir: tmpDir,

@@ -305,7 +305,7 @@ describe("groq provider compat", () => {
   });
 
   it("maps Groq Qwen 3 reasoning to provider-native none/default values", () => {
-    expect(resolveGroqReasoningCompatPatch("qwen/qwen3-32b")).toEqual({
+    expect(resolveGroqReasoningCompatPatch("qwen/qwen3.6-27b")).toEqual({
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["none", "default"],
       reasoningEffortMap: {
@@ -343,6 +343,7 @@ describe("groq provider compat", () => {
     });
     expect(provider.auth).toHaveLength(1);
     expect(provider.auth[0]).toMatchObject({
+      defaultModel: "groq/openai/gpt-oss-120b",
       id: "api-key",
       kind: "api_key",
       label: "Groq API key",

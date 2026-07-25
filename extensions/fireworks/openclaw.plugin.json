@@ -45,24 +45,24 @@
             "cost": {
               "input": 0.95,
               "output": 4,
-              "cacheRead": 0,
+              "cacheRead": 0.16,
               "cacheWrite": 0
             }
           },
           {
             "id": "accounts/fireworks/routers/kimi-k2p6-turbo",
-            "name": "Kimi K2.6 Turbo (Fire Pass)",
+            "name": "Kimi K2.6 Fast",
             "reasoning": false,
             "input": ["text", "image"],
-            "contextWindow": 256000,
+            "contextWindow": 262144,
             "maxTokens": 256000,
             "compat": {
               "unsupportedToolSchemaKeywords": ["not"]
             },
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 2,
+              "output": 8,
+              "cacheRead": 0.3,
               "cacheWrite": 0
             }
           }

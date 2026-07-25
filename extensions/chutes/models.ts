@@ -31,7 +31,7 @@ const CHUTES_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 /** Base URL for Chutes OpenAI-compatible inference. */
 export const CHUTES_BASE_URL = CHUTES_MANIFEST_PROVIDER.baseUrl;
 /** Default Chutes model id used for onboarding. */
-export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-5-TEE";
+export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-5.2-TEE";
 /** Default Chutes model ref used for onboarding. */
 export const CHUTES_DEFAULT_MODEL_REF = `chutes/${CHUTES_DEFAULT_MODEL_ID}`;
 

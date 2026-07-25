@@ -322,6 +322,7 @@ export async function patchSqliteSessionEntry(
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           maintenanceConfig: options.maintenanceConfig,
           skipMaintenance: options.skipMaintenance,
+          storePath: resolveSessionStorePathForScope(scope),
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);
@@ -406,6 +407,11 @@ export async function patchSqliteSessionEntryTarget(
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           maintenanceConfig: options.maintenanceConfig,
           skipMaintenance: options.skipMaintenance,
+          storePath: resolveSessionStorePathForScope({
+            agentId: scope.agentId,
+            sessionKey: scope.target.canonicalKey,
+            storePath: scope.storePath,
+          }),
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);

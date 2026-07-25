@@ -563,11 +563,9 @@ refreshes fail if OpenClaw cannot persist the validated snapshot.
 
 The built-in `clawhub-public` profile expects payload identity
 `clawhub-official`. OpenClaw will bundle ClawHub's production public key after
-ClawHub generates and hands off that key. Until then, staging and private
-deployments can inject both `OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID` and
-`OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY`; setting only one fails closed before
-fetch. Public keys must come from a trusted release or operator channel, not
-from a key endpoint on the feed host.
+ClawHub generates and hands off that key. Until then, the built-in profile does
+not grant signed-feed install authority. Public keys must come from a trusted
+release or operator channel, not from a key endpoint on the feed host.
 
 OpenClaw verifies the DSSE envelope and, when a profile declares `feedId`,
 requires the decoded payload ID to match it. The built-in `clawhub-public`

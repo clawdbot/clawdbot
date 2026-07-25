@@ -428,17 +428,30 @@ describe("claws cli", () => {
   });
 
   it("discloses capability escalations in the human dry-run", async () => {
-    const path = await writeManifest({
-      schemaVersion: 1,
-      agent: { id: "demo-agent", tools: { allow: ["read"] } },
-      mcpServers: {
-        docs: {
-          command: "node",
-          env: { API_TOKEN: "${GITHUB_TOKEN}" },
-          toolFilter: { include: ["search_*"] },
+    const root = tempDirs.make("openclaw-claws-cli-profile-");
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    allow: [read]\n",
+      "utf8",
+    );
+    const path = join(root, "openclaw.claw.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "demo-agent" },
+        metadata: { "openclaw.config": "profiles/openclaw.yml" },
+        mcpServers: {
+          docs: {
+            command: "node",
+            env: { API_TOKEN: "${GITHUB_TOKEN}" },
+            toolFilter: { include: ["search_*"] },
+          },
         },
-      },
-    });
+      }),
+      "utf8",
+    );
 
     await runCli(["claws", "add", path, "--dry-run"]);
 

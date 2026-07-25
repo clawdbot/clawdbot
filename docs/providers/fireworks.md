@@ -76,10 +76,10 @@ openclaw onboard --non-interactive \
 
 ## Built-in catalog
 
-| Model ref                                              | Name                        | Input        | Context | Max output | Thinking             |
-| ------------------------------------------------------ | --------------------------- | ------------ | ------- | ---------- | -------------------- |
-| `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6                   | text + image | 262,144 | 262,144    | Forced off           |
-| `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo` | Kimi K2.6 Turbo (Fire Pass) | text + image | 256,000 | 256,000    | Forced off (default) |
+| Model ref                                              | Name           | Input        | Context | Max output | Thinking             |
+| ------------------------------------------------------ | -------------- | ------------ | ------- | ---------- | -------------------- |
+| `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6      | text + image | 262,144 | 262,144    | Forced off           |
+| `fireworks/accounts/fireworks/routers/kimi-k2p6-turbo` | Kimi K2.6 Fast | text + image | 262,144 | 256,000    | Forced off (default) |
 
 <Note>
   OpenClaw pins all Fireworks Kimi models to `thinking: off` because Kimi on Fireworks can leak chain-of-thought into the visible reply unless the request explicitly disables thinking. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.

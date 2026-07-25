@@ -1,7 +1,12 @@
 // Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  listAgentEntries,
+  resolveDefaultAgentId,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -24,6 +29,19 @@ export type SystemAgentConfiguredRoute = {
       agentHarnessRuntimeOverride: string;
     }
 );
+
+export function resolveSystemAgentTargetAgentId(
+  config: OpenClawConfig,
+  requestedAgentId?: string,
+): string {
+  const configuredAgentId =
+    normalizeOptionalString(requestedAgentId) ??
+    normalizeOptionalString(config.agents?.defaults?.systemAgent?.agentId);
+  if (configuredAgentId) {
+    return normalizeAgentId(configuredAgentId);
+  }
+  return normalizeAgentId(resolveDefaultAgentId(config));
+}
 
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -83,16 +101,12 @@ function projectSystemAgentExecutionConfig(
         ]
       : []),
   ];
+  const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
   return {
     ...config,
     agents: {
-      ...config.agents,
-      ...(config.agents?.entries
-        ? {
-            entries: Object.fromEntries(projectedAgents.map(({ id, ...entry }) => [id, entry])),
-          }
-        : {}),
-      ...(config.agents?.list ? { list: projectedAgents } : {}),
+      ...agentsConfig,
+      entries: toAgentEntriesRecord(projectedAgents),
     },
   };
 }
@@ -110,9 +124,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       import("../agents/simple-completion-runtime.js"),
       import("../agents/harness/policy.js"),
     ]);
-  const modelOwnerAgentId = normalizeAgentId(
-    requestedAgentId ?? agentScope.resolveDefaultAgentId(runConfig),
-  );
+  const modelOwnerAgentId = resolveSystemAgentTargetAgentId(runConfig, requestedAgentId);
   if (!agentScope.resolveAgentEffectiveModelPrimary(runConfig, modelOwnerAgentId)) {
     return null;
   }
@@ -218,12 +230,8 @@ export async function projectInferenceRoute(
   requestedAgentId?: string,
   deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
 ): Promise<DefaultInferenceRouteProjection> {
-  const [{ resolveDefaultAgentId }, { resolveProviderIdForAuth }] = await Promise.all([
-    import("../agents/agent-scope.js"),
-    import("../agents/provider-auth-aliases.js"),
-  ]);
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const routeAgentId = normalizeAgentId(requestedAgentId ?? defaultAgentId);
+  const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+  const routeAgentId = resolveSystemAgentTargetAgentId(config, requestedAgentId);
   const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
   const list = listAgentEntries(config);
   const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);
