@@ -14,8 +14,9 @@ import {
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 
 const tempDirs: string[] = [];
-// The real smoke proof runs twice and can exceed Vitest's 120s default on fork CI runners.
-const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = 300_000;
+// Windows repeats ACL checks and >64 MiB crash/restore copies across two full runs.
+const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
+const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
 
 function reliabilitySmokeTest(name: string, test: () => void): void {
   it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
@@ -28,15 +29,19 @@ function makeTempDir(): string {
 }
 
 function runProof(args: string[]) {
-  return spawnSync(
+  const result = spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/bench-sqlite-reliability.ts", ...args],
     {
       cwd: process.cwd(),
       encoding: "utf8",
-      timeout: 240_000,
+      timeout: RELIABILITY_PROOF_TIMEOUT_MS,
     },
   );
+  if (result.error) {
+    throw result.error;
+  }
+  return result;
 }
 
 async function waitForChildReady(child: ChildProcess): Promise<void> {
