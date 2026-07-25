@@ -50,11 +50,21 @@ export async function resolveAgentRunSessionTarget(params: {
     normalizeOptionalString(sessionTarget?.sessionId) ??
     legacyMarker?.sessionId ??
     params.sessionId;
+  const compatibilitySessionKey =
+    legacySessionFile?.startsWith("agent:") || legacySessionFile?.startsWith("in-memory:")
+      ? legacySessionFile
+      : undefined;
+  const targetSessionKey = normalizeOptionalString(sessionTarget?.sessionKey);
+  const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const sessionKey =
-    normalizeOptionalString(sessionTarget?.sessionKey) ??
-    normalizeOptionalString(params.sessionKey) ??
+    targetSessionKey ??
+    suppliedSessionKey ??
+    compatibilitySessionKey ??
     normalizeOptionalString(sessionId);
+  const compatibilitySessionKeySelected =
+    !targetSessionKey && !suppliedSessionKey && sessionKey === compatibilitySessionKey;
   const suppliedKeyAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  const compatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
   if (
     legacyMarker &&
     ((params.agentId && params.agentId !== legacyMarker.agentId) ||
@@ -62,6 +72,14 @@ export async function resolveAgentRunSessionTarget(params: {
       params.sessionId !== legacyMarker.sessionId)
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session identity");
+  }
+  if (
+    compatibilitySessionKeySelected &&
+    compatibilityKeyAgentId &&
+    agentId &&
+    compatibilityKeyAgentId !== agentId
+  ) {
+    throw new Error("Compatibility session key conflicts with the supplied agent identity");
   }
   const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
   if (sessionTarget && sessionKey) {

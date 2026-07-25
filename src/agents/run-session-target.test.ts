@@ -70,6 +70,54 @@ describe("agent run session target", () => {
     });
   });
 
+  it("uses a compatibility session-file token when callers omit sessionKey", async () => {
+    const storePath = path.join(tempDir, "fallback", "sessions.json");
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        config: { session: { store: storePath } } as OpenClawConfig,
+        sessionId: "compat-session",
+        sessionFile: "agent:helper:compat-session",
+      }),
+    ).resolves.toEqual({
+      agentId: "helper",
+      sessionId: "compat-session",
+      sessionKey: "agent:helper:compat-session",
+      storePath,
+    });
+  });
+
+  it("rejects a compatibility key from another target agent", async () => {
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "compat-session",
+        sessionFile: "agent:helper:compat-session",
+        sessionTarget: { agentId: "main", sessionId: "compat-session" },
+      }),
+    ).rejects.toThrow("Compatibility session key conflicts with the supplied agent identity");
+  });
+
+  it("ignores a stale compatibility token when a typed key is present", async () => {
+    const storePath = path.join(tempDir, "target", "sessions.json");
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "target-session",
+        sessionFile: "agent:helper:stale",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "target-session",
+          sessionKey: "agent:main:target-session",
+          storePath,
+        },
+      }),
+    ).resolves.toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:target-session",
+      storePath,
+    });
+  });
+
   it("prefers typed runtime target identity", async () => {
     const storePath = path.join(tempDir, "target-store", "sessions.json");
 

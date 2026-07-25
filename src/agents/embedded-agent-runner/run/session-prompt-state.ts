@@ -65,7 +65,10 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
       sessionTarget: nextSessionTarget,
     });
-    activeSessionTarget = resolvedTarget;
+    activeSessionTarget = {
+      ...resolvedTarget,
+      ...(nextSessionTarget.threadId !== undefined ? { threadId: nextSessionTarget.threadId } : {}),
+    };
     sessionTargetAdopted = true;
     activeSessionFile = resolvedTarget.sessionKey;
     adoptSessionId(resolvedTarget.sessionId);
