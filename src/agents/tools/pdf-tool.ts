@@ -31,6 +31,7 @@ import { getModelProviderRequestTransport } from "../provider-request-config.js"
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
+import { logWarn } from "../../logger.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -465,6 +466,9 @@ export function createPdfTool(options?: {
         maxBytesMbRaw === undefined
           ? configuredMaxBytesMb
           : Math.min(maxBytesMbRaw, MAX_PDF_MB_CAP);
+      if (maxBytesMbRaw !== undefined && maxBytesMbRaw > MAX_PDF_MB_CAP) {
+        logWarn(`pdf-tool: maxBytesMb clamped from ${maxBytesMbRaw} to ${MAX_PDF_MB_CAP}`);
+      }
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
