@@ -109,6 +109,28 @@ describe("msteams inbound", () => {
       ).toBe("@Bot please check this");
     });
 
+    it("matches duplicate rendered mention tags by entity occurrence", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "<at>Bot</at> <at>Bot</at> please check this",
+          botId: "bot-id",
+          botName: "Bot",
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Bot</at>",
+              mentioned: { id: "bot-id", name: "Bot" },
+            },
+            {
+              type: "mention",
+              text: "<at>Bot</at>",
+              mentioned: { id: "user-id", name: "Bot" },
+            },
+          ],
+        }),
+      ).toBe("@Bot please check this");
+    });
+
     it("strips inline quoted markers without injecting quote preview into body text", () => {
       expect(
         buildMSTeamsNormalizedText({
@@ -124,6 +146,24 @@ describe("msteams inbound", () => {
           ],
         }),
       ).toBe("this is a quoted reply");
+    });
+
+    it("preserves additional quote markers that are not represented in supplemental context", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: '<quoted messageId="quote-1"/>\n<quoted messageId="quote-2"/>\ncurrent message',
+          entities: [
+            {
+              type: "quotedReply",
+              quotedReply: { messageId: "quote-1", preview: "first quote" },
+            },
+            {
+              type: "quotedReply",
+              quotedReply: { messageId: "quote-2", preview: "second quote" },
+            },
+          ],
+        }),
+      ).toBe('<quoted messageId="quote-2"/>\ncurrent message');
     });
 
     it("preserves authored indentation, blank lines, and Markdown hard breaks", () => {

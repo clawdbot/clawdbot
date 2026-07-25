@@ -184,8 +184,8 @@ function normalizeMSTeamsLineEndings(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function stripMSTeamsQuotedMarkers(text: string): string {
-  return text.replace(/<quoted\b[^>]*\/>/gi, "").trim();
+function stripFirstMSTeamsQuotedMarker(text: string): string {
+  return text.replace(/<quoted\b[^>]*\/>/i, "").trim();
 }
 
 function normalizeMSTeamsMentionTags(
@@ -194,7 +194,7 @@ function normalizeMSTeamsMentionTags(
   botId?: string | null,
   botName?: string | null,
 ): string {
-  const mentionsByTag = new Map<string, { id?: string; name: string }>();
+  const mentionsByTag = new Map<string, Array<{ id?: string; name: string }>>();
   const botMentionNames = new Set<string>();
   for (const entity of entities) {
     if (
@@ -208,13 +208,15 @@ function normalizeMSTeamsMentionTags(
     if (mentionedId && botId && mentionedId === botId) {
       botMentionNames.add(entity.mentioned.name.trim());
     }
-    mentionsByTag.set(entity.text, {
+    const mentions = mentionsByTag.get(entity.text) ?? [];
+    mentions.push({
       id: mentionedId,
       name: entity.mentioned.name,
     });
+    mentionsByTag.set(entity.text, mentions);
   }
   return text.replace(/<at\b[^>]*>.*?<\/at>/gis, (tag) => {
-    const mention = mentionsByTag.get(tag);
+    const mention = mentionsByTag.get(tag)?.shift();
     if (mention?.id && botId && mention.id === botId) {
       return "";
     }
@@ -285,7 +287,7 @@ export function buildMSTeamsNormalizedText(params: BuildMSTeamsNormalizedTextPar
   const entities = params.entities ?? [];
   const attachments = params.attachments ?? [];
   let text = normalizeMSTeamsMentionTags(params.text, entities, params.botId, params.botName);
-  text = stripMSTeamsQuotedMarkers(text);
+  text = stripFirstMSTeamsQuotedMarker(text);
   text = normalizeMSTeamsLineEndings(text);
 
   for (const forwardBody of extractMSTeamsForwardBodies(attachments)) {
