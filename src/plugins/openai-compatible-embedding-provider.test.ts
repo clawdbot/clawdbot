@@ -947,6 +947,7 @@ describe("openai-compatible generic embedding provider", () => {
               "openai-compatible": {
                 baseUrl: server.baseUrl,
                 request: { allowPrivateNetwork: true },
+                models: [],
               },
             },
           },
@@ -970,6 +971,7 @@ describe("openai-compatible generic embedding provider", () => {
             providers: {
               "openai-compatible": {
                 baseUrl: server.baseUrl,
+                models: [],
               },
             },
           },
