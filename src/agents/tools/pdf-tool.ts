@@ -565,6 +565,9 @@ export function createPdfTool(options?: {
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
+          // Extraction is sequential and can be CPU-heavy. Do not start the next
+          // document after the owning agent run has been cancelled.
+          signal?.throwIfAborted();
           const extracted = await extractPdfContent({
             buffer: pdf.buffer,
             maxPages: configuredMaxPages,

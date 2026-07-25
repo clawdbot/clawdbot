@@ -3381,14 +3381,21 @@ describe("image tool run abort", () => {
   it("stops remaining downloads and skips the provider call when aborted mid-run", async () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const controller = new AbortController();
-    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => {
-      // Abort the run as soon as the first image finishes downloading.
-      controller.abort();
-      return {
-        buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-        contentType: "image/png",
-        kind: "image" as const,
-      };
+    let markDownloadStarted: (() => void) | undefined;
+    const downloadStarted = new Promise<void>((resolve) => {
+      markDownloadStarted = resolve;
+    });
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
+      const downloadSignal = options?.requestInit?.signal;
+      expect(downloadSignal).toBe(controller.signal);
+      markDownloadStarted?.();
+      return await new Promise<never>((_, reject) => {
+        downloadSignal?.addEventListener(
+          "abort",
+          () => reject(downloadSignal.reason ?? new Error("aborted")),
+          { once: true },
+        );
+      });
     });
     const spies = makeDescribeSpies();
     installAbortImageDeps(loadWebMedia, spies);
@@ -3396,20 +3403,22 @@ describe("image tool run abort", () => {
     await withTempAgentDir(async (agentDir) => {
       const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
 
-      await expect(
-        tool.execute(
-          "t1",
-          {
-            prompt: "Describe the images.",
-            images: [
-              "https://example.test/a.png",
-              "https://example.test/b.png",
-              "https://example.test/c.png",
-            ],
-          },
-          controller.signal,
-        ),
-      ).rejects.toThrow();
+      const execution = tool.execute(
+        "t1",
+        {
+          prompt: "Describe the images.",
+          images: [
+            "https://example.test/a.png",
+            "https://example.test/b.png",
+            "https://example.test/c.png",
+          ],
+        },
+        controller.signal,
+      );
+      await downloadStarted;
+      controller.abort();
+
+      await expect(execution).rejects.toThrow();
 
       // Only the first image is fetched; the loop exits before the rest and the
       // paid vision provider is never called for the dead run.

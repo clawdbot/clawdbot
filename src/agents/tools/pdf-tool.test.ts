@@ -1025,10 +1025,21 @@ describe("createPdfTool", () => {
         provider: "anthropic",
       });
       const controller = new AbortController();
-      loadSpy.mockImplementation(async () => {
-        // Abort the run as soon as the first PDF finishes downloading.
-        controller.abort();
-        return FAKE_PDF_MEDIA as never;
+      let markDownloadStarted: (() => void) | undefined;
+      const downloadStarted = new Promise<void>((resolve) => {
+        markDownloadStarted = resolve;
+      });
+      loadSpy.mockImplementation(async (_url, options) => {
+        const downloadSignal = options?.requestInit?.signal;
+        expect(downloadSignal).toBe(controller.signal);
+        markDownloadStarted?.();
+        return await new Promise<never>((_, reject) => {
+          downloadSignal?.addEventListener(
+            "abort",
+            () => reject(downloadSignal.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
       });
       const nativeSpy = vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf");
       nativeSpy.mockResolvedValue("native summary");
@@ -1036,13 +1047,15 @@ describe("createPdfTool", () => {
         (await loadCreatePdfTool())({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir }),
       );
 
-      await expect(
-        tool.execute(
-          "t1",
-          { prompt: "summarize", pdfs: ["/tmp/a.pdf", "/tmp/b.pdf", "/tmp/c.pdf"] },
-          controller.signal,
-        ),
-      ).rejects.toThrow();
+      const execution = tool.execute(
+        "t1",
+        { prompt: "summarize", pdfs: ["/tmp/a.pdf", "/tmp/b.pdf", "/tmp/c.pdf"] },
+        controller.signal,
+      );
+      await downloadStarted;
+      controller.abort();
+
+      await expect(execution).rejects.toThrow();
 
       // Only the first PDF is fetched; the loop exits before the rest and the
       // paid model call never fires for the dead run.
