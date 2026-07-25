@@ -18,7 +18,8 @@ const MAX_STANDING_GRANTS = MAX_REGISTERED_ITEMS * 32;
 export default definePluginEntry({
   id: "onepassword",
   name: "1Password",
-  description: "Curated 1Password secrets broker with approval policy and SQLite audit history.",
+  description:
+    "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
   register(api) {
     const startupConfig = parseOnePasswordConfig(api.pluginConfig);
     const resolveCurrentConfig = () => {
@@ -92,20 +93,23 @@ export default definePluginEntry({
       : undefined;
 
     api.registerCli(
-      async ({ program }) => {
+      async ({ program, config }) => {
         const { registerOnePasswordCommands } = await import("./src/cli.js");
+        const { registerOnePasswordSecretRefCommands } = await import("./src/secret-ref-cli.js");
         registerOnePasswordCommands({
           program,
           resolveConfig: resolveCurrentConfig,
           resolveOpClient: resolveCurrentOpClient,
           auditStore: audit,
+          registerAdditionalCommands: (command) =>
+            registerOnePasswordSecretRefCommands({ command, config }),
         });
       },
       {
         descriptors: [
           {
             name: "onepassword",
-            description: "Inspect the 1Password secrets broker",
+            description: "Manage the 1Password integration",
             hasSubcommands: true,
           },
         ],

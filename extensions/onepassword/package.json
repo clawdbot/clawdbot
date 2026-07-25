@@ -2,14 +2,33 @@
   "name": "@openclaw/onepassword",
   "version": "2026.7.2",
   "private": true,
-  "description": "1Password secrets broker for OpenClaw",
+  "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
   "type": "module",
+  "dependencies": {
+    "@openclaw/fs-safe": "0.4.4"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "build": {
+      "staticAssets": [
+        {
+          "source": "./onepassword-op-path.js",
+          "output": "onepassword-op-path.js"
+        },
+        {
+          "source": "./onepassword-secret-ref-resolver.js",
+          "output": "onepassword-secret-ref-resolver.js"
+        },
+        {
+          "source": "./onepassword-secret-id.js",
+          "output": "onepassword-secret-id.js"
+        }
+      ]
+    }
   }
 }

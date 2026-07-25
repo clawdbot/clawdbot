@@ -5,6 +5,7 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
 import { OnePasswordError } from "./errors.js";
 
 const MAX_STDOUT_BYTES = 1024 * 1024;
@@ -223,6 +224,15 @@ export class OpClient {
     if (!this.opBin) {
       throw new OnePasswordError("OP_NOT_FOUND", "1Password CLI executable was not found");
     }
+    let trustedOpBin: string;
+    try {
+      trustedOpBin =
+        (await resolveTrustedOnePasswordCli({ configuredPath: this.opBin })) ?? this.opBin;
+    } catch (error) {
+      throw new OnePasswordError("OP_NOT_FOUND", "1Password CLI executable is not trusted", {
+        cause: error,
+      });
+    }
     const token = await this.readToken();
     const args = [
       "item",
@@ -237,7 +247,7 @@ export class OpClient {
       "--cache=false",
     ];
     try {
-      const result = await this.runner(this.opBin, args, {
+      const result = await this.runner(trustedOpBin, args, {
         env: {
           OP_SERVICE_ACCOUNT_TOKEN: token,
           HOME: this.home,

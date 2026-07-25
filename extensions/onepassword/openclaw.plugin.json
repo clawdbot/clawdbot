@@ -1,7 +1,7 @@
 {
   "id": "onepassword",
   "name": "1Password",
-  "description": "Curated 1Password secrets broker with approval policy and SQLite audit history.",
+  "description": "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
   "activation": {
     "onStartup": false,
     "onCommands": ["onepassword"],
@@ -16,10 +16,42 @@
   "contracts": {
     "tools": ["onepassword"]
   },
+  "secretProviderIntegrations": {
+    "onepassword": {
+      "providerAlias": "onepassword",
+      "displayName": "1Password",
+      "description": "Resolve OpenClaw exec SecretRefs from 1Password using the op CLI.",
+      "source": "exec",
+      "command": "${node}",
+      "args": ["./onepassword-secret-ref-resolver.js"],
+      "timeoutMs": 40000,
+      "noOutputTimeoutMs": 40000,
+      "maxOutputBytes": 8388608,
+      "passEnv": [
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "PATH",
+        "CLAW_1PASSWORD_OP"
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["vault", "items"],
+    "allOf": [
+      {
+        "if": { "required": ["vault"] },
+        "then": { "required": ["items"] }
+      },
+      {
+        "if": { "required": ["items"] },
+        "then": { "required": ["vault"] }
+      }
+    ],
     "properties": {
       "vault": {
         "type": "string",

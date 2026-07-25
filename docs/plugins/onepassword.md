@@ -1,27 +1,32 @@
 ---
-summary: "Use the optional 1Password plugin as an audited agent secrets broker"
+summary: "Resolve SecretRefs and give agents curated, audited access to 1Password"
 read_when:
   - You want agents to request curated 1Password secrets
+  - You want OpenClaw config credentials to resolve from 1Password
   - You need per-secret approval policy and audit history
   - You are configuring a 1Password service account for OpenClaw
-title: "1Password secrets broker"
+title: "1Password"
 ---
 
-# 1Password secrets broker
+# 1Password
 
-The bundled `onepassword` plugin gives agents one policy-controlled tool for
-reading a curated set of 1Password fields. It is disabled by default and does
-nothing until `plugins.entries.onepassword.config` is present.
+The bundled `onepassword` plugin has two independent, opt-in surfaces:
 
-This is an agent tool, not a SecretRef provider. It does not inject environment
-variables or resolve OpenClaw config secrets.
+- a managed exec provider that resolves configured [SecretRefs](/gateway/secrets)
+  during Gateway startup, reload, audit, and apply preflight
+- a policy-controlled agent tool that reads a curated set of 1Password fields
+
+Both use the official `op` CLI and the same service-account token file. Enabling
+the plugin alone does not expose the agent tool: that surface also requires a
+configured item registry.
 
 ## Security model
 
 - Service-account authentication only. The token stays in a local credentials
   file and is never accepted in `openclaw.json`.
-- Curated registry only. Agents can list configured slugs, but the plugin never
-  enumerates a 1Password vault.
+- Curated agent registry only. Agents can list configured slugs, but the plugin
+  never enumerates a 1Password vault. SecretRef reads are limited to references
+  explicitly stored on registered OpenClaw credential targets.
 - Per-slug `auto`, `approve`, or `deny` policy.
 - Approval grants expire. A cached value never bypasses current policy.
 - Every access attempt is recorded in OpenClaw's shared SQLite state. Audit
@@ -40,8 +45,8 @@ variables or resolve OpenClaw config secrets.
   `OP_BIOMETRIC_UNLOCK_ENABLED=false`), so a 1Password app installed on the
   Gateway host never triggers biometric or macOS permission dialogs.
 
-Give the service account read access only to the vaults and items registered in
-the plugin config.
+Give the service account read access only to the vaults and items used by
+registered SecretRefs and agent-tool slugs.
 
 ## Before you begin
 
@@ -71,6 +76,81 @@ unset OP_SERVICE_ACCOUNT_TOKEN
 When `OPENCLAW_STATE_DIR` is set, replace `~/.openclaw` with that directory.
 The plugin warns once when the token file is readable or writable by group or
 other users.
+
+## Configure SecretRefs
+
+Create a secrets apply plan for common model provider keys:
+
+```bash
+openclaw onepassword secretref setup \
+  --anthropic-id op://Automation/Anthropic/credential \
+  --openrouter-id op://Automation/OpenRouter/credential \
+  --plan-out ./openclaw-1password-secrets-plan.json
+```
+
+Use `--provider-key <provider=id>` for another model provider, or
+`--target <path=id>` for any registered
+[SecretRef credential target](/reference/secretref-credential-surface).
+The command writes a plan; inspect it, then apply and reload:
+
+```bash
+openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --dry-run --allow-exec
+openclaw secrets apply --from ./openclaw-1password-secrets-plan.json --allow-exec
+openclaw secrets audit --check --allow-exec
+openclaw secrets reload
+```
+
+Manual provider configuration uses the existing plugin id:
+
+```json5
+{
+  plugins: {
+    entries: {
+      onepassword: { enabled: true },
+    },
+  },
+  secrets: {
+    providers: {
+      onepassword: {
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "onepassword",
+          integrationId: "onepassword",
+        },
+      },
+    },
+  },
+  models: {
+    providers: {
+      openai: {
+        apiKey: {
+          source: "exec",
+          provider: "onepassword",
+          id: "op://Automation/OpenAI/credential",
+        },
+      },
+    },
+  },
+}
+```
+
+References use `op://<vault>/<item>/<field>` or
+`op://<vault>/<item>/<section>/<field>`. Vault, item, section, and field names
+may contain spaces. The setup command stores references that do not fit
+OpenClaw's shared exec-id grammar in a plugin-local opaque form and decodes them
+only inside the resolver. Very long references should use stable 1Password IDs;
+they are shorter and reduce the number of 1Password API requests.
+
+The SecretRef resolver accepts at most 16 IDs per request, runs at most four
+`op read` processes concurrently, never uses desktop-app integration, and does
+not expose an agent tool for arbitrary reads. Before passing the service-account
+token, both plugin surfaces resolve the executable and reject paths that another
+local account can replace; Windows ACL verification must also succeed. Check its
+provider wiring with:
+
+```bash
+openclaw onepassword secretref status --json
+```
 
 ## Configure registered secrets
 

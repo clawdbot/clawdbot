@@ -3159,10 +3159,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/1password
 - Headings:
   - H2: Requirements
-  - H2: Resolve config secrets with op
-  - H2: Service account setup for headless Gateways
+  - H2: Resolve config secrets with the plugin
   - H2: The 1password skill for agents
   - H2: Browser sign-in with 1Password for Claude
+  - H2: Official 1Password MCP server
   - H2: Security notes
   - H2: Troubleshooting
 
@@ -6146,9 +6146,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/onepassword
 - Headings:
-  - H1: 1Password secrets broker
+  - H1: 1Password
   - H2: Security model
   - H2: Before you begin
+  - H2: Configure SecretRefs
   - H2: Configure registered secrets
   - H2: Use the agent tool
   - H2: Policy tiers and approvals

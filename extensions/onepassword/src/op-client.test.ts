@@ -53,7 +53,7 @@ describe("OpClient", () => {
     });
     expect(runner).toHaveBeenCalledTimes(1);
     expect(runner).toHaveBeenCalledWith(
-      opBin,
+      await fs.realpath(opBin),
       [
         "item",
         "get",
@@ -157,7 +157,7 @@ describe("OpClient", () => {
         client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
       ).resolves.toMatchObject({ value: "value" });
       expect(runner).toHaveBeenCalledWith(
-        opBin,
+        await fs.realpath(opBin),
         expect.any(Array),
         expect.objectContaining({
           env: expect.objectContaining({ OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth }),
@@ -217,4 +217,18 @@ describe("OpClient", () => {
     ).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
     expect(runner).not.toHaveBeenCalled();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not read or pass the token to an executable in an unsafe directory",
+    async () => {
+      await fs.chmod(root, 0o777);
+      const runner = vi.fn<OpProcessRunner>();
+      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+
+      await expect(
+        client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+      ).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
+      expect(runner).not.toHaveBeenCalled();
+    },
+  );
 });

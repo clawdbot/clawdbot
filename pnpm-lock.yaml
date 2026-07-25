@@ -1423,6 +1423,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/onepassword:
+    dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.4.4
+        version: 0.4.4
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
