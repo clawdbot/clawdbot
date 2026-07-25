@@ -205,6 +205,13 @@ describe("network guard profile", () => {
       expected: /unsupported network guard profile shape/i,
     },
     {
+      name: "non-normalized target hostname",
+      mutate: (profile: Record<string, unknown>) => {
+        (profile.target as Record<string, unknown>).hostname = "API.EXAMPLE.COM.";
+      },
+      expected: /hostname must be normalized/i,
+    },
+    {
       name: "target TLS mismatch",
       mutate: (profile: Record<string, unknown>) => {
         (profile.route as Record<string, unknown>).tls = "cleartext";

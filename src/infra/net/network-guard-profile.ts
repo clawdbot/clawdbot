@@ -115,6 +115,10 @@ export function assertNetworkGuardProfileV1(
   }
   assertNonEmptyString(profile.target.origin, "network guard target origin");
   assertNonEmptyString(profile.target.hostname, "network guard target hostname");
+  const normalizedTargetHostname = normalizeHostname(profile.target.hostname);
+  if (normalizedTargetHostname !== profile.target.hostname) {
+    throw new Error("Network guard target hostname must be normalized");
+  }
   if (
     typeof profile.target.port !== "number" ||
     !Number.isInteger(profile.target.port) ||
@@ -132,7 +136,7 @@ export function assertNetworkGuardProfileV1(
   if (
     parsedOrigin.origin !== profile.target.origin ||
     parsedOrigin.protocol !== profile.target.protocol ||
-    normalizeHostname(parsedOrigin.hostname) !== normalizeHostname(profile.target.hostname) ||
+    normalizeHostname(parsedOrigin.hostname) !== normalizedTargetHostname ||
     resolveUrlPort(parsedOrigin) !== profile.target.port
   ) {
     throw new Error("Network guard target origin is inconsistent");
