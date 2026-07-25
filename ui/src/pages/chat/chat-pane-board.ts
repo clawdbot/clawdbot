@@ -230,8 +230,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const savedTab = snapshot.tabs.some((tab) => tab.tabId === saved?.activeTabId)
       ? saved?.activeTabId
       : undefined;
-    const activeTabId =
-      savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
+    const activeTabId = savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
     const tab = snapshot.tabs.find((candidate) => candidate.tabId === activeTabId);
     const activeTabReadOnly = snapshot.widgets.some(
       (candidate) => candidate.tabId === activeTabId && candidate.readOnly === true,
