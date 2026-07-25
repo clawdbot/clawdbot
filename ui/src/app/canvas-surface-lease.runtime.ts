@@ -1,3 +1,4 @@
+// Loaded after hello so capability renewal does not inflate the startup chunk.
 const RENEWAL_LEAD_MS = 15_000;
 const MIN_RENEWAL_DELAY_MS = 1_000;
 // Used only when a refresh response omits expiry; an early one-minute refresh

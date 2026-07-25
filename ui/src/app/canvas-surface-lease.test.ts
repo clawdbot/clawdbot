@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { createCanvasSurfaceLease } from "./canvas-surface-lease.ts";
+import { createCanvasSurfaceLease } from "./canvas-surface-lease.runtime.ts";
 
 type ScheduledTimer = {
   callback: () => void;
