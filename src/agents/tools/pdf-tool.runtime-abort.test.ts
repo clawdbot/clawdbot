@@ -70,7 +70,8 @@ describe("PDF tool prepared-runtime cancellation", () => {
         snapshot: {
           agentDir,
           config: cfg,
-          createStores: () => ({ authStorage: {}, modelRegistry }),
+          // Cancellation releases this late lease before its stores can be used.
+          createStores: () => ({ authStorage: {}, modelRegistry }) as never,
         },
         release,
       });
