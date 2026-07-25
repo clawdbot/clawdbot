@@ -51,7 +51,7 @@ type TestChatPane = HTMLElement & {
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   refreshBuiltinBoardSnapshot: () => void;
-  resolveBoardView: () => { activeTabId: string; dock: string; face: string; hasBoard: boolean };
+  resolveBoardView: () => ResolvedBoardView;
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
