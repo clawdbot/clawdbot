@@ -20,6 +20,7 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { resolveHostingProfileSelection } from "../hosting/profiles.js";
 import {
   listDevicePairing,
   resolveEffectiveOperatorDeviceIdentity,
@@ -37,7 +38,6 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { resolveHostingProfile } from "../hosting/profiles.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -120,7 +120,10 @@ export async function prepareGatewayServerBootstrap(input: {
       docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     });
   }
-  resolveHostingProfile({ env: process.env });
+  resolveHostingProfileSelection({
+    env: process.env,
+    override: opts.hostingProfileOverride,
+  });
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
