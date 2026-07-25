@@ -481,18 +481,21 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
   });
 
-  it("uriAction truncates without splitting surrogates or percent-encoded code points", () => {
-    // 999 code units + 😀 = 1001; the 1000-unit slice cuts the emoji.
-    const uri = `https://e.example/?q=${"u".repeat(978)}😀`;
-    const action = uriAction("Open", uri) as { uri: string };
-    // The raw 1000-unit boundary ends in "%A", halfway through an encoded euro sign.
-    const encodedUri = `https://example.com/?q=${"a".repeat(969)}%E2%82%AC`;
-    const encodedAction = uriAction("Open", encodedUri) as { uri: string };
+  it("uriAction visibly disables overlong links instead of changing their destination", () => {
+    const validUri = `https://e.example/?q=${"u".repeat(978)}`;
+    const validAction = uriAction("Open", validUri) as { type: string; uri?: string };
+    const overlongAction = uriAction("Open", `${validUri}😀`) as {
+      type: string;
+      label?: string;
+      text?: string;
+    };
 
-    expect(action.uri).toBe(`https://e.example/?q=${"u".repeat(978)}`);
-    expect(loneHighSurrogate.test(action.uri)).toBe(false);
-    expect(encodedAction.uri).toBe(`https://example.com/?q=${"a".repeat(969)}`);
-    expect(() => decodeURI(encodedAction.uri)).not.toThrow();
+    expect(validAction).toMatchObject({ type: "uri", uri: validUri });
+    expect(overlongAction).toEqual({
+      type: "message",
+      label: "Link unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    });
   });
 
   it("buttons template payload uri actions truncate past the 1000-unit cap", () => {
@@ -503,16 +506,20 @@ describe("action label/data surrogate-safe truncation", () => {
     });
 
     const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ uri?: string }>;
+      actions: Array<{ type: string; label?: string; text?: string }>;
     };
     const uriTemplateAction = expectDefined(
       buttonsTemplate.actions[0],
       "buttons template uri action",
     );
-    expect(uriTemplateAction.uri).toHaveLength(1000);
+    expect(uriTemplateAction).toEqual({
+      type: "message",
+      label: "Link unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    });
   });
 
-  it("media control postback data truncates on surrogate boundaries", () => {
+  it("media control cards visibly disable overlong opaque callbacks", () => {
     // 299 code units + 😀 = 301; the 300-unit slice cuts the emoji.
     const overlongData = `${"d".repeat(299)}😀`;
     const card = createMediaPlayerCard({
@@ -526,36 +533,50 @@ describe("action label/data surrogate-safe truncation", () => {
       extraActions: [{ label: "Extra", data: overlongData }],
     });
     const footer = card.footer as {
-      contents: Array<{ contents?: Array<{ action?: { data?: string } }> }>;
+      contents: Array<{
+        contents?: Array<{
+          action?: { type: string; data?: string; label?: string; text?: string };
+        }>;
+      }>;
     };
-    const datas = footer.contents
+    const actions = footer.contents
       .flatMap((content) => content.contents ?? [])
-      .flatMap((button) => (button.action?.data ? [button.action.data] : []));
+      .flatMap((button) => (button.action ? [button.action] : []));
 
-    expect(datas).toHaveLength(5);
-    for (const data of datas) {
-      expect(data).toBe("d".repeat(299));
-      expect(loneHighSurrogate.test(data)).toBe(false);
+    expect(actions).toHaveLength(5);
+    for (const action of actions) {
+      expect(action).toEqual({
+        type: "message",
+        label: "Action unavailable",
+        text: "Action unavailable: callback data exceeds LINE's limit.",
+      });
     }
   });
 
-  it("device control postback data truncates on surrogate boundaries", () => {
+  it("device controls visibly disable overlong opaque callbacks", () => {
     const card = createDeviceControlCard({
       deviceName: "Device",
       controls: [{ label: "On", data: `${"d".repeat(299)}😀` }],
     });
     const footer = card.footer as {
-      contents: Array<{ contents: Array<{ action?: { data: string } }> }>;
+      contents: Array<{
+        contents: Array<{
+          action?: { type: string; data?: string; label?: string; text?: string };
+        }>;
+      }>;
     };
     const action = footer.contents
       .flatMap((row) => row.contents)
       .find((button) => button.action)?.action;
 
-    expect(action?.data).toBe("d".repeat(299));
-    expect(loneHighSurrogate.test(action?.data ?? "")).toBe(false);
+    expect(action).toEqual({
+      type: "message",
+      label: "Action unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    });
   });
 
-  it("apple tv remote postback data truncates on surrogate boundaries", () => {
+  it("Apple TV controls visibly disable overlong opaque callbacks", () => {
     const overlongData = `${"d".repeat(299)}😀`;
     const card = createAppleTvRemoteCard({
       deviceName: "TV",
@@ -575,16 +596,23 @@ describe("action label/data surrogate-safe truncation", () => {
       },
     });
     const body = card.body as {
-      contents: Array<{ contents?: Array<{ action?: { data?: string } }> }>;
+      contents: Array<{
+        contents?: Array<{
+          action?: { type: string; data?: string; label?: string; text?: string };
+        }>;
+      }>;
     };
-    const datas = body.contents
+    const actions = body.contents
       .flatMap((row) => row.contents ?? [])
-      .flatMap((button) => (button.action?.data ? [button.action.data] : []));
+      .flatMap((button) => (button.action ? [button.action] : []));
 
-    expect(datas).toHaveLength(12);
-    for (const data of datas) {
-      expect(data).toBe("d".repeat(299));
-      expect(loneHighSurrogate.test(data)).toBe(false);
+    expect(actions).toHaveLength(12);
+    for (const action of actions) {
+      expect(action).toEqual({
+        type: "message",
+        label: "Action unavailable",
+        text: "Action unavailable: callback data exceeds LINE's limit.",
+      });
     }
   });
 });

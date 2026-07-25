@@ -451,36 +451,29 @@ describe("parseLineDirectives", () => {
   });
 
   describe("overlong action payloads", () => {
-    it("caps device control postback data despite an overlong device name", () => {
-      // The device slug is embedded in every control's postback data; an unbounded
-      // name pushes the data past LINE's 300-unit action cap and the whole flex
-      // message would come back HTTP 400.
-      const longName = "Very Long Device Name ".repeat(30);
+    it("keeps the card visible but disables a callback that cannot round-trip", () => {
+      const deviceName = `${"a".repeat(280)}_living_room`;
       const result = parseLineDirectives({
-        text: `[[device: ${longName} | Streaming Box | Playing | Play/Pause:toggle]]`,
+        text: `[[device: ${deviceName} | Streaming Box | Playing | Play/Pause:toggle]]`,
       });
       const flexMessage = requireFlexMessage(getLineData(result).flexMessage, "long device name");
       const footer = flexMessage.contents?.footer as {
         contents?: Array<{
-          contents?: Array<{ action?: { data?: string; label?: string } }>;
+          contents?: Array<{
+            action?: { type?: string; data?: string; label?: string; text?: string };
+          }>;
         }>;
       };
-      const actions = (footer?.contents ?? [])
+      const action = (footer?.contents ?? [])
         .flatMap((row) => row.contents ?? [])
-        .flatMap((button) => (button.action?.data ? [button.action] : []));
+        .find((button) => button.action)?.action;
 
-      expect(flexMessage.altText).toContain("Very Long Device Name");
-      expect(actions.length).toBeGreaterThan(0);
-      for (const action of actions) {
-        if (!action.data) {
-          throw new Error("expected device callback data");
-        }
-        const params = new URLSearchParams(action.data);
-        expect(action.label).toBe("Play/Pause");
-        expect(action.data.length).toBeLessThanOrEqual(300);
-        expect(params.get("line.action")).toBe("toggle");
-        expect(params.get("line.device")).toBeTruthy();
-      }
+      expect(flexMessage.altText).toContain("living_room");
+      expect(action).toEqual({
+        type: "message",
+        label: "Action unavailable",
+        text: "Action unavailable: callback data exceeds LINE's limit.",
+      });
     });
   });
 

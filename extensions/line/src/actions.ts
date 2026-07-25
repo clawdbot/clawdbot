@@ -15,29 +15,13 @@ function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 
-function truncateLineActionUri(uri: string): string {
-  let candidate = truncateUtf16Safe(uri, LINE_ACTION_URI_LIMIT);
-  if (candidate === uri) {
-    return candidate;
-  }
-
-  try {
-    decodeURI(uri);
-  } catch {
-    return candidate;
-  }
-
-  // LINE requires UTF-8 percent-encoded URIs. Retreat from the size boundary
-  // until truncation no longer leaves a partial encoded code point.
-  while (candidate) {
-    try {
-      decodeURI(candidate);
-      return candidate;
-    } catch {
-      candidate = truncateUtf16Safe(candidate, candidate.length - 1);
-    }
-  }
-  return candidate;
+function unavailableAction(kind: "Action" | "Link", reason: string): Action {
+  const label = `${kind} unavailable`;
+  return {
+    type: "message",
+    label,
+    text: `${label}: ${reason}`,
+  };
 }
 
 /**
@@ -55,10 +39,15 @@ export function messageAction(label: string, text?: string): Action {
  * Create a URI action (opens a URL when tapped)
  */
 export function uriAction(label: string, uri: string): Action {
+  // Opaque URLs may be signed or tokenized; changing their tail can navigate to
+  // the wrong destination. Keep the card deliverable with a visible fallback.
+  if (truncateUtf16Safe(uri, LINE_ACTION_URI_LIMIT) !== uri) {
+    return unavailableAction("Link", "URL exceeds LINE's limit.");
+  }
   return {
     type: "uri",
     label: truncateLineActionLabel(label),
-    uri: truncateLineActionUri(uri),
+    uri,
   };
 }
 
@@ -72,6 +61,16 @@ export function postbackAction(label: string, data: string, displayText?: string
     data: truncateLineActionData(data),
     displayText: displayText === undefined ? undefined : truncateLineActionData(displayText),
   };
+}
+
+export function postbackOrUnavailableAction(label: string, data: string): Action {
+  const action = postbackAction(label, data);
+  if (action.type === "postback" && action.data === data) {
+    return action;
+  }
+  // Never expose the generic postback truncation for opaque card callbacks;
+  // a visible unavailable action is safer than dispatching altered data.
+  return unavailableAction("Action", "callback data exceeds LINE's limit.");
 }
 
 /**
