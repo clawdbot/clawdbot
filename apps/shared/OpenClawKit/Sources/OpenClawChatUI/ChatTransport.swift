@@ -41,6 +41,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let activeRunIds: [String]?
     public let startedAt: Double?
     public let endedAt: Double?
+    public let swarmGroupId: String?
+    public let kind: String?
+    public let text: String?
+    public let swarmPhase: String?
     let agentStatusPresent: Bool
     let observerDigestPresent: Bool
     let statusPresent: Bool
@@ -60,6 +64,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         activeRunIds: [String]? = nil,
         startedAt: Double? = nil,
         endedAt: Double? = nil,
+        swarmGroupId: String? = nil,
+        kind: String? = nil,
+        text: String? = nil,
+        swarmPhase: String? = nil,
         agentStatusPresent: Bool? = nil,
         observerDigestPresent: Bool? = nil,
         statusPresent: Bool? = nil,
@@ -78,6 +86,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.activeRunIds = activeRunIds
         self.startedAt = startedAt
         self.endedAt = endedAt
+        self.swarmGroupId = swarmGroupId
+        self.kind = kind
+        self.text = text
+        self.swarmPhase = swarmPhase
         self.agentStatusPresent = agentStatusPresent ?? (agentStatus != nil)
         self.observerDigestPresent = observerDigestPresent ?? (observerDigest != nil)
         self.statusPresent = statusPresent ?? (status != nil)
@@ -103,6 +115,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.activeRunIds = try container.decodeIfPresent([String].self, forKey: .activeRunIds)
         self.startedAt = try container.decodeIfPresent(Double.self, forKey: .startedAt)
         self.endedAt = try container.decodeIfPresent(Double.self, forKey: .endedAt)
+        self.swarmGroupId = try container.decodeIfPresent(String.self, forKey: .swarmGroupId)
+        self.kind = try container.decodeIfPresent(String.self, forKey: .kind)
+        self.text = try container.decodeIfPresent(String.self, forKey: .text)
+        self.swarmPhase = try container.decodeIfPresent(String.self, forKey: .swarmPhase)
         self.agentStatusPresent = container.contains(.agentStatus)
         self.observerDigestPresent = container.contains(.observerDigest)
         self.statusPresent = container.contains(.status)
@@ -123,6 +139,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         case activeRunIds
         case startedAt
         case endedAt
+        case swarmGroupId
+        case kind
+        case text
+        case swarmPhase
     }
 }
 
@@ -506,6 +526,7 @@ public protocol OpenClawChatTransport: Sendable {
         limit: Int?,
         search: String?,
         archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry]
     func listAgents() async throws -> OpenClawChatAgentsListResponse?
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
     func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse?
@@ -768,6 +789,10 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.list not supported by this transport"])
     }
 
+    public func listChildSessions(parentKey _: String) async throws -> [OpenClawChatSessionEntry] {
+        []
+    }
+
     /// Conveniences for callers that only page a list. Transports must
     /// implement the canonical `listSessions(limit:search:archived:)`
     /// requirement; same-name methods on a conformer are shadowed by these
@@ -984,7 +1009,7 @@ public enum OpenClawChatSessionRoutingContract {
     /// Scope and agent ids cannot contain `|`; parse from both ends so an
     /// older custom main key containing the delimiter still round-trips.
     public static func parse(_ contract: String?) -> Components? {
-        guard let normalized = self.normalize(contract),
+        guard let normalized = normalize(contract),
               let firstSeparator = normalized.firstIndex(of: "|"),
               let lastSeparator = normalized.lastIndex(of: "|"),
               firstSeparator != lastSeparator

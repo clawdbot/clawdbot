@@ -130,6 +130,15 @@ public final class OpenClawChatViewModel {
         didSet { syncContextUsageFraction() }
     }
 
+    public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
+    var swarmActivityState = OpenClawChatSwarmActivityState()
+    @ObservationIgnored
+    var swarmRefreshGeneration: UInt64 = 0
+    @ObservationIgnored
+    var swarmSessionKey: String?
+    @ObservationIgnored
+    var swarmRefreshTask: Task<Void, Never>?
+
     public internal(set) var contextUsageFraction: Double?
     /// True while the visible transcript came from the offline cache and no
     /// live history response has replaced it yet (possibly stale).
@@ -531,6 +540,7 @@ public final class OpenClawChatViewModel {
         self.reportToolActivityChanges(from: self.pendingToolCallsById, to: [:])
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
+        self.swarmRefreshTask?.cancel()
         self.outboxRetryTask?.cancel()
         for task in self.outboxBranchReconcileRetryTasks.values {
             task.cancel()
@@ -883,6 +893,9 @@ extension OpenClawChatViewModel {
     {
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard sessionKey == self.sessionKey else { return }
+        if self.swarmSessionKey != sessionKey {
+            self.resetSwarmProgress()
+        }
         self.unreadPatchGuard.activate(key: self.sessionMutationIdentity(for: sessionKey))
         self.bootstrapGeneration &+= 1
         self.bootstrapTask?.cancel()
@@ -940,6 +953,7 @@ extension OpenClawChatViewModel {
             guard self.isCurrentBootstrap(context) else { return }
 
             Task { [weak self] in await self?.refreshQuestions() }
+            Task { [weak self] in await self?.refreshSwarmSessions(sessionSnapshot: context.session) }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }

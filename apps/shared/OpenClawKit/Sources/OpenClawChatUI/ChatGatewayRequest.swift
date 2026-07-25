@@ -122,6 +122,9 @@ public enum OpenClawChatGatewayRequests {
         includeGlobal: Bool = true,
         includeUnknown: Bool = false,
         activeMinutes: Int? = nil,
+        spawnedBy: String? = nil,
+        offset: Int? = nil,
+        configuredAgentsOnly: Bool? = nil,
         timeoutMs: Double = 15000) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
@@ -133,6 +136,15 @@ public enum OpenClawChatGatewayRequests {
         }
         if let activeMinutes {
             params["activeMinutes"] = AnyCodable(activeMinutes)
+        }
+        if let spawnedBy = normalized(spawnedBy) {
+            params["spawnedBy"] = AnyCodable(spawnedBy)
+        }
+        if let offset {
+            params["offset"] = AnyCodable(offset)
+        }
+        if let configuredAgentsOnly {
+            params["configuredAgentsOnly"] = AnyCodable(configuredAgentsOnly)
         }
         let normalizedSearch = self.normalized(search)
         if let normalizedSearch {

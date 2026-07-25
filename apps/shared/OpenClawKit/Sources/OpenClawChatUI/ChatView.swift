@@ -259,6 +259,8 @@ public struct OpenClawChatView: View {
             self.planPill
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
             self.turnRecapRow
+            self.swarmProgress
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
         }
@@ -273,6 +275,9 @@ public struct OpenClawChatView: View {
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
             self.turnRecapRow
+            self.swarmProgress
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
+                .padding(.top, Layout.stackSpacing)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
@@ -290,6 +295,14 @@ public struct OpenClawChatView: View {
             ChatPlanPill(
                 steps: self.viewModel.planSteps,
                 explanation: self.viewModel.planExplanation)
+        }
+    }
+
+    @ViewBuilder
+    private var swarmProgress: some View {
+        let groups = self.viewModel.activeSwarmGroups
+        if !groups.isEmpty {
+            OpenClawChatSwarmProgressView(groups: groups)
         }
     }
 

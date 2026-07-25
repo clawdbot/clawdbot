@@ -255,8 +255,27 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             ts: decoded.ts,
             path: decoded.path,
             count: decoded.count,
+            totalCount: decoded.totalCount,
+            offset: decoded.offset,
+            nextOffset: decoded.nextOffset,
+            hasMore: decoded.hasMore,
             defaults: defaults,
             sessions: decoded.sessions)
+    }
+
+    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+        try await OpenClawChatChildSessionPager.collect { offset in
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: 10000,
+                search: nil,
+                archived: false,
+                includeGlobal: false,
+                spawnedBy: parentKey,
+                offset: offset,
+                configuredAgentsOnly: true)
+            let data = try await connection.request(request)
+            return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        }
     }
 
     func listAgents() async throws -> OpenClawChatAgentsListResponse? {

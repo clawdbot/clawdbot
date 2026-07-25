@@ -70,6 +70,22 @@ struct ChatGatewayRequestTests {
         #expect(request.params["archived"]?.value as? Bool == true)
     }
 
+    @Test func `child session request encodes focused pagination filters`() {
+        let request = OpenClawChatGatewayRequests.sessionsList(
+            limit: 10000,
+            search: nil,
+            archived: false,
+            includeGlobal: false,
+            spawnedBy: " agent:main:parent ",
+            offset: 10000,
+            configuredAgentsOnly: true)
+
+        #expect(request.params["includeGlobal"]?.value as? Bool == false)
+        #expect(request.params["spawnedBy"]?.value as? String == "agent:main:parent")
+        #expect(request.params["offset"]?.value as? Int == 10000)
+        #expect(request.params["configuredAgentsOnly"]?.value as? Bool == true)
+    }
+
     @Test func `session patch request preserves explicit null clearing`() {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "global",
@@ -394,6 +410,25 @@ struct ChatGatewayPayloadCodecTests {
             sessionKey: "agent:main:main",
             agentId: "main",
             reason: "command-metadata"))
+
+        let swarmNote = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "reason": AnyCodable("swarm-note"),
+                "swarmGroupId": AnyCodable("swarm:agent:main:main:run-1"),
+                "kind": AnyCodable("phase"),
+                "text": AnyCodable("Research"),
+            ]))
+        guard case let .sessionsChanged(note) = OpenClawChatGatewayPayloadCodec.event(from: swarmNote)
+        else {
+            Issue.record("expected swarm sessionsChanged")
+            return
+        }
+        #expect(note.swarmGroupId == "swarm:agent:main:main:run-1")
+        #expect(note.kind == "phase")
+        #expect(note.text == "Research")
 
         let chat = EventFrame(
             type: "event",

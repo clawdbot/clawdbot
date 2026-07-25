@@ -28,17 +28,19 @@ extension OpenClawChatViewModel {
             applyTransportHealth(ok)
             if reconnected {
                 Task { [weak self] in await self?.refreshQuestions() }
+                Task { [weak self] in await self?.refreshSwarmSessions() }
             }
         case .tick:
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .sessionsChanged(change):
+            let swarmEvent = self.observeSwarmEvent(change)
             let projectedSessions = ChatSessionSidebarModel.applying(
                 sessionChange: change,
                 to: self.sessions)
             if let projectedSessions {
                 self.sessions = projectedSessions
-            } else if change.reason != "patch", change.reason != "command-metadata" {
+            } else if !swarmEvent, change.reason != "patch", change.reason != "command-metadata" {
                 let context = self.currentSessionSnapshot()
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
             }
@@ -101,6 +103,8 @@ extension OpenClawChatViewModel {
             self.reconcileQuestionsAfterEvent()
         case .seqGap:
             self.errorText = nil
+            self.resetSwarmProgress()
+            Task { [weak self] in await self?.refreshSwarmSessions() }
             self.invalidateHistorySnapshots()
             self.invalidateRunSnapshots()
             self.clearPendingRuns(reason: nil)

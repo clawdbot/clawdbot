@@ -287,6 +287,15 @@ class ChatController internal constructor(
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
+  private val _swarmGroups = MutableStateFlow<List<ChatSwarmGroup>>(emptyList())
+  val swarmGroups: StateFlow<List<ChatSwarmGroup>> = _swarmGroups.asStateFlow()
+  private val swarmActivityTracker = ChatSwarmActivityTracker()
+  private val swarmLock = Any()
+  private var swarmSessions: List<ChatSessionEntry> = emptyList()
+  private val swarmRequestSequence = AtomicLong(0)
+  private var swarmRefreshJob: Job? = null
+  private var swarmSessionKey: String? = null
+
   private val _sessionBranches = MutableStateFlow<List<SessionBranch>>(emptyList())
   val sessionBranches: StateFlow<List<SessionBranch>> = _sessionBranches.asStateFlow()
 
@@ -2117,6 +2126,7 @@ class ChatController internal constructor(
     val selectionChanged = _sessionKey.value != key || _sessionOwnerAgentId.value != owner
     if (selectionChanged) {
       chatSelectionGeneration.incrementAndGet()
+      resetSwarmProgress(key)
       sessionBranchesRefreshGeneration.incrementAndGet()
       sessionBranchSwitchGeneration.incrementAndGet()
       sessionBranchSwitchClaimed.set(false)
@@ -2816,6 +2826,7 @@ class ChatController internal constructor(
       }
       "health" -> {
         refreshQuestions()
+        refreshSwarmSessions()
         if (restoreRunStateOnReconnect) {
           refreshHistoryForRecovery(forceHealth = true, completesReconnectRecovery = true)
         } else {
@@ -2826,6 +2837,8 @@ class ChatController internal constructor(
       "seqGap" -> {
         // Missed events may include deltas or the terminal state of a pending run;
         // retain local ownership until the recovery snapshot can reconcile it.
+        resetSwarmProgress()
+        refreshSwarmSessions()
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
@@ -3344,6 +3357,7 @@ class ChatController internal constructor(
         )
       }
 
+      fetchSwarmSessions(sessionKey)
       if (!ownsReconnectRecovery) {
         pollHealthIfNeeded(force = forceHealth)
       }
@@ -3860,6 +3874,95 @@ class ChatController internal constructor(
         }
       }
     }
+  }
+
+  private fun resetSwarmProgress(sessionKey: String = _sessionKey.value) {
+    swarmRefreshJob?.cancel()
+    swarmRefreshJob = null
+    swarmRequestSequence.incrementAndGet()
+    synchronized(swarmLock) {
+      swarmSessionKey = sessionKey
+      swarmActivityTracker.clear()
+      swarmSessions = emptyList()
+      _swarmGroups.value = emptyList()
+    }
+  }
+
+  private fun observeSwarmEvent(payload: JsonObject): Boolean {
+    val observed = synchronized(swarmLock) { swarmActivityTracker.observe(payload) }
+    if (!observed) return false
+    val kind = payload["kind"].asStringOrNull()?.trim()
+    if (kind == "phase" || kind == "log") {
+      publishSwarmGroups()
+    } else {
+      scheduleSwarmRefresh()
+    }
+    return true
+  }
+
+  private fun publishSwarmGroups() {
+    val parentKey = _sessionKey.value
+    val decorated = synchronized(swarmLock) { swarmActivityTracker.decorate(swarmSessions) }
+    _swarmGroups.value =
+      buildChatSwarmGroups(decorated) { candidate -> sameOutboxSession(candidate, parentKey) }
+  }
+
+  private fun scheduleSwarmRefresh() {
+    val parentKey = _sessionKey.value
+    swarmRefreshJob?.cancel()
+    swarmRefreshJob =
+      scope.launch {
+        delay(250)
+        fetchSwarmSessions(parentKey)
+      }
+  }
+
+  private fun refreshSwarmSessions() {
+    val parentKey = _sessionKey.value
+    scope.launch { fetchSwarmSessions(parentKey) }
+  }
+
+  private suspend fun fetchSwarmSessions(parentKey: String) {
+    val requestSequence = swarmRequestSequence.incrementAndGet()
+    val rows = mutableListOf<ChatSessionEntry>()
+    val seen = mutableSetOf<String>()
+    var offset = 0
+    try {
+      while (true) {
+        val params =
+          buildJsonObject {
+            put("includeGlobal", JsonPrimitive(false))
+            put("includeUnknown", JsonPrimitive(false))
+            put("configuredAgentsOnly", JsonPrimitive(true))
+            put("spawnedBy", JsonPrimitive(parentKey))
+            put("limit", JsonPrimitive(10_000))
+            put("offset", JsonPrimitive(offset))
+          }
+        val root = json.parseToJsonElement(requestGateway("sessions.list", params.toString())).asObjectOrNull() ?: return
+        val page = root["sessions"].asArrayOrNull().orEmpty()
+        page.forEach { item ->
+          parseSessionEntry(item.asObjectOrNull())?.let { row ->
+            if (seen.add(row.key)) rows += row
+          }
+        }
+        val hasMore = root["hasMore"].asBooleanOrNull() == true
+        if (!hasMore) break
+        val nextOffset = root["nextOffset"].asLongOrNull()?.toInt() ?: (offset + page.size)
+        if (nextOffset <= offset) break
+        offset = nextOffset
+      }
+    } catch (_: Throwable) {
+      return
+    }
+    if (requestSequence != swarmRequestSequence.get() || !sameOutboxSession(parentKey, _sessionKey.value)) return
+    synchronized(swarmLock) {
+      if (swarmSessionKey != parentKey) {
+        swarmSessionKey = parentKey
+        swarmActivityTracker.clear()
+      }
+      swarmSessions = swarmActivityTracker.decorate(rows)
+    }
+    publishSwarmGroups()
   }
 
   private fun currentSessionWindowLimit(): Int = _sessions.value.size.takeIf { it > 0 } ?: 100
@@ -4977,6 +5080,7 @@ class ChatController internal constructor(
 
   private fun handleSessionsChangedEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    if (observeSwarmEvent(payload)) return
     val reason = payload["reason"].asStringOrNull()
     if (reason == "rewind" || reason == "branch-switch") {
       // Mutation events do not contain a session preview. Refresh the drawer even for a
@@ -5709,6 +5813,14 @@ class ChatController internal constructor(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) },
       hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
+      parentSessionKey = obj["parentSessionKey"].asStringOrNull()?.trim(),
+      spawnedBy = obj["spawnedBy"].asStringOrNull()?.trim(),
+      hasActiveSubagentRun = obj["hasActiveSubagentRun"].asBooleanOrNull(),
+      subagentRunState = obj["subagentRunState"].asStringOrNull()?.trim(),
+      swarmGroupId = obj["swarmGroupId"].asStringOrNull()?.trim(),
+      swarmPhase = obj["swarmPhase"].asStringOrNull()?.trim(),
+      swarmPhaseRank = obj["swarmPhaseRank"].asLongOrNull()?.toInt(),
+      swarmLog = obj["swarmLog"].asStringOrNull()?.trim(),
       status = obj["status"].asStringOrNull()?.trim(),
       lastRunError = obj["lastRunError"].asStringOrNull()?.trim(),
       startedAt = obj["startedAt"].asLongOrNull(),
@@ -6518,6 +6630,14 @@ internal fun mergeChatSessionEntry(
     hasActiveRun = hasActiveRun,
     activeRunIds = activeRunIds,
     hasActiveRunMetadata = existing.hasActiveRunMetadata || next.hasActiveRunMetadata,
+    parentSessionKey = next.parentSessionKey ?: existing.parentSessionKey,
+    spawnedBy = next.spawnedBy ?: existing.spawnedBy,
+    hasActiveSubagentRun = next.hasActiveSubagentRun ?: existing.hasActiveSubagentRun,
+    subagentRunState = next.subagentRunState ?: existing.subagentRunState,
+    swarmGroupId = next.swarmGroupId ?: existing.swarmGroupId,
+    swarmPhase = next.swarmPhase ?: existing.swarmPhase,
+    swarmPhaseRank = next.swarmPhaseRank ?: existing.swarmPhaseRank,
+    swarmLog = next.swarmLog ?: existing.swarmLog,
     status = if (next.hasRunMetadata) next.status else existing.status,
     lastRunError = if (next.hasRunMetadata) next.lastRunError else existing.lastRunError,
     startedAt = if (next.hasRunMetadata) next.startedAt else existing.startedAt,

@@ -68,6 +68,31 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
+  fun providesSwarmChildRosterForSwarmScene() {
+    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Swarm)
+    try {
+      val params = "{\"spawnedBy\":\"${AndroidScreenshotFixture.mainSessionKey}\"}"
+      val sessions =
+        json
+          .parseToJsonElement(AndroidScreenshotFixture.request("sessions.list", params))
+          .jsonObject["sessions"]
+          ?.jsonArray
+          .orEmpty()
+      assertEquals(5, sessions.size)
+      assertEquals(
+        "swarm:${AndroidScreenshotFixture.mainSessionKey}:research",
+        sessions
+          .first()
+          .jsonObject["swarmGroupId"]
+          ?.jsonPrimitive
+          ?.content,
+      )
+    } finally {
+      AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
+    }
+  }
+
+  @Test
   fun providesDeterministicChatHistory() {
     val messages =
       json

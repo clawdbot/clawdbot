@@ -379,6 +379,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var hasActiveRun: Bool?
     public var activeRunIds: [String]?
     public var hasActiveSubagentRun: Bool?
+    public var subagentRunState: String?
+    public var swarmGroupId: String?
+    public var swarmPhase: String?
+    public var swarmPhaseRank: Int?
+    public var swarmLog: String?
     public var worktree: OpenClawChatSessionWorktree?
     public var startedAt: Double?
     public var endedAt: Double?
@@ -448,6 +453,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         hasActiveRun: Bool? = nil,
         activeRunIds: [String]? = nil,
         hasActiveSubagentRun: Bool? = nil,
+        subagentRunState: String? = nil,
+        swarmGroupId: String? = nil,
+        swarmPhase: String? = nil,
+        swarmPhaseRank: Int? = nil,
+        swarmLog: String? = nil,
         worktree: OpenClawChatSessionWorktree? = nil,
         fastMode: OpenClawChatFastMode? = nil,
         effectiveFastMode: OpenClawChatFastMode? = nil,
@@ -485,6 +495,11 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds
         self.hasActiveSubagentRun = hasActiveSubagentRun
+        self.subagentRunState = subagentRunState
+        self.swarmGroupId = swarmGroupId
+        self.swarmPhase = swarmPhase
+        self.swarmPhaseRank = swarmPhaseRank
+        self.swarmLog = swarmLog
         self.worktree = worktree
         self.startedAt = startedAt
         self.endedAt = endedAt
@@ -556,10 +571,45 @@ public enum OpenClawChatSessionListOrganizer {
     }
 }
 
+public enum OpenClawChatChildSessionPager {
+    public static func collect(
+        fetchPage: (Int) async throws -> OpenClawChatSessionsListResponse) async throws
+        -> [OpenClawChatSessionEntry]
+    {
+        var rowsByKey: [String: OpenClawChatSessionEntry] = [:]
+        for _ in 0..<4 {
+            let rowsBeforePass = rowsByKey.count
+            var expectedTotal: Int?
+            var seenOffsets = Set<Int>()
+            var offset = 0
+            while seenOffsets.insert(offset).inserted {
+                let page = try await fetchPage(offset)
+                expectedTotal = page.totalCount
+                for row in page.sessions {
+                    rowsByKey[row.key] = row
+                }
+                let hasMore = page.hasMore ?? expectedTotal.map { offset + page.sessions.count < $0 } ?? false
+                let nextOffset = page.nextOffset ?? (offset + page.sessions.count)
+                guard hasMore, nextOffset > offset else { break }
+                offset = nextOffset
+            }
+            let added = rowsByKey.count - rowsBeforePass
+            if added == 0 || expectedTotal.map({ rowsByKey.count >= $0 }) != false {
+                break
+            }
+        }
+        return Array(rowsByKey.values)
+    }
+}
+
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
     public let path: String?
     public let count: Int?
+    public let totalCount: Int?
+    public let offset: Int?
+    public let nextOffset: Int?
+    public let hasMore: Bool?
     public let defaults: OpenClawChatSessionsDefaults?
     public let sessions: [OpenClawChatSessionEntry]
 
@@ -567,12 +617,20 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         ts: Double?,
         path: String?,
         count: Int?,
+        totalCount: Int? = nil,
+        offset: Int? = nil,
+        nextOffset: Int? = nil,
+        hasMore: Bool? = nil,
         defaults: OpenClawChatSessionsDefaults?,
         sessions: [OpenClawChatSessionEntry])
     {
         self.ts = ts
         self.path = path
         self.count = count
+        self.totalCount = totalCount
+        self.offset = offset
+        self.nextOffset = nextOffset
+        self.hasMore = hasMore
         self.defaults = defaults
         self.sessions = sessions
     }
