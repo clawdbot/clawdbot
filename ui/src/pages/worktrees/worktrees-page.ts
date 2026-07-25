@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -17,11 +18,8 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
-import {
-  AsyncGatewayScopeController,
-  type AsyncGatewayScope,
-} from "../../lit/async-gateway-scope-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
 type WorktreesRemoveResult = { removed: boolean; snapshotError?: string };
@@ -31,7 +29,9 @@ type WorktreeBranchesResult = {
   headBranch?: string;
 };
 
-type WorktreeOperationScope = AsyncGatewayScope & {
+type WorktreeOperationScope = {
+  gateway: ApplicationContext["gateway"];
+  client: GatewayBrowserClient;
   epoch: number;
 };
 
@@ -53,31 +53,58 @@ class WorktreesPage extends OpenClawLightDomElement {
   @state() private createBaseRef = "";
   @state() private createBranches: string[] = [];
   @state() private creating = false;
+  private client: GatewayBrowserClient | null = null;
+  private gatewayConnected = false;
+  private gatewaySource?: ApplicationContext["gateway"];
+  private hasBoundGateway = false;
   private loadGeneration = 0;
   private branchesGeneration = 0;
   private operationEpoch = 0;
-  private readonly gatewayScope = new AsyncGatewayScopeController(
-    this,
+  private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
-    (snapshot, { clientChanged, connectionChanged }) => {
-      if (clientChanged || connectionChanged) {
-        this.invalidateLoad();
-        this.invalidateOperations();
-      }
-      if (clientChanged) {
-        this.records = [];
-        this.error = null;
-      }
-      if (snapshot.phase === "connected" && snapshot.client) {
-        void this.load();
-      }
+    (gateway) => {
+      const sourceChanged = this.hasBoundGateway && this.gatewaySource !== gateway;
+      this.gatewaySource = gateway;
+      this.hasBoundGateway = true;
+      this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
+      return gateway.subscribe((snapshot) => {
+        if (this.gatewaySource === gateway && this.context.gateway === gateway) {
+          this.applyGatewaySnapshot(snapshot);
+        }
+      });
     },
   );
 
   override disconnectedCallback() {
+    this.subscriptions.clear();
     this.invalidateLoad();
     this.invalidateOperations();
+    this.gatewaySource = undefined;
+    this.client = null;
+    this.gatewayConnected = false;
     super.disconnectedCallback();
+  }
+
+  private applyGatewaySnapshot(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+    sourceChanged = false,
+  ) {
+    const clientChanged = snapshot.client !== this.client;
+    const connectionChanged = (snapshot.phase === "connected") !== this.gatewayConnected;
+    const identityChanged = sourceChanged || clientChanged;
+    this.client = snapshot.client;
+    this.gatewayConnected = snapshot.phase === "connected";
+    if (identityChanged || connectionChanged) {
+      this.invalidateLoad();
+      this.invalidateOperations();
+    }
+    if (identityChanged) {
+      this.records = [];
+      this.error = null;
+    }
+    if (snapshot.phase === "connected" && snapshot.client) {
+      void this.load();
+    }
   }
 
   private invalidateLoad() {
@@ -93,15 +120,29 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private captureOperationScope(): WorktreeOperationScope | null {
-    const scope = this.gatewayScope.capture();
-    if (!scope) {
+    const gateway = this.gatewaySource;
+    const client = this.client;
+    if (
+      !gateway ||
+      !client ||
+      !this.gatewayConnected ||
+      !this.isConnected ||
+      this.context.gateway !== gateway
+    ) {
       return null;
     }
-    return { ...scope, epoch: this.operationEpoch };
+    return { gateway, client, epoch: this.operationEpoch };
   }
 
   private isOperationScopeCurrent(scope: WorktreeOperationScope): boolean {
-    return this.gatewayScope.isCurrent(scope) && this.operationEpoch === scope.epoch;
+    return (
+      this.isConnected &&
+      this.gatewayConnected &&
+      this.gatewaySource === scope.gateway &&
+      this.context.gateway === scope.gateway &&
+      this.client === scope.client &&
+      this.operationEpoch === scope.epoch
+    );
   }
 
   // Reads and writes share one page-level lane. Otherwise a stale list can
@@ -111,8 +152,8 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private async load(options: { preserveError?: boolean } = {}) {
-    const scope = this.gatewayScope.capture();
-    if (!scope || this.operationPending) {
+    const client = this.client;
+    if (!client || !this.gatewayConnected || this.operationPending) {
       return;
     }
     const generation = ++this.loadGeneration;
@@ -121,17 +162,17 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.error = null;
     }
     try {
-      const result = await scope.client.request<WorktreesListResult>("worktrees.list", {});
-      if (generation === this.loadGeneration && this.gatewayScope.isCurrent(scope)) {
+      const result = await client.request<WorktreesListResult>("worktrees.list", {});
+      if (generation === this.loadGeneration && client === this.client) {
         // Registry order is insertion order; recently used checkouts matter most.
         this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
       }
     } catch (error) {
-      if (generation === this.loadGeneration && this.gatewayScope.isCurrent(scope)) {
+      if (generation === this.loadGeneration && client === this.client) {
         this.error = String(error);
       }
     } finally {
-      if (generation === this.loadGeneration && this.gatewayScope.isCurrent(scope)) {
+      if (generation === this.loadGeneration && client === this.client) {
         this.loading = false;
       }
     }
