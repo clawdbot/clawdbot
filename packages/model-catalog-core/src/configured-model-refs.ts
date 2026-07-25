@@ -1,6 +1,3 @@
-// Model Catalog Core module implements configured model refs behavior.
-import { parseModelCatalogRef } from "./model-catalog-refs.js";
-
 // Collects configured model references from OpenClaw config-shaped objects.
 
 /** Narrow unknown values to plain records. */
@@ -19,12 +16,31 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "model",
   "utilityModel",
   "imageModel",
-  "imageGenerationModel",
-  "videoGenerationModel",
-  "musicGenerationModel",
   "voiceModel",
   "pdfModel",
 ] as const;
+
+/** List raw refs from one string or primary/fallback model selector. */
+export function listModelRefsFromConfigValue(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const refs: string[] = [];
+  if (typeof value.primary === "string") {
+    refs.push(value.primary);
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      if (typeof fallback === "string") {
+        refs.push(fallback);
+      }
+    }
+  }
+  return refs;
+}
 
 /** Collect configured model references from agents, channels, hooks, and message config. */
 export function collectConfiguredModelRefs(
@@ -59,6 +75,10 @@ export function collectConfiguredModelRefs(
     for (const key of AGENT_MODEL_CONFIG_KEYS) {
       collectModelConfig(`${path}.${key}`, agent[key]);
     }
+    const mediaModels = isRecord(agent.mediaModels) ? agent.mediaModels : {};
+    for (const capability of ["image", "video", "music"] as const) {
+      collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability]);
+    }
     pushModelRef(
       `${path}.heartbeat.model`,
       isRecord(agent.heartbeat) ? agent.heartbeat.model : undefined,
@@ -84,7 +104,11 @@ export function collectConfiguredModelRefs(
   const root = isRecord(config) ? config : {};
   const agents = isRecord(root.agents) ? root.agents : {};
   collectFromAgent("agents.defaults", agents.defaults);
-  if (Array.isArray(agents.list)) {
+  if (isRecord(agents.entries)) {
+    for (const [agentId, entry] of Object.entries(agents.entries)) {
+      collectFromAgent(`agents.entries.${agentId}`, entry);
+    }
+  } else if (Array.isArray(agents.list)) {
     for (const [index, entry] of agents.list.entries()) {
       collectFromAgent(`agents.list.${index}`, entry);
     }
@@ -108,12 +132,7 @@ export function collectConfiguredModelRefs(
     }
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
-  pushModelRef(
-    "messages.tts.summaryModel",
-    isRecord(root.messages) && isRecord(root.messages.tts)
-      ? root.messages.tts.summaryModel
-      : undefined,
-  );
+  pushModelRef("tts.summaryModel", isRecord(root.tts) ? root.tts.summaryModel : undefined);
   pushModelRef(
     "channels.discord.voice.model",
     isRecord(root.channels) &&
@@ -131,9 +150,4 @@ export function collectConfiguredModelRefValues(
   options?: { includeChannelModelOverrides?: boolean },
 ): string[] {
   return collectConfiguredModelRefs(config, options).map((ref) => ref.value);
-}
-
-/** Extract a normalized provider id from a provider/model reference. */
-export function extractProviderFromModelRef(value: string): string | null {
-  return parseModelCatalogRef(value)?.provider ?? null;
 }

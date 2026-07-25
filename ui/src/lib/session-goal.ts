@@ -1,7 +1,7 @@
 // Control UI module implements session goal behavior.
 import type { SessionGoal } from "../api/types.ts";
 
-export function formatGoalTokenCount(value: number): string {
+function formatGoalTokenCount(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
     return "0";
   }
@@ -53,6 +53,43 @@ export function formatGoalSummary(goal: SessionGoal): string {
   const usage = formatGoalUsage(goal);
   const status = formatGoalStatusLabel(goal.status);
   return usage ? `${status} (${usage})` : status;
+}
+
+/** Wall-clock time spent on the goal; frozen at the status timestamp once not active. */
+export function goalElapsedMs(goal: SessionGoal, now: number): number {
+  const stoppedAt = (() => {
+    switch (goal.status) {
+      case "active":
+        return now;
+      case "paused":
+        return goal.pausedAt ?? goal.updatedAt;
+      case "blocked":
+        return goal.blockedAt ?? goal.updatedAt;
+      case "usage_limited":
+        return goal.usageLimitedAt ?? goal.updatedAt;
+      case "budget_limited":
+        return goal.budgetLimitedAt ?? goal.updatedAt;
+      case "complete":
+        return goal.completedAt ?? goal.updatedAt;
+    }
+    const unreachable: never = goal.status;
+    return unreachable;
+  })();
+  return Math.max(0, stoppedAt - goal.createdAt);
+}
+
+export function formatGoalElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
 export function formatGoalDetail(goal: SessionGoal): string {

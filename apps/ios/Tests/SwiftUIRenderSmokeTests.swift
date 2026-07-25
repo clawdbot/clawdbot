@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 import UIKit
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
 struct SwiftUIRenderSmokeTests {
     @MainActor private static func host(_ view: some View, size: CGSize? = nil) -> UIWindow {
@@ -46,17 +47,39 @@ struct SwiftUIRenderSmokeTests {
 
     @Test @MainActor func `settings About destination builds in light and dark mode`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
-            let appModel = NodeAppModel()
-            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab(directRoute: .about)
-                .environment(AppAppearanceModel())
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .preferredColorScheme(scheme)
+                let root = SettingsProTab(directRoute: .about)
+                    .environment(AppAppearanceModel())
+                    .environment(appModel)
+                    .environment(appModel.voiceWake)
+                    .environment(gatewayController)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
 
-            _ = Self.host(root, size: CGSize(width: 393, height: 852))
+                _ = Self.host(root, size: CGSize(width: 320, height: 852))
+            }
+        }
+    }
+
+    @Test @MainActor func `settings Privacy destination builds across appearance and type size`() {
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+                let root = SettingsProTab(directRoute: .privacy)
+                    .environment(AppAppearanceModel())
+                    .environment(appModel)
+                    .environment(appModel.voiceWake)
+                    .environment(gatewayController)
+                    .preferredColorScheme(scheme)
+                    .environment(\.dynamicTypeSize, typeSize)
+
+                _ = Self.host(root, size: CGSize(width: 393, height: 852))
+            }
         }
     }
 
@@ -76,6 +99,27 @@ struct SwiftUIRenderSmokeTests {
                 .preferredColorScheme(scheme)
 
             windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
+        }
+    }
+
+    @Test @MainActor func `settings OpenClaw destination builds access gate across appearance and type size`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                let root = SettingsProTab(directRoute: .systemAgent)
+                    .environment(AppAppearanceModel())
+                    .environment(appModel)
+                    .environment(appModel.voiceWake)
+                    .environment(gatewayController)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
+
+                windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
+            }
         }
     }
 
@@ -111,21 +155,280 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `display math builds valid and fallback view hierarchies`() {
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = VStack {
+                ChatMarkdownRenderer(
+                    text: #"Inline math \(E = mc^2\) stays inside prose."#,
+                    context: .assistant,
+                    variant: .standard,
+                    font: OpenClawChatTypography.body,
+                    textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"\notARealCommand{"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: "α + β = γ",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: String(repeating: "{", count: 65) + "x",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: String(repeating: #"\bar"#, count: 129) + "x",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"x\textcolor{#fff}{}"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+            }
+            .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 240))
+        }
+    }
+
+    @Test @MainActor func `markdown heading hierarchy builds with inline formatting and table`() {
+        let markdown = """
+        # First **strong** heading
+        ## Second [linked](https://example.com) heading
+        ### Third `code` heading
+        #### Fourth heading
+        ##### Fifth heading
+        ###### Sixth heading
+
+        | Surface | State |
+        | --- | --- |
+        | iOS | Native |
+        """
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMarkdownRenderer(
+                text: markdown,
+                context: .assistant,
+                variant: .standard,
+                font: OpenClawChatTypography.body,
+                textColor: OpenClawChatTheme.assistantText)
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 700))
+        }
+    }
+
+    @Test @MainActor func `markdown lists and thematic breaks build across appearance and type size`() {
+        let markdown = """
+        Here are the options:
+
+        9. **Option one heading** – a sentence describing it.
+        10. **Option two heading** – another sentence.
+           - Nested detail
+           - [x] Completed detail
+
+        ---
+
+        Final paragraph.
+        """
+        for scheme in [ColorScheme.light, .dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let root = ChatMarkdownRenderer(
+                    text: markdown,
+                    context: .assistant,
+                    variant: .standard,
+                    font: OpenClawChatTypography.body,
+                    textColor: OpenClawChatTheme.assistantText)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
+
+                _ = Self.host(root, size: CGSize(width: 320, height: 700))
+            }
+        }
+    }
+
+    @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
+        let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
+        let message = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: nil)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMessageBubble(
+                message: message,
+                style: .standard,
+                markdownVariant: .standard,
+                userAccent: nil,
+                displayOptions: [],
+                assistantName: "OpenClaw",
+                assistantAvatarText: "OC",
+                assistantAvatarTint: nil,
+                showsAssistantAvatar: true,
+                isClean: false,
+                contextWindowTokens: nil,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil })
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 320, height: 420))
+        }
+    }
+
+    @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
+        let text = """
+        Earlier prose stays visible.
+
+        ```swift
+        let answer = 42
+        ```
+
+        Trailing streamed words fade in.
+        """
+
+        let root = ChatStreamingAssistantBubble(
+            text: text,
+            markdownVariant: .standard,
+            showsReasoning: false,
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false)
+
+        _ = Self.host(root, size: CGSize(width: 393, height: 400))
+    }
+
+    @Test @MainActor func `assistant usage footer builds across dynamic type sizes`() throws {
+        let usage = try JSONDecoder().decode(
+            OpenClawChatUsage.self,
+            from: Data(#"{"input":12000,"output":300,"cacheRead":438400,"cacheWrite":307000,"cost":{"total":0.0123}}"#
+                .utf8))
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: "A completed assistant response with per-run usage.",
+                thinking: nil,
+                thinkingSignature: nil,
+                mimeType: nil,
+                fileName: nil,
+                content: nil,
+                id: nil,
+                name: nil,
+                arguments: nil)],
+            timestamp: nil,
+            usage: usage)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMessageBubble(
+                message: message,
+                style: .standard,
+                markdownVariant: .standard,
+                userAccent: nil,
+                displayOptions: [],
+                assistantName: "OpenClaw",
+                assistantAvatarText: "OC",
+                assistantAvatarTint: nil,
+                showsAssistantAvatar: true,
+                isClean: false,
+                contextWindowTokens: 1_000_000,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil })
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 320, height: 280))
+        }
+    }
+
     @Test @MainActor func `root tabs builds device orientation shell matrix`() {
         for scenario in Self.rootTabsShellScenarios() {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = RootTabs()
+            let root = RootTabs(initialSidebarVisibility: scenario.sidebarVisible)
                 .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
-                .environment(\.rootTabsUserInterfaceIdiomOverride, scenario.idiom)
                 .environment(\.horizontalSizeClass, scenario.horizontalSizeClass)
                 .environment(\.verticalSizeClass, scenario.verticalSizeClass)
 
             _ = Self.host(root, size: scenario.size)
+        }
+    }
+
+    @Test @MainActor func `gateway quick setup builds candidate and empty states`() {
+        let gateways: [GatewayDiscoveryModel.DiscoveredGateway?] = [
+            .previewGateway,
+            nil,
+        ]
+
+        for gateway in gateways {
+            let appModel = NodeAppModel()
+            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            if let gateway {
+                gatewayController._test_setGateways([gateway])
+                appModel.gatewayStatusText = "Ready to pair"
+            }
+
+            let root = GatewayQuickSetupSheet()
+                .environment(appModel)
+                .environment(gatewayController)
+                .openClawSheetChrome()
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 520))
+        }
+    }
+
+    @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
+        let screens: [AnyView] = [
+            AnyView(OnboardingIntroStep(onContinue: {})),
+            AnyView(OnboardingPermissionsStep(onContinue: {})),
+            AnyView(OnboardingWelcomeStep(
+                statusLine: "",
+                isConnecting: false,
+                onScanQRCode: {},
+                onManualSetup: {})),
+            AnyView(OnboardingSuccessStep(
+                gatewayName: "OpenClaw Gateway",
+                gatewayAddress: "openclaw.local",
+                onGetStarted: {})),
+            AnyView(NavigationStack {
+                Form {
+                    Section("Connection Mode") {
+                        OnboardingModeRow(
+                            title: "Home Network",
+                            subtitle: "LAN or Tailscale host",
+                            symbol: "house.and.flag",
+                            selected: true,
+                            action: {})
+                        OnboardingModeRow(
+                            title: "Remote Domain",
+                            subtitle: "VPS with domain",
+                            symbol: "globe",
+                            selected: false,
+                            action: {})
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(OpenClawBrand.activationCanvas)
+            }),
+        ]
+
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            for screen in screens {
+                let root = screen
+                    .preferredColorScheme(scheme)
+                    .environment(\.dynamicTypeSize, .accessibility2)
+                _ = Self.host(root, size: CGSize(width: 393, height: 852))
+            }
         }
     }
 
@@ -155,6 +458,37 @@ struct SwiftUIRenderSmokeTests {
         await Self.waitForPresentedAlert(in: window)
 
         #expect(window.rootViewController?.presentedViewController is UIAlertController)
+    }
+
+    @Test @MainActor func `exec approval dialog builds on compact screens with accessibility text`() throws {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        let layouts: [(CGSize, DynamicTypeSize)] = [
+            (CGSize(width: 320, height: 568), .accessibility5),
+            (CGSize(width: 568, height: 320), .accessibility3),
+        ]
+        for (size, typeSize) in layouts {
+            let appModel = NodeAppModel()
+            let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-layout",
+                commandText: String(repeating: "/usr/bin/find /private/var/mobile/Documents ", count: 12),
+                warningText: String(
+                    repeating: "This command can modify files outside the current workspace. ",
+                    count: 12),
+                allowedDecisions: ["allow-once", "allow-always", "deny"],
+                host: "gateway.example.com",
+                nodeId: "node-mobile",
+                agentId: "main",
+                expiresAtMs: Int64.max))
+            appModel._test_presentExecApprovalPrompt(prompt)
+
+            let root = Color.clear
+                .execApprovalPromptDialog()
+                .environment(appModel)
+                .environment(\.dynamicTypeSize, typeSize)
+            windows.append(Self.host(root, size: size))
+        }
     }
 
     @Test @MainActor func `root prompt alert stack presents gateway trust prompt`() async {
@@ -211,33 +545,35 @@ struct SwiftUIRenderSmokeTests {
         await controller.connectManual(host: host, port: port, useTLS: true)
     }
 
-    @Test @MainActor func `phone control hub builds gateway state view hierarchies`() {
+    @Test @MainActor func `root sidebar builds gateway state view hierarchies`() {
         for appModel in Self.rootTabsGatewayStateModels() {
-            let root = RootTabsPhoneControlHub(
-                groups: RootTabs.phoneControlGroups,
-                initialDestination: nil,
-                navigationRequest: nil,
-                openRootDestination: { _ in },
-                openChatFromControlDetail: { _ in })
+            let root = RootSidebar(
+                model: RootSidebarModel(),
+                selectedDestination: .overview,
+                isDrawerLayout: true,
+                isDismissButtonEnabled: true,
+                selectDestination: { _ in },
+                hideSidebar: {})
                 .environment(appModel)
 
-            _ = Self.host(root)
+            _ = Self.host(root, size: CGSize(width: 340, height: 852))
         }
     }
 
-    @Test @MainActor func `phone control hub builds landscape compact state`() {
+    @Test @MainActor func `root sidebar builds landscape compact state`() {
         let appModel = NodeAppModel()
-        let root = RootTabsPhoneControlHub(
-            groups: RootTabs.phoneControlGroups,
-            initialDestination: nil,
-            navigationRequest: nil,
-            openRootDestination: { _ in },
-            openChatFromControlDetail: { _ in })
+        let root = RootSidebar(
+            model: RootSidebarModel(),
+            selectedDestination: .chat,
+            isDrawerLayout: true,
+            isDismissButtonEnabled: true,
+            selectDestination: { _ in },
+            hideSidebar: {})
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)
             .environment(\.verticalSizeClass, .compact)
 
-        _ = Self.host(root)
+        _ = Self.host(root, size: CGSize(width: 340, height: 393))
     }
 
     @Test @MainActor func `routed sidebar screens build offline states`() {
@@ -321,22 +657,32 @@ struct SwiftUIRenderSmokeTests {
                 idiom: .phone,
                 size: CGSize(width: 393, height: 852),
                 horizontalSizeClass: .compact,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: false),
+            RootTabsShellScenario(
+                idiom: .phone,
+                size: CGSize(width: 393, height: 852),
+                horizontalSizeClass: .compact,
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
             RootTabsShellScenario(
                 idiom: .phone,
                 size: CGSize(width: 852, height: 393),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .compact),
+                verticalSizeClass: .compact,
+                sidebarVisible: false),
             RootTabsShellScenario(
                 idiom: .pad,
                 size: CGSize(width: 1024, height: 1366),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
             RootTabsShellScenario(
                 idiom: .pad,
                 size: CGSize(width: 1366, height: 1024),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
         ]
     }
 
@@ -345,5 +691,23 @@ struct SwiftUIRenderSmokeTests {
         let size: CGSize
         let horizontalSizeClass: UserInterfaceSizeClass
         let verticalSizeClass: UserInterfaceSizeClass
+        let sidebarVisible: Bool
     }
+}
+
+extension GatewayDiscoveryModel.DiscoveredGateway {
+    fileprivate static let previewGateway = GatewayDiscoveryModel.DiscoveredGateway(
+        name: "Studio Gateway",
+        endpoint: .hostPort(
+            host: .name("openclaw.local", nil),
+            port: 18789),
+        stableID: "preview-gateway",
+        debugID: "openclaw.local",
+        lanHost: "openclaw.local",
+        tailnetDns: nil,
+        gatewayPort: 18789,
+        canvasPort: 18789,
+        tlsEnabled: true,
+        tlsFingerprintSha256: "preview",
+        cliPath: "/opt/homebrew/bin/openclaw")
 }

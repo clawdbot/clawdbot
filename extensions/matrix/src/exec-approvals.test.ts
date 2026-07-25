@@ -2,28 +2,42 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { normalizeMatrixApproverId } from "./approval-ids.js";
 import {
   getMatrixExecApprovalApprovers,
-  isMatrixExecApprovalApprover,
   isMatrixExecApprovalAuthorizedSender,
   isMatrixExecApprovalClientEnabled,
-  isMatrixExecApprovalTargetRecipient,
-  normalizeMatrixApproverId,
   resolveMatrixExecApprovalTarget,
-  shouldHandleMatrixExecApprovalRequest,
+  shouldHandleMatrixApprovalRequest,
   shouldSuppressLocalMatrixExecApprovalPrompt,
 } from "./exec-approvals.js";
-import type { MatrixAccountConfig, MatrixExecApprovalConfig } from "./types.js";
+import type { MatrixAccountConfig } from "./types.js";
 
 const tempDirs: string[] = [];
-type MatrixExecApprovalRequest = Parameters<
-  typeof shouldHandleMatrixExecApprovalRequest
->[0]["request"];
+type MatrixExecApprovalConfig = NonNullable<MatrixAccountConfig["execApprovals"]>;
+type MatrixExecApprovalRequest = ExecApprovalRequest;
+
+function shouldHandleMatrixExecApprovalRequest(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ExecApprovalRequest;
+}): boolean {
+  return shouldHandleMatrixApprovalRequest({
+    ...params,
+    approvalKind: "exec",
+  });
+}
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -147,8 +161,12 @@ describe("matrix exec approvals", () => {
     );
 
     expect(getMatrixExecApprovalApprovers({ cfg })).toEqual(["@override:example.org"]);
-    expect(isMatrixExecApprovalApprover({ cfg, senderId: "@override:example.org" })).toBe(true);
-    expect(isMatrixExecApprovalApprover({ cfg, senderId: "@owner:example.org" })).toBe(false);
+    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@override:example.org" })).toBe(
+      true,
+    );
+    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@owner:example.org" })).toBe(
+      false,
+    );
   });
 
   it("ignores wildcard allowlist entries when inferring exec approvers", () => {
@@ -187,14 +205,11 @@ describe("matrix exec approvals", () => {
       },
     } as OpenClawConfig;
 
-    expect(isMatrixExecApprovalTargetRecipient({ cfg, senderId: "@target:example.org" })).toBe(
-      true,
-    );
-    expect(isMatrixExecApprovalTargetRecipient({ cfg, senderId: "@other:example.org" })).toBe(
-      false,
-    );
     expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@target:example.org" })).toBe(
       true,
+    );
+    expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@other:example.org" })).toBe(
+      false,
     );
   });
 
@@ -346,23 +361,27 @@ describe("matrix exec approvals", () => {
   it("scopes non-matrix turn sources to the stored matrix account", async () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
-    await saveSessionStore(
+    await upsertSessionEntry({
       storePath,
-      {
-        "agent:ops-agent:matrix:channel:!room:example.org": {
-          sessionId: "main",
-          updatedAt: 1,
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      entry: {
+        sessionId: "main",
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({
           origin: {
             provider: "matrix",
             accountId: "ops",
+            to: "room:!room:example.org",
+            nativeChannelId: "!room:example.org",
           },
-          lastChannel: "slack",
-          lastTo: "channel:C999",
-          lastAccountId: "work",
-        },
+          context: {
+            channel: "matrix",
+            to: "room:!room:example.org",
+            accountId: "ops",
+          },
+        }),
       },
-      { skipMaintenance: true },
-    );
+    });
     const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });
     const request = makeForeignChannelApprovalRequest({
       id: "req-3",

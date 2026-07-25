@@ -5,10 +5,12 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
+import { formatRateLimitOrOverloadedErrorCopy } from "./sanitize-user-facing-text.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
@@ -179,6 +181,26 @@ describe("server error status classification", () => {
   });
 });
 
+describe("provider-completed finish_reason error (#109218)", () => {
+  it("matches bare finish/stop error reasons as provider-completed failures", () => {
+    expect(isProviderCompletedErrorFinishReasonMessage("Provider finish_reason: error")).toBe(true);
+    expect(isTimeoutErrorMessage("Provider finish_reason: error")).toBe(false);
+    expect(classifyFailoverReason("Provider finish_reason: error")).toBe("server_error");
+  });
+
+  it("keeps abort/network/malformed finish reasons in the timeout lane", () => {
+    for (const sample of [
+      "Provider finish_reason: abort",
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: malformed_response",
+    ]) {
+      expect(isProviderCompletedErrorFinishReasonMessage(sample)).toBe(false);
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+    }
+  });
+});
+
 describe("generic assistant error text classification (#93931)", () => {
   it("classifies the generic 'LLM request failed.' as a timeout (transient)", () => {
     // The generic error text wraps provider availability failures (model not
@@ -208,5 +230,26 @@ describe("generic assistant error text classification (#93931)", () => {
     expect(
       isTimeoutErrorMessage("LLM request failed: connection refused by the provider endpoint."),
     ).toBe(false);
+  });
+});
+
+describe("HTTP 429 overload wording (#98101)", () => {
+  it("keeps Z.AI code 1305 in rate-limit backoff while preserving overload copy", () => {
+    const message =
+      "429 status code (exceeded limit)\n" +
+      '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
+    expect(classifyFailoverReason(message)).toBe("rate_limit");
+    expect(classifyFailoverReason(`HTTP 429: ${message}`)).toBe("rate_limit");
+    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+  });
+
+  it("preserves actionable retry details when a rate limit also mentions overload", () => {
+    expect(
+      formatRateLimitOrOverloadedErrorCopy(
+        "429 rate limit: service overloaded, try again in 30 seconds",
+      ),
+    ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });

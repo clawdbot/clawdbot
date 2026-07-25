@@ -1,5 +1,6 @@
 // Slack tests cover approval handler plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { decodeSlackApprovalAction } from "./approval-actions.js";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 type SlackPayload = {
@@ -16,6 +17,14 @@ const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
 
 function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
   return blocks.find((block) => block.type === "actions");
+}
+
+function decodeSlackApprovalElements(block: { elements?: unknown[] } | undefined) {
+  return (block?.elements ?? []).map((element) =>
+    decodeSlackApprovalAction(
+      element && typeof element === "object" ? (element as { value?: unknown }).value : undefined,
+    ),
+  );
 }
 
 function readChatUpdatePayload(
@@ -117,6 +126,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-surrogate",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-surrogate allow-once",
             style: "success",
           },
@@ -163,6 +178,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "deny",
             label: "Deny",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-surrogate",
+              approvalKind: "plugin",
+              decision: "deny",
+            },
             command: "/approve plugin:req-surrogate deny",
             style: "danger",
           },
@@ -204,6 +225,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-bmp",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-bmp allow-once",
             style: "success",
           },
@@ -244,12 +271,24 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-1",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-1 allow-once",
             style: "success",
           },
           {
             decision: "deny",
             label: "Deny",
+            action: {
+              type: "approval",
+              approvalId: "req-1",
+              approvalKind: "exec",
+              decision: "deny",
+            },
             command: "/approve req-1 deny",
             style: "danger",
           },
@@ -271,6 +310,12 @@ describe("slackApprovalNativeRuntime", () => {
 
     expect(labels).toEqual(["Allow Once", "Deny"]);
     expect(JSON.stringify(payload.blocks)).not.toContain("Allow Always");
+    expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
+    expect(JSON.stringify(payload.blocks)).toContain("openclaw:approval_button");
+    expect(decodeSlackApprovalElements(actionsBlock)).toEqual([
+      expect.objectContaining({ approvalKind: "exec", decision: "allow-once" }),
+      expect.objectContaining({ approvalKind: "exec", decision: "deny" }),
+    ]);
   });
 
   it("renders plugin pending approvals with plugin approval actions", async () => {
@@ -309,18 +354,36 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-1",
+              approvalKind: "plugin",
+              decision: "allow-once",
+            },
             command: "/approve plugin:req-1 allow-once",
             style: "success",
           },
           {
             decision: "allow-always",
             label: "Allow Always",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-1",
+              approvalKind: "plugin",
+              decision: "allow-always",
+            },
             command: "/approve plugin:req-1 allow-always",
             style: "success",
           },
           {
             decision: "deny",
             label: "Deny",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-1",
+              approvalKind: "plugin",
+              decision: "deny",
+            },
             command: "/approve plugin:req-1 deny",
             style: "danger",
           },
@@ -346,6 +409,12 @@ describe("slackApprovalNativeRuntime", () => {
 
     expect(labels).toEqual(["Allow Once", "Allow Always", "Deny"]);
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
+    expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
+    expect(decodeSlackApprovalElements(actionsBlock)).toEqual([
+      expect.objectContaining({ approvalKind: "plugin", decision: "allow-once" }),
+      expect.objectContaining({ approvalKind: "plugin", decision: "allow-always" }),
+      expect.objectContaining({ approvalKind: "plugin", decision: "deny" }),
+    ]);
   });
 
   it("renders resolved updates without interactive blocks", async () => {
@@ -585,6 +654,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-1",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-1 allow-once",
             style: "success",
           },

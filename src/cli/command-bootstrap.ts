@@ -22,6 +22,8 @@ export async function ensureCliCommandBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   pluginRegistry?: CliPluginRegistryPolicy;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }) {
   if (!params.skipConfigGuard) {
     const { ensureConfigReady } = await loadConfigGuardModule();
@@ -33,6 +35,10 @@ export async function ensureCliCommandBootstrap(params: {
         ? { beforeStateMigrations: params.beforeStateMigrations }
         : {}),
       ...(params.suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      ...(params.skipPristineStartupStateMigrations
+        ? { skipPristineStartupStateMigrations: true }
+        : {}),
+      ...(params.skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
     });
   }
   if (!params.loadPlugins) {

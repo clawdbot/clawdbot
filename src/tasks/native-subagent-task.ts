@@ -2,10 +2,8 @@
 // harness and therefore cannot be recovered through an OpenClaw child session.
 import type { TaskRecord } from "./task-registry.types.js";
 
-export const COPILOT_NATIVE_SUBAGENT_TASK_KIND = "copilot-native";
-export const COPILOT_NATIVE_SUBAGENT_RUN_ID_PREFIX = "copilot-agent:";
-export const COPILOT_NATIVE_SUBAGENT_STALE_ERROR =
-  "Copilot native subagent stopped reporting progress";
+const COPILOT_NATIVE_SUBAGENT_TASK_KIND = "copilot-native";
+const COPILOT_NATIVE_SUBAGENT_RUN_ID_PREFIX = "copilot-agent:";
 
 const CHILDLESS_NATIVE_SUBAGENT_DEFINITIONS = [
   {
@@ -18,7 +16,7 @@ const CHILDLESS_NATIVE_SUBAGENT_DEFINITIONS = [
   },
 ] as const;
 
-export type NativeSubagentTaskDefinition = (typeof CHILDLESS_NATIVE_SUBAGENT_DEFINITIONS)[number];
+type NativeSubagentTaskDefinition = (typeof CHILDLESS_NATIVE_SUBAGENT_DEFINITIONS)[number];
 
 export function resolveChildlessNativeSubagentTaskDefinition(
   task: TaskRecord,

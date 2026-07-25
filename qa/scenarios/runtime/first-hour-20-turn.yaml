@@ -3,12 +3,12 @@ title: First-hour 20-turn runtime parity
 scenario:
   id: runtime-first-hour-20-turn
   surface: runtime
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
-      - runtime.multi-turn-continuity
+      - session-memory.token-pressure-multi-turn-continuity
     secondary:
-      - runtime.long-context
+      - session-memory.token-pressure-long-context
   objective: Verify both runtimes preserve a same-session conversation across the required 20-turn maintainer gate.
   successCriteria:
     - The same QA session accepts 20 sequential user turns.

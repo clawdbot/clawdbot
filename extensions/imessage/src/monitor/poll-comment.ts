@@ -88,5 +88,3 @@ export function createPollCommentFolder(options?: { windowMs?: number }) {
     },
   };
 }
-
-export type PollCommentFolder = ReturnType<typeof createPollCommentFolder>;

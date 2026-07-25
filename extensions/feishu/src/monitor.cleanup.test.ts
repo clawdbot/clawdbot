@@ -1,16 +1,18 @@
 // Feishu tests cover monitor.cleanup plugin behavior.
 import type { Server } from "node:http";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import {
   botNames,
   botOpenIds,
-  FEISHU_HTTP_SERVER_CLOSE_TIMEOUT_MS,
+  closeTrackedFeishuHttpServer,
   httpServers,
   setFeishuBotIdentityState,
-  stopFeishuMonitorState,
   wsClients,
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+
+const FEISHU_HTTP_SERVER_CLOSE_TIMEOUT_MS = 5_000;
 
 const createFeishuWSClientMock = vi.hoisted(() => vi.fn());
 
@@ -87,9 +89,9 @@ function firstWsCallbacks(): { onError?: (err: Error) => void } {
   return callbacks as { onError?: (err: Error) => void };
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
-  await stopFeishuMonitorState();
+  cleanupFeishuMonitorStateForTests();
   vi.clearAllMocks();
 });
 
@@ -376,47 +378,36 @@ describe("feishu websocket cleanup", () => {
     expect(errorMessage).not.toContain("secret_token");
   });
 
-  it("closes targeted websocket clients during stop cleanup", async () => {
-    const alphaClient = createWsClient();
-    const betaClient = createWsClient();
+  it("keeps websocket close error logs UTF-16 safe at the truncation boundary", async () => {
+    const wsClient = createWsClient();
+    wsClient.close.mockImplementationOnce(() => {
+      throw new Error(`${"x".repeat(499)}😀tail`);
+    });
+    createFeishuWSClientMock.mockReturnValue(wsClient);
 
-    wsClients.set("alpha", alphaClient as never);
-    wsClients.set("beta", betaClient as never);
-    botOpenIds.set("alpha", "ou_alpha");
-    botOpenIds.set("beta", "ou_beta");
-    botNames.set("alpha", "Alpha");
-    botNames.set("beta", "Beta");
+    const abortController = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const monitorPromise = monitorWebSocket({
+      account: createAccount("close-error-utf16"),
+      accountId: "close-error-utf16",
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
 
-    await stopFeishuMonitorState("alpha");
+    await vi.waitFor(() => {
+      expect(wsClient.start).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+    await monitorPromise;
 
-    expect(alphaClient.close).toHaveBeenCalledTimes(1);
-    expect(betaClient.close).not.toHaveBeenCalled();
-    expect(wsClients.has("alpha")).toBe(false);
-    expect(wsClients.has("beta")).toBe(true);
-    expect(botOpenIds.has("alpha")).toBe(false);
-    expect(botOpenIds.has("beta")).toBe(true);
-    expect(botNames.has("alpha")).toBe(false);
-    expect(botNames.has("beta")).toBe(true);
-  });
-
-  it("closes all websocket clients during global stop cleanup", async () => {
-    const alphaClient = createWsClient();
-    const betaClient = createWsClient();
-
-    wsClients.set("alpha", alphaClient as never);
-    wsClients.set("beta", betaClient as never);
-    botOpenIds.set("alpha", "ou_alpha");
-    botOpenIds.set("beta", "ou_beta");
-    botNames.set("alpha", "Alpha");
-    botNames.set("beta", "Beta");
-
-    await stopFeishuMonitorState();
-
-    expect(alphaClient.close).toHaveBeenCalledTimes(1);
-    expect(betaClient.close).toHaveBeenCalledTimes(1);
-    expect(wsClients.size).toBe(0);
-    expect(botOpenIds.size).toBe(0);
-    expect(botNames.size).toBe(0);
+    expect(firstRuntimeError(runtime)).toBe(
+      `feishu[close-error-utf16]: error closing WebSocket client: ${"x".repeat(499)}...`,
+    );
   });
 
   it("keeps targeted HTTP server state until close completes", async () => {
@@ -426,7 +417,7 @@ describe("feishu websocket cleanup", () => {
     botOpenIds.set("alpha", "ou_alpha");
     botNames.set("alpha", "Alpha");
 
-    const stopPromise = stopFeishuMonitorState("alpha");
+    const stopPromise = closeTrackedFeishuHttpServer("alpha", server);
     await Promise.resolve();
 
     expect(close).toHaveBeenCalledTimes(1);
@@ -450,7 +441,7 @@ describe("feishu websocket cleanup", () => {
     httpServers.set("alpha", oldServer.server);
     setFeishuBotIdentityState("alpha", { botOpenId: "ou_old", botName: "Old" });
 
-    const stopPromise = stopFeishuMonitorState("alpha");
+    const stopPromise = closeTrackedFeishuHttpServer("alpha", oldServer.server);
     await Promise.resolve();
 
     setFeishuBotIdentityState("alpha", { botOpenId: "ou_new", botName: "New" });
@@ -463,7 +454,7 @@ describe("feishu websocket cleanup", () => {
     expect(botOpenIds.get("alpha")).toBe("ou_new");
     expect(botNames.get("alpha")).toBe("New");
 
-    const cleanupPromise = stopFeishuMonitorState("alpha");
+    const cleanupPromise = closeTrackedFeishuHttpServer("alpha", replacementServer.server);
     await Promise.resolve();
     replacementServer.finishClose();
     await cleanupPromise;
@@ -475,7 +466,7 @@ describe("feishu websocket cleanup", () => {
     httpServers.set("alpha", oldServer.server);
     setFeishuBotIdentityState("alpha", { botOpenId: "ou_old", botName: "Old" });
 
-    const stopPromise = stopFeishuMonitorState("alpha");
+    const stopPromise = closeTrackedFeishuHttpServer("alpha", oldServer.server);
     await Promise.resolve();
 
     setFeishuBotIdentityState("alpha", { botOpenId: "ou_new", botName: "New" });
@@ -486,8 +477,6 @@ describe("feishu websocket cleanup", () => {
     expect(httpServers.has("alpha")).toBe(false);
     expect(botOpenIds.get("alpha")).toBe("ou_new");
     expect(botNames.get("alpha")).toBe("New");
-
-    await stopFeishuMonitorState("alpha");
   });
 
   it("forces targeted HTTP server cleanup after the close timeout", async () => {
@@ -498,7 +487,7 @@ describe("feishu websocket cleanup", () => {
     botOpenIds.set("alpha", "ou_alpha");
     botNames.set("alpha", "Alpha");
 
-    const stopPromise = stopFeishuMonitorState("alpha");
+    const stopPromise = closeTrackedFeishuHttpServer("alpha", server);
     await Promise.resolve();
 
     expect(close).toHaveBeenCalledTimes(1);
@@ -515,31 +504,5 @@ describe("feishu websocket cleanup", () => {
     expect(httpServers.has("alpha")).toBe(false);
     expect(botOpenIds.has("alpha")).toBe(false);
     expect(botNames.has("alpha")).toBe(false);
-  });
-
-  it("preserves replacement HTTP state after delayed global cleanup", async () => {
-    const oldServer = createHttpServerMock();
-    const replacementServer = createHttpServerMock();
-
-    httpServers.set("alpha", oldServer.server);
-    setFeishuBotIdentityState("alpha", { botOpenId: "ou_old", botName: "Old" });
-
-    const stopPromise = stopFeishuMonitorState();
-    await Promise.resolve();
-
-    setFeishuBotIdentityState("alpha", { botOpenId: "ou_new", botName: "New" });
-    httpServers.set("alpha", replacementServer.server);
-
-    oldServer.finishClose();
-    await stopPromise;
-
-    expect(httpServers.get("alpha")).toBe(replacementServer.server);
-    expect(botOpenIds.get("alpha")).toBe("ou_new");
-    expect(botNames.get("alpha")).toBe("New");
-
-    const cleanupPromise = stopFeishuMonitorState("alpha");
-    await Promise.resolve();
-    replacementServer.finishClose();
-    await cleanupPromise;
   });
 });

@@ -2,6 +2,7 @@
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -11,9 +12,15 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeSession } from "./node-registry.js";
-import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
+import {
+  bindApprovalRequesterMetadata,
+  buildRequestedApprovalEvent,
+  handlePendingApprovalRequest,
+} from "./server-methods/approval-shared.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 // Plugin node.invoke policies are the last gateway-side guard before a
 // plugin-declared dangerous node command reaches the node transport.
@@ -32,6 +39,34 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   } catch {
     return payload;
   }
+}
+
+function normalizeRouteThreadId(value: unknown): string | number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return normalizeOptionalString(value) ?? null;
+}
+
+function resolveNodeInvokeTurnSourceFields(
+  turnSource:
+    | {
+        channel?: unknown;
+        to?: unknown;
+        accountId?: unknown;
+        threadId?: unknown;
+      }
+    | undefined,
+): Pick<
+  PluginApprovalRequestPayload,
+  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
+> {
+  return {
+    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
+    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
+    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
+    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
+  };
 }
 
 // Dangerous commands must have an explicit policy. Without this check, a plugin
@@ -53,6 +88,7 @@ function createApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
   pluginId: string;
+  turnSource: Parameters<typeof resolveNodeInvokeTurnSourceFields>[0];
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -61,58 +97,79 @@ function createApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
+      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
+      const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: input.title.slice(0, 80),
-        description: input.description.slice(0, 256),
+        title: truncateUtf16Safe(input.title, 80),
+        description: truncateUtf16Safe(input.description, 256),
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
-        agentId: normalizeOptionalString(input.agentId) ?? null,
-        sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
+        agentId: callerIdentity?.agentId ?? normalizeOptionalString(input.agentId) ?? null,
+        sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
+        turnSourceChannel: turnSource.turnSourceChannel,
+        turnSourceTo: turnSource.turnSourceTo,
+        turnSourceAccountId: turnSource.turnSourceAccountId,
+        turnSourceThreadId: turnSource.turnSourceThreadId,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
-      record.requestedByConnId = params.client?.connId ?? null;
-      record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
-      record.requestedByClientId = params.client?.connect?.client?.id ?? null;
-      record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
+      bindApprovalRequesterMetadata({ record, client: params.client });
+      const respond: RespondFn = () => {};
+      // Register directly: persistence and presentation-validation failures
+      // must throw so the plugin policy fails closed before any request
+      // routing. The RPC storage-unavailable respond path does not apply to
+      // this runtime-internal caller.
       const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      };
-      const approvalClientConnIds = resolveApprovalRequestRecipientConnIds({
-        context: params.context,
+      const requestEvent = buildRequestedApprovalEvent(record);
+      const forwardRequest = params.context.forwardPluginApprovalRequest;
+      const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
+        params.context.pluginApprovalIosPushDelivery,
+      );
+      await handlePendingApprovalRequest({
+        manager,
         record,
-        excludeConnId: params.client?.connId,
+        decisionPromise,
+        respond,
+        context: params.context,
+        clientConnId: params.client?.connId,
+        requestEventName: "plugin.approval.requested",
+        requestEvent,
+        twoPhase: false,
+        approvalKind: "plugin",
+        deliverRequest: () =>
+          runApprovalRequestDeliveries({
+            context: params.context,
+            record,
+            forward: forwardRequest
+              ? [
+                  () => forwardRequest(requestEvent),
+                  "plugin approvals: forward node policy request failed",
+                ]
+              : undefined,
+            iosPush: iosPushRequest
+              ? [
+                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
+                  "plugin approvals: iOS push node policy request failed",
+                ]
+              : undefined,
+          }),
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
+          }
+        },
+        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
-      // Approval requests are routed to eligible operator clients only. Falling
-      // back to broadcast is safe because the event payload carries no secret.
-      if (approvalClientConnIds) {
-        params.context.broadcastToConnIds(
-          "plugin.approval.requested",
-          requestEvent,
-          approvalClientConnIds,
-          {
-            dropIfSlow: true,
-          },
-        );
-      } else {
-        params.context.broadcast("plugin.approval.requested", requestEvent, {
-          dropIfSlow: true,
-        });
-      }
-      const hasApprovalClients =
-        approvalClientConnIds !== null
-          ? approvalClientConnIds.size > 0
-          : (params.context.hasExecApprovalClients?.(params.client?.connId) ?? false);
-      if (!hasApprovalClients) {
-        manager.expire(record.id, "no-approval-route");
+      const decision = await decisionPromise;
+      // This return hands execution authority to the plugin policy. Claim a
+      // one-shot decision here so observation or retry cannot replay it.
+      if (
+        decision === "allow-once" &&
+        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+      ) {
         return { id: record.id, decision: null };
       }
-      const decision = await decisionPromise;
       return { id: record.id, decision };
     },
   };
@@ -125,10 +182,21 @@ export async function applyPluginNodeInvokePolicy(params: {
   nodeSession: NodeSession;
   command: string;
   params: unknown;
+  turnSource?: {
+    channel?: unknown;
+    to?: unknown;
+    accountId?: unknown;
+    threadId?: unknown;
+  };
   timeoutMs?: number;
   idempotencyKey?: string;
+  isInvocationCurrent?: () => boolean | Promise<boolean>;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
+  // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
+  const trustedTurnSource = params.client?.internal?.agentRuntimeIdentity
+    ? params.turnSource
+    : undefined;
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -139,18 +207,72 @@ export async function applyPluginNodeInvokePolicy(params: {
         ok: false,
         code: "PLUGIN_POLICY_MISSING",
         message: `node.invoke ${params.command} is registered as dangerous by plugin ${dangerousCommand.pluginId} but has no plugin node.invoke policy`,
+        details: { nodeCommandDispatched: false },
       };
     }
     return null;
   }
 
+  let nodeCommandDispatched = false;
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
     // Policies invoke the real node through this narrowed transport wrapper so
     // they can retry/override params without getting direct registry access.
+    if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
+      };
+    }
+    const currentNode = params.nodeSession.pairingGeneration
+      ? params.context.nodeRegistry.getForPairingGeneration(
+          params.nodeSession.nodeId,
+          params.nodeSession.pairingGeneration,
+        )
+      : params.context.nodeRegistry.get(params.nodeSession.nodeId);
+    if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
+      return {
+        ok: false,
+        code: "ROUTE_CHANGED",
+        message: "node connection changed before dispatch",
+      };
+    }
+    if (currentNode.client.invalidated === true) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
+      };
+    }
+    const currentConfig = params.context.getRuntimeConfig();
+    const allowlist = resolveNodeCommandAllowlist(currentConfig, {
+      ...currentNode,
+      approvedCommands: currentNode.commands,
+    });
+    const allowed = isNodeCommandAllowed({
+      command: params.command,
+      declaredCommands: currentNode.commands,
+      allowlist,
+    });
+    if (!allowed.ok) {
+      return {
+        ok: false,
+        code: "NODE_COMMAND_REVOKED",
+        message: `node command not allowed at dispatch: ${allowed.reason}`,
+        details: { command: params.command, reason: allowed.reason },
+      };
+    }
+    // Once the registry owns the request, any failure is ambiguous to callers:
+    // the node may have acted before the response was lost or rejected.
+    nodeCommandDispatched = true;
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
+      expectedConnId: params.nodeSession.connId,
+      ...(params.nodeSession.pairingGeneration
+        ? { expectedPairingGeneration: params.nodeSession.pairingGeneration }
+        : {}),
       command: params.command,
       params: override.params ?? params.params,
       timeoutMs: override.timeoutMs ?? params.timeoutMs,
@@ -171,7 +293,7 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
   };
 
-  return await entry.policy.handle({
+  const result = await entry.policy.handle({
     nodeId: params.nodeSession.nodeId,
     command: params.command,
     params: params.params,
@@ -196,7 +318,17 @@ export async function applyPluginNodeInvokePolicy(params: {
       context: params.context,
       client: params.client,
       pluginId: entry.pluginId,
+      turnSource: trustedTurnSource,
     }),
     invokeNode,
   });
+  if (result.ok) {
+    return result;
+  }
+  return {
+    ...result,
+    // Core owns dispatch and must override a plugin-supplied claim. Callers may
+    // clear speculative state only when this value is definitively false.
+    details: { ...result.details, nodeCommandDispatched },
+  };
 }

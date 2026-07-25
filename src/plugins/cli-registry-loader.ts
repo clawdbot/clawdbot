@@ -131,7 +131,7 @@ async function resolvePrimaryCommandPluginIds(
 }
 
 /** Builds the runtime load context used for CLI-only plugin registry loading. */
-export function resolvePluginCliLoadContext(params: {
+function resolvePluginCliLoadContext(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   logger: PluginLogger;
@@ -143,7 +143,7 @@ export function resolvePluginCliLoadContext(params: {
   });
 }
 
-export async function loadPluginCliMetadataRegistryWithContext(
+async function loadPluginCliMetadataRegistryWithContext(
   context: PluginCliLoadContext,
   params?: { primaryCommand?: string },
   loaderOptions?: PluginCliLoaderOptions,
@@ -156,7 +156,7 @@ export async function loadPluginCliMetadataRegistryWithContext(
   };
 }
 
-export async function loadPluginCliCommandRegistryWithContext(params: {
+async function loadPluginCliCommandRegistryWithContext(params: {
   context: PluginCliLoadContext;
   primaryCommand?: string;
   loaderOptions?: PluginCliLoaderOptions;
@@ -242,7 +242,7 @@ export async function loadPluginCliDescriptors(
   }
 }
 
-export async function loadPluginCliRegistrationEntries(params: {
+async function loadPluginCliRegistrationEntries(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loaderOptions?: PluginCliLoaderOptions;

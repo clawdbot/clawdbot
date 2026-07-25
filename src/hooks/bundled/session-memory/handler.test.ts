@@ -2,21 +2,31 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createHookEvent } from "../../hooks.js";
+import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import {
-  findPreviousSessionFile,
-  getRecentSessionContent,
-  getRecentSessionContentWithResetFallback,
-} from "./transcript.js";
+import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
   generateSlugViaLLM: vi.fn().mockResolvedValue("simple-math"),
+}));
+
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => loggerMocks,
 }));
 
 let handler: typeof import("./handler.js").default;
@@ -101,7 +111,12 @@ async function runNewWithPreviousSessionEntry(params: {
   const memoryDir = path.join(params.tempDir, "memory");
   const files = await fs.readdir(memoryDir);
   const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
+    files.length > 0
+      ? await fs.readFile(
+          path.join(memoryDir, expectDefined(files[0], "files[0] test invariant")),
+          "utf-8",
+        )
+      : "";
   return { files, memoryContent };
 }
 
@@ -136,26 +151,6 @@ async function runNewWithPreviousSession(params: {
     },
   });
   return { tempDir, files, memoryContent };
-}
-
-function isAsciiDigits(value: string): boolean {
-  return /^[0-9]+$/.test(value);
-}
-
-function expectDatedMemoryFile(files: string[], slug: string) {
-  expect(files).toHaveLength(1);
-  const filename = files[0];
-  if (!filename) {
-    throw new Error("expected one session memory file");
-  }
-  const suffix = `-${slug}.md`;
-  expect(filename.endsWith(suffix)).toBe(true);
-  const datePrefix = filename.slice(0, -suffix.length);
-  const [year, month, day] = datePrefix.split("-");
-  expect([year?.length, month?.length, day?.length]).toEqual([4, 2, 2]);
-  expect(year ? isAsciiDigits(year) : false).toBe(true);
-  expect(month ? isAsciiDigits(month) : false).toBe(true);
-  expect(day ? isAsciiDigits(day) : false).toBe(true);
 }
 
 async function createSessionMemoryWorkspace(params?: {
@@ -198,7 +193,7 @@ async function readSessionTranscript(params: {
     name: "test-session.jsonl",
     content: params.sessionContent,
   });
-  return getRecentSessionContent(sessionFile, params.messageCount);
+  return getRecentSessionContentWithResetFallback(sessionFile, params.messageCount);
 }
 
 function expectMemoryConversation(params: {
@@ -271,6 +266,60 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
+  it("creates memory file from SQLite transcript rows on /new command", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "sqlite-session-memory";
+    const sessionKey = "agent:main:main";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "message",
+        id: "sqlite-user",
+        parentId: null,
+        message: { role: "user", content: "Stored in SQLite rows" },
+      },
+      {
+        type: "message",
+        id: "sqlite-inactive",
+        parentId: "sqlite-user",
+        message: { role: "assistant", content: "Inactive branch content" },
+      },
+      {
+        type: "message",
+        id: "sqlite-visible",
+        parentId: "sqlite-user",
+        message: { role: "assistant", content: "Loaded without JSONL fallback" },
+      },
+      {
+        type: "leaf",
+        id: "active-session-memory-leaf",
+        parentId: "sqlite-inactive",
+        targetId: "sqlite-visible",
+      },
+    ]);
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      previousSessionEntry: {
+        sessionId,
+        sessionFile,
+      },
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Stored in SQLite rows");
+    expect(memoryContent).toContain("assistant: Loaded without JSONL fallback");
+    expect(memoryContent).not.toContain("Inactive branch content");
+  });
+
   it("sanitizes model artifacts before writing session memory", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
@@ -282,9 +331,11 @@ describe("session-memory hook", () => {
     ]);
     const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
 
-    expect(memoryContent).toContain("user: Review this [REMOVED_SPECIAL_TOKEN]system");
+    expect(memoryContent).toContain(
+      "user: <media:image:abc> Review this [REMOVED_SPECIAL_TOKEN]system",
+    );
     expect(memoryContent).toContain("assistant: Looks good");
-    expect(memoryContent).not.toContain("<media:");
+    expect(memoryContent).toContain("<media:image:abc>");
     expect(memoryContent).not.toContain("<|im_start|>");
     expect(memoryContent).not.toContain("<tool_call>");
     expect(memoryContent).not.toContain("secret.md");
@@ -313,112 +364,6 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).not.toHaveBeenCalled();
-  });
-
-  it("uses a model-generated filename slug only when explicitly enabled", async () => {
-    const sessionContent = createMockSessionContent([
-      { role: "user", content: "What is 2+2?" },
-      { role: "assistant", content: "2+2 equals 4" },
-    ]);
-
-    const generateSlug = vi.mocked(generateSlugViaLLM);
-    generateSlug.mockClear();
-    generateSlug.mockResolvedValueOnce("simple-math");
-
-    await withEnvAsync(
-      {
-        NODE_ENV: "production",
-        OPENCLAW_TEST_FAST: undefined,
-        VITEST: undefined,
-      },
-      async () => {
-        const { files } = await runNewWithPreviousSession({
-          sessionContent,
-          cfg: (tempDir) =>
-            ({
-              agents: { defaults: { workspace: tempDir } },
-              hooks: {
-                internal: {
-                  entries: {
-                    "session-memory": {
-                      enabled: true,
-                      llmSlug: true,
-                    },
-                  },
-                },
-              },
-            }) satisfies OpenClawConfig,
-        });
-        expectDatedMemoryFile(files, "simple-math");
-      },
-    );
-
-    expect(generateSlug).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not block reset command handling on opt-in model slug generation", async () => {
-    const tempDir = await createCaseWorkspace("workspace");
-    const sessionsDir = path.join(tempDir, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
-    const sessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl",
-      content: createMockSessionContent([
-        { role: "user", content: "Investigate slow WhatsApp reset" },
-        { role: "assistant", content: "Checking reset hooks" },
-      ]),
-    });
-
-    let resolveSlug: ((slug: string | null) => void) | undefined;
-    const generateSlug = vi.mocked(generateSlugViaLLM);
-    generateSlug.mockClear();
-    generateSlug.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveSlug = resolve;
-        }),
-    );
-
-    await withEnvAsync(
-      {
-        NODE_ENV: "production",
-        OPENCLAW_TEST_FAST: undefined,
-        VITEST: undefined,
-      },
-      async () => {
-        const event = createHookEvent("command", "new", "agent:main:main", {
-          cfg: {
-            agents: { defaults: { workspace: tempDir } },
-            hooks: {
-              internal: {
-                entries: {
-                  "session-memory": {
-                    enabled: true,
-                    llmSlug: true,
-                  },
-                },
-              },
-            },
-          } satisfies OpenClawConfig,
-          previousSessionEntry: {
-            sessionId: "test-123",
-            sessionFile,
-          },
-        });
-
-        const startedAt = Date.now();
-        await handler(event);
-        expect(Date.now() - startedAt).toBeLessThan(100);
-
-        await vi.waitFor(() => expect(generateSlug).toHaveBeenCalledTimes(1), { interval: 1 });
-        resolveSlug?.("slow-reset");
-        await flushSessionMemoryWritesForTest();
-
-        const files = await fs.readdir(path.join(tempDir, "memory"));
-        expectDatedMemoryFile(files, "slow-reset");
-      },
-    );
   });
 
   it("creates memory file with session content on /reset command", async () => {
@@ -1011,5 +956,24 @@ describe("session-memory hook", () => {
     const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
     expect(lines).toEqual(["assistant: Done", "assistant: Done"]);
     expect(memoryContent).not.toContain("user: /new");
+  });
+
+  it("keeps sibling home-prefix paths intact in completion logs", async () => {
+    const fakeHome = path.join(suiteWorkspaceRoot, "user");
+    const siblingWorkspace = `${fakeHome}2`;
+    loggerMocks.info.mockClear();
+
+    await withEnvAsync(
+      { HOME: fakeHome, USERPROFILE: fakeHome, OPENCLAW_HOME: undefined },
+      async () => {
+        const { files } = await runNewWithPreviousSessionEntry({
+          tempDir: siblingWorkspace,
+          previousSessionEntry: { sessionId: "test-123" },
+        });
+        expect(loggerMocks.info).toHaveBeenCalledWith(
+          `Session context saved to ${path.join(siblingWorkspace, "memory", files[0]!)}`,
+        );
+      },
+    );
   });
 });

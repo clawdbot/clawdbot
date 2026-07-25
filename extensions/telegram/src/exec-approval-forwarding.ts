@@ -1,6 +1,6 @@
 // Telegram plugin module implements exec approval forwarding behavior.
 import {
-  buildExecApprovalPendingReplyPayload,
+  buildTypedExecApprovalPendingReplyPayload,
   resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -31,7 +31,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
   request: ExecApprovalRequest;
   nowMs: number;
 }) {
-  return buildExecApprovalPendingReplyPayload({
+  return buildTypedExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,

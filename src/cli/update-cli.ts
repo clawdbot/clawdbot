@@ -66,10 +66,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
   command
     .description("Repair post-update doctor and plugin convergence")
     .option("--json", "Output result as JSON", false)
-    .option(
-      "--channel <stable|extended-stable|beta|dev>",
-      "Persist update channel before repair",
-    )
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
     .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option(
@@ -118,10 +115,7 @@ export function registerUpdateCli(program: Command) {
     .option("--json", "Output result as JSON", false)
     .option("--no-restart", "Skip restarting the gateway service after a successful update")
     .option("--dry-run", "Preview update actions without making changes", false)
-    .option(
-      "--channel <stable|extended-stable|beta|dev>",
-      "Persist update channel (git + npm)",
-    )
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)")
     .option(
       "--tag <dist-tag|version|spec>",
       "Override the package target for this update (dist-tag, version, or package spec)",

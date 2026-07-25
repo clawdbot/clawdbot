@@ -11,11 +11,6 @@ const mocks = vi.hoisted(() => ({
   detectBinary: vi.fn(),
   isContainerEnvironment: vi.fn(),
   resolveBrewExecutable: vi.fn(),
-  resolveNodeManagerOptions: vi.fn(() => [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ]),
 }));
 
 // Module under test imports these at module scope.
@@ -35,10 +30,19 @@ vi.mock("../infra/brew.js", () => ({
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
-  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
 }));
 
 import { setupSkills } from "./onboard-skills.js";
+import { testing } from "./onboard-skills.test-support.js";
+
+describe("skill onboarding text bounds", () => {
+  it("keeps install failures and hints UTF-16 well-formed", () => {
+    expect(testing.summarizeInstallFailure(`${"x".repeat(138)}🚀tail`)).toBe(`${"x".repeat(138)}…`);
+    expect(testing.formatSkillHint({ description: `${"x".repeat(88)}🚀tail`, install: [] })).toBe(
+      `${"x".repeat(88)}…`,
+    );
+  });
+});
 
 function createBundledSkill(params: {
   name: string;

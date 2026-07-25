@@ -1,6 +1,5 @@
 // Nostr plugin module implements setup surface behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-// Nostr plugin module implements setup surface behavior.
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
@@ -11,14 +10,21 @@ import {
   createStandardChannelSetupStatus,
   createTopLevelChannelDmPolicy,
   createTopLevelChannelParsedAllowFromPrompt,
+  defineTokenCredential,
   formatDocsLink,
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
+  setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
-import { buildNostrSetupPatch, createNostrSetupAdapter, parseRelayUrls } from "./setup-adapter.js";
+import {
+  buildNostrSetupPatch,
+  createNostrSetupAdapter,
+  createNostrSetupContract,
+  parseRelayUrls,
+} from "./setup-adapter.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const t = createSetupTranslator();
@@ -83,6 +89,7 @@ export const nostrSetupAdapter = createNostrSetupAdapter({
     }
   },
 });
+export const nostrSetupContract = createNostrSetupContract(nostrSetupAdapter);
 
 export const nostrSetupWizard: ChannelSetupWizard = {
   channel,
@@ -125,8 +132,9 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       }),
   },
   credentials: [
-    {
+    defineTokenCredential({
       inputKey: "privateKey",
+      configKey: "privateKey",
       providerHint: channel,
       credentialLabel: "private key",
       preferredEnvVar: "NOSTR_PRIVATE_KEY",
@@ -136,31 +144,21 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       keepPrompt: t("wizard.nostr.privateKeyKeep"),
       inputPrompt: t("wizard.nostr.privateKeyInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      inspect: ({ cfg, accountId }) => {
-        const account = resolveNostrAccount({ cfg, accountId });
-        return {
-          accountConfigured: account.configured,
-          hasConfiguredValue: hasConfiguredSecretInput(account.config.privateKey),
-          resolvedValue: normalizeSecretInputString(account.config.privateKey),
-          envValue: process.env.NOSTR_PRIVATE_KEY?.trim(),
-        };
-      },
-      applyUseEnv: async ({ cfg, accountId }) =>
+      resolveAccount: ({ cfg, accountId }) => resolveNostrAccount({ cfg, accountId }),
+      accountConfigured: (account) => account.configured,
+      resolvedValue: (account) => normalizeSecretInputString(account.config.privateKey),
+      envValue: () => process.env.NOSTR_PRIVATE_KEY?.trim(),
+      patchAccount: ({ cfg, accountId, patch, clearFields }) =>
         patchTopLevelChannelConfigSection({
           cfg,
           channel,
           enabled: true,
-          clearFields: ["privateKey"],
-          patch: buildNostrSetupPatch(accountId, {}),
+          clearFields,
+          patch: buildNostrSetupPatch(accountId, patch),
         }),
-      applySet: async ({ cfg, accountId, resolvedValue }) =>
-        patchTopLevelChannelConfigSection({
-          cfg,
-          channel,
-          enabled: true,
-          patch: buildNostrSetupPatch(accountId, { privateKey: resolvedValue }),
-        }),
-    },
+      useEnv: { clearFields: ["privateKey"] },
+      set: { value: "resolved" },
+    }),
   ],
   textInputs: [
     {
@@ -195,10 +193,5 @@ export const nostrSetupWizard: ChannelSetupWizard = {
     },
   ],
   dmPolicy: nostrDmPolicy,
-  disable: (cfg) =>
-    patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      patch: { enabled: false },
-    }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

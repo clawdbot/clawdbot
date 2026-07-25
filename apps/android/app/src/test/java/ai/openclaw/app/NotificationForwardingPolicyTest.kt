@@ -97,6 +97,45 @@ class NotificationForwardingPolicyTest {
   }
 
   @Test
+  fun allowsPackage_neverForwardsNativeChannelPackages() {
+    val nativeChannelPackages =
+      setOf(
+        "com.discord",
+        "com.whatsapp",
+        "com.whatsapp.w4b",
+        "org.telegram.messenger",
+        "org.telegram.messenger.web",
+        "org.thunderdog.challegram",
+        "org.thoughtcrime.securesms",
+      )
+    val policies =
+      NotificationPackageFilterMode.entries.map { mode ->
+        NotificationForwardingPolicy(
+          enabled = true,
+          mode = mode,
+          packages =
+            if (mode == NotificationPackageFilterMode.Allowlist) {
+              nativeChannelPackages + "com.other.app"
+            } else {
+              nativeChannelPackages
+            },
+          quietHoursEnabled = false,
+          quietStart = "22:00",
+          quietEnd = "07:00",
+          maxEventsPerMinute = 20,
+          sessionKey = null,
+        )
+      }
+
+    policies.forEach { policy ->
+      nativeChannelPackages.forEach { packageName ->
+        assertFalse("$packageName must be owned by its native channel", policy.allowsPackage(packageName))
+      }
+      assertTrue(policy.allowsPackage("com.other.app"))
+    }
+  }
+
+  @Test
   fun isWithinQuietHours_handlesWindowCrossingMidnight() {
     val policy =
       NotificationForwardingPolicy(

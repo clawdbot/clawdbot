@@ -1,6 +1,25 @@
 // Tests for surrogate-safe UTF-16 string slicing helpers.
 import { describe, expect, it } from "vitest";
-import { sliceUtf16Safe, truncateUtf16Safe } from "./utf16-slice.js";
+import {
+  avoidTrailingHighSurrogateBreak,
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+} from "./utf16-slice.js";
+
+describe("avoidTrailingHighSurrogateBreak", () => {
+  it("keeps ordinary and terminal boundaries unchanged", () => {
+    expect(avoidTrailingHighSurrogateBreak("hello", 0, 3)).toBe(3);
+    expect(avoidTrailingHighSurrogateBreak("hello", 0, 5)).toBe(5);
+  });
+
+  it("moves a split before a surrogate pair when room remains", () => {
+    expect(avoidTrailingHighSurrogateBreak("a🤖b", 0, 2)).toBe(1);
+  });
+
+  it("includes the full pair when a one-unit chunk starts with it", () => {
+    expect(avoidTrailingHighSurrogateBreak("🤖b", 0, 1)).toBe(2);
+  });
+});
 
 describe("sliceUtf16Safe", () => {
   it("slices ASCII string normally", () => {
@@ -23,8 +42,8 @@ describe("sliceUtf16Safe", () => {
     expect(sliceUtf16Safe("hello", 0, 10)).toBe("hello");
   });
 
-  it("swaps start and end when start > end", () => {
-    expect(sliceUtf16Safe("hello", 3, 1)).toBe("el");
+  it("returns empty when start > end, matching String.prototype.slice", () => {
+    expect(sliceUtf16Safe("hello", 3, 1)).toBe("");
   });
 
   it("preserves emoji with surrogate pairs", () => {

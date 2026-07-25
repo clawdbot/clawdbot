@@ -62,6 +62,7 @@ function mockCallArg<T>(
 type FeishuDriveTool = {
   execute: (callId: string, input: Record<string, unknown>) => Promise<{ details?: unknown }>;
   name?: string;
+  parameters?: unknown;
 };
 
 type FeishuDriveToolFactory = (context: {
@@ -71,6 +72,26 @@ type FeishuDriveToolFactory = (context: {
 
 function firstToolFactory(mock: { mock: { calls: unknown[][] } }): FeishuDriveToolFactory {
   return mockCallArg<FeishuDriveToolFactory>(mock, 0, 0);
+}
+
+function buildDriveTool(): FeishuDriveTool {
+  const registerTool = vi.fn();
+  registerFeishuDriveTools(
+    createDriveToolApi({
+      config: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "app_id",
+            appSecret: "app_secret", // pragma: allowlist secret
+            tools: { drive: true },
+          },
+        },
+      },
+      registerTool,
+    }),
+  );
+  return firstToolFactory(registerTool)({ agentAccountId: undefined });
 }
 
 function firstLogMessage(mock: { mock: { calls: unknown[][] } }): string {
@@ -105,6 +126,25 @@ function expectRequestCall(
   if ("params" in expected) {
     expect(request.params).toEqual(expected.params);
   }
+}
+
+function schemaForAction(
+  schema: unknown,
+  action: string,
+): { properties?: Record<string, unknown> } {
+  const variants =
+    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).anyOf ??
+    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).oneOf ??
+    [];
+  const variant = variants.find((entry) => {
+    const actionSchema = (entry as { properties?: { action?: { const?: unknown } } }).properties
+      ?.action;
+    return actionSchema?.const === action;
+  });
+  if (!variant) {
+    throw new Error(`Missing schema variant for action ${action}`);
+  }
+  return variant as { properties?: Record<string, unknown> };
 }
 
 describe("registerFeishuDriveTools", () => {
@@ -358,6 +398,222 @@ describe("registerFeishuDriveTools", () => {
       true,
     );
     expect((replyCommentResult.details as { reply_id?: string }).reply_id).toBe("r4");
+  });
+
+  it("lists a folder continuation page when page_token is provided", async () => {
+    const listFiles = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
+        next_page_token: "page-3",
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles } },
+    });
+    const tool = buildDriveTool();
+    const listSchema = schemaForAction(tool.parameters, "list");
+    expect(listSchema.properties?.page_token).toMatchObject({ type: "string" });
+    expect(listSchema.properties?.page_size).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+    });
+
+    const result = await tool.execute("call-list-page-2", {
+      action: "list",
+      folder_token: "folder_1",
+      page_size: 25,
+      page_token: "page-2",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({
+      params: { folder_token: "folder_1", page_size: 25, page_token: "page-2" },
+    });
+    expect(result.details).toMatchObject({
+      files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
+      next_page_token: "page-3",
+    });
+  });
+
+  it("looks up file info directly by token and type", async () => {
+    const listFiles = vi.fn();
+    const batchQuery = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        metas: [
+          {
+            doc_token: "doc_1",
+            doc_type: "docx",
+            title: "Project Plan",
+            url: "https://example.test/doc_1",
+            create_time: "1710000000",
+            latest_modify_time: "1710001000",
+            owner_id: "ou_owner",
+          },
+        ],
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles }, meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info", {
+      action: "info",
+      file_token: "doc_1",
+      type: "docx",
+    });
+
+    expect(batchQuery).toHaveBeenCalledWith({
+      data: {
+        request_docs: [{ doc_token: "doc_1", doc_type: "docx" }],
+        with_url: true,
+      },
+    });
+    expect(listFiles).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      token: "doc_1",
+      name: "Project Plan",
+      type: "docx",
+      url: "https://example.test/doc_1",
+      created_time: "1710000000",
+      modified_time: "1710001000",
+      owner_id: "ou_owner",
+    });
+  });
+
+  it("reports a missing file when metadata lookup returns a failed entry", async () => {
+    const batchQuery = vi.fn().mockResolvedValue({
+      code: 0,
+      data: { metas: [], failed_list: [{ code: 970005, token: "missing_doc" }] },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info-missing", {
+      action: "info",
+      file_token: "missing_doc",
+      type: "docx",
+    });
+
+    expect(result.details).toMatchObject({ error: "File not found: missing_doc" });
+  });
+
+  it("keeps root-list lookup for shortcut info", async () => {
+    const batchQuery = vi.fn();
+    const listFiles = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [
+          {
+            token: "shortcut_1",
+            name: "Project shortcut",
+            type: "shortcut",
+            url: "https://example.test/shortcut_1",
+          },
+        ],
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles }, meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info-shortcut", {
+      action: "info",
+      file_token: "shortcut_1",
+      type: "shortcut",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({ params: {} });
+    expect(batchQuery).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      token: "shortcut_1",
+      name: "Project shortcut",
+      type: "shortcut",
+    });
+  });
+
+  it("falls back to root lookup when the metadata scope is missing", async () => {
+    const batchQuery = vi.fn().mockRejectedValue({
+      response: {
+        data: {
+          code: 99991672,
+          msg: "permission denied: drive:drive.metadata:readonly",
+        },
+      },
+    });
+    const listFiles = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [{ token: "doc_1", name: "Project Plan", type: "docx" }],
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles }, meta: { batchQuery } },
+    });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-info-missing-scope", {
+      action: "info",
+      file_token: "doc_1",
+      type: "docx",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({ params: {} });
+    expect(result.details).toMatchObject({ token: "doc_1", name: "Project Plan", type: "docx" });
+  });
+
+  it("normalizes folder pagination and suppresses it for root listings", async () => {
+    const listFiles = vi.fn().mockResolvedValue({ code: 0, data: { files: [] } });
+    createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
+    const tool = buildDriveTool();
+
+    await tool.execute("call-list-normalized", {
+      action: "list",
+      folder_token: " folder_1 ",
+      page_size: "25",
+      page_token: "   ",
+    });
+    for (const [callId, folderToken] of [
+      ["call-list-root", undefined],
+      ["call-list-empty", "   "],
+      ["call-list-zero", " 0 "],
+    ] as const) {
+      await tool.execute(callId, {
+        action: "list",
+        folder_token: folderToken,
+        page_size: 25,
+        page_token: "page-2",
+      });
+    }
+
+    expect(listFiles).toHaveBeenNthCalledWith(1, {
+      params: { folder_token: "folder_1", page_size: 25 },
+    });
+    for (const callIndex of [2, 3, 4]) {
+      expect(listFiles).toHaveBeenNthCalledWith(callIndex, { params: {} });
+    }
+  });
+
+  it.each([0, 201, 1.5])("rejects invalid folder page_size %s", async (pageSize) => {
+    const listFiles = vi.fn();
+    createFeishuToolClientMock.mockReturnValue({ drive: { file: { list: listFiles } } });
+    const tool = buildDriveTool();
+
+    const result = await tool.execute("call-list-invalid-page-size", {
+      action: "list",
+      folder_token: "folder_1",
+      page_size: pageSize,
+    });
+
+    expect(result.details).toMatchObject({
+      error: "page_size must be a positive integer between 1 and 200",
+    });
+    expect(listFiles).not.toHaveBeenCalled();
   });
 
   it("defaults add_comment file_type to docx when omitted", async () => {
@@ -1238,3 +1494,4 @@ describe("registerFeishuDriveTools", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

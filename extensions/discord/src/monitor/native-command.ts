@@ -1,6 +1,6 @@
 // Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
+import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -34,6 +34,7 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
+  resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordChannelPolicyCommandAuthorizer,
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";
@@ -42,7 +43,6 @@ import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import {
-  resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandChannelAccessContext,
@@ -85,7 +85,6 @@ import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 const log = createSubsystemLogger("discord/native-command");
-export { testing, testing as __testing } from "./native-command.runtime.js";
 
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
@@ -245,7 +244,7 @@ async function dispatchDiscordCommandInteraction(params: {
     });
   };
 
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const user = interaction.user;
   if (!user) {
     return { accepted: false };
@@ -486,10 +485,19 @@ async function dispatchDiscordCommandInteraction(params: {
         threadBindings,
       })
     : null;
-  // Native /think choices need live-discovery metadata; empty keeps config fallback.
+  // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
     command.key === "think" && menuNeedsModelContext
-      ? await loadModelCatalog({ config: cfg })
+      ? await loadPreparedModelCatalog({
+          config: cfg,
+          ...(menuModelContext?.agentId
+            ? {
+                agentId: menuModelContext.agentId,
+                agentDir: resolveAgentDir(cfg, menuModelContext.agentId),
+              }
+            : {}),
+          readOnly: true,
+        })
       : undefined;
   const menu = resolveCommandArgMenu({
     command,
@@ -497,6 +505,7 @@ async function dispatchDiscordCommandInteraction(params: {
     cfg,
     provider: menuModelContext?.provider,
     model: menuModelContext?.model,
+    agentRuntime: menuModelContext?.agentRuntime,
     ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
   });
   if (menu) {
@@ -733,3 +742,4 @@ export function createDiscordModelPickerFallbackSelect(
     dispatchCommandInteraction: dispatchDiscordCommandInteraction,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

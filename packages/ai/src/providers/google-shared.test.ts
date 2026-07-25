@@ -6,7 +6,9 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildGoogleGenerateContentParams,
+  buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
+  runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
 
 const model: Model<"google-generative-ai"> = {
@@ -52,6 +54,38 @@ function createOutput(): AssistantMessage {
     timestamp: 0,
   };
 }
+
+describe("buildGoogleSimpleThinking", () => {
+  it("keeps thinking disabled when a non-reasoning model clamps low to off", () => {
+    const nonReasoningModel = { ...model, reasoning: false };
+
+    expect(buildGoogleSimpleThinking(nonReasoningModel, { reasoning: "low" })).toEqual({
+      enabled: false,
+    });
+  });
+
+  it.each(["xhigh", "max"] as const)(
+    "keeps thinking disabled when reasoning=%s clamps to off",
+    (reasoning) => {
+      const offOnlyThinkingModel = {
+        ...model,
+        id: "gemini-3-flash-preview",
+        thinkingLevelMap: {
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      } satisfies Model<"google-generative-ai">;
+
+      expect(buildGoogleSimpleThinking(offOnlyThinkingModel, { reasoning })).toEqual({
+        enabled: false,
+      });
+    },
+  );
+});
 
 async function* chunks(items: GenerateContentResponse[]) {
   yield* items;
@@ -226,6 +260,34 @@ describe("consumeGoogleGenerateContentStream", () => {
         arguments: {},
       },
     ]);
+  });
+});
+
+describe("runGoogleGenerateContentLifecycle", () => {
+  it("surfaces HTTP response body text from Google-compatible errors", async () => {
+    const output = createOutput();
+    const stream = new AssistantMessageEventStream();
+    const error = Object.assign(new Error("502 status code (no body)"), {
+      status: 502,
+      body: "gateway maintenance",
+    });
+
+    await runGoogleGenerateContentLifecycle({
+      stream,
+      model,
+      output,
+      createClient: () => ({
+        models: {
+          generateContentStream: async () => {
+            throw error;
+          },
+        },
+      }),
+      buildParams: () => ({ model: model.id, contents: [] }),
+      nextToolCallId: () => "call_1",
+    });
+
+    expect(output.errorMessage).toBe("502: gateway maintenance");
   });
 });
 

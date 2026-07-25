@@ -26,11 +26,13 @@
   "useTabs": false,
   "ignorePatterns": [
     "apps/",
+    "CHANGELOG.md",
     "CLAUDE.md",
     "docker-compose.yml",
     "dist/",
     "docs/_layouts/",
     "extensions/diffs/assets/viewer-runtime.js",
+    "extensions/browser/chrome-extension/modules/copilot-runtime.js",
     "**/*.json",
     "node_modules/",
     "patches/",

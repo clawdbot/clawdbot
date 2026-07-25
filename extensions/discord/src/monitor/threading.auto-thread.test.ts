@@ -27,9 +27,11 @@ const mockMessage = {
 } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 
 function createMockMessage(overrides: Record<string, unknown>) {
-  return Object.assign({}, mockMessage, overrides) as Parameters<
-    MaybeCreateDiscordAutoThreadFn
-  >[0]["message"];
+  return Object.assign(
+    {},
+    mockMessage,
+    overrides,
+  ) as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["message"];
 }
 
 function createBaseParams(

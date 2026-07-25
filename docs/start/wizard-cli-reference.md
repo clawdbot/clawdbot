@@ -49,6 +49,9 @@ not install or modify anything on the remote host.
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
     - Seeds workspace files needed for first-run bootstrap.
+    - On rerun, an existing agent roster keeps its fleet-wide workspace unless
+      you explicitly confirm the move. Non-interactive reruns warn and preserve
+      the current value.
     - Workspace layout: [Agent workspace](/concepts/agent-workspace).
 
   </Step>
@@ -91,7 +94,7 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: only Node is offered interactively. Bun can corrupt memory on WhatsApp/Telegram reconnect and is not a supported daemon runtime for those channels; pass `--daemon-runtime bun` only outside that combination.
+    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
 
   </Step>
   <Step title="Health check">
@@ -157,6 +160,10 @@ Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and T
 
 ## Auth and model options
 
+If a provider setup step fails in interactive onboarding (for example a CLI reuse option
+without a local sign-in), the wizard shows the error and returns to the provider picker
+instead of exiting. Explicit `--auth-choice` runs still fail fast for automation.
+
 <AccordionGroup>
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
@@ -167,19 +174,26 @@ Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and T
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
+    On a fresh setup with no primary model, sets `agents.defaults.model` to
+    `openai/gpt-5.6-sol` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
+    On a fresh setup with no primary model, sets `agents.defaults.model` to
+    `openai/gpt-5.6-sol` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or legacy Codex model refs.
+    On a fresh setup with no primary model, sets `agents.defaults.model` to
+    `openai/gpt-5.6`; the bare direct-API model id resolves to the Sol tier.
+
+    Adding or reauthenticating OpenAI preserves an existing explicit primary
+    model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6,
+    select `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
 
   </Accordion>
   <Accordion title="xAI (Grok) OAuth">
@@ -314,7 +328,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
+- `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `main` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `per-channel-peer`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Discord, iMessage, Signal, Slack, Telegram, WhatsApp) when you opt in during prompts; Discord and Slack also resolve entered names to IDs
 - `skills.install.nodeManager`
@@ -327,15 +341,24 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
-Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
+Active sessions and transcripts are stored in
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. The
+`~/.openclaw/agents/<agentId>/sessions/` directory is used for legacy migration
+inputs and archive/support artifacts.
 
 <Note>
 Some channels are delivered as plugins. When selected during setup, the wizard
 prompts to install the plugin (npm or local path) before channel configuration.
 </Note>
+
+### Installed app recommendations
+
+After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Recommended matches are selected by default; optional matches require an explicit selection.
+
+The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in quickstart or non-macOS onboarding.
 
 ## Non-interactive setup
 
@@ -364,7 +387,7 @@ Clients (macOS app and Control UI) can render steps without re-implementing onbo
 - Downloads the appropriate release asset from the official `signal-cli` GitHub releases (native build, Linux x86-64 only)
 - On other platforms (macOS, non-x64 Linux), installs via Homebrew instead
 - Stores the release-asset install under `~/.openclaw/tools/signal-cli/<version>/`
-- Writes `channels.signal.cliPath` in config
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` in config
 - Native Windows is not supported yet; run onboarding inside WSL2 to get the Linux install path
 
 ## Related docs

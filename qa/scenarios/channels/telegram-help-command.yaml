@@ -1,0 +1,58 @@
+title: Telegram help command reply
+
+scenario:
+  id: telegram-help-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify the Telegram help command returns the concise command guide.
+  successCriteria:
+    - The help command is accepted in the Telegram group command path.
+    - The reply advertises new-session and full command-list commands.
+  codeRefs:
+    - src/auto-reply/reply/commands-core.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles:
+      {
+        "telegram:adapter": 3,
+        "telegram:all": 2,
+        "telegram:mock-release": 2,
+        "telegram:release": 2,
+      }
+    kind: flow
+    channel: telegram
+    summary: Send Telegram help and verify the concise native command guide.
+    config:
+      command: help
+      expectedAny:
+        - /new
+        - /commands for full list
+
+flow:
+  steps:
+    - name: help returns the concise command guide
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text:
+              expr: "transport.id === 'telegram' ? `/${config.command}@openclaw` : `/${config.command}`"
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: { expr: "config.expectedAny[0]" }
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "config.expectedAny.every((needle) => reply.text.includes(needle))"
+            message:
+              expr: "`help reply missing expected text: ${reply.text}`"
+      detailsExpr: reply.text

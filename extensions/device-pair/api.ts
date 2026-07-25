@@ -13,6 +13,7 @@ export {
   resolveGatewayBindUrl,
   resolveGatewayPort,
   resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
 } from "openclaw/plugin-sdk/core";
 export { resolveAdvertisedLanHost } from "openclaw/plugin-sdk/gateway-runtime";
 export {

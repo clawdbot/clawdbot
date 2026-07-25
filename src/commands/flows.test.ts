@@ -2,16 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
-} from "../tasks/task-flow-registry.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
+  resetTaskFlowRegistryForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "../tasks/task-registry.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+} from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
@@ -159,6 +157,52 @@ describe("flows commands", () => {
           },
         ],
       });
+    });
+  });
+
+  it("reports blank status filters as absent in JSON output", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsListCommand({ json: true, status: "   " }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(jsonRoundTrip(vi.mocked(runtime.writeJson).mock.calls[0]?.[0])).toMatchObject({
+        count: 1,
+        status: null,
+        flows: [expect.objectContaining(jsonRoundTrip(flow))],
+      });
+    });
+  });
+
+  it("keeps truncated text rows UTF-16 well-formed", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: `${"x".repeat(18)}🚀tail`,
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"x".repeat(18)}…`);
+      expect(output).not.toContain("\uD83D");
     });
   });
 

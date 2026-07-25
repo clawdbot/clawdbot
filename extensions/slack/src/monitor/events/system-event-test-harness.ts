@@ -30,6 +30,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     botUserId: "U_BOT",
     botId: "B_BOT",
     teamId: "T_TEST",
+    installationIdentity: { kind: "workspace", teamId: "T_TEST" },
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
@@ -48,6 +49,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     reactionAllowlist: overrides?.reactionAllowlist ?? [],
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
+    rememberSlackChannelType: () => {},
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,

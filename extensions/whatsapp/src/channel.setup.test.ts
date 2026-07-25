@@ -58,14 +58,6 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
     "openclaw/plugin-sdk/setup",
   );
-  const normalizeE164 = (value?: string | null) => {
-    const raw = (value ?? "").trim();
-    if (!raw) {
-      return "";
-    }
-    const digits = raw.replace(/[^\d+]/g, "");
-    return digits.startsWith("+") ? digits : `+${digits}`;
-  };
   return {
     ...actual,
     DEFAULT_ACCOUNT_ID,
@@ -80,7 +72,6 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
       }
       return [...normalized];
     },
-    normalizeE164,
     splitSetupEntries: splitSetupEntriesForMock,
     setSetupChannelEnabled: (cfg: OpenClawConfig, channel: string, enabled: boolean) => ({
       ...cfg,
@@ -125,6 +116,12 @@ function createRuntime(): RuntimeEnv {
     error: vi.fn(),
   } as unknown as RuntimeEnv;
 }
+
+describe("WhatsApp setup promotion contract", () => {
+  it("exposes authDir on the setup-only plugin surface", () => {
+    expect(whatsappSetupPlugin.setup?.singleAccountKeysToMove).toEqual(["authDir"]);
+  });
+});
 
 async function runConfigureWithHarness(params: {
   harness: ReturnType<typeof createQueuedWizardPrompter>;
@@ -211,6 +208,26 @@ describe("whatsapp setup wizard", () => {
     expect(prompt.validate("abc")).toBe("Invalid number: abc");
     expect(prompt.validate("whatsapp:")).toBe("Invalid number: whatsapp:");
     expect(prompt.validate("+1 (555) 555-0123")).toBeUndefined();
+  });
+
+  it("skips interactive linking when the client defers device linking", async () => {
+    hoisted.hasWebCredsSync.mockReturnValue(true);
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "disabled"],
+    });
+
+    const result = await finalizeWhatsAppSetup({
+      cfg: {} as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      forceAllowFrom: false,
+      prompter: harness.prompter,
+      runtime: createRuntime(),
+      options: { deferDeviceLinkToClient: true },
+    });
+
+    expect(hoisted.loginWeb).not.toHaveBeenCalled();
+    expect(harness.confirm).not.toHaveBeenCalled();
+    expectWhatsAppSeparatePhoneDisabledSetup(result.cfg, harness);
   });
 
   it("supports disabled DM policy for separate-phone setup", async () => {
@@ -409,7 +426,9 @@ describe("whatsapp setup wizard", () => {
       runtime,
     });
 
-    expect(hoisted.loginWeb).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID);
+    expect(hoisted.loginWeb).toHaveBeenCalledWith(false, undefined, runtime, DEFAULT_ACCOUNT_ID, {
+      beforeCredentialPersistence: undefined,
+    });
   });
 
   it("skips relink note when already linked and relink is declined", async () => {
@@ -463,6 +482,21 @@ describe("whatsapp setup wizard", () => {
     });
 
     expect(result).toEqual({ ok: true, reason: "ok" });
+  });
+
+  it("heartbeat readiness honors the channel disable flag", async () => {
+    const result = await checkWhatsAppHeartbeatReady({
+      cfg: { channels: { whatsapp: { enabled: false } } } as OpenClawConfig,
+      deps: {
+        readWebAuthExistsForDecision: async () => ({
+          outcome: "stable" as const,
+          exists: true,
+        }),
+        hasActiveWebListener: () => true,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, reason: "whatsapp-disabled" });
   });
 
   it("heartbeat readiness returns unstable when auth state timing is unresolved", async () => {

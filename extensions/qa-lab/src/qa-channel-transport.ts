@@ -15,9 +15,9 @@ import type {
   QaTransportGatewayClient,
   QaTransportNativeCommandInput,
   QaTransportOutboundSequenceMatch,
+  QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
-import { qaChannelPlugin } from "./runtime-api.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
@@ -83,7 +83,9 @@ async function waitForQaChannelReady(params: {
 
 export function createQaChannelGatewayConfig(params: {
   baseUrl: string;
+  transportPolicy?: QaTransportPolicy;
 }): QaTransportGatewayConfig {
+  const senderAllowlist = params.transportPolicy?.senderAllowlist;
   return {
     channels: {
       [QA_CHANNEL_ID]: {
@@ -91,7 +93,22 @@ export function createQaChannelGatewayConfig(params: {
         baseUrl: params.baseUrl,
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
+        allowFrom: senderAllowlist ? [...senderAllowlist] : ["*"],
+        ...(senderAllowlist
+          ? {
+              groupPolicy: "allowlist" as const,
+              groupAllowFrom: [...senderAllowlist],
+            }
+          : {}),
+        ...(params.transportPolicy?.requireGroupMention
+          ? {
+              groups: {
+                "*": {
+                  requireMention: true,
+                },
+              },
+            }
+          : {}),
         pollTimeoutMs: 250,
       },
     },
@@ -114,7 +131,7 @@ function createQaChannelReportNotes(params: QaTransportReportParams) {
     params.isolatedWorkers === true
       ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`
       : "Scenarios run serially in one gateway worker.",
-    "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
+    "Scheduling scenarios verify stored schedules and execution behavior through the Gateway.",
   ];
 }
 
@@ -124,6 +141,7 @@ async function handleQaChannelAction(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
+  const { qaChannelPlugin } = await import("openclaw/plugin-sdk/qa-channel");
   return await qaChannelPlugin.actions?.handleAction?.({
     channel: QA_CHANNEL_ID,
     action: params.action,
@@ -134,7 +152,9 @@ async function handleQaChannelAction(params: {
 }
 
 class QaChannelTransport extends QaStateBackedTransportAdapter {
-  constructor(state: QaBusState) {
+  readonly #transportPolicy?: QaTransportPolicy;
+
+  constructor(state: QaBusState, transportPolicy?: QaTransportPolicy) {
     super({
       id: QA_CHANNEL_ID,
       label: "qa-channel + qa-lab bus",
@@ -143,9 +163,11 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       supportedActions: ["delete", "edit", "react", "thread-create"],
       state,
     });
+    this.#transportPolicy = transportPolicy;
   }
 
-  createGatewayConfig = createQaChannelGatewayConfig;
+  createGatewayConfig = ({ baseUrl }: { baseUrl: string }) =>
+    createQaChannelGatewayConfig({ baseUrl, transportPolicy: this.#transportPolicy });
   waitReady = waitForQaChannelReady;
   buildAgentDelivery = ({ target }: { target: string }) => ({
     channel: QA_CHANNEL_ID,
@@ -170,6 +192,6 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
   createReportNotes = createQaChannelReportNotes;
 }
 
-export function createQaChannelTransport(state: QaBusState) {
-  return new QaChannelTransport(state);
+export function createQaChannelTransport(state: QaBusState, transportPolicy?: QaTransportPolicy) {
+  return new QaChannelTransport(state, transportPolicy);
 }

@@ -50,25 +50,26 @@ present.
 
 ## How the sidecar works
 
-- OpenClaw creates collections from your workspace memory files and any
-  configured `memory.qmd.paths`, then runs `qmd update` when the QMD manager
-  opens and periodically afterward (`memory.qmd.update.interval`, default
-  `5m`). Refreshes run through QMD subprocesses, not an in-process filesystem
-  crawl. Semantic search modes also run `qmd embed`
-  (`memory.qmd.update.embedInterval`, default `60m`).
+- OpenClaw creates collections from workspace memory files and configured
+  `memory.qmd.paths`. The QMD adapter owns update, embedding, debounce, and
+  timeout heuristics; these are not user configuration.
+- QMD continues to own its `index.sqlite`, YAML collection config, and model
+  downloads under the per-agent QMD home; these are external-tool artifacts,
+  not OpenClaw state tables. OpenClaw-owned coordination lives only in SQLite:
+  one shared lease limits embedding work across agents, while one lease in each
+  agent database serializes that agent's collection, update, and embed writes.
+  Runtime no longer creates QMD file-lock sidecars. `openclaw doctor --fix`
+  removes retired sidecars only after proving their old process owner is stale.
+  Upgrades are a clean cutover: stop and restart every OpenClaw process that
+  shares the state directory before using the new version. Mixed old/new QMD
+  writers are unsupported; runtime intentionally does not dual-lock the retired
+  sidecars.
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
   tree. Lowercase `memory.md` is not indexed as a root memory file.
 - QMD's own scanner ignores hidden paths and common dependency/build
   directories such as `.git`, `.cache`, `node_modules`, `vendor`, `dist`, and
-  `build`. Gateway startup does not initialize QMD by default
-  (`memory.qmd.update.startup` defaults to `off`), so cold boot avoids
-  importing the memory runtime or creating the long-lived watcher before
-  memory is first used.
-- Set `memory.qmd.update.startup` to `idle` or `immediate` to initialize QMD
-  at gateway start anyway. `memory.qmd.update.onBoot` defaults to `true` and
-  runs the initial refresh at startup; set it to `false` to skip that
-  immediate refresh (the long-lived manager still opens when update or embed
-  intervals are configured, so QMD keeps owning its regular watcher/timers).
+  `build`. Gateway startup keeps QMD lazy; the manager initializes when memory
+  is first used.
 - Searches use the configured `searchMode` (default: `search`; also supports
   `vsearch` and `query`). `search` is BM25-only, so OpenClaw skips semantic
   vector readiness probes and embedding maintenance in that mode. If a mode
@@ -158,20 +159,16 @@ correct collection root.
 ## Indexing session transcripts
 
 Enable session indexing to recall earlier conversations. QMD needs both the
-general `memorySearch` session source and the QMD transcript exporter:
+general `memory.search` session source and the QMD transcript exporter:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        experimental: { sessionMemory: true },
-        sources: ["memory", "sessions"],
-      },
-    },
-  },
   memory: {
     backend: "qmd",
+    search: {
+      experimental: { sessionMemory: true },
+      sources: ["memory", "sessions"],
+    },
     qmd: {
       sessions: { enabled: true },
     },
@@ -181,14 +178,18 @@ general `memorySearch` session source and the QMD transcript exporter:
 
 Transcripts export as sanitized User/Assistant turns into a dedicated QMD
 collection under `~/.openclaw/agents/<id>/qmd/sessions/`. Setting only
-`memorySearch.experimental.sessionMemory` does not export transcripts into
-QMD.
+`sources: ["sessions"]` does not export transcripts into QMD; also enable
+`rememberAcrossConversations` or explicit QMD session export.
 
 Session hits are still filtered by
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The
-default `tree` visibility does not expose unrelated same-agent sessions. If a
-gateway-dispatched session should be recallable from a separate DM session,
-set `tools.sessions.visibility: "agent"` intentionally.
+default `tree` visibility includes the current session, its spawned sessions,
+and same-agent group sessions watched through ambient group awareness. With
+`session.dmScope: "main"`, users in a multi-user DM setup share the main
+session and can recall content from its watched groups. Use a per-peer
+`dmScope` for DM isolation, or set visibility to `"self"` to opt out of ambient
+watched-session reads. Other unrelated same-agent sessions still require
+`"agent"` visibility.
 
 ## Search scope
 
@@ -269,8 +270,10 @@ keeps the older per-collection fallback for correctness.
 lexical-only, skips QMD vector status probes and embedding maintenance, and
 leaves semantic readiness checks to `vsearch` or `query` setups.
 
-**Search times out?** Increase `memory.qmd.limits.timeoutMs` (default:
-4000ms). Set it higher, for example `120000`, for slower hardware.
+**Search times out?** Increase `memory.qmd.limits.timeoutMs` (default: 4000ms).
+Set it higher, for example `120000`, for slower hardware. This limit applies to
+QMD's own search commands during agent `memory_search` calls; setup, sync,
+builtin fallback, and supplemental corpus work keep their own shorter deadlines.
 
 **Empty results in group or channel chats?** This is expected with the
 default `memory.qmd.scope`, which allows only direct sessions. Add an

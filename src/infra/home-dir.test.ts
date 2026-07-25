@@ -1,6 +1,6 @@
 // Tests OpenClaw home directory resolution.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -8,6 +8,8 @@ import {
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
+  resolveUserPath,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -166,6 +168,22 @@ describe("resolveRequiredHomeDir", () => {
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
   });
+
+  it("fails clearly when both home and cwd are unavailable", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+    const noHome = () => {
+      throw new Error("no home");
+    };
+
+    try {
+      expect(() => resolveRequiredHomeDir({}, noHome)).toThrow(/set OPENCLAW_HOME/i);
+      expect(() => resolveRequiredOsHomeDir({}, noHome)).toThrow(/set HOME/i);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
 });
 
 describe("resolveOsHomeDir", () => {
@@ -255,6 +273,13 @@ describe("resolveHomeRelativePath", () => {
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(resolveHomeRelativePath(input, opts)).toBe(expected);
+  });
+});
+
+describe("resolveUserPath", () => {
+  it("preserves the historical falsy-input contract", () => {
+    expect(resolveUserPath(undefined as unknown as string)).toBe("");
+    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });
 

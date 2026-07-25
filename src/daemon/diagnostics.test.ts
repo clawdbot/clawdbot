@@ -124,4 +124,36 @@ describe("readLastGatewayErrorLine", () => {
       "recent two",
     ]);
   });
+
+  it("surfaces ENOSPC from stdout ahead of a generic stderr tail on linux", async () => {
+    const stateDir = makeTempStateDir();
+    const homeDir = makeTempStateDir();
+    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
+    const stateLogs = resolveGatewayLogPaths(env);
+    fs.mkdirSync(stateLogs.logDir, { recursive: true });
+    fs.writeFileSync(
+      stateLogs.stdoutPath,
+      "parse/handle error: Error: ENOSPC: no space left on device, write\n",
+      "utf8",
+    );
+    fs.writeFileSync(stateLogs.stderrPath, "gateway stderr tail without a known pattern\n", "utf8");
+
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
+      "parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
+  });
+
+  it("does not return a generic log tail when a pattern match is required", async () => {
+    const stateDir = makeTempStateDir();
+    const homeDir = makeTempStateDir();
+    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
+    const stateLogs = resolveGatewayLogPaths(env);
+    fs.mkdirSync(stateLogs.logDir, { recursive: true });
+    fs.writeFileSync(stateLogs.stdoutPath, "gateway stdout current\n", "utf8");
+    fs.writeFileSync(stateLogs.stderrPath, "routine gateway stderr\n", "utf8");
+
+    await expect(
+      readLastGatewayErrorLine(env, { platform: "linux", requirePatternMatch: true }),
+    ).resolves.toBeNull();
+  });
 });

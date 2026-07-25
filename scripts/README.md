@@ -41,7 +41,7 @@ new directory taxonomy.
 | Release checks  | `pnpm release:check`, `pnpm release:beta`, `pnpm release:candidate`            | Release scripts are maintainer workflows; read release docs before use.                                            |
 | GitHub reads    | `scripts/gh-read`                                                              | Uses a GitHub App read token when configured, leaving normal `gh` login for writes.                                |
 | Commits         | `scripts/committer "<message>" <files...>`                                     | Preferred scoped commit helper for OpenClaw changes.                                                               |
-| Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use for Crabbox/Testbox lanes when local proof would be too broad or environment-sensitive.                        |
+| Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Agent default for tests and heavy work; pre-warm by source trust, sync each run, reuse the lease.                  |
 
 ## Script Families
 

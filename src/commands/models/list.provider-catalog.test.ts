@@ -1,757 +1,341 @@
-// Provider catalog list tests cover provider catalog integration for model listing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotOwnerMaps,
+} from "../../plugins/plugin-metadata-snapshot.types.js";
+
+const mocks = vi.hoisted(() => ({
+  loadAuthStore: vi.fn(() => ({ version: 1, profiles: {} })),
+  loadMetadata: vi.fn(),
+  loadOwner: vi.fn(),
+  resolveImplicitProviders: vi.fn(),
+}));
+
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthStore,
+}));
+
+vi.mock("../../agents/models-config.providers.implicit.js", () => ({
+  resolveImplicitProviders: mocks.resolveImplicitProviders,
+}));
+
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogOwnerSnapshot: mocks.loadOwner,
+}));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: mocks.loadMetadata,
+}));
+
 import {
+  hasProviderRuntimeCatalogForFilter,
   hasProviderStaticCatalogForFilter,
   loadProviderCatalogModelsForList,
-  resolveProviderCatalogPluginIdsForFilter,
 } from "./list.provider-catalog.js";
 
-const providerDiscoveryMocks = vi.hoisted(() => ({
-  buildAgentModelCatalogCacheKey: vi.fn(),
-  buildModelsJsonSourceFingerprint: vi.fn(),
-  loadPluginRegistrySnapshotWithMetadata: vi.fn(),
-  readCachedAgentModelCatalog: vi.fn(),
-  resolvePluginContributionOwners: vi.fn(),
-  resolveProviderOwners: vi.fn(),
-  resolveBundledProviderCompatPluginIds: vi.fn(),
-  resolveOwningPluginIdsForProvider: vi.fn(),
-  resolveRuntimePluginDiscoveryProviders: vi.fn(),
-  resolveProviderContractPluginIdsForProviderAlias: vi.fn(),
-  writeCachedAgentModelCatalog: vi.fn(),
-}));
+const emptyOwners: PluginMetadataSnapshotOwnerMaps = {
+  channels: new Map(),
+  channelConfigs: new Map(),
+  providers: new Map(),
+  modelCatalogProviders: new Map(),
+  cliBackends: new Map(),
+  setupProviders: new Map(),
+  commandAliases: new Map(),
+  contracts: new Map(),
+};
 
-vi.mock("../../agents/model-catalog-state-cache.js", () => ({
-  buildAgentModelCatalogCacheKey: providerDiscoveryMocks.buildAgentModelCatalogCacheKey,
-  readCachedAgentModelCatalog: providerDiscoveryMocks.readCachedAgentModelCatalog,
-  writeCachedAgentModelCatalog: providerDiscoveryMocks.writeCachedAgentModelCatalog,
-}));
+const emptyMetadataSnapshot = {
+  manifestRegistry: { plugins: [] },
+  owners: emptyOwners,
+} as unknown as PluginMetadataSnapshot;
 
-vi.mock("../../agents/models-config.js", () => ({
-  buildModelsJsonSourceFingerprint: providerDiscoveryMocks.buildModelsJsonSourceFingerprint,
-}));
-
-vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  loadPluginRegistrySnapshotWithMetadata:
-    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata,
-  resolvePluginContributionOwners: providerDiscoveryMocks.resolvePluginContributionOwners,
-  resolveProviderOwners: providerDiscoveryMocks.resolveProviderOwners,
-}));
-
-vi.mock("../../plugins/providers.js", () => ({
-  resolveBundledProviderCompatPluginIds:
-    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
-  resolveOwningPluginIdsForProviderRef: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
-}));
-
-vi.mock("../../plugins/contracts/registry.js", () => ({
-  resolveProviderContractPluginIdsForProviderAlias:
-    providerDiscoveryMocks.resolveProviderContractPluginIdsForProviderAlias,
-}));
-
-vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/provider-discovery.js")>();
+function metadataWithCatalogOwner(provider: string, pluginId: string): PluginMetadataSnapshot {
   return {
-    ...actual,
-    resolveRuntimePluginDiscoveryProviders:
-      providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders,
-  };
-});
-
-const baseParams = {
-  cfg: {
-    plugins: {
-      entries: {
-        chutes: { enabled: true },
-        moonshot: { enabled: true },
-      },
+    ...emptyMetadataSnapshot,
+    owners: {
+      ...emptyOwners,
+      modelCatalogProviders: new Map([[provider, [pluginId]]]),
     },
-  },
-  agentDir: "/tmp/openclaw-provider-catalog-test",
-  env: {
-    ...process.env,
-    CHUTES_API_KEY: "",
-    MOONSHOT_API_KEY: "",
-  },
-};
-
-const chutesProvider = {
-  id: "chutes",
-  pluginId: "chutes",
-  label: "Chutes",
-  auth: [],
-  staticCatalog: {
-    run: async () => ({
-      provider: { baseUrl: "https://chutes.example/v1", models: [] },
-    }),
-  },
-};
-
-const moonshotProvider = {
-  id: "moonshot",
-  pluginId: "moonshot",
-  label: "Moonshot",
-  auth: [],
-  staticCatalog: {
-    run: async () => ({
-      provider: {
-        baseUrl: "https://api.moonshot.ai/v1",
-        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
-      },
-    }),
-  },
-};
-
-const openaiProvider = {
-  id: "openai",
-  pluginId: "openai",
-  label: "OpenAI",
-  aliases: ["azure-openai-responses"],
-  auth: [],
-  staticCatalog: {
-    run: async () => ({
-      provider: { baseUrl: "https://api.openai.com/v1", models: [] },
-    }),
-  },
-};
-
-const catalogOnlyProvider = {
-  id: "ollama",
-  pluginId: "ollama",
-  label: "Ollama",
-  auth: [],
-  catalog: {
-    run: async () => ({
-      provider: { baseUrl: "http://127.0.0.1:11434", models: [] },
-    }),
-  },
-};
-
-const hybridCatalogProvider = {
-  id: "hybrid",
-  pluginId: "hybrid",
-  label: "Hybrid",
-  auth: [],
-  catalog: {
-    run: vi.fn(async () => ({
-      provider: {
-        baseUrl: "https://hybrid.example/v1",
-        models: [{ id: "live-model", name: "Live Model" }],
-      },
-    })),
-  },
-  staticCatalog: {
-    run: vi.fn(async () => ({
-      provider: {
-        baseUrl: "https://hybrid.example/v1",
-        models: [{ id: "static-model", name: "Static Model" }],
-      },
-    })),
-  },
-};
-
-const vllmProvider = {
-  id: "vllm",
-  pluginId: "vllm",
-  label: "vLLM",
-  auth: [],
-  catalog: {
-    run: async (ctx: {
-      config: {
-        models?: {
-          providers?: Record<
-            string,
-            {
-              baseUrl?: string;
-            }
-          >;
-        };
-      };
-      resolveProviderApiKey: (providerId?: string) => {
-        apiKey: string | undefined;
-        discoveryApiKey?: string;
-      };
-    }) => ({
-      provider: {
-        baseUrl: ctx.config.models?.providers?.vllm?.baseUrl,
-        api: "openai-completions",
-        models: [
-          {
-            id: "runtime-vllm-model",
-            name: "Runtime vLLM Model",
-          },
-        ],
-        apiKey: "proof-key",
-      },
-    }),
-  },
-};
-
-const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
-
-function firstDiscoveryRequest(): {
-  onlyPluginIds?: string[];
-  requireCompleteDiscoveryEntryCoverage?: boolean;
-  discoveryEntriesOnly?: boolean;
-  includeUntrustedWorkspacePlugins?: boolean;
-} {
-  const call = providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0];
-  if (!call) {
-    throw new Error("expected runtime plugin discovery call");
-  }
-  return call[0] as {
-    onlyPluginIds?: string[];
-    requireCompleteDiscoveryEntryCoverage?: boolean;
-    discoveryEntriesOnly?: boolean;
-    includeUntrustedWorkspacePlugins?: boolean;
   };
 }
 
-function firstCacheKeyInput(): {
-  cacheScope?: {
-    envFingerprint?: string;
-    sourceFingerprint?: string;
-  };
-  metadataSnapshot?: unknown;
-} {
-  const call = providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mock.calls[0];
-  if (!call) {
-    throw new Error("expected state cache key build call");
-  }
-  return call[0] as {
-    cacheScope?: {
-      envFingerprint?: string;
-      sourceFingerprint?: string;
-    };
-    metadataSnapshot?: unknown;
+function ownerSnapshot(modelCatalog: unknown, metadataSnapshot = emptyMetadataSnapshot) {
+  return {
+    agentDir: "/tmp/agent",
+    metadataSnapshot,
+    modelCatalog,
   };
 }
 
-describe("loadProviderCatalogModelsForList", () => {
+describe("model-list provider catalog", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockImplementation(
-      (input: { cacheScope?: { sourceFingerprint?: string } }) =>
-        `provider-cache-key:${input.cacheScope?.sourceFingerprint ?? "none"}`,
-    );
-    providerDiscoveryMocks.buildModelsJsonSourceFingerprint.mockResolvedValue({
-      agentDir: baseParams.agentDir,
-      fingerprint: "provider-source-fingerprint",
-      workspaceDir: "/tmp/provider-workspace",
-    });
-    providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValue(undefined);
-    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot: {
-        plugins: [],
+    mocks.loadAuthStore.mockClear();
+    mocks.loadMetadata.mockReset();
+    mocks.loadMetadata.mockReturnValue(emptyMetadataSnapshot);
+    mocks.loadOwner.mockReset();
+    mocks.resolveImplicitProviders.mockReset();
+  });
+
+  it("projects a filtered provider through targeted plugin discovery", async () => {
+    mocks.resolveImplicitProviders.mockResolvedValue({
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai",
+        api: "openai-completions",
+        models: [{ id: "kimi-k2.6", name: "Kimi K2.6", contextWindow: 262_144 }],
       },
-      diagnostics: [],
     });
-    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
-      ({ providerId }: { providerId: string }) =>
-        defaultProviders
-          .filter((provider) => provider.id === providerId)
-          .map((provider) => provider.pluginId),
-    );
-    providerDiscoveryMocks.resolvePluginContributionOwners.mockReturnValue([]);
-    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([
-      "chutes",
-      "moonshot",
-      "openai",
-      "ollama",
-      "hybrid",
-    ]);
-    providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockImplementation(
-      ({ provider }: { provider: string }) =>
-        [...defaultProviders, catalogOnlyProvider, hybridCatalogProvider].some(
-          (entry) => entry.id === provider,
-        )
-          ? [provider]
-          : undefined,
-    );
-    providerDiscoveryMocks.resolveProviderContractPluginIdsForProviderAlias.mockImplementation(
-      (provider: string) => (provider === "azure-openai-responses" ? ["openai"] : undefined),
-    );
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
-      async ({ onlyPluginIds }: { onlyPluginIds?: string[] }) =>
-        defaultProviders.filter((provider) => onlyPluginIds?.includes(provider.pluginId)),
-    );
-  });
-
-  it("does not use live provider discovery for display-only rows", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
-
-    await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "chutes",
-    });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("includes unauthenticated Moonshot static catalog rows", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
-
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "moonshot",
-    });
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toContain("moonshot/kimi-k2.6");
-  });
-
-  it("reuses cached provider catalog rows before runtime provider discovery", async () => {
-    providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValueOnce([
-      { provider: "moonshot", id: "cached-kimi", name: "Cached Kimi" },
-    ]);
-
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
-    });
-
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/cached-kimi"]);
-    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenCalledWith({
-      agentDir: baseParams.agentDir,
-      catalogKey: "provider-cache-key:provider-source-fingerprint",
-    });
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-    expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).not.toHaveBeenCalled();
-  });
-
-  it("separates provider catalog state cache keys by environment fingerprint", async () => {
-    await loadProviderCatalogModelsForList({
-      ...baseParams,
-      env: {
-        ...baseParams.env,
-        MOONSHOT_API_KEY: "first-secret",
-      },
-      providerFilter: "moonshot",
-    });
-    const firstFingerprint = firstCacheKeyInput().cacheScope?.envFingerprint;
-
-    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockClear();
-    await loadProviderCatalogModelsForList({
-      ...baseParams,
-      env: {
-        ...baseParams.env,
-        MOONSHOT_API_KEY: "second-secret",
-      },
-      providerFilter: "moonshot",
-    });
-    const secondFingerprint = firstCacheKeyInput().cacheScope?.envFingerprint;
-
-    expect(firstFingerprint).toEqual(expect.any(String));
-    expect(secondFingerprint).toEqual(expect.any(String));
-    expect(firstFingerprint).not.toBe(secondFingerprint);
-    expect(firstFingerprint).not.toContain("first-secret");
-    expect(secondFingerprint).not.toContain("second-secret");
-  });
-
-  it("writes provider catalog rows to the state cache after runtime discovery", async () => {
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "moonshot",
-    });
-
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/kimi-k2.6"]);
-    expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).toHaveBeenCalledWith({
-      agentDir: baseParams.agentDir,
-      catalogKey: "provider-cache-key:provider-source-fingerprint",
-      entries: rows,
-    });
-  });
-
-  it("misses cached provider catalog rows when source freshness changes", async () => {
-    providerDiscoveryMocks.buildModelsJsonSourceFingerprint
-      .mockResolvedValueOnce({
-        agentDir: baseParams.agentDir,
-        fingerprint: "old-provider-source",
-        workspaceDir: "/tmp/provider-workspace",
-      })
-      .mockResolvedValueOnce({
-        agentDir: baseParams.agentDir,
-        fingerprint: "new-provider-source",
-        workspaceDir: "/tmp/provider-workspace",
-      });
-    providerDiscoveryMocks.readCachedAgentModelCatalog.mockImplementation(
-      ({ catalogKey }: { catalogKey: string }) =>
-        catalogKey.endsWith("old-provider-source")
-          ? [{ provider: "moonshot", id: "cached-stale", name: "Cached Stale" }]
-          : undefined,
-    );
-
-    await expect(loadProviderCatalogModelsForList({ ...baseParams })).resolves.toEqual([
-      { provider: "moonshot", id: "cached-stale", name: "Cached Stale" },
-    ]);
-    await expect(loadProviderCatalogModelsForList({ ...baseParams })).resolves.toEqual([
-      expect.objectContaining({ provider: "moonshot", id: "kimi-k2.6" }),
-    ]);
-
-    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenNthCalledWith(1, {
-      agentDir: baseParams.agentDir,
-      catalogKey: "provider-cache-key:old-provider-source",
-    });
-    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenNthCalledWith(2, {
-      agentDir: baseParams.agentDir,
-      catalogKey: "provider-cache-key:new-provider-source",
-    });
-  });
-
-  it("requires complete discovery-entry coverage for static-only loads", async () => {
-    await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "moonshot",
-      staticOnly: true,
-    });
-
-    const discoveryRequest = firstDiscoveryRequest();
-    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["moonshot"]);
-    expect(discoveryRequest?.requireCompleteDiscoveryEntryCoverage).toBe(true);
-    expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
-  });
-
-  it("reuses a command metadata snapshot for provider catalog planning", async () => {
-    const metadataSnapshot = {
-      index: {
-        plugins: [{ pluginId: "moonshot", enabled: true, origin: "bundled" }],
-      },
-      manifestRegistry: {
-        plugins: [],
-        diagnostics: [],
-      },
-    };
-
-    await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "moonshot",
-      staticOnly: true,
-      metadataSnapshot: metadataSnapshot as unknown as Parameters<
-        typeof loadProviderCatalogModelsForList
-      >[0]["metadataSnapshot"],
-    });
-
-    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ index: metadataSnapshot.index }),
-    );
-    expect(providerDiscoveryMocks.resolveBundledProviderCompatPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ manifestRegistry: metadataSnapshot.manifestRegistry }),
-    );
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
-    );
-    expect(firstCacheKeyInput()).toEqual(expect.objectContaining({ metadataSnapshot }));
-  });
-
-  it("uses bundled runtime provider catalogs for provider-filtered self-hosted rows", async () => {
-    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
-      ({ providerId }: { providerId: string }) => (providerId === "vllm" ? ["vllm"] : []),
-    );
-    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["vllm"]);
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([vllmProvider]);
-
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
-            },
-          },
-        },
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://vllm-router.example/v1",
-              apiKey: "proof-key",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-      providerFilter: "vllm",
-    });
-
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual([
-      "vllm/runtime-vllm-model",
-    ]);
-    expect(rows[0]?.baseUrl).toBe("http://vllm-router.example/v1");
-    const discoveryRequest = firstDiscoveryRequest();
-    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["vllm"]);
-    expect(discoveryRequest?.discoveryEntriesOnly).toBe(false);
-  });
-
-  it("uses live catalogs before static catalogs for normal list output", async () => {
-    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
-      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
-    );
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      hybridCatalogProvider,
-    ]);
-
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "hybrid",
-    });
-
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/live-model"]);
-    expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
-    expect(hybridCatalogProvider.staticCatalog.run).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicit static-only list output on static catalogs", async () => {
-    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
-      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
-    );
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      hybridCatalogProvider,
-    ]);
-
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "hybrid",
-      staticOnly: true,
-    });
-
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
-    expect(hybridCatalogProvider.catalog.run).not.toHaveBeenCalled();
-    expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
-  });
-
-  it("falls back to static rows when a live catalog fails", async () => {
-    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
-      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
-    );
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      hybridCatalogProvider,
-    ]);
-    hybridCatalogProvider.catalog.run.mockRejectedValueOnce(new Error("live catalog offline"));
-
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
-      providerFilter: "hybrid",
-    });
-
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
-    expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
-    expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
-  });
-
-  it("resolves provider owners from the installed plugin index before manifest fallback", async () => {
-    await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "moonshot",
-      }),
-    ).resolves.toEqual(["moonshot"]);
-
-    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
-      config: baseParams.cfg,
-      env: baseParams.env,
-    });
-    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
-  });
-
-  it("uses a supplied registry index for provider ownership", async () => {
-    const registryIndex = {
-      plugins: [{ pluginId: "moonshot", enabled: true, origin: "bundled" }],
-    };
-
-    await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "moonshot",
-        registryIndex: registryIndex as unknown as Parameters<
-          typeof resolveProviderCatalogPluginIdsForFilter
-        >[0]["registryIndex"],
-      }),
-    ).resolves.toEqual(["moonshot"]);
-
-    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
-      config: baseParams.cfg,
-      env: baseParams.env,
-      index: registryIndex,
-    });
-    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
-  });
-
-  it("falls back to manifest ownership when the plugin index is derived", async () => {
-    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
-      source: "derived",
-      snapshot: {
-        plugins: [],
-      },
-      diagnostics: [],
-    });
-
-    await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "moonshot",
-      }),
-    ).resolves.toEqual(["moonshot"]);
-
-    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).toHaveBeenCalledWith({
-      provider: "moonshot",
-      config: baseParams.cfg,
-      env: baseParams.env,
-    });
-  });
-
-  it("does not fall back to legacy manifest ownership for disabled persisted plugin owners", async () => {
-    providerDiscoveryMocks.resolveProviderOwners
-      .mockReturnValueOnce([])
-      .mockReturnValueOnce(["moonshot"]);
-    providerDiscoveryMocks.resolvePluginContributionOwners.mockReturnValue([]);
-
-    await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "moonshot",
-      }),
-    ).resolves.toStrictEqual([]);
-
-    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
-  });
-
-  it("returns an empty catalog when a static provider catalog throws", async () => {
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValueOnce([
-      {
-        id: "moonshot",
-        pluginId: "moonshot",
-        label: "Moonshot",
-        auth: [],
-        staticCatalog: {
-          run: async () => {
-            throw new Error("catalog offline");
-          },
-        },
-      },
-    ]);
 
     await expect(
       loadProviderCatalogModelsForList({
-        ...baseParams,
+        cfg: {},
+        agentDir: "/tmp/agent",
         providerFilter: "moonshot",
-        staticOnly: true,
       }),
-    ).resolves.toStrictEqual([]);
-  });
-
-  it("only skips registry for providers with actual static catalogs", async () => {
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      catalogOnlyProvider,
+    ).resolves.toEqual([
+      expect.objectContaining({
+        provider: "moonshot",
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        contextWindow: 262_144,
+        maxTokens: 200_000,
+      }),
     ]);
-
-    await expect(
-      hasProviderStaticCatalogForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "ollama",
+    expect(mocks.resolveImplicitProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authStore: { version: 1, profiles: {} },
+        providerDiscoveryProviderIds: ["moonshot"],
       }),
-    ).resolves.toBe(false);
-
-    const discoveryRequest = firstDiscoveryRequest();
-    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["ollama"]);
-    expect(discoveryRequest?.requireCompleteDiscoveryEntryCoverage).toBe(true);
-    expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
+    );
+    expect(mocks.loadAuthStore).toHaveBeenCalledWith("/tmp/agent", {
+      config: {},
+      externalCliProviderIds: ["moonshot"],
+    });
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
   });
 
-  it("does not skip registry when a bundled provider has no lightweight static entry", async () => {
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValueOnce([]);
-
-    await expect(
-      hasProviderStaticCatalogForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "chutes",
-      }),
-    ).resolves.toBe(false);
-  });
-
-  it("does not skip registry for non-bundled static catalog owners", async () => {
-    providerDiscoveryMocks.resolveProviderOwners.mockReturnValueOnce([]);
-    providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce([
-      "workspace-static-provider",
-    ]);
-    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValueOnce(["moonshot"]);
-
-    await expect(
-      hasProviderStaticCatalogForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "workspace-static-provider",
-      }),
-    ).resolves.toBe(false);
-
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
-  });
-
-  it("recognizes bundled provider hook aliases before the unknown-provider short-circuit", async () => {
-    providerDiscoveryMocks.resolveProviderOwners.mockReturnValueOnce([]);
-
-    await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "azure-openai-responses",
-      }),
-    ).resolves.toEqual(["openai"]);
-  });
-
-  it("does not execute workspace provider static catalogs", async () => {
-    const workspaceStaticCatalog = vi.fn(async () => ({
-      provider: { baseUrl: "https://workspace.example/v1", models: [] },
-    }));
-    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["bundled-demo"]);
-    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-      {
-        id: "bundled-demo",
-        pluginId: "bundled-demo",
-        label: "Bundled Demo",
-        auth: [],
-        staticCatalog: {
-          run: async () => null,
-        },
+  it("resolves the effective agent context for filtered discovery", async () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "worker",
+            agentDir: "/tmp/model-list-worker-agent",
+            workspace: "/tmp/model-list-worker-workspace",
+          },
+        ],
       },
-      {
-        id: "workspace-demo",
-        pluginId: "workspace-demo",
-        label: "Workspace Demo",
-        auth: [],
-        staticCatalog: {
-          run: workspaceStaticCatalog,
-        },
-      },
-    ]);
+    };
+    mocks.resolveImplicitProviders.mockResolvedValue({ moonshot: { models: [] } });
 
-    const rows = await loadProviderCatalogModelsForList({
-      ...baseParams,
+    await loadProviderCatalogModelsForList({
+      cfg,
+      agentId: "worker",
+      providerFilter: "moonshot",
     });
 
-    const discoveryRequest = firstDiscoveryRequest();
-    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["bundled-demo"]);
-    expect(discoveryRequest?.includeUntrustedWorkspacePlugins).toBe(false);
-    expect(workspaceStaticCatalog).not.toHaveBeenCalled();
-    expect(rows).toStrictEqual([]);
+    expect(mocks.loadMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        workspaceDir: "/tmp/model-list-worker-workspace",
+      }),
+    );
+    expect(mocks.loadAuthStore).toHaveBeenCalledWith("/tmp/model-list-worker-agent", {
+      config: cfg,
+      externalCliProviderIds: ["moonshot"],
+    });
+    expect(mocks.resolveImplicitProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/model-list-worker-agent" }),
+    );
   });
 
-  it("keeps unknown provider filters eligible for early empty results", async () => {
-    providerDiscoveryMocks.resolveProviderOwners.mockReturnValueOnce([]);
+  it("keeps unfiltered runtime output on the lifecycle owner", async () => {
+    mocks.loadOwner.mockResolvedValue(
+      ownerSnapshot({
+        entries: [
+          { provider: "moonshot", id: "kimi-k2.6", name: "Kimi K2.6" },
+          { provider: "ollama", id: "local-model", name: "Local Model" },
+        ],
+        routeVariants: [],
+      }),
+    );
 
     await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg: baseParams.cfg,
-        env: baseParams.env,
-        providerFilter: "unknown-provider-for-catalog-test",
+      loadProviderCatalogModelsForList({
+        cfg: {},
+        agentDir: "/tmp/agent",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.not.toContainEqual(expect.objectContaining({ provider: "ollama" }));
+  });
+
+  it("keeps static provider-hook rows separate from runtime ownership", async () => {
+    mocks.loadOwner.mockResolvedValue(
+      ownerSnapshot({
+        entries: [{ provider: "moonshot", id: "kimi-runtime", name: "Kimi Runtime" }],
+        staticEntries: [{ provider: "nvidia", id: "nemotron-static", name: "Nemotron Static" }],
+        routeVariants: [],
+      }),
+    );
+
+    await expect(
+      hasProviderRuntimeCatalogForFilter({
+        cfg: {},
+        agentId: "worker",
+        agentDir: "/tmp/agent",
+        providerFilter: "nvidia",
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      hasProviderStaticCatalogForFilter({
+        cfg: {},
+        agentDir: "/tmp/agent",
+        providerFilter: "nvidia",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      hasProviderStaticCatalogForFilter({
+        cfg: {},
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      loadProviderCatalogModelsForList({
+        cfg: {},
+        agentDir: "/tmp/agent",
+        staticOnly: true,
+      }),
+    ).resolves.toEqual([{ provider: "nvidia", id: "nemotron-static", name: "Nemotron Static" }]);
+    expect(mocks.loadOwner).toHaveBeenCalledWith(expect.objectContaining({ readOnly: true }));
+  });
+
+  it("uses model-catalog manifest ownership without activating a prepared runtime", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/model-list-state" };
+    mocks.loadMetadata.mockReturnValue(metadataWithCatalogOwner("moonshot", "moonshot"));
+
+    await expect(
+      hasProviderRuntimeCatalogForFilter({
+        cfg: {},
+        agentId: "worker",
+        agentDir: "/tmp/agent",
+        env,
+        providerFilter: "moonshot",
+      }),
+    ).resolves.toBe(true);
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
+  });
+
+  it("does not treat generic provider ownership as runtime catalog ownership", async () => {
+    mocks.loadMetadata.mockReturnValue({
+      ...emptyMetadataSnapshot,
+      owners: {
+        ...emptyMetadataSnapshot.owners,
+        providers: new Map([["auth-only", ["auth-only"]]]),
+        cliBackends: new Map([["auth-only", ["auth-only"]]]),
+      },
+    });
+
+    await expect(
+      hasProviderRuntimeCatalogForFilter({
+        cfg: {},
+        agentDir: "/tmp/agent",
+        providerFilter: "auth-only",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("derives the matching directory for an explicit agent", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "worker", agentDir: "/tmp/model-list-worker-agent" }],
+      },
+    };
+    mocks.loadOwner.mockResolvedValue(
+      ownerSnapshot({
+        entries: [],
+        staticEntries: [{ provider: "nvidia", id: "worker-model", name: "Worker Model" }],
+        routeVariants: [],
+      }),
+    );
+
+    await expect(
+      hasProviderStaticCatalogForFilter({
+        cfg,
+        agentId: "worker",
+        providerFilter: "nvidia",
+      }),
+    ).resolves.toBe(true);
+    expect(mocks.loadOwner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "worker",
+        agentDir: "/tmp/model-list-worker-agent",
+      }),
+    );
+  });
+
+  it("resolves provider aliases without a caller-supplied metadata snapshot", async () => {
+    mocks.loadMetadata.mockReturnValue({
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "moonshot",
+            modelCatalog: {
+              aliases: { kimi: { provider: "moonshot" } },
+            },
+          },
+        ],
+      },
+    });
+    mocks.resolveImplicitProviders.mockResolvedValue({
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai",
+        api: "openai-completions",
+        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+      },
+    });
+
+    await loadProviderCatalogModelsForList({
+      cfg: {},
+      agentDir: "/tmp/agent",
+      providerFilter: "kimi",
+    });
+
+    expect(mocks.resolveImplicitProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ providerDiscoveryProviderIds: ["moonshot"] }),
+    );
+  });
+
+  it("matches provider aliases from the captured metadata generation", async () => {
+    const metadataSnapshot = {
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "moonshot",
+            modelCatalog: {
+              aliases: { kimi: { provider: "moonshot" } },
+            },
+          },
+        ],
+      },
+    } as never;
+    mocks.resolveImplicitProviders.mockResolvedValue({
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai",
+        api: "openai-completions",
+        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+      },
+    });
+
+    await expect(
+      loadProviderCatalogModelsForList({
+        cfg: {},
+        agentDir: "/tmp/agent",
+        providerFilter: "kimi",
+        metadataSnapshot,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ provider: "moonshot", id: "kimi-k2.6", name: "Kimi K2.6" }),
+    ]);
+    expect(mocks.resolveImplicitProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ providerDiscoveryProviderIds: ["moonshot"] }),
+    );
   });
 });

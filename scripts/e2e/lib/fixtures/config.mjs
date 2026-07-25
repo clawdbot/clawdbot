@@ -15,10 +15,10 @@ function writeConfig(kind) {
               mode: "token",
               token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
             },
-            channelHealthCheckMinutes: 1,
             controlUi: { enabled: false },
-            reload: { mode: "hybrid", debounceMs: 0 },
+            reload: { mode: "hybrid" },
           },
+          ui: { seamColor: "#ff4500" },
         }
       : kind === "browser-cdp"
         ? {
@@ -32,6 +32,8 @@ function writeConfig(kind) {
             },
             browser: {
               enabled: true,
+              noSandbox: true,
+              extraArgs: ["--remote-debugging-address=127.0.0.1", "about:blank"],
               defaultProfile: "docker-cdp",
               ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
               profiles: {
@@ -62,7 +64,7 @@ function writeOpenAiWebSearchMinimalConfig() {
       providers: {
         openai: {
           api: "openai-responses",
-          baseUrl: "http://api.openai.com/v1",
+          baseUrl: "https://api.openai.com/v1",
           apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           request: { allowPrivateNetwork: true },
           models: [

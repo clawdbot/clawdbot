@@ -1,13 +1,11 @@
 // Main interactive configure/update wizard implementation.
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
-import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import {
   createConfigIO,
@@ -19,14 +17,16 @@ import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { isPlainObject, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
+import { mergeWizardConfigOntoLatest } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -46,11 +46,14 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
   guardCancel,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -80,26 +83,6 @@ function validateGatewayPortInput(value: unknown): string | undefined {
 
 function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
   return setupPluginConfigModuleLoader.load();
-}
-
-function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
-  if (isDeepStrictEqual(next, base)) {
-    return current;
-  }
-  if (isPlainObject(current) && isPlainObject(base) && isPlainObject(next)) {
-    const merged: Record<string, unknown> = { ...current };
-    const keys = new Set([...Object.keys(current), ...Object.keys(base), ...Object.keys(next)]);
-    for (const key of keys) {
-      const mergedValue = mergeWizardConfigOntoLatest(current[key], base[key], next[key]);
-      if (mergedValue === undefined) {
-        delete merged[key];
-      } else {
-        merged[key] = mergedValue;
-      }
-    }
-    return merged;
-  }
-  return structuredClone(next);
 }
 
 async function resolveGatewaySecretInputForWizard(params: {
@@ -185,6 +168,7 @@ async function promptConfigureSection(
       initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
     }),
     runtime,
+    1,
   );
 }
 
@@ -207,6 +191,7 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
       initialValue: "configure",
     }),
     runtime,
+    1,
   ) as ChannelsWizardMode;
 }
 
@@ -229,7 +214,8 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a managed provider now, and Codex-capable models can also use native Codex web search.",
+      "Codex-capable models can use native Codex web search.",
+      "Other models use a separate web search provider, which you can configure here.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -237,10 +223,11 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search?",
+      message: "Enable the web_search tool?",
       initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
     }),
     runtime,
+    1,
   );
 
   let nextSearch: WebSearchConfig = {
@@ -256,12 +243,12 @@ async function promptWebToolsConfig(
     if (codexRelevant) {
       note(
         [
-          "Codex-capable models can optionally use native Codex web search.",
-          "Managed web_search still controls non-Codex models.",
-          "If no managed provider is configured, non-Codex models still rely on provider auto-detect and may have no search available.",
+          "Codex-capable models can use native Codex web search instead of a separate provider.",
+          "Other models need a separate web search provider.",
+          "If you do not choose one, OpenClaw can select a provider from available credentials; otherwise other models may not have web search.",
           ...(describeCodexNativeWebSearch(nextConfig)
             ? [describeCodexNativeWebSearch(nextConfig)!]
-            : ["Recommended mode: cached."]),
+            : []),
         ].join("\n"),
         "Codex native search",
       );
@@ -272,12 +259,13 @@ async function promptWebToolsConfig(
           initialValue: existingSearch?.openaiCodex?.enabled === true,
         }),
         runtime,
+        1,
       );
 
       if (enableCodexNative) {
         const codexMode = guardCancel(
           await select({
-            message: "Codex native web search mode",
+            message: "Native Codex web search mode",
             options: [
               {
                 value: "cached",
@@ -293,6 +281,7 @@ async function promptWebToolsConfig(
             initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
           }),
           runtime,
+          1,
         );
         nextSearch = {
           ...nextSearch,
@@ -304,10 +293,13 @@ async function promptWebToolsConfig(
         };
         configureManagedProvider = guardCancel(
           await confirm({
-            message: "Configure or change a managed web search provider now?",
+            message: existingSearch?.provider
+              ? `Change the separate web search provider (currently ${existingSearch.provider})?`
+              : "Also configure a separate web search provider for other models?",
             initialValue: Boolean(existingSearch?.provider),
           }),
           runtime,
+          1,
         );
       } else {
         nextSearch = {
@@ -356,12 +348,21 @@ async function promptWebToolsConfig(
     }
   }
 
+  note(
+    [
+      "`web_fetch` is a separate tool for reading a specific URL.",
+      "It does not require an API key and works independently of web search providers, including Codex.",
+    ].join("\n"),
+    "Web fetch",
+  );
+
   const enableFetch = guardCancel(
     await confirm({
-      message: "Enable web_fetch (keyless HTTP fetch)?",
+      message: "Enable the web_fetch tool?",
       initialValue: existingFetch?.enabled ?? true,
     }),
     runtime,
+    1,
   );
 
   const nextFetch = {
@@ -442,7 +443,7 @@ export async function runConfigureWizard(
       selectedSections.includes("daemon") ||
       selectedSections.includes("health");
     const promptGatewayRunMode = async (): Promise<OnboardMode> => {
-      const localUrl = "ws://127.0.0.1:18789";
+      const localUrl = `ws://127.0.0.1:${resolveGatewayPort(baseConfig)}`;
       const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
       const localProbePromise = (async () => {
         const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([
@@ -502,6 +503,7 @@ export async function runConfigureWizard(
           ],
         }),
         runtime,
+        1,
       );
     };
 
@@ -541,10 +543,8 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    let workspaceDir =
-      nextConfig.agents?.defaults?.workspace ??
-      baseConfig.agents?.defaults?.workspace ??
-      DEFAULT_WORKSPACE;
+    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
     const persistConfig = async () => {
@@ -585,11 +585,7 @@ export async function runConfigureWizard(
             const diskConfig = freshSnapshot.valid
               ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)
               : {};
-            nextConfig = mergeWizardConfigOntoLatest(
-              diskConfig,
-              mergeBaseConfig,
-              nextConfig,
-            ) as OpenClawConfig;
+            nextConfig = mergeWizardConfigOntoLatest(diskConfig, mergeBaseConfig, nextConfig);
             continue;
           }
           throw err;
@@ -604,6 +600,7 @@ export async function runConfigureWizard(
           initialValue: workspaceDir,
         }),
         runtime,
+        1,
       );
       workspaceDir = resolveUserPath(
         normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
@@ -634,17 +631,34 @@ export async function runConfigureWizard(
           );
         }
       }
-      nextConfig = {
-        ...nextConfig,
-        agents: {
-          ...nextConfig.agents,
-          defaults: {
-            ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
-          },
-        },
-      };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      const target = resolveSetupTarget();
+      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      nextConfig =
+        targetEntry?.workspace !== undefined
+          ? {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                entries: {
+                  ...nextConfig.agents?.entries,
+                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                },
+              },
+            }
+          : {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                defaults: {
+                  ...nextConfig.agents?.defaults,
+                  workspace: workspaceDir,
+                },
+              },
+            };
+    };
+
+    const provisionWorkspace = async () => {
+      await ensureOnboardingAgentWorkspace(resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
@@ -655,6 +669,7 @@ export async function runConfigureWizard(
       if (channelMode === "configure") {
         nextConfig = await setupChannels(nextConfig, runtime, prompter, {
           allowDisable: true,
+          allowIMessageInstall: true,
           allowSignalInstall: true,
           deferStatusUntilSelection: true,
           skipConfirm: true,
@@ -673,6 +688,7 @@ export async function runConfigureWizard(
           validate: validateGatewayPortInput,
         }),
         runtime,
+        1,
       );
       gatewayPort = parsePort(portInput) ?? gatewayPort;
     };
@@ -686,6 +702,7 @@ export async function runConfigureWizard(
 
       if (selected.includes("workspace")) {
         await configureWorkspace();
+        await provisionWorkspace();
       }
 
       if (selected.includes("model")) {
@@ -711,13 +728,17 @@ export async function runConfigureWizard(
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
-          workspaceDir: resolveUserPath(workspaceDir),
+          workspaceDir: resolveSetupTarget().workspaceDir,
         });
       }
 
       if (selected.includes("skills")) {
-        const wsDir = resolveUserPath(workspaceDir);
-        nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+        nextConfig = await setupSkills(
+          nextConfig,
+          resolveSetupTarget().workspaceDir,
+          runtime,
+          prompter,
+        );
       }
 
       await persistConfig();
@@ -746,6 +767,7 @@ export async function runConfigureWizard(
 
         if (choice === "workspace") {
           await configureWorkspace();
+          await provisionWorkspace();
           await persistConfig();
         }
 
@@ -777,14 +799,18 @@ export async function runConfigureWizard(
           nextConfig = await configurePluginConfig({
             config: nextConfig,
             prompter,
-            workspaceDir: resolveUserPath(workspaceDir),
+            workspaceDir: resolveSetupTarget().workspaceDir,
           });
           await persistConfig();
         }
 
         if (choice === "skills") {
-          const wsDir = resolveUserPath(workspaceDir);
-          nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+          nextConfig = await setupSkills(
+            nextConfig,
+            resolveSetupTarget().workspaceDir,
+            runtime,
+            prompter,
+          );
           await persistConfig();
         }
 
@@ -907,3 +933,4 @@ export async function runConfigureWizard(
     throw err;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

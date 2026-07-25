@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawAgentDatabasesForTest,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -18,7 +19,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
-import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import {
+  inspectPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+} from "./auth-profiles/sqlite.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -131,6 +135,41 @@ describe("auth profile sqlite store", () => {
     await withAgentDirEnv("openclaw-auth-sqlite-no-create-", (agentDir) => {
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
       expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+    });
+  });
+
+  it("treats a legacy agent database without auth tables as a missing store", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-legacy-schema-", (agentDir) => {
+      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      database.exec("CREATE TABLE legacy_state (id INTEGER PRIMARY KEY);");
+      database.close();
+
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({
+        status: "missing",
+        reason: "table",
+      });
+    });
+  });
+
+  it("rejects a newer agent database that has no current auth table", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-newer-schema-", (agentDir) => {
+      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+      database.close();
+
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({ status: "unreadable" });
+    });
+  });
+
+  it("treats a non-table auth schema object as unreadable", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-invalid-schema-", (agentDir) => {
+      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      database.exec(
+        "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
+      );
+      database.close();
+
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir)).toEqual({ status: "unreadable" });
     });
   });
 

@@ -13,6 +13,7 @@ import {
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
+import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -206,7 +207,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
-    await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    if (!drained) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚙️ Compaction unavailable: the previous run is still stopping.",
+          isStatusNotice: true,
+        },
+      };
+    }
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -217,7 +227,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       ? params.agentDir
       : resolveAgentDir(params.cfg, sessionAgentId);
   const customInstructions = extractCompactInstructions({
-    rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
+    rawBody: params.ctx.commandText,
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: sessionAgentId,
@@ -238,6 +248,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
+    clientCaps: params.ctx.GatewayClientCaps,
     groupId: targetSessionEntry.groupId,
     groupChannel: targetSessionEntry.groupChannel,
     groupSpace: targetSessionEntry.space,
@@ -246,6 +257,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
+    inputProvenance: params.ctx.InputProvenance,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       targetSessionEntry,
@@ -261,9 +273,19 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     provider: params.provider,
     model: params.model,
     authProfileId: targetSessionEntry.authProfileOverride,
+    authProfileIdSource:
+      targetSessionEntry.authProfileOverrideSource ??
+      (targetSessionEntry.authProfileOverride
+        ? typeof targetSessionEntry.authProfileOverrideCompactionCount === "number"
+          ? "auto"
+          : "user"
+        : undefined),
     contextTokenBudget,
     agentHarnessId:
-      targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
+      targetSessionEntry.modelSelectionLocked === true
+        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
+        : targetSessionEntry.agentHarnessId,
+    modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,

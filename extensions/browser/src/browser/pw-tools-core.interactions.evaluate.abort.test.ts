@@ -35,6 +35,16 @@ vi.mock("./pw-session.js", () => {
     markObservedDialogsHandledRemotelyForPage,
     refLocator,
     restoreRoleRefsForTarget,
+    wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
+    withPageNavigationRequestGuard: vi.fn(
+      async ({
+        action,
+        page: guardedPage,
+      }: {
+        action: (url: string) => Promise<unknown>;
+        page: { url: () => string };
+      }) => await action(guardedPage.url()),
+    ),
   };
 });
 
@@ -136,7 +146,8 @@ describe("evaluateViaPlaywright (abort)", () => {
     await expect(p).rejects.toThrow("blocked by dialog");
     expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
     resolveEval(true);
-    await Promise.resolve();
-    expect(markObservedDialogsHandledRemotelyForPage).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(markObservedDialogsHandledRemotelyForPage).toHaveBeenCalled();
+    });
   });
 });

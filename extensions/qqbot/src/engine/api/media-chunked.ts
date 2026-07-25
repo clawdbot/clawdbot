@@ -39,6 +39,8 @@ import type { FileHandle } from "node:fs/promises";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import pMap from "p-map";
 import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
 import { openLocalFile } from "../messaging/media-source.js";
 import {
@@ -285,10 +287,10 @@ export class ChunkedMediaApi {
         });
       };
 
-      await runWithConcurrency(
-        parts.map((part) => () => uploadPart(part)),
-        maxConcurrent,
-      );
+      await pMap(parts, uploadPart, {
+        concurrency: maxConcurrent,
+        stopOnError: true,
+      });
 
       this.logger?.info?.(`${prefix} all parts uploaded, completing...`);
 
@@ -577,10 +579,10 @@ async function putToPresignedUrl(
             PART_UPLOAD_ERROR_BODY_LIMIT_BYTES,
           ).catch(() => "");
           logger?.error?.(
-            `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
+            `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${truncateUtf16Safe(body, 160)}`,
           );
           throw new Error(
-            `COS PUT failed: ${response.status} ${response.statusText} - ${body.slice(0, 120)}`,
+            `COS PUT failed: ${response.status} ${response.statusText} - ${truncateUtf16Safe(body, 120)}`,
           );
         }
 
@@ -601,7 +603,7 @@ async function putToPresignedUrl(
       if (attempt < PART_UPLOAD_MAX_RETRIES) {
         const delay = 1000 * 2 ** attempt;
         (logger?.warn ?? logger?.error)?.(
-          `${prefix} PUT part ${partIndex}/${totalParts} attempt ${attempt + 1} failed (${lastError.message.slice(0, 120)}), retrying in ${delay}ms`,
+          `${prefix} PUT part ${partIndex}/${totalParts} attempt ${attempt + 1} failed (${truncateUtf16Safe(lastError.message, 120)}), retrying in ${delay}ms`,
         );
         await sleep(delay);
       }
@@ -611,24 +613,4 @@ async function putToPresignedUrl(
   }
 
   throw lastError ?? new Error(`Part ${partIndex}/${totalParts} upload failed`);
-}
-
-// ============ Concurrency ============
-
-/**
- * Batch-mode concurrency limiter. Deliberately simple: dispatch N tasks at
- * a time and wait for the whole batch to settle before the next batch.
- *
- * A pool / queue implementation would recover some throughput when tasks
- * have heavy variance, but part uploads are size-uniform (last part can be
- * short) so the extra complexity is not worth it.
- */
-async function runWithConcurrency(
-  tasks: Array<() => Promise<void>>,
-  maxConcurrent: number,
-): Promise<void> {
-  for (let i = 0; i < tasks.length; i += maxConcurrent) {
-    const batch = tasks.slice(i, i + maxConcurrent);
-    await Promise.all(batch.map((task) => task()));
-  }
 }

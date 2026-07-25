@@ -15,13 +15,15 @@ let package = Package(
         .executable(name: "openclaw-mac", targets: ["OpenClawMacCLI"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.0.1"),
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
-        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.5.2"),
+        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.9.6"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
         .package(path: "../shared/OpenClawKit"),
+        .package(path: "../shared/OpenClawMLXTTSProtocol"),
         .package(path: "../swabble"),
     ],
     targets: [
@@ -45,8 +47,10 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),
+                .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
@@ -56,6 +60,7 @@ let package = Package(
                 .product(name: "PeekabooBridge", package: "Peekaboo"),
                 .product(name: "PeekabooAutomationKit", package: "Peekaboo"),
                 .product(name: "ConcurrencyExtras", package: "swift-concurrency-extras"),
+                .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
             ],
             exclude: [
                 "Resources/Info.plist",
@@ -64,6 +69,7 @@ let package = Package(
             resources: [
                 .copy("Resources/OpenClaw.icns"),
                 .copy("Resources/DeviceModels"),
+                .copy("Resources/ProviderIcons"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
@@ -86,6 +92,9 @@ let package = Package(
                 "OpenClaw",
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawChatUI", package: "OpenClawKit"),
+                .product(name: "OpenClawKit", package: "OpenClawKit"),
+                .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
             ],

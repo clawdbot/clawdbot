@@ -47,7 +47,7 @@ export const ParallelSearchSchema = {
     client_model: {
       type: "string",
       description:
-        "The identifier of the LLM model making this tool call (e.g. 'claude-opus-4-7', 'gpt-5.5', 'gemini-3.1-pro'). Pass the exact active model slug verbatim; never shorten or substitute a family alias like 'gpt-5'. Lets Parallel tailor default settings for your model's capabilities.",
+        "The identifier of the LLM model making this tool call (e.g. 'claude-opus-4-7', 'gpt-5.6-sol', 'gemini-3.1-pro'). Pass the exact active model slug verbatim; never shorten or substitute a family alias like 'gpt-5'. Lets Parallel tailor default settings for your model's capabilities.",
       maxLength: PARALLEL_MAX_CLIENT_MODEL_CHARS,
     },
   },

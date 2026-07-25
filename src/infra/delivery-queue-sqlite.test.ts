@@ -1,10 +1,13 @@
 // Validates SQLite delivery queue inflate guards against corrupted entry_json.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
+  completeDeliveryQueueEntry,
+  countFailedDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
+  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -158,5 +161,163 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       deleteDeliveryQueueEntry(QUEUE, "rt-3", stateDir);
       expect(loadDeliveryQueueEntry(QUEUE, "rt-3", stateDir)).toBeNull();
     });
+
+    it("complete retains an idempotency tombstone outside pending reads", () => {
+      upsertDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id: "rt-expired-completed",
+          enqueuedAt: Date.now() - 31 * 24 * 60 * 60_000,
+          retryCount: 0,
+        },
+        status: "completed",
+        stateDir,
+      });
+      upsertDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id: "rt-completed",
+          enqueuedAt: 1000,
+          retryCount: 3,
+          lastError: "must not persist",
+        },
+        metadata: {
+          sessionKey: "agent:main:main",
+          channel: "discord",
+          target: "channel:123",
+          accountId: "default",
+        },
+        stateDir,
+      });
+
+      completeDeliveryQueueEntry(QUEUE, "rt-completed", stateDir);
+
+      expect(loadDeliveryQueueEntry(QUEUE, "rt-completed", stateDir)).toBeNull();
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-completed", stateDir)).toBe("completed");
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-expired-completed", stateDir)).toBeUndefined();
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const row = db
+        .prepare(
+          `SELECT entry_json, session_key, channel, target, account_id, retry_count, last_error
+             FROM delivery_queue_entries
+            WHERE queue_name = ? AND id = ?`,
+        )
+        .get(QUEUE, "rt-completed") as Record<string, unknown>;
+      expect(JSON.parse(String(row.entry_json))).toEqual({
+        id: "rt-completed",
+        enqueuedAt: expect.any(Number),
+        retryCount: 0,
+        acknowledgedAt: expect.any(Number),
+      });
+      expect(row).toMatchObject({
+        session_key: null,
+        channel: null,
+        target: null,
+        account_id: null,
+        retry_count: 0,
+        last_error: null,
+      });
+    });
+
+    it("never prunes a permanent producer receipt", () => {
+      upsertDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id: "rt-permanent",
+          enqueuedAt: 1,
+          retryCount: 0,
+          completionRetention: "permanent",
+        },
+        stateDir,
+      });
+      completeDeliveryQueueEntry(QUEUE, "rt-permanent", stateDir);
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      db.prepare(
+        `UPDATE delivery_queue_entries
+            SET enqueued_at = ?
+          WHERE queue_name = ? AND id = ?`,
+      ).run(Date.now() - 31 * 24 * 60 * 60_000, QUEUE, "rt-permanent");
+
+      enqueueValid("rt-prune-trigger");
+      completeDeliveryQueueEntry(QUEUE, "rt-prune-trigger", stateDir);
+
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-permanent", stateDir)).toBe("completed");
+      const row = db
+        .prepare(
+          `SELECT recovery_state, entry_json
+             FROM delivery_queue_entries
+            WHERE queue_name = ? AND id = ?`,
+        )
+        .get(QUEUE, "rt-permanent") as Record<string, unknown>;
+      expect(row.recovery_state).toBe("completed_permanent");
+      expect(JSON.parse(String(row.entry_json))).toMatchObject({
+        completionRetention: "permanent",
+        recoveryState: "completed_permanent",
+      });
+    });
+  });
+});
+
+describe("countFailedDeliveryQueueEntries", () => {
+  let tmpDir: string;
+  let stateDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-count-"));
+    stateDir = path.join(tmpDir, "state");
+    fs.mkdirSync(stateDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function enqueue(queueName: string, id: string, enqueuedAt: number) {
+    upsertDeliveryQueueEntry({
+      queueName,
+      entry: { id, enqueuedAt, retryCount: 0 },
+      stateDir,
+    });
+  }
+
+  it("returns an empty list when nothing is dead-lettered", () => {
+    enqueue("outbound", "pending-1", 1_000);
+
+    expect(countFailedDeliveryQueueEntries(stateDir)).toEqual([]);
+  });
+
+  it("counts dead-lettered entries per queue with the oldest failure timestamp", () => {
+    enqueue("outbound", "dead-1", 1_000);
+    enqueue("outbound", "dead-2", 2_000);
+    enqueue("outbound", "still-pending", 3_000);
+    enqueue("session", "dead-3", 4_000);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(50_000);
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1", stateDir);
+      vi.setSystemTime(60_000);
+      moveDeliveryQueueEntryToFailed("outbound", "dead-2", stateDir);
+      vi.setSystemTime(70_000);
+      moveDeliveryQueueEntryToFailed("session", "dead-3", stateDir);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const counts = countFailedDeliveryQueueEntries(stateDir);
+
+    expect(counts).toHaveLength(2);
+    const outbound = counts.find((queue) => queue.queueName === "outbound");
+    expect(outbound?.count).toBe(2);
+    expect(outbound?.oldestFailedAt).toBe(50_000);
+    const session = counts.find((queue) => queue.queueName === "session");
+    expect(session?.count).toBe(1);
+    expect(session?.oldestFailedAt).toBe(70_000);
+    expect(loadDeliveryQueueEntries("outbound", stateDir).map((entry) => entry.id)).toEqual([
+      "still-pending",
+    ]);
   });
 });

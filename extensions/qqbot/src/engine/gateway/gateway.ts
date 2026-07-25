@@ -1,13 +1,14 @@
 // Qqbot plugin module implements gateway behavior.
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   classifyCoreCommandForGroup,
   PRIVATE_CHAT_ONLY_TEXT,
 } from "../commands/command-visibility.js";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
-import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
+import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
 import {
   clearTokenCache,
@@ -61,7 +62,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   onMessageSent(account.appId, (refIdx, meta) => {
     log?.info(
-      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText?.slice(0, 30)}`,
+      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText === undefined ? undefined : truncateUtf16Safe(meta.ttsText, 30)}`,
     );
     const attachments: RefAttachmentSummary[] = [];
     if (meta.mediaType) {
@@ -94,22 +95,21 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     allowTextCommands: ctx.group?.allowTextCommands,
     isControlCommand: ctx.group?.isControlCommand,
     resolveIntroHint: ctx.group?.resolveIntroHint,
-    sessionStoreReader: ctx.group?.sessionStoreReader,
   };
   const groupChatEnabled = groupOpts.enabled;
   const groupHistories: Map<string, HistoryEntry[]> | undefined = groupChatEnabled
     ? new Map()
     : undefined;
-  const sessionStoreReader = groupChatEnabled
-    ? (groupOpts.sessionStoreReader ?? createNodeSessionStoreReader())
-    : undefined;
-
   // Live config provider: per-inbound lookup so binding edits applied
   // through the CLI take effect without a gateway restart (#69546).
   const activeCfgProvider = createActiveCfgProvider({ fallback: ctx.cfg });
 
   // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
+    if (event.turnAdoptionLifecycle?.abortSignal.aborted) {
+      await event.turnAdoptionLifecycle.onAbandoned();
+      return;
+    }
     log?.info(`Processing message from ${event.senderId}: ${event.content}`, {
       accountId: account.accountId,
       messageId: event.messageId,
@@ -133,7 +133,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       runtime,
       startTyping: (ev) => startTypingForEvent(ev, account, log),
       groupHistories,
-      sessionStoreReader,
       allowTextCommands: groupOpts.allowTextCommands,
       isControlCommand: groupOpts.isControlCommand,
       resolveGroupIntroHint: groupOpts.resolveIntroHint,
@@ -147,6 +146,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         blockReason: inbound.blockReason,
       });
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -168,6 +168,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
           },
         );
         inbound.typing.keepAlive?.stop();
+        await event.turnAdoptionLifecycle?.onAdopted();
         return;
       }
       log?.info(
@@ -180,6 +181,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         },
       );
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -217,6 +219,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         },
       );
       inbound.typing.keepAlive?.stop();
+      await event.turnAdoptionLifecycle?.onAdopted();
       return;
     }
 
@@ -232,6 +235,9 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (event.turnAdoptionLifecycle) {
+        throw err;
+      }
     } finally {
       inbound.typing.keepAlive?.stop();
       if (event.type === "group" && event.groupOpenid && inbound.group) {
@@ -260,6 +266,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     onReady: ctx.onReady,
     onResumed: ctx.onResumed,
     onError: ctx.onError,
+    onDisconnected: ctx.onDisconnected,
     onInteraction: handleInteraction,
     handleMessage,
   });
@@ -286,6 +293,13 @@ async function startTypingForEvent(
     const creds = accountToCreds(account);
     const rawNotifyFn = createRawInputNotifyFn(account.appId);
     const sendNotifyAndStartKeepAlive = async () => {
+      // Typing and text share QQ's five passive calls. Keep one slot for the
+      // final reply. The claim stays inside this retried closure so each wire
+      // attempt consumes its own slot.
+      const passive = claimMessageReply(event.messageId, 1);
+      if (!passive.allowed) {
+        return { keepAlive: null };
+      }
       const resp = await senderSendInputNotify({
         openid: event.senderId,
         creds,

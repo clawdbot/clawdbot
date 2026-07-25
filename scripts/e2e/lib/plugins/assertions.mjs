@@ -844,11 +844,7 @@ async function assertClawHubPreflight() {
     process.env.CLAWHUB_URL ||
     "https://clawhub.ai"
   ).replace(/\/+$/, "");
-  const token =
-    process.env.OPENCLAW_CLAWHUB_TOKEN ||
-    process.env.CLAWHUB_TOKEN ||
-    process.env.CLAWHUB_AUTH_TOKEN ||
-    "";
+  const token = process.env.CLAWHUB_TOKEN || process.env.CLAWHUB_AUTH_TOKEN || "";
   const preflightUrl = `${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`;
   const response = await withTimeout(
     `ClawHub package preflight for ${packageName}`,

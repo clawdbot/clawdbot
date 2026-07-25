@@ -1,7 +1,7 @@
 // Control UI tests cover mount fallback behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const indexHtmlPath = path.resolve(
   process.cwd(),
@@ -31,6 +31,20 @@ function createIsolatedWindow(): TestWindow {
     throw new Error("failed to create isolated frame window");
   }
   return frameWindow;
+}
+
+function installStartupPaintShell(window: TestWindow, html: string): void {
+  const parsed = new window.DOMParser().parseFromString(html, "text/html");
+  window.document.head.innerHTML = parsed.head.innerHTML;
+  window.document.body.innerHTML = parsed.body.innerHTML;
+
+  const startupScript = Array.from(
+    parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
+  ).find((script) => script.textContent?.includes("var THEMES = { claw: 1, knot: 1, dash: 1 }"));
+  if (!startupScript?.textContent) {
+    throw new Error("Expected inline startup theme script in index.html");
+  }
+  window.eval(startupScript.textContent);
 }
 
 function installFallbackShell(window: TestWindow, html: string): void {
@@ -64,6 +78,28 @@ describe("Control UI mount fallback", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
+
+  it.each([
+    ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
+    ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
+    ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
+  ])(
+    "paints %s before the app stylesheet loads",
+    async (_name, settings, expectedTheme, expectedBackground) => {
+      const frameWindow = createIsolatedWindow();
+      frameWindow.localStorage.clear();
+      frameWindow.localStorage.setItem("openclaw.control.settings.v1", JSON.stringify(settings));
+      installStartupPaintShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+      expect(frameWindow.document.documentElement.dataset.theme).toBe(expectedTheme);
+      expect(
+        frameWindow.getComputedStyle(frameWindow.document.documentElement).backgroundColor,
+      ).toBe(expectedBackground);
+      expect(frameWindow.getComputedStyle(frameWindow.document.body).backgroundColor).toBe(
+        expectedBackground,
+      );
+    },
+  );
 
   it("shows the static troubleshooting panel when the app element is never registered", async () => {
     const frameWindow = createIsolatedWindow();
@@ -114,5 +150,68 @@ describe("Control UI mount fallback", () => {
     );
     expect(fallback.hidden).toBe(true);
     expect([...frameWindow.document.body.classList]).toEqual([]);
+  });
+
+  it("probes a cache-busted current document when the original bundle did not start", async () => {
+    const frameWindow = createIsolatedWindow();
+    const html = await readIndexHtmlWithDelay(1);
+    const fetch = vi.fn().mockResolvedValue({ ok: false });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, html);
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("openclaw_mount_recovery="),
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: expect.any(frameWindow.AbortSignal),
+      }),
+    );
+  });
+
+  it("times out stalled recovery probes so automatic retries can continue", async () => {
+    const frameWindow = createIsolatedWindow();
+    const signals: AbortSignal[] = [];
+    const fetch = vi.fn((_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!(signal instanceof frameWindow.AbortSignal)) {
+        throw new Error("Expected recovery probe to include an abort signal");
+      }
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("request aborted")), {
+          once: true,
+        });
+      });
+    });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+
+    expect(signals).toHaveLength(6);
+    await vi.waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
+  });
+
+  it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
+    const frameWindow = createIsolatedWindow();
+    const fetch = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    await waitForWindowTimeout(frameWindow, 10);
+
+    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(
+      requireElementById(
+        frameWindow,
+        "openclaw-mount-fallback-summary",
+        frameWindow.HTMLParagraphElement,
+      ).textContent,
+    ).toContain("gateway is still unavailable");
   });
 });

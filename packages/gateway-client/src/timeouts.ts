@@ -8,10 +8,28 @@ function parseStrictPositiveInteger(value: string): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function isTestRuntimeEnv(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.VITEST === "true" ||
+    env.VITEST === "1" ||
+    env.VITEST_POOL_ID !== undefined ||
+    env.VITEST_WORKER_ID !== undefined ||
+    env.NODE_ENV === "test" ||
+    (env !== process.env &&
+      (process.env.VITEST === "true" ||
+        process.env.VITEST === "1" ||
+        process.env.VITEST_POOL_ID !== undefined ||
+        process.env.VITEST_WORKER_ID !== undefined ||
+        process.env.NODE_ENV === "test"))
+  );
+}
+
 /** Maximum delay Node timers can represent without overflow warnings. */
 export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 /** Default server-side window for gateway preauth handshakes. */
 export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15_000;
+/** Default deadline for a single non-streaming Gateway request. */
+export const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 30_000;
 /** Minimum client watchdog delay for connect challenge setup. */
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
 /** Default maximum client watchdog delay, aligned with the preauth server timeout. */
@@ -111,19 +129,6 @@ export function resolveConnectChallengeTimeoutMs(
   return clampConnectChallengeTimeoutMs(configuredPreauthTimeoutMs, maxTimeoutMs);
 }
 
-/** Reads the preauth handshake timeout override from environment variables. */
-export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
-  const configuredTimeout =
-    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
-  if (configuredTimeout) {
-    const parsed = parseStrictPositiveInteger(configuredTimeout);
-    if (parsed !== undefined) {
-      return resolveSafeTimeoutDelayMs(parsed);
-    }
-  }
-  return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
-}
-
 /** Resolves the server preauth timeout from env, explicit config, or default. */
 export function resolvePreauthHandshakeTimeoutMs(params?: {
   env?: NodeJS.ProcessEnv;
@@ -131,7 +136,8 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
 }): number {
   const env = params?.env ?? process.env;
   const configuredTimeout =
-    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
+    (isTestRuntimeEnv(env) ? env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS : undefined);
   if (configuredTimeout) {
     const parsed = parseStrictPositiveInteger(configuredTimeout);
     if (parsed !== undefined) {

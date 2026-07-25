@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { formatSlackError } from "./errors.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import type { SlackEventScope } from "./monitor/event-scope.js";
 import type { SlackSendIdentity } from "./send.js";
 import { sendMessageSlack } from "./send.js";
 
@@ -23,7 +24,7 @@ type SlackDraftStream = {
   channelId: () => string | undefined;
 };
 
-export type SlackDraftStreamUpdate =
+type SlackDraftStreamUpdate =
   | string
   | {
       text: string;
@@ -35,6 +36,7 @@ export function createSlackDraftStream(params: {
   cfg: OpenClawConfig;
   token: string;
   accountId?: string;
+  eventScope?: SlackEventScope;
   identity?: SlackSendIdentity;
   maxChars?: number;
   throttleMs?: number;
@@ -88,6 +90,7 @@ export function createSlackDraftStream(params: {
           cfg: params.cfg,
           token: params.token,
           accountId: params.accountId,
+          ...(params.eventScope ? { client: params.eventScope.client } : {}),
           ...(blocks ? { blocks } : {}),
         });
         return;
@@ -98,6 +101,9 @@ export function createSlackDraftStream(params: {
         accountId: params.accountId,
         threadTs: params.resolveThreadTs?.(),
         identity: params.identity,
+        ...(params.eventScope
+          ? { client: params.eventScope.client, enterpriseEventScope: params.eventScope }
+          : {}),
         ...(params.metadata ? { metadata: params.metadata } : {}),
         ...(blocks ? { blocks } : {}),
       });
@@ -145,6 +151,7 @@ export function createSlackDraftStream(params: {
       await remove(channelId, messageId, {
         token: params.token,
         accountId: params.accountId,
+        ...(params.eventScope ? { client: params.eventScope.client } : {}),
       });
     } catch (err) {
       params.warn?.(`slack stream preview cleanup failed: ${formatSlackError(err)}`);

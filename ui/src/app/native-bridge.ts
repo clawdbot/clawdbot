@@ -5,10 +5,6 @@ type WebView2Bridge = {
   removeEventListener(type: "message", listener: (event: MessageEvent) => void): void;
 };
 
-export type NativeBridgeMessage =
-  | { type: "draft-text"; payload: { text: string } }
-  | { type: "ready"; payload?: Record<string, unknown> };
-
 export type NativeChatDrafts = {
   subscribe: (listener: (draft: string) => void) => () => void;
   dispose: () => void;
@@ -19,12 +15,9 @@ function getWebview(): WebView2Bridge | undefined {
   return webview;
 }
 
-export function isWebView2(): boolean {
-  return getWebview() !== undefined;
-}
-
-export function sendToNative(msg: NativeBridgeMessage): void {
-  getWebview()?.postMessage(msg);
+// Keep WebView2 messaging distinct from the DOM Window.postMessage contract.
+function sendToNative(message: unknown): void {
+  getWebview()?.postMessage(message);
 }
 
 function readNativeDraft(raw: unknown): string | null {

@@ -7,6 +7,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 function currentLocalDate(): string {
@@ -25,54 +26,62 @@ function errorMessage(error: unknown): string {
 }
 
 async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRouteData> {
-  const gateway = context.gateway.snapshot;
+  const gateway = context.gateway;
+  const gatewaySnapshot = gateway.snapshot;
   const startDate = currentLocalDate();
   const query: UsageRouteData["query"] = {
     startDate,
     endDate: startDate,
     scope: "family",
     timeZone: "local",
-    agentId: null,
+    agentId: context.agentSelection.state.scopeId,
   };
-  if (!gateway.connected || !gateway.client) {
+  if (gatewaySnapshot.phase !== "connected" || !gatewaySnapshot.client) {
     return {
-      client: gateway.client,
-      connected: gateway.connected,
+      gateway,
+      gatewaySnapshot,
       query,
       result: null,
       costSummary: null,
+      providerUsageSummary: null,
+      loadedAtMs: null,
       error: null,
     };
   }
 
   try {
-    const [result, costSummary] = await Promise.all([
-      requestSessionUsage(gateway.client, {
+    const [result, costSummary, providerUsageSummary] = await Promise.all([
+      requestSessionUsage(gatewaySnapshot.client, {
         ...query,
         agentId: query.agentId ?? undefined,
       }),
-      gateway.client.request<CostUsageSummary>("usage.cost", {
+      gatewaySnapshot.client.request<CostUsageSummary>("usage.cost", {
         startDate: query.startDate,
         endDate: query.endDate,
-        agentScope: "all",
+        ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" as const }),
         ...buildSessionUsageDateParams(query.timeZone),
       }),
+      gatewaySnapshot.client.request<ProviderUsageSummary>("usage.status").catch(() => null),
     ]);
     return {
-      client: gateway.client,
-      connected: true,
+      gateway,
+      gatewaySnapshot,
       query,
       result,
       costSummary,
+      providerUsageSummary,
+      loadedAtMs: Date.now(),
       error: null,
     };
   } catch (error) {
     return {
-      client: gateway.client,
-      connected: true,
+      gateway,
+      gatewaySnapshot,
       query,
       result: null,
       costSummary: null,
+      providerUsageSummary: null,
+      loadedAtMs: null,
       error: errorMessage(error),
     };
   }

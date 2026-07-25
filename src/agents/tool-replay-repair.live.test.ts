@@ -1,5 +1,7 @@
 // Live tool replay repair tests validate repaired historical transcripts across
 // selected real model providers.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -24,7 +26,7 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const DEFAULT_TARGET_MODEL_REFS = "openai/gpt-5.5,google/gemini-3-flash-preview";
+const DEFAULT_TARGET_MODEL_REFS = "openai/gpt-5.6-luna,google/gemini-3-flash-preview";
 const TARGET_MODEL_REFS = parseTargetModelRefs(
   process.env.OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS ?? DEFAULT_TARGET_MODEL_REFS,
 );
@@ -300,7 +302,7 @@ describeLive("tool replay repair live", () => {
           "toolResult",
           "user",
         ]);
-        const assistantMessage = sanitized[1];
+        const assistantMessage = expectDefined(sanitized[1], "sanitized[1] test invariant");
         expect(assistantMessage?.role).toBe("assistant");
         expect(
           sanitized.slice(2, 5).map((message) => (message as { toolCallId?: string }).toolCallId),

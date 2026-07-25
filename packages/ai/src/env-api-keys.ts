@@ -89,8 +89,11 @@ function getProcEnv(key: string): string | undefined {
   if (procEnvCache === null) {
     procEnvCache = new Map();
     try {
-      const { readFileSync } = require("node:fs") as typeof import("node:fs");
-      const data = readFileSync("/proc/self/environ", "utf-8");
+      const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
+      if (!fsModule) {
+        return undefined;
+      }
+      const data = fsModule.readFileSync("/proc/self/environ", "utf-8");
       for (const entry of data.split("\0")) {
         const idx = entry.indexOf("=");
         if (idx > 0) {
@@ -106,7 +109,7 @@ function getProcEnv(key: string): string | undefined {
 }
 
 function getEnvValue(key: string): string | undefined {
-  return getProcessEnv()?.[key] || getProcEnv(key);
+  return (getProcessEnv()?.[key] || getProcEnv(key))?.trim() || undefined;
 }
 
 let cachedVertexAdcCredentialsExists: true | null = null;
@@ -163,6 +166,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
 
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
+    meta: "MODEL_API_KEY",
     "azure-openai-responses": "AZURE_OPENAI_API_KEY",
     deepseek: "DEEPSEEK_API_KEY",
     google: "GEMINI_API_KEY",

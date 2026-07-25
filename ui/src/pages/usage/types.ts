@@ -1,6 +1,8 @@
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 // Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
+  ProviderUsageSummary,
   SessionsUsageEntry,
   SessionsUsageResult,
   SessionsUsageTotals,
@@ -22,9 +24,20 @@ export type UsageColumnId =
   | "errors"
   | "duration";
 
+export const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
+  "channel",
+  "agent",
+  "provider",
+  "model",
+  "messages",
+  "tools",
+  "errors",
+  "duration",
+];
+
 export type TimeSeriesPoint = SessionUsageTimePoint;
 
-export type UsageDataState = {
+type UsageDataState = {
   loading: boolean;
   error: string | null;
   sessions: UsageSessionEntry[];
@@ -34,6 +47,7 @@ export type UsageDataState = {
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
   cacheStatus: SessionsUsageResult["cacheStatus"];
+  providerUsage: ProviderUsageSummary["providers"];
 };
 
 export type UsageFilterState = {
@@ -49,7 +63,7 @@ export type UsageFilterState = {
   timeZone: "local" | "utc";
 };
 
-export type UsageDisplayState = {
+type UsageDisplayState = {
   chartMode: "tokens" | "cost";
   dailyChartMode: "total" | "by-type";
   sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
@@ -61,15 +75,17 @@ export type UsageDisplayState = {
   headerPinned: boolean;
 };
 
-export type UsageDetailState = {
+type UsageDetailState = {
   timeSeriesMode: "cumulative" | "per-turn";
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
   timeSeriesLoading: boolean;
+  timeSeriesStatus: PanelRefreshStatus;
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
   timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
   sessionLogs: SessionLogEntry[] | null;
   sessionLogsLoading: boolean;
+  sessionLogsStatus: PanelRefreshStatus;
   sessionLogsExpanded: boolean;
   logFilters: {
     roles: SessionLogRole[];
@@ -79,7 +95,7 @@ export type UsageDetailState = {
   };
 };
 
-export type UsageCallbacks = {
+type UsageCallbacks = {
   filters: {
     onStartDateChange: (date: string) => void;
     onEndDateChange: (date: string) => void;
@@ -118,6 +134,8 @@ export type UsageCallbacks = {
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
+    onRetryTimeSeries: () => void;
+    onRetrySessionLogs: () => void;
   };
 };
 

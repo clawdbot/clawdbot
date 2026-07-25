@@ -4,10 +4,11 @@
  * ordering.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeSurrogates } from "./sanitize-unicode.js";
 
 /** Normalize structured prompt text before hashing or snapshot comparison. */
 export function normalizeStructuredPromptSection(text: string): string {
-  return text
+  return sanitizeSurrogates(text)
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]+$/gm, "")
     .trim();

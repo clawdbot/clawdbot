@@ -2,18 +2,22 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
   pluginSdkEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+let ts;
+
 function usage() {
   return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
 
@@ -25,7 +29,7 @@ Options:
 `;
 }
 
-function parseArgs(argv) {
+function parsePluginSdkSurfaceReportArgs(argv) {
   const args = { check: false, help: false };
   for (const arg of argv) {
     if (arg === "--check") {
@@ -40,28 +44,15 @@ function parseArgs(argv) {
   }
   return args;
 }
-
-let cliArgs;
-try {
-  cliArgs = parseArgs(process.argv.slice(2));
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
-if (cliArgs.help) {
-  process.stdout.write(usage());
-  process.exit(0);
-}
-
-const checkOnly = cliArgs.check;
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
+const packagedPrivateRuntimeEntrypointSet = new Set(packagedPrivatePluginSdkRuntimeEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-function readBudgetEnv(name, fallback) {
-  const raw = process.env[name];
+function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
+  const raw = env[name];
   if (raw === undefined) {
     return fallback;
   }
@@ -76,8 +67,8 @@ function readBudgetEnv(name, fallback) {
   return parsed;
 }
 
-function readEntrypointBudgetEnv(name, fallback) {
-  const raw = process.env[name];
+function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
+  const raw = env[name];
   if (raw === undefined) {
     return fallback;
   }
@@ -103,123 +94,139 @@ function readEntrypointBudgetEnv(name, fallback) {
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
-  health: 1,
-  lmstudio: 1,
-  "provider-setup": 1,
-  "self-hosted-provider-setup": 14,
   routing: 1,
-  runtime: 3,
-  "runtime-logger": 3,
-  "runtime-secret-resolution": 5,
-  "setup-adapter-runtime": 1,
-  "channel-streaming": 48,
-  "approval-reply-runtime": 1,
-  "config-runtime": 123,
-  "config-contracts": 1,
-  "config-types": 421,
-  "config-schema": 3,
-  "reply-dedupe": 1,
-  "inbound-reply-dispatch": 33,
+  health: 0,
+  "channel-streaming": 54,
+  "approval-gateway-runtime": 1,
+  "approval-handler-runtime": 1,
+  "approval-reply-runtime": 0,
+  "config-runtime": 115,
+  "config-contracts": 0,
+  "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
-  "channel-reply-options-runtime": 2,
-  "channel-runtime": 144,
-  "interactive-runtime": 13,
-  "outbound-send-deps": 4,
-  "outbound-runtime": 16,
-  "file-access-runtime": 2,
-  "infra-runtime": 585,
+  "interactive-runtime": 11,
+  // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+  "infra-runtime": 596,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
-  "media-runtime": 2,
+  // +1: deprecated agent media projection re-export during the media migration window.
+  "media-runtime": 3,
+  // +3: deprecated media projection type, builder, and local-roots compatibility re-export.
+  "agent-media-payload": 3,
+  // +2: deprecated media projection type and builder.
+  "reply-payload": 2,
   "text-runtime": 191,
-  "agent-runtime": 7,
-  "plugin-runtime": 13,
+  "agent-runtime": 2,
   "channel-secret-runtime": 23,
-  "secret-file-runtime": 1,
-  "security-runtime": 7,
-  "agent-harness": 7,
-  "agent-harness-runtime": 11,
-  types: 6,
+  "agent-harness-runtime": 4,
   "agent-config-primitives": 2,
-  "command-auth": 81,
-  compat: 152,
-  "direct-dm": 9,
-  "direct-dm-access": 5,
-  discord: 48,
-  mattermost: 7,
+  "command-auth": 78,
+  discord: 47,
   matrix: 1,
-  "channel-config-schema-legacy": 22,
-  "channel-actions": 2,
-  "channel-envelope": 3,
-  "channel-inbound": 21,
-  "channel-inbound-roots": 1,
+  // +4: deprecated media projection type, builder, and turn aliases.
+  "channel-inbound": 18,
   "channel-logging": 4,
-  "channel-location": 4,
-  "channel-mention-gating": 7,
   "channel-lifecycle": 23,
-  "channel-ingress": 8,
-  "channel-message": 229,
-  "channel-message-runtime": 226,
-  "channel-pairing-paths": 1,
-  "channel-policy": 8,
-  "channel-route": 5,
-  "session-store-runtime": 1,
-  "session-transcript-runtime": 2,
+  "channel-message": 129,
+  "channel-pairing": 0,
+  "channel-policy": 7,
+  "channel-send-result": 1,
+  "session-store-runtime": 4,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "group-access": 13,
-  "media-generation-runtime-shared": 3,
-  "music-generation-core": 20,
-  "reply-history": 8,
+  "reply-history": 6,
   "messaging-targets": 12,
-  "memory-core": 45,
-  "memory-core-engine-runtime": 15,
-  "memory-core-host-multimodal": 3,
-  "memory-core-host-query": 2,
-  "memory-core-host-events": 12,
-  "memory-core-host-status": 1,
-  "memory-core-host-runtime-core": 1,
-  "memory-host-core": 1,
-  "memory-host-files": 7,
-  "memory-host-status": 72,
-  "provider-auth": 20,
-  "provider-oauth-runtime": 2,
-  "provider-auth-login": 3,
-  "provider-model-shared": 29,
-  "provider-stream-family": 40,
-  "provider-stream-shared": 29,
-  "provider-stream": 40,
-  "provider-web-search": 1,
-  "provider-zai-endpoint": 3,
+  "provider-auth": 19,
   "telegram-account": 3,
-  "telegram-command-config": 7,
-  "webhook-ingress": 2,
-  "webhook-path": 2,
-  zalouser: 5,
   zod: 282,
 });
 
-let budgets;
-let publicDeprecatedExportsByEntrypointBudget;
-try {
-  budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 324),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10429),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5206),
-    publicDeprecatedExports: readBudgetEnv(
-      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3261,
+export function readPluginSdkSurfaceBudgets(env = process.env) {
+  const budgets = {
+    publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
+      // +1: session-discussion binds one external discussion provider to sessions.
+      // +1: focused media-local-roots replacement for the legacy agent-media facade.
+      // +1: account-aware channel DM policy setup descriptors.
+      142,
+      env,
     ),
-    publicWildcardReexports: readBudgetEnv(
+    publicExports: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
+      // +4: session discussion state, info, provider, and registration contracts.
+      // +2: structured media placeholder formatter and its text-fact contract.
+      // +2: narrow settled-turn finalization result and safe full-attempt projector.
+      // +1: channel-owned setup contract factory.
+      // +18: generic schema primitives needed by plugin-owned channel config schemas.
+      // +2: shared Teams reply-style and TTS schema leaves.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +2: attributed-range renderer and its options contract.
+      // +1: agent-harness transcript visibility projector.
+      // +1: outbound formatting capability profile.
+      // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +3: typed channel partial-delivery error, creator, and structural guard.
+      // +1: closed attempt-terminal merge, normalization, and projection helper.
+      // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
+      // +1: canonical unknown-value to Error coercion.
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      // +5: focused media-local-roots helpers and typed hook media contracts.
+      // +1: model-independent agent-harness preflight failure contract.
+      // +3: channel DM policy factory and its account/patch callback contracts.
+      // +1: typed owner-required error for session store path resolution.
+      // +1: native approval messaging target resolver.
+      // +1: shared plugin SecretRef setup plan helper.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      4724,
+      env,
+    ),
+    publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
+      // +1: session discussion provider registration.
+      // +1: structured media placeholder formatter for text-only channel carriers.
+      // +1: settled-turn full-attempt projector.
+      // +1: channel-owned setup contract factory.
+      // +4: generic channel schema shape builders.
+      // +1: plugin-owned sensitive-schema registration.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +1: attributed-range renderer.
+      // +1: agent-harness transcript visibility projector.
+      // +2: plugin approval detail truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +2: channel partial-delivery error creator and structural guard.
+      // +1: harness-native MCP App preview helper.
+      // +1: canonical unknown-value to Error coercion.
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      // +2: focused media-local-roots helpers.
+      // +3: channel DM policy factory and its account/patch callbacks.
+      // +1: native approval messaging target resolver.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      2862,
+      env,
+    ),
+    publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
+      // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +10: named media legacy projection deprecations across public compatibility barrels.
+      1698,
+      env,
+    ),
+    publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      212,
+      83,
+      env,
     ),
   };
-  publicDeprecatedExportsByEntrypointBudget = readEntrypointBudgetEnv(
+  const publicDeprecatedExportsByEntrypointBudget = readPluginSdkEntrypointBudgetEnv(
     "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT",
     defaultPublicDeprecatedExportsByEntrypointBudget,
+    env,
   );
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+  return { budgets, publicDeprecatedExportsByEntrypointBudget };
 }
 
 function entrypointPath(entrypoint) {
@@ -242,20 +249,9 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
-function isGeneratedPackageDeclaration(declaration) {
-  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
-  const relativePath = relative.split(path.sep).join(path.posix.sep);
-  // Package builds can make workspace package reexports look newly callable.
-  // Source-surface counts must stay independent of generated dist state.
-  return /^packages\/[^/]+\/dist\//u.test(relativePath);
-}
-
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
-  if (isGeneratedPackageDeclaration(declaration)) {
-    return false;
-  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }
@@ -277,29 +273,40 @@ function countWildcardReexports(entrypoints) {
   return { count, matches };
 }
 
-// All three inventories overlap. Reuse one module graph so reporting subsets
-// does not triple TypeScript compiler time and heap usage.
-const exportStatsProgram = ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
-  allowJs: false,
-  declaration: true,
-  emitDeclarationOnly: true,
-  module: ts.ModuleKind.ESNext,
-  moduleResolution: ts.ModuleResolutionKind.Bundler,
-  noEmit: true,
-  skipLibCheck: true,
-  strict: false,
-  target: ts.ScriptTarget.ES2022,
-  types: [],
-});
-const exportStatsChecker = exportStatsProgram.getTypeChecker();
+// All three inventories overlap. Lazily reuse one module graph so --help and
+// invalid options avoid compiler work without tripling report time and heap.
+let exportStatsProgram;
 
 function collectExportStats(entrypoints) {
+  // CLI validation and help do not need the compiler's startup cost.
+  ts ??= require("typescript");
+  const configPath = path.join(repoRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (config.error) {
+    throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+  }
+  exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
+    allowJs: false,
+    baseUrl: repoRoot,
+    declaration: true,
+    emitDeclarationOnly: true,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    noEmit: true,
+    paths: config.config.compilerOptions?.paths,
+    skipLibCheck: true,
+    strict: false,
+    target: ts.ScriptTarget.ES2022,
+    types: [],
+  });
+  const program = exportStatsProgram;
+  const checker = program.getTypeChecker();
   const byEntrypoint = new Map();
   const uniqueNames = new Set();
   const uniqueCallableNames = new Set();
 
   for (const entrypoint of entrypoints) {
-    const sourceFile = exportStatsProgram.getSourceFile(entrypointPath(entrypoint));
+    const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
@@ -309,8 +316,8 @@ function collectExportStats(entrypoints) {
       });
       continue;
     }
-    const moduleSymbol = exportStatsChecker.getSymbolAtLocation(sourceFile);
-    const symbols = moduleSymbol ? exportStatsChecker.getExportsOfModule(moduleSymbol) : [];
+    const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
+    const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
@@ -318,11 +325,11 @@ function collectExportStats(entrypoints) {
     for (const symbol of symbols) {
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
-      const callable = isCallableExport(exportStatsChecker, symbol, sourceFile);
+      const callable = isCallableExport(checker, symbol, sourceFile);
       const deprecated =
         deprecatedEntrypoint ||
         hasDeprecatedTag(symbol) ||
-        hasDeprecatedTag(unwrapAlias(exportStatsChecker, symbol));
+        hasDeprecatedTag(unwrapAlias(checker, symbol));
       if (callable) {
         callableExports += 1;
         uniqueCallableNames.add(exportName);
@@ -360,6 +367,36 @@ function collectExportStats(entrypoints) {
   return { byEntrypoint, totals };
 }
 
+function selectExportStats(scannedStats, entrypoints) {
+  const byEntrypoint = new Map();
+  const totals = {
+    entrypoints: entrypoints.length,
+    exports: 0,
+    callableExports: 0,
+    deprecatedExports: 0,
+    deprecatedCallableExports: 0,
+    uniqueExports: 0,
+    uniqueCallableExports: 0,
+  };
+  for (const entrypoint of entrypoints) {
+    const stats = scannedStats.byEntrypoint.get(entrypoint) ?? {
+      exports: 0,
+      callableExports: 0,
+      deprecatedExports: 0,
+      deprecatedCallableExports: 0,
+    };
+    byEntrypoint.set(entrypoint, stats);
+    totals.exports += stats.exports;
+    totals.callableExports += stats.callableExports;
+    totals.deprecatedExports += stats.deprecatedExports;
+    totals.deprecatedCallableExports += stats.deprecatedCallableExports;
+  }
+  // Export identities are entrypoint-qualified, so the selected totals are unique.
+  totals.uniqueExports = totals.exports;
+  totals.uniqueCallableExports = totals.callableExports;
+  return { byEntrypoint, totals };
+}
+
 function formatStats(label, stats) {
   return [
     `${label}:`,
@@ -372,10 +409,10 @@ function formatStats(label, stats) {
   ].join("\n");
 }
 
-function collectDeprecatedEntrypointBudgetFailures(byEntrypoint) {
+function collectDeprecatedEntrypointBudgetFailures(byEntrypoint, entrypointBudgets) {
   const failures = [];
   for (const [entrypoint, stats] of byEntrypoint) {
-    const budget = publicDeprecatedExportsByEntrypointBudget[entrypoint] ?? 0;
+    const budget = entrypointBudgets[entrypoint] ?? 0;
     if (stats.deprecatedExports > budget) {
       failures.push(
         `public deprecated exports in ${entrypoint} ${stats.deprecatedExports} > ${budget}`,
@@ -385,95 +422,160 @@ function collectDeprecatedEntrypointBudgetFailures(byEntrypoint) {
   return failures;
 }
 
-const allStats = collectExportStats(pluginSdkEntrypoints);
-const publicStats = collectExportStats(publicPluginSdkEntrypoints);
-const localOnlyStats = collectExportStats(privateLocalOnlyPluginSdkEntrypoints);
-const publicWildcards = countWildcardReexports(publicPluginSdkEntrypoints);
-const packageExportedSubpaths = readPackageExportedSubpaths();
-const leakedForbiddenExports = packageExportedSubpaths.filter((subpath) =>
-  forbiddenPublicSubpaths.has(subpath),
-);
-const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter((entrypoint) =>
-  publicEntrypointSet.has(entrypoint),
-);
-const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
-  (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
-);
-const deprecatedMissingFromPublic = [...deprecatedPublicEntrypointSet].filter(
-  (entrypoint) => !publicEntrypointSet.has(entrypoint),
-);
-const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
-  (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
-);
-const deprecatedBarrelWithoutWildcard = [...deprecatedBarrelEntrypointSet].filter((entrypoint) => {
-  const source = fs.readFileSync(entrypointPath(entrypoint), "utf8");
-  return !/^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
-});
-
-console.log(formatStats("all SDK entrypoints", allStats.totals));
-console.log(formatStats("public package SDK entrypoints", publicStats.totals));
-console.log(formatStats("local-only SDK entrypoints", localOnlyStats.totals));
-console.log(`deprecated public subpaths: ${deprecatedPublicPluginSdkEntrypoints.length}`);
-console.log(`deprecated barrel subpaths: ${deprecatedBarrelPluginSdkEntrypoints.length}`);
-console.log(`public wildcard reexports: ${publicWildcards.count}`);
-console.log(`package-exported forbidden subpaths: ${leakedForbiddenExports.length}`);
-
-const failures = [];
-if (publicPluginSdkEntrypoints.length > budgets.publicEntrypoints) {
-  failures.push(
-    `public entrypoints ${publicPluginSdkEntrypoints.length} > ${budgets.publicEntrypoints}`,
+export function collectPluginSdkSurfaceReport() {
+  const scannedEntrypoints = [
+    ...new Set([
+      ...pluginSdkEntrypoints,
+      ...publicPluginSdkEntrypoints,
+      ...privateLocalOnlyPluginSdkEntrypoints,
+    ]),
+  ];
+  const scannedStats = collectExportStats(scannedEntrypoints);
+  const allStats = selectExportStats(scannedStats, pluginSdkEntrypoints);
+  const publicStats = selectExportStats(scannedStats, publicPluginSdkEntrypoints);
+  const localOnlyStats = selectExportStats(scannedStats, privateLocalOnlyPluginSdkEntrypoints);
+  const publicWildcards = countWildcardReexports(publicPluginSdkEntrypoints);
+  const leakedForbiddenExports = readPackageExportedSubpaths().filter((subpath) =>
+    forbiddenPublicSubpaths.has(subpath),
   );
-}
-if (publicStats.totals.exports > budgets.publicExports) {
-  failures.push(`public exports ${publicStats.totals.exports} > ${budgets.publicExports}`);
-}
-if (publicStats.totals.callableExports > budgets.publicFunctionExports) {
-  failures.push(
-    `public callable exports ${publicStats.totals.callableExports} > ${budgets.publicFunctionExports}`,
+  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter(
+    (entrypoint) =>
+      publicEntrypointSet.has(entrypoint) && !packagedPrivateRuntimeEntrypointSet.has(entrypoint),
   );
-}
-if (publicStats.totals.deprecatedExports > budgets.publicDeprecatedExports) {
-  failures.push(
-    `public deprecated exports ${publicStats.totals.deprecatedExports} > ${budgets.publicDeprecatedExports}`,
+  const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
+    (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
   );
-}
-failures.push(...collectDeprecatedEntrypointBudgetFailures(publicStats.byEntrypoint));
-if (publicWildcards.count > budgets.publicWildcardReexports) {
-  failures.push(
-    `public wildcard reexports ${publicWildcards.count} > ${budgets.publicWildcardReexports}`,
+  const deprecatedMissingFromPublic = [...deprecatedPublicEntrypointSet].filter(
+    (entrypoint) => !publicEntrypointSet.has(entrypoint),
   );
-}
-if (leakedForbiddenExports.length > 0) {
-  failures.push(`forbidden public subpaths: ${leakedForbiddenExports.join(", ")}`);
-}
-if (localOnlyStillPublic.length > 0) {
-  failures.push(`local-only entrypoints still public: ${localOnlyStillPublic.join(", ")}`);
-}
-if (localOnlyMissingFromInventory.length > 0) {
-  failures.push(
-    `local-only entrypoints missing from inventory: ${localOnlyMissingFromInventory.join(", ")}`,
+  const deprecatedBarrelMissingFromInventory = [...deprecatedBarrelEntrypointSet].filter(
+    (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),
   );
-}
-if (deprecatedMissingFromPublic.length > 0) {
-  failures.push(
-    `deprecated public entrypoints missing from package surface: ${deprecatedMissingFromPublic.join(", ")}`,
+  const deprecatedBarrelWithoutWildcard = [...deprecatedBarrelEntrypointSet].filter(
+    (entrypoint) => {
+      const source = fs.readFileSync(entrypointPath(entrypoint), "utf8");
+      return !/^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
+    },
   );
-}
-if (deprecatedBarrelMissingFromInventory.length > 0) {
-  failures.push(
-    `deprecated barrel entrypoints missing from inventory: ${deprecatedBarrelMissingFromInventory.join(", ")}`,
-  );
-}
-if (deprecatedBarrelWithoutWildcard.length > 0) {
-  failures.push(
-    `deprecated barrel entrypoints without wildcard exports: ${deprecatedBarrelWithoutWildcard.join(", ")}`,
-  );
+  return {
+    allStats,
+    deprecatedBarrelMissingFromInventory,
+    deprecatedBarrelWithoutWildcard,
+    deprecatedMissingFromPublic,
+    leakedForbiddenExports,
+    localOnlyMissingFromInventory,
+    localOnlyStats,
+    localOnlyStillPublic,
+    publicStats,
+    publicWildcards,
+  };
 }
 
-if (checkOnly && failures.length > 0) {
-  console.error("plugin SDK surface budget failed:");
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
+export function evaluatePluginSdkSurfaceReport(
+  report,
+  { budgets, publicDeprecatedExportsByEntrypointBudget },
+) {
+  const failures = [];
+  if (publicPluginSdkEntrypoints.length > budgets.publicEntrypoints) {
+    failures.push(
+      `public entrypoints ${publicPluginSdkEntrypoints.length} > ${budgets.publicEntrypoints}`,
+    );
   }
-  process.exit(1);
+  if (report.publicStats.totals.exports > budgets.publicExports) {
+    failures.push(`public exports ${report.publicStats.totals.exports} > ${budgets.publicExports}`);
+  }
+  if (report.publicStats.totals.callableExports > budgets.publicFunctionExports) {
+    failures.push(
+      `public callable exports ${report.publicStats.totals.callableExports} > ${budgets.publicFunctionExports}`,
+    );
+  }
+  if (report.publicStats.totals.deprecatedExports > budgets.publicDeprecatedExports) {
+    failures.push(
+      `public deprecated exports ${report.publicStats.totals.deprecatedExports} > ${budgets.publicDeprecatedExports}`,
+    );
+  }
+  failures.push(
+    ...collectDeprecatedEntrypointBudgetFailures(
+      report.publicStats.byEntrypoint,
+      publicDeprecatedExportsByEntrypointBudget,
+    ),
+  );
+  if (report.publicWildcards.count > budgets.publicWildcardReexports) {
+    failures.push(
+      `public wildcard reexports ${report.publicWildcards.count} > ${budgets.publicWildcardReexports}`,
+    );
+  }
+  if (report.leakedForbiddenExports.length > 0) {
+    failures.push(`forbidden public subpaths: ${report.leakedForbiddenExports.join(", ")}`);
+  }
+  if (report.localOnlyStillPublic.length > 0) {
+    failures.push(`local-only entrypoints still public: ${report.localOnlyStillPublic.join(", ")}`);
+  }
+  if (report.localOnlyMissingFromInventory.length > 0) {
+    failures.push(
+      `local-only entrypoints missing from inventory: ${report.localOnlyMissingFromInventory.join(", ")}`,
+    );
+  }
+  if (report.deprecatedMissingFromPublic.length > 0) {
+    failures.push(
+      `deprecated public entrypoints missing from package surface: ${report.deprecatedMissingFromPublic.join(", ")}`,
+    );
+  }
+  if (report.deprecatedBarrelMissingFromInventory.length > 0) {
+    failures.push(
+      `deprecated barrel entrypoints missing from inventory: ${report.deprecatedBarrelMissingFromInventory.join(", ")}`,
+    );
+  }
+  if (report.deprecatedBarrelWithoutWildcard.length > 0) {
+    failures.push(
+      `deprecated barrel entrypoints without wildcard exports: ${report.deprecatedBarrelWithoutWildcard.join(", ")}`,
+    );
+  }
+  return failures;
+}
+
+function renderPluginSdkSurfaceReport(report) {
+  return [
+    formatStats("all SDK entrypoints", report.allStats.totals),
+    formatStats("public package SDK entrypoints", report.publicStats.totals),
+    formatStats("local-only SDK entrypoints", report.localOnlyStats.totals),
+    `deprecated public subpaths: ${deprecatedPublicPluginSdkEntrypoints.length}`,
+    `deprecated barrel subpaths: ${deprecatedBarrelPluginSdkEntrypoints.length}`,
+    `public wildcard reexports: ${report.publicWildcards.count}`,
+    `package-exported forbidden subpaths: ${report.leakedForbiddenExports.length}`,
+  ].join("\n");
+}
+
+function main(argv = process.argv.slice(2), env = process.env) {
+  const cliArgs = parsePluginSdkSurfaceReportArgs(argv);
+  if (cliArgs.help) {
+    process.stdout.write(usage());
+    return 0;
+  }
+  const budgetConfig = readPluginSdkSurfaceBudgets(env);
+  const report = collectPluginSdkSurfaceReport();
+  process.stdout.write(`${renderPluginSdkSurfaceReport(report)}\n`);
+  const failures = evaluatePluginSdkSurfaceReport(report, budgetConfig);
+  if (cliArgs.check && failures.length > 0) {
+    process.stderr.write(`plugin SDK surface budget failed:\n`);
+    for (const failure of failures) {
+      process.stderr.write(`- ${failure}\n`);
+    }
+    return 1;
+  }
+  return 0;
+}
+
+const isMain =
+  typeof process.argv[1] === "string" &&
+  process.argv[1].length > 0 &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isMain) {
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
 }

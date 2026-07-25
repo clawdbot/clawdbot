@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
-import { makeBrowserServerState } from "./server-context.test-harness.js";
+import { beginProfileTransition } from "./server-context.lifecycle.js";
+import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -11,6 +12,47 @@ afterEach(() => {
 });
 
 describe("browser server-context listProfiles", () => {
+  it("reads running state only after an in-flight profile transition settles", async () => {
+    const state = makeBrowserServerState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    ctx.forProfile("openclaw");
+    const runtime = state.profiles.get("openclaw");
+    if (!runtime) {
+      throw new Error("expected profile runtime");
+    }
+    runtime.running = {
+      pid: 123,
+      exe: { kind: "chromium", path: "/usr/bin/chromium" },
+      userDataDir: "/tmp/openclaw-profile",
+      cdpPort: 18800,
+      startedAt: Date.now(),
+      proc: {} as never,
+    };
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const transition = beginProfileTransition({
+      state,
+      runtime,
+      reason: "stop requested",
+      closeSharedAdapters: false,
+      afterCleanup: async () => {
+        await cleanupGate;
+        runtime.running = null;
+      },
+    });
+    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
+
+    const listing = ctx.listProfiles();
+    await Promise.resolve();
+    releaseCleanup();
+    await transition;
+    const profiles = await listing;
+
+    expect(profiles[0]?.running).toBe(false);
+  });
+
   it("bypasses SSRF gating when probing managed loopback profiles", async () => {
     const state = makeBrowserServerState({
       resolvedOverrides: {
@@ -94,4 +136,27 @@ describe("browser server-context listProfiles", () => {
     );
     expect(profiles[0]?.cdpUrl).toBe("http://127.0.0.1:9222");
   });
+
+  it.each(["constructor", "prototype"] as const)(
+    "marks runtime-only %s profiles as missing from config",
+    async (profileName) => {
+      const profile = makeBrowserProfile({ name: profileName });
+      const state = makeBrowserServerState({
+        profile,
+        resolvedOverrides: { profiles: {} },
+      });
+      state.profiles.set(profileName, {
+        profile,
+        running: { pid: 123 } as never,
+        lastTargetId: null,
+        reconcile: null,
+      });
+
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const profiles = await ctx.listProfiles();
+
+      expect(profiles).toHaveLength(1);
+      expect(profiles[0]).toMatchObject({ name: profileName, missingFromConfig: true });
+    },
+  );
 });

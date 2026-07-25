@@ -4,7 +4,29 @@ import {
   createLazyImportLoader,
   createLazyPromise,
   createLazyPromiseLoader,
+  getOrCreatePromise,
 } from "./lazy-promise.js";
+
+describe("getOrCreatePromise", () => {
+  it("dedupes each key and leaves cache lifecycle to the caller", async () => {
+    const cache = new Map<string, Promise<string>>();
+    const create = vi.fn(async (key: string) => `loaded-${key}`);
+
+    const first = getOrCreatePromise(cache, "a", async () => await create("a"));
+    expect(getOrCreatePromise(cache, "a", async () => await create("a"))).toBe(first);
+    await expect(first).resolves.toBe("loaded-a");
+    await expect(getOrCreatePromise(cache, "b", async () => await create("b"))).resolves.toBe(
+      "loaded-b",
+    );
+    expect(create).toHaveBeenCalledTimes(2);
+
+    cache.clear();
+    await expect(getOrCreatePromise(cache, "a", async () => await create("a"))).resolves.toBe(
+      "loaded-a",
+    );
+    expect(create).toHaveBeenCalledTimes(3);
+  });
+});
 
 describe("createLazyPromise", () => {
   it("returns a reusable single-flight loader", async () => {

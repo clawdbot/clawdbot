@@ -1,4 +1,6 @@
 // Verifies channel metadata validation and plugin capability lookups.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -125,7 +127,10 @@ function createExternalFeishuSchemaWithCloserMetadataRegistry(): PluginManifestR
 }
 
 function createExternalFeishuSchemaWithRootOnlyShadowRegistry(): PluginManifestRegistry {
-  const firstSchema = createExternalFeishuSchemaRegistry().plugins[0];
+  const firstSchema = expectDefined(
+    createExternalFeishuSchemaRegistry().plugins[0],
+    "createExternalFeishuSchemaRegistry().plugins[0] test invariant",
+  );
   return {
     diagnostics: [],
     plugins: [
@@ -415,17 +420,14 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
     );
   });
 
-  it('does not warn when dmPolicy="open" is satisfied by the legacy dm.allowFrom alias', () => {
-    // Runtime resolves allowFrom as canonical `allowFrom` ?? legacy `dm.allowFrom`, so a
-    // top-level-canonical channel (Discord) that keeps its wildcard under `dm.allowFrom`
-    // is valid and must not produce a false "all DMs dropped" warning.
+  it('does not warn when dmPolicy="open" has canonical allowFrom', () => {
     const result = validateConfigObjectWithPlugins({
       channels: {
         discord: {
           enabled: true,
           token: "test-token",
           dmPolicy: "open",
-          dm: { allowFrom: ["*"] },
+          allowFrom: ["*"],
         },
       },
     });
@@ -679,8 +681,9 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
   it("sanitizes the schema owner in validation diagnostics", () => {
     const unsafeId = `openclaw${String.fromCharCode(10)}${String.fromCharCode(27)}[31m-lark`;
     const registry = createExternalFeishuSchemaRegistry();
+    const plugin = expectDefined(registry.plugins[0], "external Feishu plugin manifest");
     registry.plugins[0] = {
-      ...registry.plugins[0],
+      ...plugin,
       id: unsafeId,
     };
     mockLoadPluginManifestRegistry.mockReturnValue(registry);
@@ -752,20 +755,6 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
-  it("accepts the shipped deprecated bundledDiscovery marker", () => {
-    const result = validateConfigObjectWithPlugins({
-      plugins: {
-        allow: ["telegram"],
-        bundledDiscovery: "compat",
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
-    }
-  });
-
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 

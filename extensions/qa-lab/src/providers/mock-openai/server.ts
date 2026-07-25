@@ -1,2097 +1,149 @@
-// Qa Lab plugin module implements server behavior.
-import { createHash } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+// QA Lab mock Responses dispatcher, HTTP transport, and debug endpoints.
+import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
-import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
+import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
-
-type ResponsesInputItem = Record<string, unknown>;
-
-let mockFunctionCallSequence = 0;
-
-type StreamEvent =
-  | { type: "response.output_item.added"; item: Record<string, unknown> }
-  | {
-      type: "response.output_text.delta";
-      item_id: string;
-      output_index: number;
-      content_index: number;
-      delta: string;
-    }
-  | {
-      type: "response.output_text.done";
-      item_id: string;
-      output_index: number;
-      content_index: number;
-      text: string;
-    }
-  | { type: "response.function_call_arguments.delta"; delta: string }
-  | { type: "response.output_item.done"; item: Record<string, unknown> }
-  | {
-      type: "response.completed";
-      response: {
-        id: string;
-        status: "completed";
-        output: Array<Record<string, unknown>>;
-        usage: {
-          input_tokens: number;
-          output_tokens: number;
-          total_tokens: number;
-        };
-      };
-    };
-
-/**
- * Provider variant tag for `body.model`. The mock previously ignored
- * `body.model` for dispatch and only echoed it in the prose output, which
- * made the parity gate tautological when run against the mock alone
- * (both providers produced identical scenario plans by construction).
- * Tagging requests with a normalized variant lets individual scenario
- * branches opt into provider-specific behavior while the rest of the
- * dispatcher stays shared, and lets `/debug/requests` consumers verify
- * which provider lane a given request came from without re-parsing the
- * raw model string.
- *
- * Policy:
- * - `openai/*`, `gpt-*`, `o1-*`, anything starting with `gpt-` → `"openai"`
- * - `anthropic/*`, `claude-*` → `"anthropic"`
- * - Everything else (including empty strings) → `"unknown"`
- *
- * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.5` model string is still
- * classified as `"openai"`. That matches the parity program's convention
- * where the provider label is the source of truth, not the HTTP route.
- */
-export type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
-
-export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
-  if (typeof model !== "string") {
-    return "unknown";
-  }
-  const trimmed = model.trim().toLowerCase();
-  if (trimmed.length === 0) {
-    return "unknown";
-  }
-  // Prefer the explicit `provider/model` or `provider:model` prefix when
-  // the caller supplied one — that's the most reliable signal.
-  const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
-  const provider = separatorMatch?.[1] ?? trimmed;
-  if (provider === "openai") {
-    return "openai";
-  }
-  if (provider === "anthropic" || provider === "claude-cli") {
-    return "anthropic";
-  }
-  // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-8`.
-  if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
-    return "openai";
-  }
-  if (/^(?:claude-|anthropic-)/.test(trimmed)) {
-    return "anthropic";
-  }
-  return "unknown";
-}
-
-type MockOpenAiRequestSnapshot = {
-  raw: string;
-  body: Record<string, unknown>;
-  prompt: string;
-  allInputText: string;
-  instructions?: string;
-  toolOutput: string;
-  model: string;
-  providerVariant: MockOpenAiProviderVariant;
-  imageInputCount: number;
-  plannedToolCallId?: string;
-  plannedToolName?: string;
-  plannedToolArgs?: Record<string, unknown>;
-  toolOutputCallId?: string;
-  toolOutputStructuredError?: true;
-};
-
-// Anthropic /v1/messages request/response shapes the mock actually needs.
-// This is a subset of the real Anthropic Messages API — just enough so the
-// QA suite can run its parity pack against a "baseline" Anthropic provider
-// without needing real API keys. The scenarios drive their dispatch through
-// the shared mock scenario logic (buildResponsesPayload), with `model`
-// preserved so provider-aware branches can intentionally diverge.
-type AnthropicMessageContentBlock =
-  | { type: "text"; text: string }
-  | {
-      type: "tool_use";
-      id: string;
-      name: string;
-      input: Record<string, unknown>;
-    }
-  | {
-      type: "tool_result";
-      tool_use_id: string;
-      is_error?: boolean;
-      content: string | Array<{ type: "text"; text: string }>;
-    }
-  | { type: "image"; source: Record<string, unknown> };
-
-type AnthropicMessage = {
-  role: "user" | "assistant";
-  content: string | AnthropicMessageContentBlock[];
-};
-
-type AnthropicMessagesRequest = {
-  model?: string;
-  max_tokens?: number;
-  system?: string | Array<{ type: "text"; text: string }>;
-  messages?: AnthropicMessage[];
-  tools?: Array<Record<string, unknown>>;
-  stream?: boolean;
-};
-
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
-const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
-const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
-const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE = /anthropic thinking error qa check/i;
-const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
-const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
-const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
-const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
-const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
-const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
-const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
-const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
-const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
-const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
-const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
-  /qa group message unavailable fallback check/i;
-const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
-const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
-const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
-const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
-const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
-const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
-  /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
-const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
-  /upload-file action to send a PNG with caption\s+((?:WHATSAPP_QA_AGENT_UPLOAD|WHATSAPP_QA_GROUP_AGENT_UPLOAD)_[A-Z0-9]+)/i;
-const QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE =
-  /\bWHATSAPP_QA_PENDING_HISTORY_TRIGGER_([A-Z0-9]+)\b/u;
-const QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL =
-  "Chat history since last reply (untrusted, for context):";
-const QA_WHATSAPP_BROADCAST_PROMPT_RE = /\bopenclawqa broadcast fanout check\s+([A-Z0-9_]+)\b/i;
-const QA_WHATSAPP_RUNTIME_AGENT_RE = /\bRuntime:\s*[^\n]*\bagent=([A-Za-z0-9_-]+)/i;
-const QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE = /\bWHATSAPP_QA_ACTIVATION_ALWAYS_([A-Z0-9]+)\b/u;
-const QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE = /\bWHATSAPP_QA_REPLY_TO_BOT_SEED_[A-Z0-9]+\b/u;
-const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
-  /\bWHATSAPP_QA_REPLY_TO_BOT_TRIGGER_[A-Z0-9]+\b/u;
-const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
-const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
-const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
-const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
-const QA_IMAGE_GENERATION_PROMPT_RE =
-  /image generation check|capability flip image check|\/tool\s+image_generate/i;
-const QA_REASONING_ONLY_RETRY_NEEDLE =
-  "recorded reasoning but did not produce a user-visible answer";
-const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
-  "The previous attempt did not produce a user-visible answer.";
-const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
-  /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
-const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
-const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
-const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
-const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
-const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
-const QA_AUDIO_TRANSCRIPTION_TEXT =
-  "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
-const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
-  "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
-const QA_GROUP_AUDIO_TRIGGER_SENTINEL = "OPENCLAW_QA_GROUP_AUDIO_TRIGGER";
-const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
-
-type MockScenarioState = {
-  anthropicThinkingErrorPhase: number;
-  subagentFanoutPhase: number;
-  subagentHandoffSpawned: boolean;
-};
-
-function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
-  return providerVariant === "anthropic"
-    ? "repo/docs/help/testing.md"
-    : "repo/qa/scenarios/index.yaml";
-}
-
-function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
-  return providerVariant === "anthropic"
-    ? "Inspect the QA docs fixture and return one concise protocol note."
-    : "Inspect the QA workspace and return one concise protocol note.";
-}
-
-function subagentFanoutTaskForProvider(
-  providerVariant: MockOpenAiProviderVariant,
-  worker: "alpha" | "beta",
-) {
-  const marker = worker === "alpha" ? "ALPHA-OK" : "BETA-OK";
-  const scope = providerVariant === "anthropic" ? "the QA docs fixture" : "the QA workspace";
-  return `Fanout worker ${worker}: inspect ${scope} and finish with exactly ${marker}.`;
-}
-
-const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
-const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
-const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return readRequestBodyWithLimit(req, {
-    maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
-    timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
-  });
-}
-
-function parseJsonObjectBody(raw: string): Record<string, unknown> | null {
-  try {
-    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
-  writeJson(res, 400, {
-    error: {
-      type: "invalid_request_error",
-      message: `Malformed JSON body for ${label} request.`,
-    },
-  });
-}
-
-function transcriptionTextForAudioRequest(rawBody: string) {
-  if (rawBody.includes(QA_GROUP_AUDIO_TRIGGER_SENTINEL)) {
-    return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
-  }
-  return QA_AUDIO_TRANSCRIPTION_TEXT;
-}
-
-function writeSse(res: ServerResponse, events: StreamEvent[]) {
-  const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    "content-length": Buffer.byteLength(body),
-  });
-  res.end(body);
-}
-
-async function writeSseWithPreviewPause(
-  res: ServerResponse,
-  events: StreamEvent[],
-  pauseMs: number,
-) {
-  const completionIndex = events.findIndex((event) => event.type === "response.output_text.done");
-  if (completionIndex < 0) {
-    writeSse(res, events);
-    return;
-  }
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  for (const event of events.slice(0, completionIndex)) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  await sleep(pauseMs);
-  for (const event of events.slice(completionIndex)) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  res.end("data: [DONE]\n\n");
-}
-
-type AnthropicStreamEvent = Record<string, unknown> & {
-  type: string;
-};
-
-function writeAnthropicSse(res: ServerResponse, events: AnthropicStreamEvent[]) {
-  const body = events
-    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    "content-length": Buffer.byteLength(body),
-  });
-  res.end(body);
-}
-
-function countApproxTokens(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  return Math.max(1, Math.ceil(trimmed.length / 4));
-}
-
-function extractEmbeddingInputTexts(input: unknown): string[] {
-  if (typeof input === "string") {
-    return [input];
-  }
-  if (Array.isArray(input)) {
-    return input.flatMap((entry) => extractEmbeddingInputTexts(entry));
-  }
-  if (
-    input &&
-    typeof input === "object" &&
-    typeof (input as { text?: unknown }).text === "string"
-  ) {
-    return [(input as { text: string }).text];
-  }
-  return [];
-}
-
-function buildDeterministicEmbedding(text: string, dimensions = 16) {
-  const values = Array.from({ length: dimensions }, () => 0);
-  for (let index = 0; index < text.length; index += 1) {
-    values[index % dimensions] += text.charCodeAt(index) / 255;
-  }
-  const magnitude = Math.hypot(...values) || 1;
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
-}
-
-function extractLastUserText(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      return text;
-    }
-  }
-  return "";
-}
-
-function findLastUserIndex(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    if (item.role === "user" && Array.isArray(item.content)) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function isToolOutputContinuationText(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    /^(?:continue|keep going|resume|retry|carry on)(?:[.!?])?$/i.test(trimmed) ||
-    /\b(?:continue|continuation|compaction|post-compaction|retry|resume)\b/i.test(trimmed)
-  );
-}
-
-function stringifyFunctionCallOutput(output: unknown): string {
-  if (typeof output === "string") {
-    return output;
-  }
-  if (Array.isArray(output)) {
-    return output
-      .map((entry) => {
-        if (typeof entry === "string") {
-          return entry;
-        }
-        if (!entry || typeof entry !== "object") {
-          return "";
-        }
-        const record = entry as Record<string, unknown>;
-        if (typeof record.text === "string") {
-          return record.text;
-        }
-        if (typeof record.output_text === "string") {
-          return record.output_text;
-        }
-        if (typeof record.content === "string") {
-          return record.content;
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (output && typeof output === "object") {
-    const record = output as Record<string, unknown>;
-    if (typeof record.text === "string") {
-      return record.text;
-    }
-    if (typeof record.output_text === "string") {
-      return record.output_text;
-    }
-    if (typeof record.content === "string") {
-      return record.content;
-    }
-    try {
-      return JSON.stringify(output);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
-    return "";
-  }
-  return stringifyFunctionCallOutput(item.output);
-}
-
-function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
-    return "";
-  }
-  const record = item as {
-    call_id?: unknown;
-    tool_call_id?: unknown;
-    tool_use_id?: unknown;
-  };
-  return (
-    [record.call_id, record.tool_call_id, record.tool_use_id].find(
-      (value): value is string => typeof value === "string" && value.trim().length > 0,
-    ) ?? ""
-  );
-}
-
-function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
-    return false;
-  }
-  return item.is_error === true || item.isError === true;
-}
-
-function extractToolOutput(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return output;
-    }
-  }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      const laterUserTexts = input
-        .slice(index + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
-      ) {
-        return output;
-      }
-      continue;
-    }
-  }
-  return "";
-}
-
-function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return functionCallOutputIsStructuredError(item);
-    }
-  }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      const laterUserTexts = input
-        .slice(index + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
-      ) {
-        return functionCallOutputIsStructuredError(item);
-      }
-    }
-  }
-  return false;
-}
-
-function extractToolOutputCallId(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return extractFunctionCallOutputCallId(item);
-    }
-  }
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      const laterUserTexts = input
-        .slice(index + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
-      ) {
-        return extractFunctionCallOutputCallId(item);
-      }
-    }
-  }
-  return "";
-}
-
-function extractLatestToolOutput(input: ResponsesInputItem[]) {
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    const item = input[index];
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return output;
-    }
-  }
-  return "";
-}
-
-function extractAllToolOutputText(input: ResponsesInputItem[]) {
-  return input
-    .map((item) => extractFunctionCallOutputText(item))
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
-  let latestToolOutputIndex = -1;
-  for (let index = input.length - 1; index >= 0; index -= 1) {
-    if (extractFunctionCallOutputText(input[index])) {
-      latestToolOutputIndex = index;
-      break;
-    }
-  }
-  if (latestToolOutputIndex < 0) {
-    return "";
-  }
-  return input
-    .slice(latestToolOutputIndex + 1)
-    .filter((item) => item.role === "user" && Array.isArray(item.content))
-    .map((item) => extractInputText(item.content as unknown[]))
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractInputText(content: unknown[]): string {
-  return content
-    .filter(
-      (entry): entry is { type: "input_text"; text: string } =>
-        Boolean(entry) &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "input_text" &&
-        typeof (entry as { text?: unknown }).text === "string",
-    )
-    .map((entry) => entry.text)
-    .join("\n")
-    .trim();
-}
-
-function extractAllUserTexts(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts;
-}
-
-function extractSystemInputText(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "system") {
-      continue;
-    }
-    if (typeof item.content === "string" && item.content.trim()) {
-      texts.push(item.content.trim());
-      continue;
-    }
-    if (!Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts.join("\n");
-}
-
-function extractAllInputTexts(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (typeof item.output === "string" && item.output.trim()) {
-      texts.push(item.output.trim());
-    }
-    if (!Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts.join("\n");
-}
-
-function extractInstructionsText(body: Record<string, unknown>) {
-  return typeof body.instructions === "string" ? body.instructions.trim() : "";
-}
-
-function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string, unknown>) {
-  const texts: string[] = [];
-  const instructions = extractInstructionsText(body);
-  if (instructions) {
-    texts.push(instructions);
-  }
-  const inputText = extractAllInputTexts(input);
-  if (inputText) {
-    texts.push(inputText);
-  }
-  return texts.join("\n");
-}
-
-function buildWhatsAppPendingHistoryReply(allInputText: string) {
-  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(allInputText);
-  if (!triggerMatch?.[1]) {
-    return undefined;
-  }
-  const suffix = triggerMatch[1];
-  const beforeTrigger = allInputText.slice(0, triggerMatch.index);
-  const priorGroupContext = extractStructuredWhatsAppPendingHistoryContext(beforeTrigger);
-  const quietMarkerPattern = new RegExp(`\\bWHATSAPP_QA_PENDING_HISTORY_QUIET_${suffix}\\b`, "u");
-  const contextSentinelPattern = new RegExp(
-    `\\bWHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_${suffix}\\b`,
-    "u",
-  );
-  if (
-    !quietMarkerPattern.test(priorGroupContext) ||
-    !contextSentinelPattern.test(priorGroupContext)
-  ) {
-    return "WHATSAPP_QA_PENDING_HISTORY_MISSING_CONTEXT";
-  }
-  return `WHATSAPP_QA_PENDING_HISTORY_OK_${suffix}`;
-}
-
-function extractStructuredWhatsAppPendingHistoryContext(beforeTrigger: string) {
-  const blocks = extractJsonBlocksByLabel(
-    beforeTrigger,
-    QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL,
-  );
-  return blocks
-    .flatMap((block) => {
-      if (!Array.isArray(block)) {
-        return [];
-      }
-      return block.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const body = (entry as Record<string, unknown>)["body"];
-        return typeof body === "string" ? [body] : [];
-      });
-    })
-    .join("\n");
-}
-
-function extractJsonBlocksByLabel(text: string, label: string): unknown[] {
-  const blockRe = new RegExp(
-    `${escapeRegExp(label)}\\s*\\n\`\`\`json\\n([\\s\\S]*?)\\n\`\`\``,
-    "gu",
-  );
-  const blocks: unknown[] = [];
-  for (const match of text.matchAll(blockRe)) {
-    const rawJson = match[1];
-    if (!rawJson) {
-      continue;
-    }
-    try {
-      blocks.push(JSON.parse(rawJson) as unknown);
-    } catch {
-      // The mock only trusts the exact structured block emitted by the inbound
-      // prompt builder; malformed user text must not satisfy this QA oracle.
-    }
-  }
-  return blocks;
-}
-
-function buildWhatsAppBroadcastReply(allInputText: string) {
-  const promptMatch = QA_WHATSAPP_BROADCAST_PROMPT_RE.exec(allInputText);
-  const token = promptMatch?.[1];
-  if (!token) {
-    return undefined;
-  }
-  const agentId = QA_WHATSAPP_RUNTIME_AGENT_RE.exec(allInputText)?.[1];
-  if (agentId === "main") {
-    return `${token}_MAIN`;
-  }
-  if (agentId === "qa-second") {
-    return `${token}_SECOND`;
-  }
-  return "WHATSAPP_QA_BROADCAST_AGENT_CONTEXT_MISSING";
-}
-
-function buildWhatsAppGroupDispatchReply(allInputText: string) {
-  const activationMatch = QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE.exec(allInputText);
-  if (activationMatch?.[1]) {
-    return `WHATSAPP_QA_ACTIVATION_ALWAYS_${activationMatch[1]}`;
-  }
-  const triggerMatch = QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE.exec(allInputText);
-  if (triggerMatch?.[0]) {
-    return triggerMatch[0];
-  }
-  return QA_WHATSAPP_REPLY_TO_BOT_SEED_MARKER_RE.exec(allInputText)?.[0];
-}
-
-function buildWhatsAppBatchedReply(allInputText: string) {
-  const finalMatch = QA_WHATSAPP_BATCHED_FINAL_MARKER_RE.exec(allInputText);
-  const suffix = finalMatch?.[1];
-  if (!suffix) {
-    return undefined;
-  }
-  const firstMarker = `WHATSAPP_QA_BATCHED_FIRST_${suffix}`;
-  if (!allInputText.includes(firstMarker)) {
-    return `WHATSAPP_QA_BATCHED_MISSING_CONTEXT_${suffix}`;
-  }
-  return finalMatch[0];
-}
-
-function countImageInputs(value: unknown): number {
-  const seen = new WeakSet<object>();
-  const stack = [value];
-  let count = 0;
-  let visited = 0;
-  while (stack.length > 0 && visited < 50_000) {
-    visited += 1;
-    const current = stack.pop();
-    if (Array.isArray(current)) {
-      for (const entry of current) {
-        stack.push(entry);
-      }
-      continue;
-    }
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-    if (seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    const record = current as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type : "";
-    if (type === "input_image" || type === "image" || type === "image_url" || type === "media") {
-      count += 1;
-    }
-    stack.push(record.content, record.image_url, record.source);
-  }
-  return count;
-}
-
-function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserIndex = findLastUserIndex(input);
-  if (latestUserIndex < 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-
-  const latestUserItem = input[latestUserIndex];
-  if (!latestUserItem) {
-    return { text: "", imageInputCount: 0 };
-  }
-
-  const imageTurnItems = [latestUserItem];
-  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
-  if (imageInputCount === 0) {
-    return { text: "", imageInputCount: 0 };
-  }
-  return {
-    text: imageTurnItems
-      .map((item) => extractInputText(item.content as unknown[]))
-      .filter(Boolean)
-      .join("\n"),
-    imageInputCount,
-  };
-}
-
-function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
-  if (!toolOutput.trim()) {
-    return null;
-  }
-  try {
-    return JSON.parse(toolOutput) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function normalizePromptPathCandidate(candidate: string) {
-  const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
-  if (!trimmed) {
-    return null;
-  }
-  const normalized = trimmed.replace(/^\.\//, "");
-  if (
-    normalized.includes("/") ||
-    /\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)$/i.test(normalized)
-  ) {
-    return normalized;
-  }
-  return null;
-}
-
-function readTargetFromPrompt(prompt: string) {
-  const backtickedMatches = Array.from(prompt.matchAll(/`([^`]+)`/g))
-    .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => Boolean(value));
-  if (backtickedMatches.length > 0) {
-    return backtickedMatches[0];
-  }
-
-  const quotedMatches = Array.from(prompt.matchAll(/"([^"]+)"/g))
-    .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => Boolean(value));
-  if (quotedMatches.length > 0) {
-    return quotedMatches[0];
-  }
-
-  const repoScoped = /\b(?:repo\/[^\s`",)]+|QA_[A-Z_]+\.md)\b/.exec(prompt)?.[0]?.trim();
-  if (repoScoped) {
-    return repoScoped;
-  }
-
-  const loosePath = /\b[A-Za-z0-9._-]+\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
-    .exec(prompt)?.[0]
-    ?.trim();
-  if (loosePath) {
-    return loosePath;
-  }
-
-  if (/\bdocs?\b/i.test(prompt)) {
-    return "repo/docs/help/testing.md";
-  }
-  if (/\bscenario|kickoff|qa\b/i.test(prompt)) {
-    return "QA_KICKOFF_TASK.md";
-  }
-  return "repo/package.json";
-}
-
-function execCommandFromToolProgressPrompt(prompt: string) {
-  return (
-    /call the exec tool exactly once with this exact command before answering:\s*`([^`]+)`/i
-      .exec(prompt)?.[1]
-      ?.trim() || null
-  );
-}
-
-function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
-  const serialized = JSON.stringify(args);
-  const callSuffix = createHash("sha256")
-    .update(name)
-    .update("\0")
-    .update(serialized)
-    .digest("hex")
-    .slice(0, 10);
-  const sequence = ++mockFunctionCallSequence;
-  const uniqueSuffix = `${callSuffix}_${sequence}`;
-  const callId = `call_mock_${name}_${uniqueSuffix}`;
-  const itemId = `fc_mock_${name}_${uniqueSuffix}`;
-  const item = {
-    type: "function_call",
-    id: itemId,
-    call_id: callId,
-    name,
-    arguments: serialized,
-  };
-  return {
-    callId,
-    item,
-    itemId,
-    responseId: `resp_mock_${name}_${uniqueSuffix}`,
-    serialized,
-  };
-}
-
-function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): StreamEvent[] {
-  const call = buildMockFunctionCall(name, args);
-  return [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "function_call",
-        id: call.itemId,
-        call_id: call.callId,
-        name,
-        arguments: "",
-      },
-    },
-    { type: "response.function_call_arguments.delta", delta: call.serialized },
-    {
-      type: "response.output_item.done",
-      item: call.item,
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [call.item],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
-  ];
-}
-
-function extractRememberedFact(userTexts: string[]) {
-  for (const text of userTexts) {
-    const qaCanaryMatch = /\bqa canary code is\s+([A-Za-z0-9-]+)/i.exec(text);
-    if (qaCanaryMatch?.[1]) {
-      return qaCanaryMatch[1];
-    }
-  }
-  for (const text of userTexts) {
-    const match = /remember(?: this fact for later)?:\s*([A-Za-z0-9-]+)/i.exec(text);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-  return null;
-}
-
-function extractOrbitCode(text: string) {
-  return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
-}
-
-function decodeXmlEntities(text: string) {
-  return text
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'");
-}
-
-function extractActiveMemorySummary(text: string) {
-  const match = /<active_memory_plugin>\s*([\s\S]*?)\s*<\/active_memory_plugin>/i.exec(text);
-  return match?.[1] ? decodeXmlEntities(match[1]).trim() : null;
-}
-
-function extractToolSearchTarget(text: string): string | null {
-  const match = /\btarget=([A-Za-z0-9_.:-]+)\b/.exec(text);
-  return match?.[1]?.trim() || null;
-}
-
-function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
-  if (failureMode && targetTool === "web_search") {
-    return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
-  }
-  if (failureMode) {
-    return { __qaFailureMode: "denied-input" };
-  }
-  if (targetTool === "exec") {
-    return { command: "echo runtime-tool-fixture", timeout: 5 };
-  }
-  if (targetTool === "read") {
-    return { path: "QA_KICKOFF_TASK.md" };
-  }
-  if (targetTool === "write") {
-    return { path: "runtime-tool-fixture-write.txt", content: "runtime tool fixture\n" };
-  }
-  if (targetTool === "edit") {
-    return {
-      path: "runtime-tool-fixture-edit.txt",
-      edits: [{ oldText: "before edit\n", newText: "after edit\n" }],
-    };
-  }
-  if (targetTool === "apply_patch") {
-    return {
-      input: [
-        "*** Begin Patch",
-        "*** Add File: runtime-tool-fixture-patch.txt",
-        "+runtime patch",
-        "*** End Patch",
-        "",
-      ].join("\n"),
-    };
-  }
-  if (targetTool === "web_search") {
-    return { query: "OpenClaw runtime parity fixed query", count: 1 };
-  }
-  if (targetTool === "web_fetch") {
-    return { url: "https://example.com/", maxChars: 500 };
-  }
-  if (targetTool === "image_generate") {
-    return { prompt: "QA lighthouse runtime parity fixture", filename: "runtime-tool-fixture" };
-  }
-  if (targetTool === "tts") {
-    return { text: "Runtime parity voice fixture." };
-  }
-  if (targetTool === "message") {
-    return { action: "send", message: "runtime parity message fixture" };
-  }
-  if (targetTool === "session_status") {
-    return { sessionKey: "current" };
-  }
-  if (targetTool === "sessions_spawn") {
-    return {
-      task: "Runtime tool fixture subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
-      label: "runtime-tool-fixture",
-      mode: "run",
-      thread: false,
-    };
-  }
-  if (targetTool === "memory_recall") {
-    return { query: "runtime parity memory fixture" };
-  }
-  return { marker: "normal" };
-}
-
-function isActiveMemorySubagentPrompt(text: string) {
-  return text.includes("You are a memory search agent.");
-}
-
-function extractSnackPreference(text: string) {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  const match =
-    /(lemon pepper wings(?:\s+with\s+blue cheese)?|blue cheese(?:\s+with\s+lemon pepper wings)?)/i.exec(
-      normalized,
-    );
-  return match?.[0]?.trim() ?? null;
-}
-
-function extractLastCapture(text: string, pattern: RegExp) {
-  let lastMatch: RegExpExecArray | null = null;
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  const globalPattern = new RegExp(pattern.source, flags);
-  for (let match = globalPattern.exec(text); match; match = globalPattern.exec(text)) {
-    lastMatch = match;
-  }
-  return lastMatch?.[1]?.trim() || null;
-}
-
-function extractCaptures(text: string, pattern: RegExp) {
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  const globalPattern = new RegExp(pattern.source, flags);
-  return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
-}
-
-function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = texts[index] ?? "";
-    if (pattern.test(text)) {
-      return text;
-    }
-  }
-  return "";
-}
-
-function extractExactReplyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return (
-    extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i) ??
-    extractLastCapture(text, /reply(?: with)? exactly\s+(?!with\b)([^\s`.,;:!?]+)/i)
-  );
-}
-
-function extractFinishExactlyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
-}
-
-function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(
-    text,
-    /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
-  );
-}
-
-function extractWhatsAppLocationMarkerDirective(text: string) {
-  return extractLastCapture(
-    text,
-    /WhatsApp location marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
-  );
-}
-
-function extractWhatsAppContactMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp contact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
-}
-
-function extractWhatsAppStickerMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
-}
-
-function shouldUseWhatsAppLocationMarker(prompt: string) {
-  return /(?:^|[\n:]\s*)📍\s*37\.774900,\s*-122\.419400\b/u.test(prompt.trim());
-}
-
-function shouldUseWhatsAppContactMarker(prompt: string) {
-  return /(?:^|[\n:]\s*)<contacts?(?::|>)/iu.test(prompt.trim());
-}
-
-function shouldUseWhatsAppStickerMarker(prompt: string) {
-  return /(?:^|[\n:]\s*)<media:sticker>(?:\s|$)/iu.test(prompt.trim());
-}
-
-function extractLabeledMarkerDirective(text: string, label: string) {
-  const escapedLabel = escapeRegExp(label);
-  const backtickedMatch = extractLastCapture(
-    text,
-    new RegExp(`${escapedLabel}:\\s*\`([^\\\`]+)\``, "i"),
-  );
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(
-    text,
-    new RegExp(`${escapedLabel}:\\s*([^\\s\\\`.,;:!?]+(?:-[^\\s\\\`.,;:!?]+)*)`, "i"),
-  );
-}
-
-function extractBlockStreamingMarkerDirectives(text: string) {
-  const firstLabeledMarker = extractLabeledMarkerDirective(text, "first exact marker");
-  const secondLabeledMarker = extractLabeledMarkerDirective(text, "second exact marker");
-  if (firstLabeledMarker && secondLabeledMarker) {
-    return {
-      first: firstLabeledMarker,
-      second: secondLabeledMarker,
-    };
-  }
-
-  const markers = extractCaptures(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
-  if (markers.length < 2) {
-    return null;
-  }
-  const [first, second] = markers.slice(-2);
-  return first && second
-    ? {
-        first,
-        second,
-      }
-    : null;
-}
-
-function extractQuotedToolArg(text: string, name: string) {
-  const escapedName = escapeRegExp(name);
-  return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*"([^"]+)"`, "i"));
-}
-
-function extractBareToolArg(text: string, name: string) {
-  const escapedName = escapeRegExp(name);
-  return extractLastCapture(text, new RegExp(`\\b${escapedName}\\s*=\\s*([^\\s\\\`.,;:!?]+)`, "i"));
-}
-
-function hasDeclaredTool(body: Record<string, unknown>, name: string) {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  if (
-    [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name)) ||
-    instructionTextMentionsToolName(extractInstructionsText(body), name)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
-  if (depth > 6 || !value || typeof value !== "object") {
-    return false;
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => toolDefinitionMentionsName(item, name, depth + 1));
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of ["name", "tool", "functionName"]) {
-    if (record[key] === name) {
-      return true;
-    }
-  }
-  return Object.values(record).some((item) => toolDefinitionMentionsName(item, name, depth + 1));
-}
-
-function instructionTextMentionsToolName(text: string, name: string) {
-  if (!text) {
-    return false;
-  }
-  const escapedName = escapeRegExp(name);
-  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
-}
-
-function isQaToolSearchFixture(text: string) {
-  return QA_TOOL_SEARCH_PROMPT_RE.test(text) || QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(text);
-}
-
-function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
-  if (!/\bsessions_spawn\b/i.test(text)) {
-    return null;
-  }
-  const task = extractQuotedToolArg(text, "task");
-  if (!task) {
-    return null;
-  }
-  const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
-  const mode = extractBareToolArg(text, "mode")?.toLowerCase();
-  const context = extractBareToolArg(text, "context")?.toLowerCase();
-  return {
-    task,
-    ...(label ? { label } : {}),
-    ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
-    ...(mode === "session" || mode === "run" ? { mode } : {}),
-    ...(context === "fork" || context === "isolated" ? { context } : {}),
-  };
-}
-
-function extractToolErrorForNamedCall(params: {
-  input: ResponsesInputItem[];
-  name: string;
-  toolJson: Record<string, unknown> | null;
-}) {
-  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
-  if (!error) {
-    return undefined;
-  }
-  const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
-  );
-  if (namedFunctionCall) {
-    return error;
-  }
-  return undefined;
-}
-
-function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
-  if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
-    return true;
-  }
-  if (
-    typeof toolJson?.status === "string" &&
-    /\b(?:error|failed|failure)\b/i.test(toolJson.status)
-  ) {
-    return true;
-  }
-  return /\b(?:error|failed|failure|not found|no such file|enoent)\b/i.test(toolOutput);
-}
-
-function extractSessionStatusSessionKey(
-  toolJson: Record<string, unknown> | null,
-  toolOutput: string,
-) {
-  const details = toolJson?.details;
-  if (details && typeof details === "object") {
-    const sessionKey = (details as { sessionKey?: unknown }).sessionKey;
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
-      return sessionKey.trim();
-    }
-  }
-  const topLevelSessionKey = toolJson?.sessionKey;
-  if (typeof topLevelSessionKey === "string" && topLevelSessionKey.trim()) {
-    return topLevelSessionKey.trim();
-  }
-  const statusLineSessionKey = /(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1];
-  if (statusLineSessionKey?.trim()) {
-    return statusLineSessionKey.trim();
-  }
-  return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
-}
-
-function isHeartbeatPrompt(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed || /remember this fact/i.test(trimmed)) {
-    return false;
-  }
-  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
-}
-
-function readFirstMediaPath(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return "";
-  }
-  const media = value as {
-    mediaUrl?: unknown;
-    mediaUrls?: unknown;
-    path?: unknown;
-    filePath?: unknown;
-    attachments?: unknown;
-  };
-  for (const candidate of [media.mediaUrl, media.path, media.filePath]) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  if (Array.isArray(media.mediaUrls)) {
-    const mediaUrl = media.mediaUrls.find(
-      (candidate) => typeof candidate === "string" && candidate.trim(),
-    );
-    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
-      return mediaUrl.trim();
-    }
-  }
-  if (Array.isArray(media.attachments)) {
-    for (const attachment of media.attachments) {
-      const mediaPath = readFirstMediaPath(attachment);
-      if (mediaPath) {
-        return mediaPath;
-      }
-    }
-  }
-  return "";
-}
-
-function buildAssistantText(
-  input: ResponsesInputItem[],
-  body: Record<string, unknown>,
-  scenarioState: MockScenarioState,
-) {
-  const prompt = extractLastUserText(input);
-  const toolOutput = extractToolOutput(input);
-  const scenarioToolOutput =
-    toolOutput ||
-    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
-      extractAllRequestTexts(input, body),
-    )
-      ? extractLatestToolOutput(input)
-      : "");
-  const toolJson = parseToolOutputJson(scenarioToolOutput);
-  const userTexts = extractAllUserTexts(input);
-  const allInputText = extractAllRequestTexts(input, body);
-  const rememberedFact = extractRememberedFact(userTexts);
-  const model = typeof body.model === "string" ? body.model : "";
-  const memorySnippet =
-    typeof toolJson?.text === "string"
-      ? toolJson.text
-      : Array.isArray(toolJson?.results)
-        ? JSON.stringify(toolJson.results)
-        : scenarioToolOutput;
-  const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath =
-    typeof toolJson?.details === "object" &&
-    toolJson.details !== null &&
-    !Array.isArray(toolJson.details)
-      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
-      : "";
-  const promptExactReplyDirective = extractExactReplyDirective(prompt);
-  const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
-  const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
-  const exactMarkerDirective =
-    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
-  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
-    ? extractWhatsAppLocationMarkerDirective(allInputText)
-    : "";
-  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
-    ? extractWhatsAppContactMarkerDirective(allInputText)
-    : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
-    ? extractWhatsAppStickerMarkerDirective(allInputText)
-    : "";
-  const finishExactlyDirective =
-    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
-  const activeMemorySummary = extractActiveMemorySummary(allInputText);
-  const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
-  const sessionsSpawnError = extractToolErrorForNamedCall({
-    input,
-    name: "sessions_spawn",
-    toolJson,
-  });
-
-  if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
-    return `Protocol note: the QA canary code was ${rememberedFact}.`;
-  }
-  if (sessionsSpawnError) {
-    return `Protocol note: sessions_spawn failed: ${sessionsSpawnError}`;
-  }
-  if (/remember this fact/i.test(prompt) && exactReplyDirective) {
-    return exactReplyDirective;
-  }
-  if (/remember this fact/i.test(prompt) && rememberedFact) {
-    return `Protocol note: acknowledged. I will remember ${rememberedFact}.`;
-  }
-  if (/memory unavailable check/i.test(prompt)) {
-    return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
-  }
-  if (isHeartbeatPrompt(prompt)) {
-    return "HEARTBEAT_OK";
-  }
-  if (
-    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
-  ) {
-    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
-  }
-  if (
-    /image understanding check/i.test(latestImageUserTurn.text) &&
-    latestImageUserTurn.imageInputCount > 0
-  ) {
-    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
-  }
-  if (whatsAppLocationMarker) {
-    return whatsAppLocationMarker;
-  }
-  if (whatsAppContactMarker) {
-    return whatsAppContactMarker;
-  }
-  if (whatsAppStickerMarker) {
-    return whatsAppStickerMarker;
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
-    return promptExactMarkerDirective;
-  }
-  if (/\bmarker\b/i.test(prompt) && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
-    return exactMarkerDirective;
-  }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
-  }
-  if (promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if (/visible skill marker/i.test(prompt)) {
-    return "VISIBLE-SKILL-OK";
-  }
-  if (/hot install marker/i.test(prompt)) {
-    return "HOT-INSTALL-OK";
-  }
-  if (/memory tools check/i.test(prompt) && orbitCode) {
-    return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
-  }
-  if (/silent snack recall check/i.test(prompt) && snackPreference) {
-    return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
-  }
-  if (/silent snack recall check/i.test(prompt)) {
-    return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
-  }
-  if (/qa private final reply warning check/i.test(prompt)) {
-    return [
-      "QA-STRANDED-85714 confirms this is a substantive private final reply that intentionally stays outside the message tool path for the warning check.",
-      "The response is long enough to exercise message_tool_only private-final detection while remaining private to the agent transcript.",
-    ].join(" ");
-  }
-  if (/tool continuity check/i.test(prompt) && toolOutput) {
-    return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
-  }
-  if (toolOutput && promptExactReplyDirective) {
-    return promptExactReplyDirective;
-  }
-  if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
-    const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
-    if (
-      /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
-      /status:\s*complete/i.test(repoEvidenceText)
-    ) {
-      return [
-        "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
-        "Wrote: repo-contract-summary.txt",
-        "Status: complete",
-      ].join("\n");
-    }
-    return [
-      "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
-      "Wrote: repo-contract-summary.txt",
-      "Status: blocked",
-    ].join("\n");
-  }
-  if (toolOutput && /personal task followthrough check/i.test(allInputText)) {
-    const taskEvidenceText = scenarioToolOutput;
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
-      return [
-        "Pending: maintainer feedback before publishing",
-        "Blocked: publishing needs explicit user approval",
-        "Done: local evidence captured in personal-task-status.txt",
-      ].join("\n");
-    }
-    return [
-      "Pending: maintainer feedback before publishing",
-      "Blocked: publishing needs explicit user approval",
-      "Done: blocked until personal-task-status.txt exists",
-    ].join("\n");
-  }
-  if (/session memory ranking check/i.test(prompt) && orbitCode) {
-    return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
-  }
-  if (/thread memory check/i.test(allInputText) && orbitCode) {
-    return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
-  }
-  if (/switch(?:ing)? models?/i.test(prompt)) {
-    return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
-  }
-  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
-    return `Protocol note: generated the QA lighthouse image successfully. Attachment: ${mediaPath}`;
-  }
-  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
-    return [
-      "Animated GIF QA checklist ready.",
-      "- Confirm true animation, not a static preview.",
-      "- Verify dimensions and product UI fit.",
-      "- Record attribution and license.",
-      "- Keep a local copy before using the asset.",
-      "- Re-open the copied file for final verification.",
-    ].join("\n");
-  }
-  if (
-    /interrupted by a gateway reload/i.test(prompt) &&
-    /subagent recovery worker/i.test(allInputText)
-  ) {
-    return "RECOVERED-SUBAGENT-OK";
-  }
-  if (/subagent recovery worker/i.test(prompt)) {
-    return "RECOVERED-SUBAGENT-OK";
-  }
-  if (/fanout worker alpha/i.test(prompt)) {
-    return "ALPHA-OK";
-  }
-  if (/fanout worker beta/i.test(prompt)) {
-    return "BETA-OK";
-  }
-  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
-    return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
-  }
-  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
-    return "FORKED-CONTEXT-ALPHA";
-  }
-  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return fanoutCompleteReply;
-  }
-  if (
-    /forked subagent context qa check/i.test(prompt) &&
-    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
-  ) {
-    return [
-      "Worked",
-      "- FORKED-CONTEXT-ALPHA",
-      "Evidence",
-      "- The forked child recovered the visible code from requester transcript context.",
-      "Blocked",
-      "- None.",
-    ].join("\n");
-  }
-  if (
-    toolOutput &&
-    (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
-      /subagent handoff/i.test(allInputText))
-  ) {
-    const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
-    return `Delegated task:\n- Inspect the QA workspace via a bounded subagent.\nResult:\n- ${compact}\nEvidence:\n- The child result was folded back into the main thread exactly once.`;
-  }
-  if (toolOutput && /worked, failed, blocked|worked\/failed\/blocked|follow-up/i.test(prompt)) {
-    return `Worked:\n- Read seeded QA material.\n- Expanded the report structure.\nFailed:\n- None observed in mock mode.\nBlocked:\n- No live provider evidence in this lane.\nFollow-up:\n- Re-run with a real model for qualitative coverage.`;
-  }
-  if (toolOutput && /lobster invaders/i.test(prompt)) {
-    if (toolOutput.includes("QA mission") || toolOutput.includes("Testing")) {
-      return "";
-    }
-    return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
-  }
-  if (
-    toolOutput &&
-    (/compaction retry mutating tool check/i.test(allInputText) ||
-      /compaction-retry-summary\.txt/i.test(toolOutput))
-  ) {
-    if (
-      toolOutput.includes("Replay safety: unsafe after write.") ||
-      /compaction-retry-summary\.txt/i.test(toolOutput) ||
-      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
-      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
-    ) {
-      return "Protocol note: replay unsafe after write.";
-    }
-    return "";
-  }
-  if (
-    toolOutput &&
-    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
-  ) {
-    const targetTool = extractToolSearchTarget(allInputText);
-    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
-      return `FAKE_PLUGIN_OK ${targetTool}`;
-    }
-  }
-  if (
-    toolOutput &&
-    /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
-  ) {
-    return [
-      "Worked:",
-      "- Read all three seeded files: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
-      "- Extra QA scenario candidates: config restart capability flip and image generation roundtrip.",
-      "Failed:",
-      "- None observed in mock mode.",
-      "Blocked:",
-      "- No live provider evidence in this lane.",
-      "Follow-up:",
-      "- Re-run with a real model for qualitative coverage.",
-    ].join("\n");
-  }
-  if (toolOutput) {
-    const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
-    return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
-  }
-  if (finishExactlyDirective) {
-    return finishExactlyDirective;
-  }
-  if (prompt) {
-    return `Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.`;
-  }
-  return "Protocol note: mock OpenAI server ready.";
-}
-
-function buildToolCallEvents(prompt: string): StreamEvent[] {
-  const targetPath = readTargetFromPrompt(prompt);
-  return buildToolCallEventsWithArgs("read", { path: targetPath });
-}
-
-function buildReleaseAuditJson() {
-  return `${JSON.stringify(
-    {
-      verified: false,
-      findings: [
-        {
-          id: "REL-GATEWAY-417",
-          source: "src/gateway/reconnect.ts",
-          status: "retry jitter verified, resume token fallback still needs manual spot check",
-          verified: true,
-        },
-        {
-          id: "REL-CHANNEL-238",
-          source: "src/channels/delivery.ts",
-          status: "thread replies preserve ordering, root-channel fallback needs handoff note",
-          verified: true,
-        },
-        {
-          id: "REL-CRON-904",
-          source: "src/scheduling/cron.ts",
-          status: "single-run lock verified for restart wakeups",
-          verified: true,
-        },
-        {
-          id: "REL-MEMORY-552",
-          source: "src/memory/recall.ts",
-          status:
-            "fallback summary survives empty memory search; ranking sample needs second reviewer",
-          verified: true,
-        },
-        {
-          id: "REL-PLUGIN-319",
-          source: "src/plugins/runtime.ts",
-          status: "bundled runtime manifest loads cleanly after restart",
-          verified: true,
-        },
-        {
-          id: "REL-INSTALL-846",
-          source: "install/update.ts",
-          status: "update smoke passed from previous stable tag",
-          verified: true,
-        },
-        {
-          id: "REL-DOCS-611",
-          source: "docs/operator-notes.md",
-          status:
-            "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
-          verified: true,
-        },
-        {
-          id: "REL-UI-BLOCKED",
-          source: "ui/control-panel.ts",
-          status: "blocked: source file was referenced by checklist but missing from the fixture",
-          verified: false,
-        },
-      ],
-    },
-    null,
-    2,
-  )}\n`;
-}
-
-function buildReleaseHandoffMarkdown() {
-  return [
-    "# Release Handoff",
-    "",
-    "Ready:",
-    "- REL-GATEWAY-417: gateway reconnect handling checked in `src/gateway/reconnect.ts`.",
-    "- REL-CRON-904: cron duplicate prevention checked in `src/scheduling/cron.ts`.",
-    "- REL-PLUGIN-319: plugin runtime loading checked in `src/plugins/runtime.ts`.",
-    "- REL-INSTALL-846: installer update path checked in `install/update.ts`.",
-    "",
-    "Follow-up:",
-    "- REL-CHANNEL-238: channel delivery ordering needs maintainer handoff.",
-    "- REL-MEMORY-552: memory recall fallback ranking sample needs a second reviewer.",
-    "- REL-DOCS-611: docs update status needs channel ordering and UI notes.",
-    "- `ui/control-panel.ts` is blocked/not found in the fixture.",
-    "",
-  ].join("\n");
-}
-
-function extractPlannedToolName(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; name?: unknown };
-    if (item.type === "function_call" && typeof item.name === "string") {
-      return item.name;
-    }
-  }
-  return undefined;
-}
-
-function extractPlannedToolCallId(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; call_id?: unknown };
-    if (item.type === "function_call" && typeof item.call_id === "string") {
-      return item.call_id;
-    }
-  }
-  return undefined;
-}
-
-function extractPlannedToolArgs(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; arguments?: unknown };
-    if (item.type !== "function_call" || typeof item.arguments !== "string") {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(item.arguments);
-      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
-}
-
-type MockAssistantMessageSpec = {
-  id: string;
-  phase?: "commentary" | "final_answer";
-  streamDeltas?: string[];
-  text: string;
-};
-
-function splitMockStreamingText(text: string, parts = 3) {
-  if (text.length <= 1) {
-    return [text];
-  }
-  const chunkSize = Math.max(1, Math.ceil(text.length / parts));
-  const chunks: string[] = [];
-  for (let index = 0; index < text.length; index += chunkSize) {
-    chunks.push(text.slice(index, index + chunkSize));
-  }
-  return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
-}
-
-function buildQaLongFinalText({
-  endMarker = "TELEGRAM-LONG-FINAL-END",
-  segmentPrefix = "telegram-long-final-segment",
-  segmentCount = 42,
-  startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
-}: {
-  endMarker?: string;
-  segmentPrefix?: string;
-  segmentCount?: number;
-  startMarker?: string;
-} = {}) {
-  const body = Array.from(
-    { length: segmentCount },
-    (_, index) => `${segmentPrefix}-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
-  ).join("\n");
-  return `${startMarker}\n${body}\n${endMarker}`;
-}
-
-function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
-  return {
-    type: "message",
-    id: spec.id,
-    role: "assistant",
-    status: "completed",
-    ...(spec.phase ? { phase: spec.phase } : {}),
-    content: [{ type: "output_text", text: spec.text, annotations: [] }],
-  } as const;
-}
-
-function appendAssistantMessageEvents(events: StreamEvent[], spec: MockAssistantMessageSpec) {
-  events.push({
-    type: "response.output_item.added",
-    item: {
-      type: "message",
-      id: spec.id,
-      role: "assistant",
-      ...(spec.phase ? { phase: spec.phase } : {}),
-      content: [],
-      status: "in_progress",
-    },
-  });
-  for (const delta of spec.streamDeltas ?? []) {
-    events.push({
-      type: "response.output_text.delta",
-      item_id: spec.id,
-      output_index: 0,
-      content_index: 0,
-      delta,
-    });
-  }
-  if ((spec.streamDeltas ?? []).length > 0) {
-    events.push({
-      type: "response.output_text.done",
-      item_id: spec.id,
-      output_index: 0,
-      content_index: 0,
-      text: spec.text,
-    });
-  }
-  events.push({
-    type: "response.output_item.done",
-    item: buildAssistantOutputItem(spec),
-  });
-}
-
-function buildAssistantThenToolCallEvents(
-  spec: MockAssistantMessageSpec,
-  name: string,
-  args: Record<string, unknown>,
-): StreamEvent[] {
-  const call = buildMockFunctionCall(name, args);
-  const message = buildAssistantOutputItem(spec);
-  const events: StreamEvent[] = [];
-  appendAssistantMessageEvents(events, spec);
-  events.push({
-    type: "response.output_item.added",
-    item: {
-      type: "function_call",
-      id: call.itemId,
-      call_id: call.callId,
-      name,
-      arguments: "",
-    },
-  });
-  events.push({ type: "response.function_call_arguments.delta", delta: call.serialized });
-  events.push({
-    type: "response.output_item.done",
-    item: call.item,
-  });
-  events.push({
-    type: "response.completed",
-    response: {
-      id: call.responseId,
-      status: "completed",
-      output: [message, call.item],
-      usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
-    },
-  });
-  return events;
-}
-
-function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string): StreamEvent[] {
-  const specs =
-    typeof specsOrText === "string"
-      ? [
-          {
-            id: "msg_mock_1",
-            text: specsOrText,
-          },
-        ]
-      : specsOrText;
-  const output = specs.map((spec) => buildAssistantOutputItem(spec));
-  const events: StreamEvent[] = [];
-
-  for (const [outputIndex, spec] of specs.entries()) {
-    events.push({
-      type: "response.output_item.added",
-      item: {
-        type: "message",
-        id: spec.id,
-        role: "assistant",
-        ...(spec.phase ? { phase: spec.phase } : {}),
-        content: [],
-        status: "in_progress",
-      },
-    });
-    for (const delta of spec.streamDeltas ?? []) {
-      events.push({
-        type: "response.output_text.delta",
-        item_id: spec.id,
-        output_index: outputIndex,
-        content_index: 0,
-        delta,
-      });
-    }
-    if ((spec.streamDeltas ?? []).length > 0) {
-      events.push({
-        type: "response.output_text.done",
-        item_id: spec.id,
-        output_index: outputIndex,
-        content_index: 0,
-        text: spec.text,
-      });
-    }
-    events.push({
-      type: "response.output_item.done",
-      item: output[outputIndex],
-    });
-  }
-
-  events.push({
-    type: "response.completed",
-    response: {
-      id: "resp_mock_msg_1",
-      status: "completed",
-      output,
-      usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
-    },
-  });
-  return events;
-}
-
-function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
-  const reasoningItem = {
-    type: "reasoning",
-    id,
-    summary: [{ text: summaryText }],
-  } as const;
-  return [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "reasoning",
-        id,
-        summary: [],
-      },
-    },
-    {
-      type: "response.output_item.done",
-      item: reasoningItem,
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [reasoningItem],
-        usage: { input_tokens: 64, output_tokens: 8, total_tokens: 72 },
-      },
-    },
-  ];
-}
-
-function buildReasoningAndAssistantEvents(params: {
-  reasoningId: string;
-  answerText: string;
-  answerId?: string;
-}): StreamEvent[] {
-  const reasoningItem = {
-    type: "reasoning",
-    id: params.reasoningId,
-    summary: [],
-  } as const;
-  const answerItem = buildAssistantOutputItem({
-    id: params.answerId ?? "msg_mock_reasoned_answer",
-    phase: "final_answer",
-    text: params.answerText,
-  });
-  return [
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "reasoning",
-        id: params.reasoningId,
-        summary: [],
-      },
-    },
-    {
-      type: "response.output_item.done",
-      item: reasoningItem,
-    },
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "message",
-        id: answerItem.id,
-        role: "assistant",
-        phase: "final_answer",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
-      delta: params.answerText,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
-      text: params.answerText,
-    },
-    {
-      type: "response.output_item.done",
-      item: answerItem,
-    },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${params.reasoningId}`,
-        status: "completed",
-        output: [reasoningItem, answerItem],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
-  ];
-}
+import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
+import { buildMessagesPayload } from "./mock-anthropic-messages.js";
+import { buildAssistantText } from "./mock-openai-assistant-text.js";
+import {
+  type ResponsesInputItem,
+  type StreamEvent,
+  resolveProviderVariant,
+  type MockOpenAiRequestSnapshot,
+  type MockOpenAiRequestSnapshotInput,
+  type AnthropicMessagesRequest,
+  TINY_PNG_BASE64,
+  QA_REASONING_ONLY_RECOVERY_PROMPT_RE,
+  QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE,
+  QA_THINKING_VISIBILITY_OFF_PROMPT_RE,
+  QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
+  QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
+  QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_STREAMING_PROMPT_RE,
+  QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
+  QA_BLOCK_STREAMING_PROMPT_RE,
+  QA_TOOL_PROGRESS_ERROR_PROMPT_RE,
+  QA_TOOL_PROGRESS_PROMPT_RE,
+  QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
+  QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
+  QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
+  QA_STRANDED_FINAL_RECOVERY_PROMPT_RE,
+  QA_STRANDED_FINAL_RETRY_PROMPT_RE,
+  QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE,
+  QA_TELEGRAM_STREAM_SINGLE_MARKER,
+  QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE,
+  QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
+  QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
+  QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
+  QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
+  buildStrandedFinalRecoveryText,
+  buildStrandedFinalRetryFailureText,
+  isStrandedFinalRetryFailureRequest,
+  QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_NATIVE_STOP_DELAY_PROMPT_RE,
+  QA_NATIVE_STOP_DELAY_MS,
+  QA_IMAGE_GENERATION_PROMPT_RE,
+  QA_REASONING_ONLY_RETRY_NEEDLE,
+  QA_EMPTY_RESPONSE_RETRY_NEEDLE,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
+  QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
+  QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE,
+  QA_RELEASE_AUDIT_PROMPT_RE,
+  QA_TOOL_SEARCH_PROMPT_RE,
+  QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
+  QA_MCP_CODE_MODE_PROMPT_RE,
+  QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
+  QA_RESTART_RECOVERY_PROMPT_RE,
+  QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
+  type MockScenarioState,
+  sourceDiscoveryReadPathForProvider,
+  subagentHandoffTaskForProvider,
+  subagentFanoutTaskForProvider,
+  MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
+  readBody,
+  parseJsonObjectBody,
+  writeOpenAiMalformedJsonError,
+  transcriptionTextForAudioRequest,
+  writeSse,
+  isRemoteCompactionV2Request,
+  buildRemoteCompactionV2Events,
+  writeSseWithPreviewPause,
+  writeAnthropicSse,
+  countApproxTokens,
+  extractEmbeddingInputTexts,
+  buildDeterministicEmbedding,
+} from "./mock-openai-contracts.js";
+import {
+  extractLastMatchingUserText,
+  extractExactReplyDirective,
+  extractExactMarkerDirective,
+  extractWhatsAppLocationMarkerDirective,
+  extractWhatsAppContactMarkerDirective,
+  extractWhatsAppStickerMarkerDirective,
+  shouldUseWhatsAppLocationMarker,
+  shouldUseWhatsAppContactMarker,
+  shouldUseWhatsAppStickerMarker,
+  extractBlockStreamingMarkerDirectives,
+  hasDeclaredTool,
+  hasToolDefinition,
+  isQaToolSearchFixture,
+  buildExplicitSessionsSpawnArgs,
+  buildQaA2aMessageToolMirrorSessionsSendArgs,
+  hasToolErrorOutput,
+  extractSessionStatusSessionKey,
+  isHeartbeatPrompt,
+} from "./mock-openai-directives.js";
+import {
+  buildToolCallEvents,
+  buildReleaseAuditJson,
+  buildReleaseHandoffMarkdown,
+  extractPlannedToolName,
+  extractPlannedToolCallId,
+  extractPlannedToolArgs,
+  splitMockStreamingText,
+  buildQaLongFinalText,
+  buildAssistantThenToolCallEvents,
+  buildAssistantEvents,
+  buildReasoningOnlyEvents,
+  buildReasoningAndAssistantEvents,
+} from "./mock-openai-events.js";
+import {
+  extractLastUserText,
+  extractToolOutput,
+  extractToolOutputStructuredError,
+  extractToolOutputCallId,
+  extractLatestToolOutput,
+  extractAllToolOutputText,
+  extractUserTextAfterLatestToolOutput,
+  extractAllUserTexts,
+  extractSystemInputText,
+  extractAllInputTexts,
+  extractInstructionsText,
+  extractAllRequestTexts,
+  buildWhatsAppPendingHistoryReply,
+  buildWhatsAppBroadcastReply,
+  buildWhatsAppGroupDispatchReply,
+  buildWhatsAppBatchedReply,
+  countImageInputs,
+  extractLatestImageUserTurn,
+  parseToolOutputJson,
+} from "./mock-openai-input.js";
+import {
+  readTargetFromPrompt,
+  execCommandFromToolProgressPrompt,
+  buildToolCallEventsWithArgs,
+  extractOrbitCode,
+  extractToolSearchTarget,
+  buildQaToolSearchArgs,
+  isActiveMemorySubagentPrompt,
+  isSnackRecallPrompt,
+  extractSnackPreference,
+} from "./mock-openai-tooling.js";
 
 async function buildResponsesPayload(
   body: Record<string, unknown>,
@@ -2114,9 +166,15 @@ async function buildResponsesPayload(
   const toolJson = parseToolOutputJson(scenarioToolOutput);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const allUserText = extractAllUserTexts(input).join("\n");
+  const userExactReplyDirective =
+    promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
+  const userExactMarkerDirective =
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -2133,18 +191,23 @@ async function buildResponsesPayload(
   const blockStreamingMarkers =
     extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
     extractBlockStreamingMarkerDirectives(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
-  const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
+  const hasEmptyResponseRetryInstruction =
+    allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE) ||
+    allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE);
+  const isActiveEmptyResponseSideEffectRecovery =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
   const canCallMockSubagentTool =
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
     /subagent fanout synthesis check/i.test(allInputText) ||
     /forked subagent context qa check/i.test(allInputText) ||
     /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
     /subagent handoff/i.test(allInputText) ||
-    buildExplicitSessionsSpawnArgs(allInputText) !== null;
+    buildExplicitSessionsSpawnArgs(prompt) !== null;
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
   const canCallSessionsYield =
     hasDeclaredTool(body, "sessions_yield") ||
@@ -2182,6 +245,39 @@ async function buildResponsesPayload(
     if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
+  }
+  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
+    if (QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      if (toolOutput.includes("unsafe-probe-executed")) {
+        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+      }
+      if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+        return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+      }
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (toolJson?.status === "completed" && toolJson.value === "RESTART-CODE-MODE-WAIT-OK") {
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (
+      toolJson?.status === "waiting" &&
+      typeof toolJson.runId === "string" &&
+      hasDeclaredTool(body, "wait")
+    ) {
+      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      return buildToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        restartSafe: true,
+        code: [
+          'const matches = await tools.search("qa_restart_wait");',
+          "await tools.call(matches[0].id, {});",
+          'return "RESTART-CODE-MODE-WAIT-OK";',
+        ].join("\n"),
+      });
+    }
+    return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
   }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
@@ -2270,6 +366,20 @@ async function buildResponsesPayload(
   }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+  }
+  if (isActiveEmptyResponseSideEffectRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+      );
+    }
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "qa-empty-response-side-effect.txt",
+        content: "side effect completed once\n",
+      });
+    }
+    return buildAssistantEvents("");
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
@@ -2389,7 +499,7 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(allInputText);
+  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
   if (whatsAppPendingHistoryReply) {
     return buildAssistantEvents(whatsAppPendingHistoryReply);
   }
@@ -2404,6 +514,31 @@ async function buildResponsesPayload(
   const whatsAppBatchedReply = buildWhatsAppBatchedReply(allInputText);
   if (whatsAppBatchedReply) {
     return buildAssistantEvents(whatsAppBatchedReply);
+  }
+  const slackChartMatch = QA_SLACK_CHART_PRESENTATION_PROMPT_RE.exec(allInputText);
+  if (slackChartMatch?.[1] && slackChartMatch[2]) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: slackChartMatch[1],
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "line",
+              title: "QA latency trend",
+              categories: ["P50", "P95"],
+              series: [{ name: "Latency", values: [120, 240] }],
+              xLabel: "Percentile",
+              yLabel: "Milliseconds",
+            },
+          ],
+        },
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents(slackChartMatch[2]);
+    }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
     if (!toolOutput && hasDeclaredTool(body, "message")) {
@@ -2508,6 +643,30 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  if (isStrandedFinalRetryFailureRequest(allInputText)) {
+    return buildAssistantEvents(buildStrandedFinalRetryFailureText());
+  }
+  if (QA_STRANDED_FINAL_RECOVERY_PROMPT_RE.test(allInputText)) {
+    if (QA_STRANDED_FINAL_RETRY_PROMPT_RE.test(allInputText)) {
+      if (!toolOutput && hasDeclaredTool(body, "message")) {
+        return buildToolCallEventsWithArgs("message", {
+          action: "send",
+          message: "QA-STRANDED-85714",
+        });
+      }
+      return buildAssistantEvents("");
+    }
+    return buildAssistantEvents(buildStrandedFinalRecoveryText());
+  }
+  if (QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE.test(prompt)) {
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+    const sessionsSendArgs = buildQaA2aMessageToolMirrorSessionsSendArgs(prompt);
+    if (sessionsSendArgs && hasDeclaredTool(body, "sessions_send")) {
+      return buildToolCallEventsWithArgs("sessions_send", sessionsSendArgs);
+    }
+  }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
     if (!toolOutput && hasDeclaredTool(body, "message")) {
@@ -2552,14 +711,55 @@ async function buildResponsesPayload(
         : `QA-TELEGRAM-CURRENT-SESSION-BAD ${sessionKey || "missing-session-key"}`,
     );
   }
+  // Scenario workflow beats broad marker fallback: system context can contain unrelated exact-reply directives.
+  if (/dreaming shadow trial report check/i.test(allInputText)) {
+    const shadowTrialEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Report: dreaming-shadow-trial-report.md",
+          "Promotion action: report-only",
+          "DREAMING-SHADOW-TRIAL-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !shadowTrialEvidenceText ||
+      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+        !shadowTrialEvidenceText.includes("# Candidate evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
+    }
+    if (
+      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+      shadowTrialEvidenceText.includes("# Candidate evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "dreaming-shadow-trial-report.md",
+        content: [
+          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
+          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
+          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
+          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
+          "Verdict: helpful",
+          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
+          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
+          "Promotion action: report-only",
+        ].join("\n"),
+      });
+    }
+    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
+    }
+  }
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return buildAssistantEvents(promptExactReplyDirective);
   }
-  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
-    return buildAssistantEvents(exactMarkerDirective);
+  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
+    return buildAssistantEvents(userExactMarkerDirective);
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
+    return buildAssistantEvents(userExactReplyDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -2616,46 +816,6 @@ async function buildResponsesPayload(
     }
     if (/release-handoff\.md/i.test(toolOutput)) {
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
-    }
-  }
-  if (/dreaming shadow trial report check/i.test(allInputText)) {
-    const shadowTrialEvidenceText = extractAllToolOutputText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Report: dreaming-shadow-trial-report.md",
-          "Promotion action: report-only",
-          "DREAMING-SHADOW-TRIAL-OK",
-        ].join("\n"),
-      );
-    }
-    if (
-      !shadowTrialEvidenceText ||
-      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
-        !shadowTrialEvidenceText.includes("# Candidate evidence"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
-    }
-    if (
-      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
-      shadowTrialEvidenceText.includes("# Candidate evidence")
-    ) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "dreaming-shadow-trial-report.md",
-        content: [
-          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
-          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
-          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
-          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
-          "Verdict: helpful",
-          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
-          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
-          "Promotion action: report-only",
-        ].join("\n"),
-      });
-    }
-    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
-      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
     }
   }
   if (/personal share-safe diagnostics check/i.test(allInputText)) {
@@ -2835,15 +995,12 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (
-    isActiveMemorySubagentPrompt(allInputText) &&
-    /silent snack recall check/i.test(allInputText)
-  ) {
+  if (isActiveMemorySubagentPrompt(allInputText) && isSnackRecallPrompt(allInputText)) {
     if (!toolOutput) {
       if (!hasDeclaredTool(body, "memory_recall")) {
         return buildToolCallEventsWithArgs("memory_search", {
           query: "QA movie night snack lemon pepper wings blue cheese",
-          maxResults: 3,
+          maxResults: /remember across conversations qa check/i.test(allInputText) ? 10 : 3,
         });
       }
       return buildToolCallEventsWithArgs("memory_recall", {
@@ -2875,7 +1032,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (typeof first?.path === "string") {
+    if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)
@@ -3001,7 +1158,7 @@ async function buildResponsesPayload(
     scenarioState.subagentFanoutPhase = 3;
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
-  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
+  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
   if (explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
@@ -3133,514 +1290,20 @@ async function buildResponsesPayload(
   if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
-  if (
-    /subagent recovery worker/i.test(prompt) &&
-    !/interrupted by a gateway reload/i.test(prompt)
-  ) {
-    await sleep(60_000);
+  if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
+    await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
   return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
 }
 
-// ---------------------------------------------------------------------------
-// Anthropic /v1/messages adapter
-// ---------------------------------------------------------------------------
-//
-// The QA parity gate needs two comparable scenario runs: one against the
-// "candidate" (openai/gpt-5.5) and one against the "baseline"
-// (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
-// the scenario prompt branches we care about. Rather than duplicating that
-// machinery, the /v1/messages route below translates Anthropic request
-// shapes into the shared ResponsesInputItem[] format, calls the same
-// buildResponsesPayload() dispatcher, and then re-serializes the resulting
-// events into an Anthropic response. This gives the parity harness a
-// baseline lane that exercises the same scenario logic and selected
-// provider-specific plans without requiring real Anthropic API keys.
-//
-// Scope: handles Anthropic Messages requests with text and tool_result
-// content blocks, supporting both non-streaming JSON responses and the
-// streaming SSE path used by the parity harness.
-
-function normalizeAnthropicSystemToString(
-  system: AnthropicMessagesRequest["system"],
-): string | undefined {
-  if (typeof system === "string") {
-    return system.trim() || undefined;
-  }
-  if (Array.isArray(system)) {
-    const joined = system
-      .map((block) => (block?.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    return joined || undefined;
-  }
-  return undefined;
-}
-
-function stringifyToolResultContent(
-  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"],
-): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => (block?.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-function convertAnthropicMessagesToResponsesInput(params: {
-  system?: AnthropicMessagesRequest["system"];
-  messages: AnthropicMessage[];
-}): ResponsesInputItem[] {
-  const items: ResponsesInputItem[] = [];
-  const systemText = normalizeAnthropicSystemToString(params.system);
-  if (systemText) {
-    items.push({
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
-    });
-  }
-  for (const message of params.messages) {
-    const content = message.content;
-    if (typeof content === "string") {
-      items.push({
-        role: message.role,
-        content: [
-          message.role === "assistant"
-            ? { type: "output_text", text: content }
-            : { type: "input_text", text: content },
-        ],
-      });
-      continue;
-    }
-    if (!Array.isArray(content)) {
-      continue;
-    }
-    // Buffer each block type so we can push in OpenAI-Responses order instead
-    // of the order they appear in the Anthropic content array. The parent
-    // role message must precede any function_call_output items from the same
-    // turn, otherwise extractToolOutput() (which scans for
-    // function_call_output AFTER the last user-role index) will not see the
-    // output and the downstream scenario dispatcher will behave as if no
-    // tool output was returned. Similarly, assistant tool_use blocks become
-    // function_call items that must follow the assistant text message they
-    // narrate.
-    const textPieces: Array<{ type: "input_text" | "output_text"; text: string }> = [];
-    const imagePieces: Array<{ type: "input_image"; image_url: string }> = [];
-    const toolResultItems: ResponsesInputItem[] = [];
-    const toolUseItems: ResponsesInputItem[] = [];
-    for (const block of content) {
-      if (!block || typeof block !== "object") {
-        continue;
-      }
-      if (block.type === "text") {
-        textPieces.push({
-          type: message.role === "assistant" ? "output_text" : "input_text",
-          text: block.text ?? "",
-        });
-        continue;
-      }
-      if (block.type === "image") {
-        // Mock only needs to count image inputs; a placeholder URL is fine.
-        imagePieces.push({ type: "input_image", image_url: "anthropic-mock:image" });
-        continue;
-      }
-      if (block.type === "tool_result") {
-        const output = stringifyToolResultContent(block.content);
-        if (output.trim()) {
-          toolResultItems.push({
-            type: "function_call_output",
-            call_id: block.tool_use_id,
-            output,
-            ...(block.is_error === true ? { is_error: true } : {}),
-          });
-        }
-        continue;
-      }
-      if (block.type === "tool_use") {
-        // Mirror OpenAI's function_call output_item shape so downstream
-        // prompt extraction still sees "the assistant just emitted a tool
-        // call". The scenario dispatcher looks for tool_output on the next
-        // user turn, not the assistant's prior tool_use, so a minimal
-        // placeholder is enough.
-        toolUseItems.push({
-          type: "function_call",
-          name: block.name,
-          arguments: JSON.stringify(block.input ?? {}),
-          call_id: block.id,
-        });
-        continue;
-      }
-    }
-    if (textPieces.length > 0 || imagePieces.length > 0) {
-      const combinedContent: Array<Record<string, unknown>> = [...textPieces, ...imagePieces];
-      items.push({ role: message.role, content: combinedContent });
-    }
-    // Emit tool_use (assistant prior calls) and tool_result (user-side
-    // returns) AFTER the parent role message so extractLastUserText and
-    // extractToolOutput walk the array in the order they expect. For a
-    // tool_result-only user turn with no text/image blocks, the parent
-    // message is intentionally omitted — the function_call_output itself
-    // represents the user's "return the tool output" turn.
-    for (const toolUse of toolUseItems) {
-      items.push(toolUse);
-    }
-    for (const toolResult of toolResultItems) {
-      items.push(toolResult);
-    }
-  }
-  return items;
-}
-
-type ExtractedAssistantOutput = {
-  text: string;
-  toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
-};
-
-function extractFinalAssistantOutputFromEvents(events: StreamEvent[]): ExtractedAssistantOutput {
-  const toolCalls: ExtractedAssistantOutput["toolCalls"] = [];
-  let text = "";
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as {
-      type?: unknown;
-      name?: unknown;
-      call_id?: unknown;
-      id?: unknown;
-      arguments?: unknown;
-      content?: unknown;
-    };
-    if (item.type === "function_call" && typeof item.name === "string") {
-      let input: Record<string, unknown> = {};
-      if (typeof item.arguments === "string" && item.arguments.trim()) {
-        try {
-          const parsed = JSON.parse(item.arguments) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            input = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // keep empty input on malformed args — mock dispatcher owns arg shape
-        }
-      }
-      toolCalls.push({
-        id: typeof item.call_id === "string" ? item.call_id : `toolu_mock_${toolCalls.length + 1}`,
-        name: item.name,
-        input,
-      });
-      continue;
-    }
-    if (item.type === "message" && Array.isArray(item.content)) {
-      for (const piece of item.content as Array<{ type?: unknown; text?: unknown }>) {
-        if (piece?.type === "output_text" && typeof piece.text === "string") {
-          text = piece.text;
-        }
-      }
-    }
-  }
-  return { text, toolCalls };
-}
-
-function buildAnthropicMessageResponse(params: {
-  model: string;
-  extracted: ExtractedAssistantOutput;
-}): Record<string, unknown> {
-  const content: Array<Record<string, unknown>> = [];
-  if (params.extracted.text) {
-    content.push({ type: "text", text: params.extracted.text });
-  }
-  for (const call of params.extracted.toolCalls) {
-    content.push({
-      type: "tool_use",
-      id: call.id,
-      name: call.name,
-      input: call.input,
-    });
-  }
-  if (content.length === 0) {
-    content.push({ type: "text", text: "" });
-  }
-  const stopReason = params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn";
-  const approxInputTokens = 64;
-  const approxOutputTokens = Math.max(
-    16,
-    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
-  );
-  return {
-    id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
-    type: "message",
-    role: "assistant",
-    model: params.model || "claude-opus-4-8",
-    content,
-    stop_reason: stopReason,
-    stop_sequence: null,
-    usage: {
-      input_tokens: approxInputTokens,
-      output_tokens: approxOutputTokens,
-    },
-  };
-}
-
-const QA_ANTHROPIC_THINKING_ERROR_TEXT =
-  "QA replay-safe read completed, but the provider stream failed after signed thinking.";
-const QA_ANTHROPIC_THINKING_ERROR_SIGNATURE = "qa_signed_thinking_block_91953";
-const QA_ANTHROPIC_THINKING_ERROR_MESSAGE = "QA injected provider stream failure";
-
-function buildAnthropicThinkingErrorResponse(params: { model: string }): Record<string, unknown> {
-  return {
-    type: "error",
-    error: {
-      type: "api_error",
-      message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
-    },
-    model: params.model || "claude-opus-4-8",
-  };
-}
-
-function buildAnthropicThinkingErrorStreamEvents(params: {
-  model: string;
-}): AnthropicStreamEvent[] {
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
-  return [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 64,
-          output_tokens: 0,
-        },
-      },
-    },
-    {
-      type: "content_block_start",
-      index: 0,
-      content_block: {
-        type: "thinking",
-        thinking: "",
-        signature: "",
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "thinking_delta",
-        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "signature_delta",
-        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
-      },
-    },
-    {
-      type: "content_block_stop",
-      index: 0,
-    },
-    {
-      type: "message_delta",
-      delta: {},
-      usage: {
-        input_tokens: 64,
-        output_tokens: 1120,
-      },
-    },
-    {
-      type: "error",
-      error: {
-        type: "api_error",
-        message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
-      },
-    },
-  ];
-}
-
-function buildAnthropicMessageStreamEvents(params: {
-  model: string;
-  extracted: ExtractedAssistantOutput;
-}): AnthropicStreamEvent[] {
-  const approxInputTokens = 64;
-  const approxOutputTokens = Math.max(
-    16,
-    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
-  );
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
-  const events: AnthropicStreamEvent[] = [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: approxInputTokens,
-          output_tokens: 0,
-        },
-      },
-    },
-  ];
-  let index = 0;
-  if (params.extracted.text || params.extracted.toolCalls.length === 0) {
-    events.push({
-      type: "content_block_start",
-      index,
-      content_block: {
-        type: "text",
-        text: "",
-      },
-    });
-    if (params.extracted.text) {
-      events.push({
-        type: "content_block_delta",
-        index,
-        delta: {
-          type: "text_delta",
-          text: params.extracted.text,
-        },
-      });
-    }
-    events.push({
-      type: "content_block_stop",
-      index,
-    });
-    index += 1;
-  }
-  for (const call of params.extracted.toolCalls) {
-    events.push({
-      type: "content_block_start",
-      index,
-      content_block: {
-        type: "tool_use",
-        id: call.id,
-        name: call.name,
-        input: {},
-      },
-    });
-    events.push({
-      type: "content_block_delta",
-      index,
-      delta: {
-        type: "input_json_delta",
-        partial_json: JSON.stringify(call.input ?? {}),
-      },
-    });
-    events.push({
-      type: "content_block_stop",
-      index,
-    });
-    index += 1;
-  }
-  events.push({
-    type: "message_delta",
-    delta: {
-      stop_reason: params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn",
-    },
-    usage: {
-      input_tokens: approxInputTokens,
-      output_tokens: approxOutputTokens,
-    },
-  });
-  events.push({
-    type: "message_stop",
-  });
-  return events;
-}
-
-async function buildMessagesPayload(
-  body: AnthropicMessagesRequest,
-  scenarioState: MockScenarioState,
-): Promise<{
-  events: StreamEvent[];
-  input: ResponsesInputItem[];
-  extracted: ExtractedAssistantOutput;
-  responseBody: Record<string, unknown>;
-  streamEvents: AnthropicStreamEvent[];
-  model: string;
-}> {
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  const input = convertAnthropicMessagesToResponsesInput({
-    system: body.system,
-    messages,
-  });
-  // Treat empty-string model the same as absent. A bare typeof check lets
-  // `""` leak through to `responseBody.model` and `lastRequest.model`,
-  // which then confuses parity consumers that assume the mock always
-  // echoes the real provider label. Normalize once and reuse everywhere.
-  const normalizedModel =
-    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
-  // Dispatch through the same scenario logic the /v1/responses route uses.
-  // Preserve declared tools so route-specific adapters mirror what the
-  // real provider request made available to the model.
-  const dispatchBody: Record<string, unknown> = {
-    input,
-    model: normalizedModel,
-    stream: false,
-    ...(Array.isArray(body.tools) ? { tools: body.tools } : {}),
-  };
-  const allInputText = extractAllRequestTexts(input, dispatchBody);
-  if (QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE.test(allInputText)) {
-    const toolOutput = extractToolOutput(input);
-    const shouldEmitThinkingError =
-      toolOutput.length > 0 && scenarioState.anthropicThinkingErrorPhase === 0;
-    const events =
-      toolOutput.length === 0
-        ? buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" })
-        : shouldEmitThinkingError
-          ? (() => {
-              scenarioState.anthropicThinkingErrorPhase = 1;
-              return buildAssistantEvents("");
-            })()
-          : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
-    const extracted = extractFinalAssistantOutputFromEvents(events);
-    const responseBody = shouldEmitThinkingError
-      ? buildAnthropicThinkingErrorResponse({ model: normalizedModel })
-      : buildAnthropicMessageResponse({
-          model: normalizedModel,
-          extracted,
-        });
-    const streamEvents = shouldEmitThinkingError
-      ? buildAnthropicThinkingErrorStreamEvents({ model: normalizedModel })
-      : buildAnthropicMessageStreamEvents({
-          model: normalizedModel,
-          extracted,
-        });
-    return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
-  }
-  const events = await buildResponsesPayload(dispatchBody, scenarioState);
-  const extracted = extractFinalAssistantOutputFromEvents(events);
-  const responseBody = buildAnthropicMessageResponse({
-    model: normalizedModel,
-    extracted,
-  });
-  const streamEvents = buildAnthropicMessageStreamEvents({
-    model: normalizedModel,
-    extracted,
-  });
-  return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
-}
-
-export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
+export async function startQaMockOpenAiServer(params?: {
+  host?: string;
+  port?: number;
+  finalOnlyMarkerPauseMs?: number;
+  modelRefs?: readonly string[];
+}) {
   const host = params?.host ?? "127.0.0.1";
+  const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
@@ -3648,6 +1311,16 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  let nextRequestCursor = 1;
+  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
+    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
+    lastRequest = recorded;
+    requests.push(recorded);
+    if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+      requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+    }
+    return recorded;
+  };
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -3660,15 +1333,10 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
-          data: [
-            { id: "gpt-5.5", object: "model" },
-            { id: "gpt-5.5-alt", object: "model" },
-            { id: "gpt-image-1", object: "model" },
-            { id: "gpt-4o-transcribe", object: "model" },
-            { id: "text-embedding-3-small", object: "model" },
-            { id: "claude-opus-4-8", object: "model" },
-            { id: "claude-sonnet-4-6", object: "model" },
-          ],
+          data: listMockOpenAiServerModelIds(params?.modelRefs).map((id) => ({
+            id,
+            object: "model",
+          })),
         });
         return;
       }
@@ -3676,8 +1344,45 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
+        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/debug/requests") {
-        writeJson(res, 200, requests);
+        const afterText = url.searchParams.get("after");
+        if (afterText === null) {
+          writeJson(res, 200, requests);
+          return;
+        }
+        const after = parseQaDebugRequestCursor(afterText);
+        if (after === null) {
+          writeJson(res, 400, { error: "after must be a non-negative safe integer" });
+          return;
+        }
+        const latestCursor = nextRequestCursor - 1;
+        const oldestCursor = requests[0]?.cursor ?? nextRequestCursor;
+        if (after > latestCursor) {
+          writeJson(res, 409, {
+            error: "request cursor is ahead of the latest recorded request",
+            after,
+            latestCursor,
+          });
+          return;
+        }
+        if (after < oldestCursor - 1) {
+          writeJson(res, 409, {
+            error: "request cursor expired",
+            after,
+            oldestCursor,
+            latestCursor,
+          });
+          return;
+        }
+        writeJson(
+          res,
+          200,
+          requests.filter((request) => request.cursor > after),
+        );
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
@@ -3750,6 +1455,15 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           return;
         }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+        if (isRemoteCompactionV2Request(input)) {
+          const events = buildRemoteCompactionV2Events();
+          if (body.stream === false) {
+            writeJson(res, 200, events[1].response);
+          } else {
+            writeSse(res, events);
+          }
+          return;
+        }
         const prompt = extractLastUserText(input);
         const allInputText = extractAllRequestTexts(input, body);
         const inflightRequestId = nextInflightRequestId++;
@@ -3761,7 +1475,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           inflightRequests.delete(inflightRequestId);
         }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
-        lastRequest = {
+        recordRequest({
           raw,
           body,
           prompt,
@@ -3776,11 +1490,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
@@ -3791,7 +1501,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           return;
         }
         if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
-          await writeSseWithPreviewPause(res, events, 1_500);
+          await writeSseWithPreviewPause(res, events, finalOnlyMarkerPauseMs);
         } else {
           writeSse(res, events);
         }
@@ -3816,14 +1526,14 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           responseBody,
           streamEvents,
           model: normalizedModel,
-        } = await buildMessagesPayload(body, scenarioState);
+        } = await buildMessagesPayload(body, scenarioState, buildResponsesPayload);
         // Record the adapted request snapshot so /debug/requests gives the QA
         // suite the same plannedToolName / allInputText / toolOutput signals
         // on the Anthropic route that the OpenAI route already exposes. This
         // is what lets a single parity run diff assertions across both lanes.
         // Reuse the normalized model so an empty-string body.model no longer
         // leaks through to `lastRequest.model`.
-        lastRequest = {
+        recordRequest({
           raw,
           body: body as Record<string, unknown>,
           prompt: extractLastUserText(input),
@@ -3837,11 +1547,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           plannedToolArgs: extractPlannedToolArgs(events),
           toolOutputCallId: extractToolOutputCallId(input) || undefined,
           ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        };
-        requests.push(lastRequest);
-        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-        }
+        });
         if (body.stream === true) {
           writeAnthropicSse(res, streamEvents);
           return;
@@ -3870,3 +1576,4 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

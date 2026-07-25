@@ -17,6 +17,7 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="$(openclaw_live_default_profile_file)"
 ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
+ACP_CLAUDE_AUTH_MODE="${OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH:-auto}"
 ACP_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS 180)"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
@@ -61,6 +62,15 @@ openclaw_live_acp_bind_resolve_agent_command() {
     *) return 1 ;;
   esac
 }
+
+case "$ACP_CLAUDE_AUTH_MODE" in
+  auto | api-key | subscription)
+    ;;
+  *)
+    echo "ERROR: OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH must be one of: auto, api-key, subscription." >&2
+    exit 1
+    ;;
+esac
 
 cleanup_temp_dirs() {
   if ((${#TEMP_DIRS[@]} > 0)); then
@@ -174,10 +184,30 @@ fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
   claude)
-    if [ ! -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
-      run_setup_command npm install -g @anthropic-ai/claude-code
+    claude_auth_mode="${OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH:-auto}"
+    if [ "$claude_auth_mode" = "subscription" ]; then
+      unset ANTHROPIC_API_KEY
+      unset ANTHROPIC_API_KEY_OLD
+      unset ANTHROPIC_API_TOKEN
+      unset ANTHROPIC_AUTH_TOKEN
+      unset ANTHROPIC_OAUTH_TOKEN
     fi
+    claude_code_version="$(
+      node -e 'const path = require("node:path"); const packagePath = path.join(path.dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
+    )"
+    claude_package_json="$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json"
     real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
+    installed_claude_code_version=""
+    if [ -f "$claude_package_json" ]; then
+      installed_claude_code_version="$(
+        node -e 'process.stdout.write(require(process.argv[1]).version);' \
+          "$claude_package_json" 2>/dev/null || true
+      )"
+    fi
+    if [ "$installed_claude_code_version" != "$claude_code_version" ]; then
+      rm -f "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
+      run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"
+    fi
     if [ ! -x "$real_claude" ] && [ -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
       mv "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
     fi
@@ -185,17 +215,24 @@ case "$agent" in
       cat > "$NPM_CONFIG_PREFIX/bin/claude" <<WRAP
 #!/usr/bin/env bash
 script_dir="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
-if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY:-}" ]; then
-  export ANTHROPIC_API_KEY="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY}"
-fi
-if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD:-}" ]; then
-  export ANTHROPIC_API_KEY_OLD="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD}"
+if [ "\${OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH:-auto}" = "subscription" ]; then
+  unset ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN
+  unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_OAUTH_TOKEN
+else
+  if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY:-}" ]; then
+    export ANTHROPIC_API_KEY="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY}"
+  fi
+  if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD:-}" ]; then
+    export ANTHROPIC_API_KEY_OLD="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD}"
+  fi
 fi
 exec "\$script_dir/claude-real" "\$@"
 WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
     export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
+    echo "Using Claude Code $claude_code_version declared by the installed Claude Agent SDK"
+    claude --version
     claude auth status || true
     ;;
   codex)
@@ -355,6 +392,14 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     echo "ERROR: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
     exit 1
   fi
+  CLAUDE_AUTH_MODE="$ACP_CLAUDE_AUTH_MODE"
+  if [[ "$ACP_AGENT" == "claude" && "$CLAUDE_AUTH_MODE" == "auto" ]]; then
+    if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" || -f "$HOME/.claude/.credentials.json" ]]; then
+      CLAUDE_AUTH_MODE="subscription"
+    else
+      CLAUDE_AUTH_MODE="api-key"
+    fi
+  fi
 
   EXTERNAL_AUTH_MOUNTS=()
   if ((${#AUTH_DIRS[@]} > 0)); then
@@ -382,6 +427,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
+  if [[ "$ACP_AGENT" == "claude" ]]; then
+    echo "==> Claude auth mode: $CLAUDE_AUTH_MODE"
+  fi
   if openclaw_live_uses_managed_bind_dirs; then
     openclaw_live_chown_bind_dirs_for_container_user \
       "$LIVE_IMAGE_NAME" \
@@ -392,13 +440,24 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   fi
   DOCKER_RUN_ARGS=()
   openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s}"
+  DOCKER_AUTH_ENV=()
+  if [[ "$ACP_AGENT" == "claude" && "$CLAUDE_AUTH_MODE" == "subscription" ]]; then
+    DOCKER_AUTH_ENV+=(
+      -e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      -e OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH="$CLAUDE_AUTH_MODE"
+    )
+  elif [[ "$ACP_AGENT" == "claude" ]]; then
+    DOCKER_AUTH_ENV+=(
+      -e ANTHROPIC_API_KEY
+      -e ANTHROPIC_API_KEY_OLD
+      -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+      -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}"
+      -e OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH="$CLAUDE_AUTH_MODE"
+    )
+  fi
   DOCKER_RUN_ARGS+=(--rm -t \
     -u "$DOCKER_USER" \
     --entrypoint bash \
-    -e ANTHROPIC_API_KEY \
-    -e ANTHROPIC_API_KEY_OLD \
-    -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
-    -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
     -e GEMINI_API_KEY \
     -e GOOGLE_API_KEY \
     -e FACTORY_API_KEY \
@@ -434,6 +493,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_THINKING="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_THINKING:-}" \
     -e OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_TIMEOUT_MS="${OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_TIMEOUT_MS:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND")
+  openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_AUTH_ENV
   openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
   openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
   DOCKER_RUN_ARGS+=(\

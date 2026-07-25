@@ -1,14 +1,15 @@
 // Discord tests cover client plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Client, ComponentRegistry, type AnyListener } from "./client.js";
+import { Client } from "./client.js";
 import { BaseCommand } from "./commands.js";
+import { ComponentRegistry } from "./component-registry.js";
 import { Button, StringSelectMenu, parseCustomId } from "./components.js";
+import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
+
+type AnyListener = Parameters<Client["registerListener"]>[0];
 
 function createDeferred<T = void>(): {
   promise: Promise<T>;
@@ -239,6 +240,78 @@ describe("Client.deployCommands", () => {
     expect(deleteRequest).not.toHaveBeenCalled();
   });
 
+  it("bulk overwrites when a capped application cannot create a replacement", async () => {
+    const retainedCommands = Array.from({ length: 99 }, (_, index) =>
+      createTestCommand({ name: `retained-${index}` }),
+    );
+    const replacement = createTestCommand({ name: "replacement" });
+    const client = createInternalTestClient([...retainedCommands, replacement]);
+    const existing = [
+      ...retainedCommands.map((command, index) =>
+        Object.assign(command.serialize(), {
+          id: `retained-id-${index}`,
+          application_id: "app1",
+        }),
+      ),
+      Object.assign(createTestCommand({ name: "stale" }).serialize(), {
+        id: "stale-id",
+        application_id: "app1",
+      }),
+    ];
+    let deployedCount = existing.length;
+    const operations: string[] = [];
+    const get = vi.fn(async () => existing);
+    const post = vi.fn(async () => {
+      if (deployedCount >= 100) {
+        throw new DiscordError(new Response(null, { status: 400 }), {
+          message: "Maximum number of application commands reached (100).",
+          code: 30032,
+        });
+      }
+      deployedCount += 1;
+      operations.push("post");
+    });
+    const put = vi.fn(async () => {
+      deployedCount = 100;
+      operations.push("put");
+    });
+    const deleteRequest = vi.fn(async () => undefined);
+    attachRestMock(client, { get, post, put, delete: deleteRequest });
+
+    await client.deployCommands({ mode: "reconcile" });
+
+    expect(deleteRequest).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
+      body: replacement.serialize(),
+    });
+    expect(put).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
+      body: [...retainedCommands, replacement].map((command) => command.serialize()),
+    });
+    expect(operations).toEqual(["put"]);
+    expect(deployedCount).toBe(100);
+  });
+
+  it("keeps stale commands when a replacement create fails below the cap", async () => {
+    const client = createInternalTestClient([createTestCommand({ name: "replacement" })]);
+    const get = vi.fn(async () => [
+      Object.assign(createTestCommand({ name: "stale" }).serialize(), {
+        id: "stale-id",
+        application_id: "app1",
+      }),
+    ]);
+    const post = vi.fn(async () => {
+      throw new Error("Discord unavailable");
+    });
+    const deleteRequest = vi.fn(async () => undefined);
+    attachRestMock(client, { get, post, delete: deleteRequest });
+
+    await expect(client.deployCommands({ mode: "reconcile" })).rejects.toThrow(
+      "Discord unavailable",
+    );
+
+    expect(deleteRequest).not.toHaveBeenCalled();
+  });
+
   it("patches changed option localization maps", async () => {
     const client = createInternalTestClient([
       createTestCommand({
@@ -316,12 +389,15 @@ describe("Client.deployCommands", () => {
   });
 
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
-    const hashStorePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-command-deploy-")),
-      "hashes.json",
-    );
+    const hashes = new Map<string, string>();
+    const commandDeployHashStore = {
+      lookup: async (key: string) => hashes.get(key),
+      register: async (key: string, value: string) => {
+        hashes.set(key, value);
+      },
+    };
     const first = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStorePath: hashStorePath,
+      commandDeployHashStore,
     });
     const firstGet = vi.fn(async () => []);
     const firstPost = vi.fn(async () => undefined);
@@ -330,7 +406,7 @@ describe("Client.deployCommands", () => {
     await first.deployCommands({ mode: "reconcile" });
 
     const second = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStorePath: hashStorePath,
+      commandDeployHashStore,
     });
     const secondGet = vi.fn(async () => []);
     const secondPost = vi.fn(async () => undefined);
@@ -434,7 +510,7 @@ describe("Client gateway event queue", () => {
     });
   });
 
-  it("times out hung queued listeners", async () => {
+  it("resolves timed-out dispatches while retaining the hung listener slot", async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const listener = {
@@ -455,12 +531,99 @@ describe("Client gateway event queue", () => {
     );
     expect(client.getRuntimeMetrics().eventQueue).toEqual({
       queueSize: 0,
-      processing: 0,
+      processing: 1,
       processed: 1,
       dropped: 0,
       timeouts: 1,
       maxQueueSize: 10_000,
       maxConcurrency: 1,
+    });
+  });
+
+  it("holds a timed-out listener slot until its underlying promise resolves", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const firstSettlement = createDeferred();
+    const started: string[] = [];
+    const first = {
+      type: "READY",
+      handle: vi.fn(async () => {
+        started.push("first");
+        await firstSettlement.promise;
+      }),
+    } satisfies AnyListener;
+    const second = {
+      type: "READY",
+      handle: vi.fn(async () => {
+        started.push("second");
+      }),
+    } satisfies AnyListener;
+    const client = createQueuedClient({
+      listeners: [first, second],
+      eventQueue: { listenerTimeout: 10, maxConcurrency: 1 },
+    });
+
+    const dispatch = client.dispatchGatewayEvent("READY", {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(started).toEqual(["first"]);
+    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
+      queueSize: 1,
+      processing: 1,
+      processed: 1,
+      timeouts: 1,
+    });
+
+    firstSettlement.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(started).toEqual(["first", "second"]);
+    expect(first.handle).toHaveBeenCalledTimes(1);
+    expect(second.handle).toHaveBeenCalledTimes(1);
+    await expect(dispatch).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
+      queueSize: 0,
+      processing: 0,
+      processed: 2,
+      timeouts: 1,
+    });
+  });
+
+  it("logs a listener failure that arrives after its dispatch timeout", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const settlement = createDeferred();
+    const lateError = new Error("late listener failure");
+    const listener = {
+      type: "READY",
+      handle: vi.fn(async () => await settlement.promise),
+    } satisfies AnyListener;
+    const client = createQueuedClient({
+      listeners: [listener],
+      eventQueue: { listenerTimeout: 10, maxConcurrency: 1 },
+    });
+
+    const dispatch = client.dispatchGatewayEvent("READY", {});
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(dispatch).resolves.toBeUndefined();
+
+    settlement.reject(lateError);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      1,
+      "[EventQueue] Listener Object timed out after 10ms for event READY",
+    );
+    expect(errorSpy).toHaveBeenNthCalledWith(
+      2,
+      "[EventQueue] Listener Object failed after timeout for event READY:",
+      lateError,
+    );
+    expect(client.getRuntimeMetrics().eventQueue).toMatchObject({
+      processing: 0,
+      processed: 1,
+      timeouts: 1,
     });
   });
 

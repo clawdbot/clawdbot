@@ -1,9 +1,9 @@
 // Matrix plugin module implements deps behavior.
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 
 const REQUIRED_MATRIX_PACKAGES = [
@@ -12,7 +12,7 @@ const REQUIRED_MATRIX_PACKAGES = [
   "@matrix-org/matrix-sdk-crypto-wasm",
 ];
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
-export const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
+const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
@@ -51,105 +51,38 @@ type CommandResult = {
 
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
-function appendBoundedOutputTail(current: string, chunk: Buffer | string): string {
-  const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  if (chunkBuffer.byteLength >= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
-    return chunkBuffer
-      .subarray(chunkBuffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES)
-      .toString("utf8");
-  }
-
-  const currentBuffer = Buffer.from(current);
-  const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
-  if (nextBytes <= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
-    return `${current}${chunkBuffer.toString("utf8")}`;
-  }
-
-  const currentTailBytes = MATRIX_COMMAND_OUTPUT_TAIL_BYTES - chunkBuffer.byteLength;
-  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], MATRIX_COMMAND_OUTPUT_TAIL_BYTES).toString(
-    "utf8",
-  );
-}
-
-export async function runFixedCommandWithTimeout(params: {
+async function runFixedCommandWithTimeout(params: {
   argv: string[];
   cwd: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<CommandResult> {
-  return await new Promise((resolve) => {
-    const [command, ...args] = params.argv;
-    if (!command) {
-      resolve({
-        code: 1,
-        stdout: "",
-        stderr: "command is required",
-      });
-      return;
-    }
-
-    const proc = spawn(command, args, {
+  if (!params.argv[0]) {
+    return { code: 1, stdout: "", stderr: "command is required" };
+  }
+  try {
+    const result = await runCommandWithTimeout(params.argv, {
       cwd: params.cwd,
-      env: { ...process.env, ...params.env },
-      stdio: ["ignore", "pipe", "pipe"],
+      env: params.env,
+      killProcessTree: true,
+      maxOutputBytes: MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
+      outputCapture: "tail",
+      timeoutMs: params.timeoutMs,
     });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timer: NodeJS.Timeout | null = null;
-    const killChildOnExit = () => {
-      if (!settled && proc.exitCode === null) {
-        proc.kill("SIGTERM");
-      }
+    return {
+      code: result.termination === "timeout" ? 124 : (result.code ?? 1),
+      stdout: result.stdout,
+      stderr:
+        result.stderr ||
+        (result.termination === "timeout" ? `command timed out after ${params.timeoutMs}ms` : ""),
     };
-
-    const finalize = (result: CommandResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      process.off("exit", killChildOnExit);
-      resolve(result);
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
     };
-    process.once("exit", killChildOnExit);
-
-    proc.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout = appendBoundedOutputTail(stdout, chunk);
-    });
-    proc.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr = appendBoundedOutputTail(stderr, chunk);
-    });
-
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finalize({
-        code: 124,
-        stdout,
-        stderr: stderr || `command timed out after ${params.timeoutMs}ms`,
-      });
-    }, params.timeoutMs);
-
-    proc.on("error", (err) => {
-      finalize({
-        code: 1,
-        stdout,
-        stderr: err.message,
-      });
-    });
-
-    proc.on("close", (code) => {
-      finalize({
-        code: code ?? 1,
-        stdout,
-        stderr,
-      });
-    });
-  });
+  }
 }
 
 function defaultRequireFn(id: string): unknown {

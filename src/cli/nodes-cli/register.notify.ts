@@ -17,7 +17,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
     nodes
       .command("notify")
-      .description("Send a local notification on a node (mac only)")
+      .description("Send a local notification on a node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--title <text>", "Notification title")
       .option("--body <text>", "Notification body")

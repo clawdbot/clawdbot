@@ -114,13 +114,12 @@ const TEXT_BODY = "OpenClaw web_fetch direct text benchmark body.".repeat(160);
 const MARKDOWN_BODY = "# Web Fetch Benchmark\n\n" + "- markdown list item\n".repeat(220);
 const OFFLINE_PROVIDER_ENV_VARS = ["FIRECRAWL_API_KEY"] as const;
 
-const lookupFn: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
+const lookupFn = (async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
 const toolConfig: OpenClawConfig = {
   tools: {
     web: {
       fetch: {
         cacheTtlMinutes: 0,
-        firecrawl: { enabled: false },
       },
     },
   },
@@ -270,7 +269,7 @@ function installMockFetch(params: { body: string; contentType: string }) {
       headers: {
         "content-type": params.contentType,
       },
-    })) as typeof globalThis.fetch & { mock: object };
+    })) as unknown as typeof globalThis.fetch & { mock: object };
   // fetchWithSsrFGuard preserves dispatcher support unless global fetch is a
   // test double. The marker keeps this benchmark offline and deterministic.
   fetchImpl.mock = {};

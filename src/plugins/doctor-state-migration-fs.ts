@@ -23,16 +23,39 @@ export async function archiveLegacyStateSource(params: {
   warnings: string[];
 }): Promise<void> {
   const archivedPath = `${params.filePath}.migrated`;
-  if (await legacyStateFileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ${params.label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
   try {
+    if (await legacyStateFileExists(archivedPath)) {
+      // Import commits before archival, so an existing archive must converge
+      // instead of re-warning every startup (#102749): identical bytes already
+      // preserve the snapshot; differing bytes archive under a free suffix.
+      const [sourceBytes, archiveBytes] = await Promise.all([
+        fs.readFile(params.filePath),
+        fs.readFile(archivedPath),
+      ]);
+      if (sourceBytes.equals(archiveBytes)) {
+        await fs.rm(params.filePath, { force: true });
+        params.changes.push(
+          `Removed already-archived ${params.label} legacy source ${params.filePath}`,
+        );
+        return;
+      }
+      const nextArchivePath = await firstFreeArchivePath(params.filePath);
+      await fs.rename(params.filePath, nextArchivePath);
+      params.changes.push(`Archived ${params.label} legacy source -> ${nextArchivePath}`);
+      return;
+    }
     await fs.rename(params.filePath, archivedPath);
     params.changes.push(`Archived ${params.label} legacy source -> ${archivedPath}`);
   } catch (err) {
     params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
+  }
+}
+
+async function firstFreeArchivePath(sourcePath: string): Promise<string> {
+  for (let index = 2; ; index++) {
+    const candidate = `${sourcePath}.migrated.${index}`;
+    if (!(await legacyStateFileExists(candidate))) {
+      return candidate;
+    }
   }
 }

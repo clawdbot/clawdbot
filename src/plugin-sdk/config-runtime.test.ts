@@ -46,6 +46,23 @@ describe("resolvePluginConfigObject", () => {
     });
   });
 
+  it("reads config through normalized plugin entry ids", () => {
+    const config = {
+      plugins: {
+        entries: {
+          " CODEX ": {
+            enabled: true,
+            config: { supervision: { enabled: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolvePluginConfigObject(config, "codex")).toEqual({
+      supervision: { enabled: true },
+    });
+  });
+
   it("returns undefined for missing or non-object plugin configs", () => {
     const config = {
       plugins: {

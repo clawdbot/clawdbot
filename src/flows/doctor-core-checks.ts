@@ -1,6 +1,7 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
@@ -30,12 +31,17 @@ import {
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import type { CronListPageResult } from "../cron/service/list-page-types.js";
+import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { registerHealthCheck } from "./health-check-registry.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
+import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
+import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -51,11 +57,10 @@ const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
-
+const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
 };
-
 type CoreHealthRepairContext = HealthRepairContext & {
   readonly deep?: boolean;
 };
@@ -74,12 +79,14 @@ export type CoreHealthCheckDeps = {
   readonly collectProviderCatalogProjectionFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
+  readonly collectLocalAudioAccelerationFindings: () => Promise<readonly HealthFinding[]>;
   readonly collectGatewayHealthFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
   readonly collectGatewayDaemonFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
+  readonly listGatewayCronJobs: (ctx: HealthCheckContext) => Promise<readonly CronJob[]>;
 };
 
 async function detectUnavailableSkillsWithRuntime(
@@ -124,6 +131,13 @@ async function collectProviderCatalogProjectionFindingsWithRuntime(
   return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
 }
 
+async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
+  readonly HealthFinding[]
+> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectLocalAudioAccelerationFindings();
+}
+
 async function collectGatewayHealthFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
@@ -138,14 +152,85 @@ async function collectGatewayDaemonFindingsWithRuntime(
   return runtime.collectGatewayDaemonFindings(ctx);
 }
 
+async function listGatewayCronJobsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly CronJob[]> {
+  if (
+    (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
+    ctx.allowExecSecretRefs !== true
+  ) {
+    throw new Error(
+      "Gateway cron inventory skipped because credentials use an exec SecretRef; rerun doctor with --allow-exec.",
+    );
+  }
+  const { callGateway } = await import("../gateway/call.js");
+  const jobs: CronJob[] = [];
+  let offset = 0;
+  let snapshotRevision: string | undefined;
+  let total: number | undefined;
+
+  while (total === undefined || offset < total) {
+    const page = await callGateway<CronListPageResult>({
+      method: "cron.list",
+      params: { includeDisabled: true, limit: 200, offset },
+      timeoutMs: 3000,
+      config: ctx.cfg,
+      deviceIdentity: null,
+    });
+    const validPage =
+      Array.isArray(page.jobs) &&
+      typeof page.snapshotRevision === "string" &&
+      page.snapshotRevision.length > 0 &&
+      Number.isSafeInteger(page.total) &&
+      page.total >= 0 &&
+      page.offset === offset &&
+      Number.isSafeInteger(page.limit) &&
+      page.limit > 0 &&
+      typeof page.hasMore === "boolean" &&
+      (page.nextOffset === null || Number.isSafeInteger(page.nextOffset));
+    if (!validPage) {
+      throw new Error("Gateway returned an invalid cron inventory response.");
+    }
+    if (
+      (snapshotRevision !== undefined && page.snapshotRevision !== snapshotRevision) ||
+      (total !== undefined && page.total !== total)
+    ) {
+      throw new Error("Gateway cron inventory changed while doctor was reading it.");
+    }
+    snapshotRevision ??= page.snapshotRevision;
+    total ??= page.total;
+    jobs.push(...page.jobs);
+
+    if (!page.hasMore) {
+      if (page.nextOffset !== null || jobs.length !== total) {
+        throw new Error("Gateway returned an inconsistent cron inventory response.");
+      }
+      return jobs;
+    }
+    const expectedNextOffset = offset + page.jobs.length;
+    if (
+      page.nextOffset !== expectedNextOffset ||
+      expectedNextOffset <= offset ||
+      expectedNextOffset >= total
+    ) {
+      throw new Error("Gateway returned an invalid cron inventory cursor.");
+    }
+    offset = expectedNextOffset;
+  }
+
+  throw new Error("Gateway returned an incomplete cron inventory response.");
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
   collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
+  collectLocalAudioAccelerationFindings: collectLocalAudioAccelerationFindingsWithRuntime,
   collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
   collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
+  listGatewayCronJobs: listGatewayCronJobsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -211,6 +296,33 @@ const commandOwnerCheck: HealthCheck = {
         path: "commands.ownerAllowFrom",
         fixHint:
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
+      },
+    ];
+  },
+};
+
+const skillWorkshopToolPolicyCheck: HealthCheck = {
+  id: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+  kind: "core",
+  description: "Autonomous Skill Workshop capture has a callable review tool.",
+  source: "doctor",
+  async detect(ctx) {
+    const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
+      config: ctx.cfg,
+      workshopEnabled: resolveSkillWorkshopConfig(ctx.cfg).autonomous.enabled,
+    });
+    if (!diagnostic) {
+      return [];
+    }
+    return [
+      {
+        checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
+        severity: "warning",
+        message: diagnostic.detail,
+        path: diagnostic.source,
+        target: diagnostic.agentId,
+        requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
+        fixHint: diagnostic.fix,
       },
     ];
   },
@@ -339,7 +451,7 @@ const hooksModelCheck: HealthCheck = {
       return [];
     }
     const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-    const { loadModelCatalog } = await import("../agents/model-catalog.js");
+    const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
     const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
       await import("../agents/model-selection.js");
     const hooksModelRef = resolveHooksGmailModel({
@@ -361,7 +473,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadModelCatalog({ config: ctx.cfg, readOnly: true });
+    const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
     const status = getModelRefStatus({
       cfg: ctx.cfg,
       catalog,
@@ -374,9 +486,10 @@ const hooksModelCheck: HealthCheck = {
       findings.push({
         checkId: "core/doctor/hooks-model",
         severity: "warning",
-        message: `hooks.gmail.model "${status.key}" is not in agents.defaults.models allowlist.`,
+        message: `hooks.gmail.model "${status.key}" is not allowed by agents.defaults.modelPolicy.allow.`,
         path: "hooks.gmail.model",
-        fixHint: "Add the model to agents.defaults.models or remove hooks.gmail.model.",
+        fixHint:
+          "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model.",
       });
     }
     if (!status.inCatalog) {
@@ -392,14 +505,18 @@ const hooksModelCheck: HealthCheck = {
   },
 };
 
-const legacyStateCheck: HealthCheck = {
+const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-state",
   kind: "core",
   description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
   source: "doctor",
+  defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
-    const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+    const detected = await detectLegacyStateMigrations({
+      cfg: ctx.cfg,
+      doctorOnlyStateMigrations: true,
+    });
     return [
       ...detected.preview.map(
         (line): HealthFinding => ({
@@ -434,18 +551,20 @@ const bootstrapSizeCheck: HealthCheck = {
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+    const defaultAgentId = resolveDefaultAgentId(ctx.cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, defaultAgentId);
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
       config: ctx.cfg,
+      agentId: defaultAgentId,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
         bootstrapFiles,
         injectedFiles: contextFiles,
       }),
-      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg),
-      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg),
+      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg, defaultAgentId),
+      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg, defaultAgentId),
     });
     const findings: HealthFinding[] = [];
     for (const file of analysis.truncatedFiles) {
@@ -454,7 +573,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars/TotalMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -466,7 +586,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "info",
         message: `${file.name} is near the configured bootstrap file limit.`,
         path: file.path,
-        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars.",
+        fixHint:
+          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       });
     }
     if (analysis.totalNearLimit) {
@@ -475,7 +596,8 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: analysis.hasTruncation ? "warning" : "info",
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
-        fixHint: "Reduce bootstrap file sizes or tune agents.defaults.bootstrapTotalMaxChars.",
+        fixHint:
+          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
       });
     }
     return findings;
@@ -709,9 +831,9 @@ const codexSessionRoutesCheck: HealthCheck = {
         path: issue.path,
         target: issue.canonicalModel,
         requirement: "Codex plugin enabled for routes that use the Codex runtime.",
-        fixHint: issue.blockedOutsideEntry
+        fixHint: issue.repairBlocked
           ? [
-              "Enable plugin loading and remove codex from plugins.deny,",
+              "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny;",
               "or set the affected OpenAI models to an OpenClaw runtime policy.",
             ].join(" ")
           : [
@@ -839,12 +961,15 @@ const browserCheck: HealthCheck = {
   },
 };
 
-function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createSkillsReadinessCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/skills-readiness",
     kind: "core",
     description: "Allowed skills are usable in the current runtime environment.",
     source: "doctor",
+    defaultEnabled: false,
     async detect(ctx, scope) {
       const unavailable = filterUnavailableSkillsForScope(
         await deps.detectUnavailableSkills(ctx.cfg),
@@ -1082,6 +1207,7 @@ function createConvertedWorkflowChecks(
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
+    removedWorkspacesStateCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     codexSessionRoutesCheck,
@@ -1098,26 +1224,45 @@ function createConvertedWorkflowChecks(
     hooksModelCheck,
     bootstrapSizeCheck,
     createProviderCatalogProjectionCheck(deps),
+    {
+      id: "core/doctor/local-audio-acceleration",
+      kind: "core",
+      description: "Local STT auto-selection and acceleration evidence are visible.",
+      source: "doctor",
+      async detect() {
+        return await deps.collectLocalAudioAccelerationFindings();
+      },
+    },
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
+    skillWorkshopToolPolicyCheck,
+    ...(isExperimentalClawsEnabled()
+      ? [
+          {
+            id: "core/doctor/claws-state",
+            kind: "core" as const,
+            description: "Claw lifecycle ownership and managed resources are consistent.",
+            defaultEnabled: false as const,
+            source: "doctor",
+            async detect(ctx: HealthCheckContext) {
+              const [{ collectClawStateHealthFindings }, { listConfiguredMcpServers }] =
+                await Promise.all([
+                  import("../claws/doctor.js"),
+                  import("../config/mcp-config.js"),
+                ]);
+              return await collectClawStateHealthFindings({
+                cfg: ctx.cfg,
+                env: process.env,
+                listMcpServers: listConfiguredMcpServers,
+                cronGateway: {
+                  list: async () => await deps.listGatewayCronJobs(ctx),
+                },
+              });
+            },
+          },
+        ]
+      : []),
   ];
-}
-
-let registered = false;
-
-/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
-export function registerCoreHealthChecks(): void {
-  if (registered) {
-    return;
-  }
-  for (const check of CORE_HEALTH_CHECKS) {
-    registerHealthCheck(check);
-  }
-  registered = true;
-}
-
-export function resetCoreHealthChecksForTest(): void {
-  registered = false;
 }
 
 export function createCoreHealthChecks(
@@ -1134,3 +1279,4 @@ export function createCoreHealthChecks(
 }
 
 export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

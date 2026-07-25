@@ -2,22 +2,41 @@
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import { createHookRunner } from "../plugins/hooks.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
 }));
+const DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS = 15_000;
+const BEFORE_AGENT_FINALIZE_EVENT = {
+  runId: "run-1",
+  sessionId: "session-1",
+  sessionKey: "agent:main:session-1",
+  turnId: "turn-1",
+  provider: "openai",
+  model: "freeze-e2e",
+  cwd: "/repo",
+  transcriptPath: "/tmp/session.jsonl",
+  stopHookActive: false,
+  lastAssistantMessage: "done",
+};
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: emitAgentEventMock,
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
 function createContext(
   lastAssistant: unknown,
   overrides?: {
-    onAgentEvent?: (event: unknown) => void;
+    onAgentEvent?: (event: unknown) => void | Promise<void>;
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
+    onBeforeTerminalDelivery?: () => void | Promise<void>;
     onBlockReply?: ((payload: unknown) => void) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
     resolveTerminalStopReason?: () => string | undefined;
@@ -35,6 +54,7 @@ function createContext(
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
       onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
+      onBeforeTerminalDelivery: overrides?.onBeforeTerminalDelivery,
       resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
       ...(onBlockReply ? { onBlockReply } : {}),
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
@@ -100,6 +120,18 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
 }
 
 describe("handleAgentEnd", () => {
+  it("contains rejected lifecycle start event callbacks", async () => {
+    const onAgentEvent = vi.fn().mockRejectedValue(new Error("progress failed"));
+    const ctx = createContext(undefined, { onAgentEvent });
+
+    handleAgentStart(ctx);
+    await Promise.resolve();
+
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("lifecycle agent event callback failed"),
+    );
+  });
+
   it("keeps explicit session and agent identity on lifecycle start events", () => {
     emitAgentEventMock.mockClear();
     const ctx = createContext(undefined);
@@ -315,6 +347,52 @@ describe("handleAgentEnd", () => {
         stopReason: "end_turn",
         aborted: true,
       },
+    });
+  });
+
+  it("carries a sanitized tool-error summary on aborted terminals", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalAborted = true;
+    ctx.state.lastToolError = {
+      toolName: "edit",
+      validationErrorSummary: "edit tool validation failed: invalid arguments",
+      error:
+        'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{\n  "path": "secret.txt"\n}',
+    };
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "end",
+          aborted: true,
+          toolErrorSummary: "edit tool validation failed: invalid arguments",
+        }),
+      }),
+    );
+    // The echoed model arguments must never ride the lifecycle event.
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("Received arguments");
+  });
+
+  it("does not expose arbitrary tool errors on aborted terminals", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalAborted = true;
+    ctx.state.lastToolError = {
+      toolName: "browser",
+      error: "tab not found: secret-token",
+    };
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: expect.not.objectContaining({ toolErrorSummary: expect.anything() }),
     });
   });
 
@@ -842,6 +920,59 @@ describe("handleAgentEnd", () => {
     await endPromise;
   });
 
+  it("resolves compaction retry after a timed-out terminal hook finalizes the original answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+      const runner = createHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_agent_finalize",
+            handler: vi.fn(() => new Promise(() => {})),
+          },
+        ]),
+        { logger },
+      );
+      const onBeforeTerminalDelivery = vi.fn(async () => {
+        await runner.runBeforeAgentFinalize(BEFORE_AGENT_FINALIZE_EVENT, TEST_PLUGIN_AGENT_CTX);
+        return undefined;
+      });
+      const ctx = createContext(
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          stopReason: "stop",
+        },
+        { onBeforeTerminalDelivery },
+      );
+      ctx.state.assistantTexts = ["done"];
+      ctx.state.pendingCompactionRetry = 1;
+
+      const endPromise = handleAgentEnd(ctx);
+      await Promise.resolve();
+
+      expect(onBeforeTerminalDelivery).toHaveBeenCalledTimes(1);
+      expect(ctx.resolveCompactionRetry).not.toHaveBeenCalled();
+      expect(ctx.flushBlockReplyBuffer).not.toHaveBeenCalledWith({ final: true });
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS);
+      await endPromise;
+
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] before_agent_finalize handler from test-plugin failed: timed out after 15000ms",
+      );
+      expect(ctx.clearDeferredAssistantEvents).not.toHaveBeenCalled();
+      expect(ctx.clearDeferredBlockReplies).not.toHaveBeenCalled();
+      expect(ctx.flushDeferredAssistantEvents).toHaveBeenCalledTimes(1);
+      expect(ctx.flushDeferredBlockReplies).toHaveBeenCalledTimes(1);
+      expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({ final: true });
+      expect(ctx.resolveCompactionRetry).toHaveBeenCalledTimes(1);
+      expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the before-lifecycle callback before the lifecycle end event", async () => {
     const order: string[] = [];
     const onAgentEvent = vi.fn(() => {
@@ -1042,3 +1173,4 @@ describe("handleAgentEnd", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

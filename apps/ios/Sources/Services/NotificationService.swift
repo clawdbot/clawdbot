@@ -14,6 +14,18 @@ enum NotificationAuthorizationStatus {
     case ephemeral
 }
 
+enum NotificationServingPreference {
+    static let storageKey = "notifications.serving.enabled"
+    static let defaultEnabled = true
+
+    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: self.storageKey) != nil else {
+            return self.defaultEnabled
+        }
+        return defaults.bool(forKey: self.storageKey)
+    }
+}
+
 protocol NotificationCentering: Sendable {
     func authorizationStatus() async -> NotificationAuthorizationStatus
     func add(_ request: UNNotificationRequest) async throws

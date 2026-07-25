@@ -1,0 +1,81 @@
+{
+  "id": "mxc",
+  "name": "MXC Sandbox Execution",
+  "description": "OS-level sandboxed tool execution via MXC: runs commands in a Windows ProcessContainer with configured MXC policy files.",
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.mxc"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mxcBinaryPath": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Absolute path to the MXC executor (wxc-exec.exe). When unset, the executor is discovered from the installed @microsoft/mxc-sdk."
+      },
+      "containment": {
+        "type": "string",
+        "enum": ["process", "processcontainer"],
+        "description": "Windows containment mode. 'process' and 'processcontainer' currently both resolve to the Windows ProcessContainer sandbox."
+      },
+      "network": {
+        "type": "string",
+        "enum": ["none", "default"],
+        "description": "Outbound network policy. 'none' blocks all network; 'default' allows outbound access via the internetClient capability."
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000,
+        "description": "Per-command execution timeout in seconds. Capped to the sandbox policy baseline timeout when both are set."
+      },
+      "debug": {
+        "type": "boolean",
+        "description": "Forward verbose debug output from the MXC SDK launcher."
+      },
+      "mxcPolicyPaths": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": "Absolute MXC policy file paths applied on top of the built-in sandbox baseline policy."
+      }
+    }
+  },
+  "configContracts": {
+    "dangerousFlags": [{ "path": "network", "equals": "default" }]
+  },
+  "uiHints": {
+    "mxcBinaryPath": {
+      "label": "MXC Executor Path",
+      "help": "Optional absolute path to the MXC executor (wxc-exec.exe). Leave unset to auto-discover from the installed @microsoft/mxc-sdk.",
+      "advanced": true
+    },
+    "containment": {
+      "label": "Containment Mode",
+      "help": "Windows containment mode. 'process' and 'processcontainer' currently both resolve to the Windows ProcessContainer sandbox."
+    },
+    "network": {
+      "label": "Network Policy",
+      "help": "'none' blocks all outbound network; 'default' allows outbound access via the internetClient capability, which weakens sandbox isolation."
+    },
+    "timeoutSeconds": {
+      "label": "Command Timeout (seconds)",
+      "help": "Per-command execution timeout, from 1 to 2147000 seconds. Capped to the sandbox policy baseline timeout when both are set.",
+      "advanced": true
+    },
+    "debug": {
+      "label": "Debug Logging",
+      "help": "Forward verbose debug output from the MXC SDK launcher.",
+      "advanced": true
+    },
+    "mxcPolicyPaths": {
+      "label": "MXC Policy Files",
+      "help": "Absolute MXC policy file paths applied on top of the built-in sandbox baseline policy.",
+      "advanced": true
+    }
+  }
+}

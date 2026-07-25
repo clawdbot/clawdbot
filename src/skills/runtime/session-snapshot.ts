@@ -15,7 +15,7 @@ const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
 /** Inputs that make a resolved skill snapshot reusable within a process. */
-export type ReusableSkillSnapshotParams = {
+type ReusableSkillSnapshotParams = {
   workspaceDir: string;
   config: OpenClawConfig;
   agentId?: string;
@@ -27,15 +27,11 @@ export type ReusableSkillSnapshotParams = {
   hydrateExisting?: boolean;
 };
 
-export type ReusableSkillSnapshotResult = {
+type ReusableSkillSnapshotResult = {
   snapshot: SkillSnapshot;
   shouldRefresh: boolean;
   snapshotVersion: number;
 };
-
-export function resetResolvedSkillsCacheForTests(): void {
-  resolvedSkillsCache.clear();
-}
 
 function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
   return crypto
@@ -68,9 +64,13 @@ export function resolveReusableWorkspaceSkillSnapshot(
     params.existingSnapshot?.version,
     snapshotVersion,
   );
+  const nodeSkillsEligibilityChanged =
+    stableStringify(params.existingSnapshot?.nodeSkillsEligibility) !==
+    stableStringify(params.eligibility?.nodeSkills);
   const shouldRefresh =
     promptFormatChanged ||
     skillVersionChanged ||
+    nodeSkillsEligibilityChanged ||
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter);
   const buildSnapshot = () => {
     return buildWorkspaceSkillSnapshot(params.workspaceDir, {

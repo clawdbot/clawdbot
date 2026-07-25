@@ -2,7 +2,7 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
-export type WebPushSnapshot = {
+type WebPushSnapshot = {
   supported: boolean;
   permission: NotificationPermission | "unsupported";
   subscribed: boolean;
@@ -106,7 +106,7 @@ export function createWebPushCapability(gateway: ApplicationGateway): WebPushCap
   void readExistingSubscription().catch(() => {});
   const stopGateway = gateway.subscribe((gatewaySnapshot) => {
     const client = gatewaySnapshot.client;
-    const connected = gatewaySnapshot.connected && client !== null;
+    const connected = gatewaySnapshot.phase === "connected" && client !== null;
     if (connected && !wasConnected && client) {
       void reconcile(client);
     }

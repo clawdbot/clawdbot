@@ -1,13 +1,14 @@
 // Google plugin module implements oauth.credentials behavior.
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { readSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLIENT_ID_KEYS, CLIENT_SECRET_KEYS } from "./oauth.shared.js";
 
 type CredentialFs = {
   existsSync: (path: Parameters<typeof existsSync>[0]) => ReturnType<typeof existsSync>;
-  readFileSync: (path: Parameters<typeof readFileSync>[0], encoding: "utf8") => string;
+  readFileSync: (path: string, encoding: "utf8") => string;
   realpathSync: (path: Parameters<typeof realpathSync>[0]) => string;
   readdirSync: (
     path: Parameters<typeof readdirSync>[0],
@@ -17,10 +18,16 @@ type CredentialFs = {
 
 const defaultFs: CredentialFs = {
   existsSync,
-  readFileSync,
+  readFileSync: (path) =>
+    readSecretFileSync(path, "Gemini CLI OAuth credentials", {
+      maxBytes: 1024 * 1024,
+      rejectHardlinks: false,
+    }),
   realpathSync,
   readdirSync,
 };
+
+const OAUTH_CREDENTIALS_TEST_API_KEY = Symbol.for("openclaw.google.oauthCredentialsTestApi");
 
 let credentialFs: CredentialFs = defaultFs;
 const GEMINI_CLI_TREE_SEARCH_DEPTH = 10;
@@ -45,16 +52,16 @@ function resolveEnv(keys: string[]): string | undefined {
 let cachedGeminiCliCredentials: { clientId: string; clientSecret: string } | null = null;
 let geminiCliCredentialExtractError: string | null = null;
 
-export function clearCredentialsCache(): void {
+function clearCredentialsCache(): void {
   cachedGeminiCliCredentials = null;
   geminiCliCredentialExtractError = null;
 }
 
-export function setOAuthCredentialsFsForTest(overrides?: Partial<CredentialFs>): void {
+function setOAuthCredentialsFsForTest(overrides?: Partial<CredentialFs>): void {
   credentialFs = overrides ? { ...defaultFs, ...overrides } : defaultFs;
 }
 
-export function extractGeminiCliCredentials(): { clientId: string; clientSecret: string } | null {
+function extractGeminiCliCredentials(): { clientId: string; clientSecret: string } | null {
   if (cachedGeminiCliCredentials) {
     return cachedGeminiCliCredentials;
   }
@@ -361,4 +368,11 @@ export function resolveOAuthClientConfig(): { clientId: string; clientSecret?: s
   throw new Error(
     `Gemini CLI not found. Install it first: brew install gemini-cli (or npm install -g @google/gemini-cli), or set GEMINI_CLI_OAUTH_CLIENT_ID.${detail}`,
   );
+}
+
+if (process.env.VITEST) {
+  (globalThis as Record<PropertyKey, unknown>)[OAUTH_CREDENTIALS_TEST_API_KEY] = {
+    clearCredentialsCache,
+    setFs: setOAuthCredentialsFsForTest,
+  };
 }

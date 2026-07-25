@@ -1,4 +1,5 @@
 // Qqbot tests cover interaction handler plugin behavior.
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSdkAccessAdapter } from "../../bridge/sdk-adapter.js";
@@ -8,6 +9,11 @@ import { createInteractionHandler } from "./interaction-handler.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const acknowledgeInteractionMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendTextMock = vi.hoisted(() => vi.fn(async () => ({ id: "message-1", timestamp: 1 })));
+
+function waitForQqInteraction(assertion: () => void) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 vi.mock("../messaging/sender.js", () => ({
   accountToCreds: (account: GatewayAccount) => ({
@@ -15,9 +21,36 @@ vi.mock("../messaging/sender.js", () => ({
     clientSecret: account.clientSecret,
   }),
   acknowledgeInteraction: acknowledgeInteractionMock,
+  sendText: sendTextMock,
 }));
 
-const resolveApprovalMock = vi.fn(async () => true);
+const appliedApprovalResult = {
+  applied: true,
+  approval: {
+    id: "exec:abc12345",
+    urlPath: "/approve/exec%3Aabc12345",
+    createdAtMs: 1,
+    expiresAtMs: 10_000,
+    presentation: {
+      kind: "exec",
+      commandText: "echo approved",
+      allowedDecisions: ["allow-once", "deny"],
+    },
+    status: "allowed",
+    decision: "allow-once",
+    resolvedAtMs: 2,
+    reason: "user",
+  },
+} satisfies ApprovalResolveResult;
+
+const resolveApprovalMock = vi.fn(
+  async (): Promise<ApprovalResolveResult> => appliedApprovalResult,
+);
+const expectedApprovalResolve = {
+  approvalId: "exec:abc12345",
+  approvalKind: "exec",
+  decision: "allow-once",
+} as const;
 
 function makeAccount(config: GatewayAccount["config"] = {}): GatewayAccount {
   return {
@@ -71,7 +104,7 @@ function makeApprovalEvent(overrides: Partial<InteractionEvent> = {}): Interacti
     data: {
       type: 11,
       resolved: {
-        button_data: "approve:exec:abc12345:allow-once",
+        button_data: "approve:v2:exec:exec%3Aabc12345:allow-once",
         user_id: "ATTACKER_USER_ID",
       },
     },
@@ -99,6 +132,7 @@ function installPlatformAdapter(): void {
 describe("createInteractionHandler approval buttons", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveApprovalMock.mockResolvedValue(appliedApprovalResult);
     installPlatformAdapter();
   });
 
@@ -109,7 +143,7 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent());
 
-    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+    await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
 
     expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
       { appId: "app", clientSecret: "secret" },
@@ -130,14 +164,14 @@ describe("createInteractionHandler approval buttons", () => {
         data: {
           type: 11,
           resolved: {
-            button_data: "approve:exec:abc12345:allow-once",
+            button_data: "approve:v2:exec:exec%3Aabc12345:allow-once",
             user_id: "OWNER_OPENID",
           },
         },
       }),
     );
 
-    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+    await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
 
     expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
       { appId: "app", clientSecret: "secret" },
@@ -155,9 +189,140 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent({ group_member_openid: "OWNER_OPENID" }));
 
-    await vi.waitFor(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
     );
+  });
+
+  it("preserves plugin ownership through configured-approver authorization", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => makeRestrictedCfg(["OWNER_OPENID"]),
+    });
+
+    handler(
+      makeApprovalEvent({
+        group_member_openid: "OWNER_OPENID",
+        data: {
+          type: 11,
+          resolved: {
+            button_data: "approve:v2:plugin:exec%3Alooks-like-exec%2F1:deny",
+            user_id: "ATTACKER_USER_ID",
+          },
+        },
+      }),
+    );
+
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith({
+        approvalId: "exec:looks-like-exec/1",
+        approvalKind: "plugin",
+        decision: "deny",
+      }),
+    );
+  });
+
+  it("rejects plugin approval buttons from users outside the configured approvers", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => makeRestrictedCfg(["OWNER_OPENID"]),
+    });
+
+    handler(
+      makeApprovalEvent({
+        data: {
+          type: 11,
+          resolved: {
+            button_data: "approve:v2:plugin:exec%3Alooks-like-exec%2F1:deny",
+            user_id: "ATTACKER_USER_ID",
+          },
+        },
+      }),
+    );
+
+    await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: "You are not authorized to approve this request." },
+    );
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+  });
+
+  it("logs the canonical winner when another surface already resolved", async () => {
+    resolveApprovalMock.mockResolvedValueOnce({
+      applied: false,
+      approval: {
+        id: "exec:abc12345",
+        urlPath: "/approve/exec%3Aabc12345",
+        createdAtMs: 1,
+        expiresAtMs: 10_000,
+        presentation: {
+          kind: "exec",
+          commandText: "echo approved",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        status: "denied",
+        decision: "deny",
+        resolvedAtMs: 2,
+        reason: "user",
+      },
+    });
+    const log = { info: vi.fn(), error: vi.fn() };
+    const handler = createInteractionHandler(account, runtime, log, {
+      getActiveCfg: () => makeRestrictedCfg(["OWNER_OPENID"]),
+    });
+
+    handler(makeApprovalEvent({ group_member_openid: "OWNER_OPENID" }));
+
+    await waitForQqInteraction(() =>
+      expect(log.info).toHaveBeenCalledWith(
+        "Approval already resolved: id=exec:abc12345, status=denied, decision=deny",
+      ),
+    );
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: "Approval response received." },
+    );
+    expect(sendTextMock).toHaveBeenCalledWith(
+      { type: "group", id: "group-1" },
+      "This approval was already resolved: Denied.",
+      { appId: "app", clientSecret: "secret" },
+      { msgId: undefined },
+    );
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("decision=allow-once"));
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges before a slow canonical resolution completes", async () => {
+    let releaseResolution!: (result: ApprovalResolveResult) => void;
+    resolveApprovalMock.mockImplementationOnce(
+      async () =>
+        await new Promise<ApprovalResolveResult>((resolve) => {
+          releaseResolution = resolve;
+        }),
+    );
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => makeRestrictedCfg(["OWNER_OPENID"]),
+    });
+
+    handler(makeApprovalEvent({ group_member_openid: "OWNER_OPENID" }));
+
+    await waitForQqInteraction(() =>
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        { content: "Approval response received." },
+      ),
+    );
+    await waitForQqInteraction(() => expect(resolveApprovalMock).toHaveBeenCalled());
+    expect(sendTextMock).not.toHaveBeenCalled();
+
+    releaseResolution(appliedApprovalResult);
+    await waitForQqInteraction(() => expect(sendTextMock).toHaveBeenCalled());
   });
 
   it("uses the direct user openid when a group member openid is unavailable", async () => {
@@ -174,8 +339,8 @@ describe("createInteractionHandler approval buttons", () => {
       }),
     );
 
-    await vi.waitFor(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
     );
   });
 
@@ -186,8 +351,8 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent());
 
-    await vi.waitFor(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
     );
   });
 
@@ -217,8 +382,8 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent());
 
-    await vi.waitFor(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
     );
   });
 
@@ -242,8 +407,8 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent());
 
-    await vi.waitFor(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    await waitForQqInteraction(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
     );
   });
 
@@ -263,7 +428,7 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent());
 
-    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+    await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
 
     expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
       { appId: "app", clientSecret: "secret" },
@@ -307,7 +472,7 @@ describe("createInteractionHandler approval buttons", () => {
 
       handler(makeApprovalEvent());
 
-      await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+      await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
 
       expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
         { appId: "app", clientSecret: "secret" },
@@ -326,7 +491,7 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent({ group_member_openid: undefined, user_openid: undefined }));
 
-    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+    await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
 
     expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
       { appId: "app", clientSecret: "secret" },
@@ -346,7 +511,7 @@ describe("createInteractionHandler approval buttons", () => {
 
     handler(makeApprovalEvent());
 
-    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+    await waitForQqInteraction(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
 
     expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
       { appId: "app", clientSecret: "secret" },

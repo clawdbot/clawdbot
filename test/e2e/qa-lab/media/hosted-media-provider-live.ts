@@ -121,8 +121,6 @@ type HostedMediaOptions = {
 type HostedMediaSuiteDefinition = {
   codeRefs: string[];
   docsRefs: string[];
-  primaryCoverageIds: string[];
-  secondaryCoverageIds?: string[];
   scenarioId: string;
   title: string;
   videoFullModes?: boolean;
@@ -139,7 +137,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   image: {
     scenarioId: "hosted-image-generation-providers-live",
     title: "Hosted image generation providers live",
-    primaryCoverageIds: ["hosted-providers.image-generation-providers"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/image-generation.md",
@@ -154,11 +151,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
   video: {
     scenarioId: "hosted-video-generation-providers-live",
     title: "Hosted video generation providers live",
-    primaryCoverageIds: [
-      "hosted-providers.video-generation-providers",
-      "media.reference-image-video-and-audio-inputs",
-    ],
-    secondaryCoverageIds: ["media.video-generation-tool-invocation"],
     docsRefs: [
       "docs/help/testing.md",
       "docs/tools/video-generation.md",
@@ -481,8 +473,8 @@ export async function buildRunPlan(
   );
 }
 
-function printHelp(): void {
-  console.log(`Media live harness
+export function formatHelp(): string {
+  return `Media live harness
 
 Usage:
   pnpm test:live:media
@@ -509,7 +501,11 @@ Flags:
   --all-providers           do not auto-filter by available auth
   --allow-empty             exit 0 when auth filtering leaves no runnable providers
   --quiet | --no-quiet      passed through to test:live
-`);
+`;
+}
+
+function printHelp(): void {
+  console.log(formatHelp());
 }
 
 export async function runSuite(params: {
@@ -724,8 +720,6 @@ function createHostedMediaEvidenceWriter(options: HostedMediaOptions) {
       id: definition.scenarioId,
       title: definition.title,
       sourcePath: SOURCE_PATH,
-      primaryCoverageIds: definition.primaryCoverageIds,
-      secondaryCoverageIds: definition.secondaryCoverageIds,
       docsRefs: definition.docsRefs,
       codeRefs: definition.codeRefs,
     },
@@ -791,7 +785,7 @@ export function buildHostedMediaEvidence(params: {
   return createHostedMediaEvidenceWriter(params.options).build(params.result);
 }
 
-export async function runHostedMediaProviderLiveProducer(
+async function runHostedMediaProviderLiveProducer(
   options: HostedMediaOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const writer = createHostedMediaEvidenceWriter(options);

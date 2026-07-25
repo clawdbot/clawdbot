@@ -1,12 +1,12 @@
 ---
-summary: "Camera capture (iOS/Android nodes + macOS app) for agent use: photos (jpg) and short video clips (mp4)"
+summary: "Camera capture on iOS, Android, macOS, and Linux nodes for photos and short video clips"
 read_when:
-  - Adding or modifying camera capture on iOS/Android nodes or macOS
+  - Adding or modifying camera capture on node platforms
   - Extending agent-accessible MEDIA temp-file workflows
 title: "Camera capture"
 ---
 
-OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, and **macOS** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
+OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, **macOS**, and **Linux** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
 
 All camera access is gated behind a user-controlled setting per platform.
 
@@ -123,6 +123,38 @@ openclaw nodes camera clip --node <id> --no-audio
 - `openclaw nodes camera snap` defaults to `maxWidth=1600` unless overridden.
 - `camera.snap` waits `delayMs` (default 2000ms, clamped to `[0, 10000]`) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5MB.
+
+## Linux node host
+
+The bundled Linux Node plugin adds camera capture to the CLI `openclaw node` service. It works on a headless host and does not require the Linux desktop app.
+
+Camera access defaults to off. Enable it under the plugin entry, then restart the node service so its Gateway advertisement is rebuilt:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          camera: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Requirements:
+
+- FFmpeg with V4L2 input, `libx264`, and AAC support
+- a `/dev/video*` device readable by the node-service user; on common distributions, add that user to the `video` group
+- for clips with the default `includeAudio: true`, a working PulseAudio server or PipeWire PulseAudio compatibility layer with a default source
+
+Linux returns capture-capable, readable V4L2 device paths from `camera.list`; FFmpeg probes each `/dev/video*` candidate and omits metadata or output-only nodes. Device `position` is `unknown`, so facing requests without `deviceId` produce one `unknown`-position photo or clip instead of claiming a front or back camera. Use `deviceId` when a host has multiple cameras. `camera.snap` uses FFmpeg input warm-up for `delayMs` and preserves aspect ratio while limiting width. `camera.clip` records microphone audio as the MP4 audio track; OpenClaw deliberately exposes no standalone microphone command.
+
+The plugin uses `libx264` for MP4 video and does not silently change codecs. An FFmpeg build without the required input or encoders returns `CAMERA_UNAVAILABLE`. Photos and clips that would exceed the 25MB base64 payload budget fail with `PAYLOAD_TOO_LARGE`.
+
+`camera.snap` and `camera.clip` remain dangerous commands. Add them to `gateway.nodes.commands.allow` only when you intend to arm capture; enabling the plugin alone does not bypass Gateway policy.
 
 ## Safety + practical limits
 

@@ -8,6 +8,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveLocalPathFromRootsSync } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { MediaFileType, type GatewayAccount } from "../types.js";
 import { formatFileSize, getImageMimeType, getMaxUploadSize } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -207,7 +208,7 @@ export async function handleStructuredPayload(
 type StructuredPayloadMediaType = "image" | "video" | "file";
 
 function formatMediaTypeLabel(mediaType: StructuredPayloadMediaType): string {
-  return mediaType[0].toUpperCase() + mediaType.slice(1);
+  return mediaType.charAt(0).toUpperCase() + mediaType.slice(1);
 }
 
 function validateStructuredPayloadLocalPath(
@@ -281,10 +282,7 @@ function resolveStructuredPayloadPath(
 }
 
 function sanitizeForLog(value: string, maxLen = 200): string {
-  return value
-    .replace(/[\r\n\t]/g, " ")
-    .replaceAll("\0", " ")
-    .slice(0, maxLen);
+  return truncateUtf16Safe(value.replace(/[\r\n\t]/g, " ").replaceAll("\0", " "), maxLen);
 }
 
 function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): string {
@@ -513,7 +511,7 @@ export async function sendTextAsVoiceReply(
       return false;
     }
 
-    log?.debug?.(`TTS: "${ttsText.slice(0, 50)}..."`);
+    log?.debug?.(`TTS: "${truncateUtf16Safe(ttsText, 50)}..."`);
     const ttsResult = await deps.tts.textToSpeech({
       text: ttsText,
       cfg,

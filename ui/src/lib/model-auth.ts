@@ -4,14 +4,6 @@ import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/type
 
 const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
 
-export type ModelAuthStatusState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  modelAuthStatusLoading: boolean;
-  modelAuthStatusResult: ModelAuthStatusResult | null;
-  modelAuthStatusError: string | null;
-};
-
 /**
  * True when a provider's auth should be actively monitored on the dashboard.
  *
@@ -24,8 +16,8 @@ export type ModelAuthStatusState = {
  * Excludes API-key-only providers — their credentials don't expire on a
  * schedule the dashboard can meaningfully monitor.
  *
- * Single source of truth for both the Overview card and the attention-items
- * panel. Keep the two in sync by always routing through this helper.
+ * Single source of truth for the chat composer and the sidebar attention
+ * chips. Keep consumers in sync by always routing through this helper.
  */
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   if (p.status === "missing") {
@@ -39,41 +31,13 @@ export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
 
 export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; agentId?: string },
 ): Promise<ModelAuthStatusResult> {
-  const params = opts?.refresh ? { refresh: true } : {};
+  const params = {
+    ...(opts?.refresh ? { refresh: true } : {}),
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+  };
   return (
     (await client.request<ModelAuthStatusResult>("models.authStatus", params)) ?? EMPTY_AUTH_STATUS
   );
-}
-
-export async function loadModelAuthStatusState(
-  state: ModelAuthStatusState,
-  opts?: { refresh?: boolean },
-): Promise<void> {
-  const client = state.client;
-  if (!client || !state.connected) {
-    state.modelAuthStatusLoading = false;
-    return;
-  }
-  if (state.modelAuthStatusLoading) {
-    return;
-  }
-  state.modelAuthStatusLoading = true;
-  state.modelAuthStatusError = null;
-  try {
-    const result = await loadModelAuthStatus(client, opts);
-    if (state.client !== client || !state.connected) {
-      return;
-    }
-    state.modelAuthStatusResult = result;
-  } catch (err) {
-    if (state.client !== client || !state.connected) {
-      return;
-    }
-    state.modelAuthStatusError = err instanceof Error ? err.message : String(err);
-    state.modelAuthStatusResult = EMPTY_AUTH_STATUS;
-  } finally {
-    state.modelAuthStatusLoading = false;
-  }
 }

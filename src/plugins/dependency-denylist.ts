@@ -1,15 +1,9 @@
 /** Denylist checks for unsafe packages in plugin manifests and installed dependency trees. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-
-const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES = ["plain-crypto-js"] as const;
-
-/** Package names blocked from installed plugin dependency trees. */
-export const blockedInstallDependencyPackageNames = [
-  ...BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES,
-] as const;
+import { BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES } from "./dependency-denylist-packages.js";
 
 /** Finding for blocked dependencies declared in a plugin package manifest. */
-export type BlockedManifestDependencyFinding = {
+type BlockedManifestDependencyFinding = {
   dependencyName: string;
   declaredAs?: string;
   field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
@@ -49,11 +43,11 @@ type PackageOverrideFields = {
 };
 
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET = new Set<string>(
-  blockedInstallDependencyPackageNames,
+  BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES,
 );
 
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_LOWER_SET = new Set<string>(
-  blockedInstallDependencyPackageNames.map((packageName) => packageName.toLowerCase()),
+  BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES.map((packageName) => packageName.toLowerCase()),
 );
 
 function isBlockedInstallDependencyPackageName(packageName: string): boolean {
@@ -172,7 +166,9 @@ function collectBlockedOverrideFindings(
   }
 
   const findings: BlockedManifestDependencyFinding[] = [];
-  for (const overrideKey of Object.keys(value).toSorted()) {
+  for (const [overrideKey, overrideValue] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
     const overrideSelectorPackageName = parsePackageNameFromOverrideSelector(overrideKey);
     if (
       overrideSelectorPackageName &&
@@ -184,7 +180,7 @@ function collectBlockedOverrideFindings(
         field: "overrides",
       });
     }
-    findings.push(...collectBlockedOverrideFindings(value[overrideKey], [...path, overrideKey]));
+    findings.push(...collectBlockedOverrideFindings(overrideValue, [...path, overrideKey]));
   }
   return findings;
 }
@@ -209,13 +205,15 @@ export function findBlockedManifestDependencies(
     if (!dependencyMap) {
       continue;
     }
-    for (const dependencyName of Object.keys(dependencyMap).toSorted()) {
+    for (const [dependencyName, dependencySpec] of Object.entries(dependencyMap).toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       if (isBlockedInstallDependencyPackageName(dependencyName)) {
         findings.push({ dependencyName, field });
         continue;
       }
 
-      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencyMap[dependencyName]);
+      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencySpec);
       if (!aliasTargetPackageName) {
         continue;
       }

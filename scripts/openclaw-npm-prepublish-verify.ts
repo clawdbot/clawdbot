@@ -1,12 +1,13 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Prepublish Verify script supports OpenClaw repository automation.
 
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
+import { type NpmVerifyCommandInvocation, runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import {
   collectInstalledPackageErrors,
@@ -14,12 +15,18 @@ import {
   resolveInstalledBinaryCommandInvocation,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import {
+  assertPreparedOpenClawNpmShrinkwrap,
+  npmTarballIntegrity,
+  readTarballJson,
+} from "./prepare-openclaw-npm-shrinkwrap.ts";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
 };
 
-export type OpenClawNpmPrepublishVerifyArgs =
+type OpenClawNpmPrepublishVerifyArgs =
   | {
       expectedVersion?: string;
       dependencyTarballPaths: string[];
@@ -69,6 +76,10 @@ export function parseOpenClawNpmPrepublishVerifyArgs(
     : { dependencyTarballPaths, help: false, tarballPath };
 }
 
+export function usesPreparedLocalDependencyInstall(dependencyTarballCount: number): boolean {
+  return dependencyTarballCount === 1;
+}
+
 function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
     npmArgs: args,
@@ -90,21 +101,67 @@ function main(argv = process.argv.slice(2)): void {
   const workingDir = mkdtempSync(join(tmpdir(), "openclaw-prepublish-"));
   const prefixDir = join(workingDir, "prefix");
   try {
-    npmExec(
-      [
-        "install",
-        "-g",
-        "--prefix",
+    let binaryInvocation: NpmVerifyCommandInvocation;
+    let packageRoot: string;
+    if (usesPreparedLocalDependencyInstall(args.dependencyTarballPaths.length)) {
+      const aiTarballPath = realpathSync(
+        expectDefined(args.dependencyTarballPaths[0], "prepared dependency tarball"),
+      );
+      assertPreparedOpenClawNpmShrinkwrap({
+        aiIntegrity: npmTarballIntegrity(aiTarballPath),
+        aiManifest: readTarballJson(aiTarballPath, "package/package.json"),
+        rootManifest: readTarballJson(args.tarballPath, "package/package.json"),
+        shrinkwrap: readTarballJson(args.tarballPath, "package/npm-shrinkwrap.json"),
+      });
+      mkdirSync(prefixDir, { recursive: true });
+      writeFileSync(
+        join(prefixDir, "package.json"),
+        `${JSON.stringify(
+          {
+            private: true,
+            dependencies: {
+              "@openclaw/ai": pathToFileURL(aiTarballPath).href,
+              openclaw: pathToFileURL(realpathSync(args.tarballPath)).href,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      npmExec(["install", "--prefix", prefixDir, "--no-fund", "--no-audit"], workingDir);
+      packageRoot = join(prefixDir, "node_modules", "openclaw");
+      const binaryPath = join(
         prefixDir,
-        ...args.dependencyTarballPaths.map((dependency) => realpathSync(dependency)),
-        realpathSync(args.tarballPath),
-        "--no-fund",
-        "--no-audit",
-      ],
-      workingDir,
-    );
-    const globalRoot = npmExec(["root", "-g", "--prefix", prefixDir], workingDir);
-    const packageRoot = join(globalRoot, "openclaw");
+        "node_modules",
+        ".bin",
+        process.platform === "win32" ? "openclaw.cmd" : "openclaw",
+      );
+      binaryInvocation =
+        process.platform === "win32"
+          ? {
+              command: resolveWindowsCmdExePath(),
+              args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, ["--version"])],
+              windowsVerbatimArguments: true,
+            }
+          : { command: binaryPath, args: ["--version"] };
+    } else {
+      npmExec(
+        [
+          "install",
+          "-g",
+          "--prefix",
+          prefixDir,
+          ...args.dependencyTarballPaths.map((dependency) => realpathSync(dependency)),
+          realpathSync(args.tarballPath),
+          "--no-fund",
+          "--no-audit",
+        ],
+        workingDir,
+      );
+      const globalRoot = npmExec(["root", "-g", "--prefix", prefixDir], workingDir);
+      packageRoot = join(globalRoot, "openclaw");
+      binaryInvocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
+    }
     const pkg = JSON.parse(
       readFileSync(join(packageRoot, "package.json"), "utf8"),
     ) as InstalledPackageJson;
@@ -114,7 +171,6 @@ function main(argv = process.argv.slice(2)): void {
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
     });
-    const binaryInvocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
     const installedBinaryVersion = runNpmVerifyCommand(binaryInvocation, workingDir);
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== resolvedExpectedVersion) {
       errors.push(

@@ -16,7 +16,7 @@ OpenClaw Tlon/Urbit channel plugin for chat workflows.
 
 ## Surface
 
-channels: tlon; skills
+channels: `tlon`; skills
 
 ## Related docs
 

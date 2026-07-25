@@ -1,10 +1,15 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { titleForRoute } from "../../app-navigation.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
+import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   closeClawHubDetail,
@@ -13,6 +18,7 @@ import {
   loadClawHubDetail,
   loadSkillCard,
   loadSkills,
+  refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
   searchClawHub,
@@ -23,24 +29,25 @@ import {
   type ClawHubSearchResult,
   type ClawHubSkillDetail,
   type ClawHubSkillSecurityVerdict,
+  type SkillOperation,
   type SkillMessageMap,
 } from "../../lib/skills/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
 
 export type SkillsRouteData = {
-  connected: boolean;
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  agents: ApplicationContext["agents"];
   agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
   report: SkillStatusReport | null;
   error: string | null;
 };
 
-export class SkillsPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class SkillsPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: SkillsRouteData;
@@ -55,7 +62,7 @@ export class SkillsPage extends LitElement {
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;
   @state() skillsError: string | null = null;
-  @state() skillsBusyKey: string | null = null;
+  @state() skillOperation: SkillOperation = null;
   @state() skillsFilter = "";
   @state() skillsStatusFilter: SkillsStatusFilter = "all";
   @state() skillEdits: Record<string, string> = {};
@@ -70,7 +77,6 @@ export class SkillsPage extends LitElement {
   @state() clawhubDetailSlug: string | null = null;
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
-  @state() clawhubInstallSlug: string | null = null;
   @state() clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
@@ -86,51 +92,61 @@ export class SkillsPage extends LitElement {
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
 
-  private stopGatewaySubscription?: () => void;
-  private stopAgentsSubscription?: () => void;
   private clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  private routeDataInitialized = false;
+  private routeDataEnabled = true;
+  private hasBoundGatewaySource = false;
+  private sourceGeneration = 0;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const resetForSourceBind = this.hasBoundGatewaySource;
+        this.hasBoundGatewaySource = true;
+        const cleanup = gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot));
+        this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
+        return cleanup;
+      },
+    )
+    .effect(
+      () => this.context?.agents,
+      (agents) => {
+        const cleanup = agents.subscribe(() => {
+          this.syncAgentState();
+          this.requestUpdate();
+        });
+        this.syncAgentState();
+        this.ensureInitialData();
+        return cleanup;
+      },
+    );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.syncGatewayState();
-    this.stopGatewaySubscription = this.context.gateway.subscribe(() => {
-      const previousClient = this.client;
-      this.syncGatewayState();
-      if (previousClient !== this.client) {
-        this.resetLoadedSkillState();
-      }
-      this.ensureInitialData();
-    });
-    this.stopAgentsSubscription = this.context.agents.subscribe(() => {
-      this.syncAgentState();
-      this.requestUpdate();
-    });
-    this.syncAgentState();
-    this.ensureInitialData();
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
+      this.ensureInitialData();
     }
   }
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
+    this.subscriptions.clear();
     if (this.clawhubSearchTimer) {
       clearTimeout(this.clawhubSearchTimer);
       this.clawhubSearchTimer = null;
     }
+    this.resetLoadedSkillState();
     super.disconnectedCallback();
   }
 
-  private syncGatewayState() {
-    const gateway = this.context.gateway.snapshot;
-    this.client = gateway.client;
-    this.connected = gateway.connected;
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
+    const clientChanged = resetForSourceBind || snapshot.client !== this.client;
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+    this.client = snapshot.client;
+    this.connected = snapshot.phase === "connected";
+    if (clientChanged || connectionChanged) {
+      this.resetLoadedSkillState();
+    }
+    this.ensureInitialData();
   }
 
   private syncAgentState() {
@@ -149,6 +165,14 @@ export class SkillsPage extends LitElement {
   }
 
   private resetLoadedSkillState() {
+    this.sourceGeneration++;
+    if (this.clawhubSearchTimer) {
+      clearTimeout(this.clawhubSearchTimer);
+      this.clawhubSearchTimer = null;
+    }
+    if (this.routeDataInitialized) {
+      this.routeDataEnabled = false;
+    }
     this.agentsLoading = false;
     this.agentsError = null;
     this.agentsList = null;
@@ -157,12 +181,18 @@ export class SkillsPage extends LitElement {
     this.skillsLoading = false;
     this.skillsReport = null;
     this.skillsError = null;
-    this.skillsBusyKey = null;
+    this.skillOperation = null;
     this.skillEdits = {};
     this.skillMessages = {};
     this.skillsDetailKey = null;
     this.skillsDetailTab = "overview";
-    this.clawhubInstallSlug = null;
+    this.clawhubSearchResults = null;
+    this.clawhubSearchLoading = false;
+    this.clawhubSearchError = null;
+    this.clawhubDetail = null;
+    this.clawhubDetailSlug = null;
+    this.clawhubDetailLoading = false;
+    this.clawhubDetailError = null;
     this.clawhubInstallMessage = null;
     this.clawhubVerdicts = {};
     this.clawhubVerdictsLoading = false;
@@ -178,10 +208,23 @@ export class SkillsPage extends LitElement {
     if (!data) {
       return;
     }
+    this.routeDataInitialized = true;
+    this.routeDataEnabled = true;
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    this.client = snapshot.client;
+    this.connected = snapshot.phase === "connected";
+    if (
+      data.gateway !== gateway ||
+      data.gatewaySnapshot !== snapshot ||
+      data.agents !== this.context.agents
+    ) {
+      this.routeDataEnabled = false;
+      return;
+    }
     if (this.skillsAgentId && data.selectedAgentId && data.selectedAgentId !== this.skillsAgentId) {
       return;
     }
-    this.connected = data.connected;
     this.agentsLoading = false;
     this.agentsError = null;
     this.agentsList = data.agentsList ?? this.context.agents.state.agentsList;
@@ -195,7 +238,10 @@ export class SkillsPage extends LitElement {
     if (!this.connected || !this.client) {
       return;
     }
-    if (this.routeData?.agentsList || this.routeData?.report || this.routeData?.error) {
+    if (
+      this.routeDataEnabled &&
+      (this.routeData?.agentsList || this.routeData?.report || this.routeData?.error)
+    ) {
       return;
     }
     if (!this.agentsList && !this.agentsLoading) {
@@ -204,6 +250,14 @@ export class SkillsPage extends LitElement {
     if (!this.skillsReport && !this.skillsLoading) {
       void loadSkills(this);
     }
+    if (
+      this.clawhubSearchQuery.trim() &&
+      !this.clawhubSearchLoading &&
+      !this.clawhubSearchResults &&
+      !this.clawhubSearchError
+    ) {
+      void searchClawHub(this, this.clawhubSearchQuery);
+    }
   }
 
   private async loadAgents() {
@@ -211,15 +265,25 @@ export class SkillsPage extends LitElement {
     if (!client || !this.connected || this.agentsLoading) {
       return;
     }
-    if (this.context.agents.state.agentsList) {
+    const gatewaySource = this.context.gateway;
+    const agentsSource = this.context.agents;
+    const sourceGeneration = this.sourceGeneration;
+    const isCurrent = () =>
+      this.isConnected &&
+      this.connected &&
+      this.client === client &&
+      this.context.gateway === gatewaySource &&
+      this.context.agents === agentsSource &&
+      this.sourceGeneration === sourceGeneration;
+    if (agentsSource.state.agentsList) {
       this.syncAgentState();
       return;
     }
     this.agentsLoading = true;
     this.agentsError = null;
     try {
-      const agents = await this.context.agents.ensureList();
-      if (this.client !== client) {
+      const agents = await agentsSource.ensureList();
+      if (!isCurrent()) {
         return;
       }
       this.agentsList = agents;
@@ -230,22 +294,24 @@ export class SkillsPage extends LitElement {
         this.skillsDetailTab = "overview";
       }
     } catch (err) {
-      if (this.client === client) {
+      if (isCurrent()) {
         this.agentsError = String(err);
       }
     } finally {
-      if (this.client === client) {
+      if (isCurrent()) {
         this.agentsLoading = false;
       }
     }
   }
 
   private async refreshPage() {
-    await this.loadAgents();
-    await loadSkills(this, { clearMessages: true });
+    await refreshSkills(this, () => this.loadAgents());
   }
 
   private changeAgent(agentId: string) {
+    if (this.skillOperation || this.skillsLoading) {
+      return;
+    }
     const previousAgentId = this.skillsAgentId;
     setSkillsAgentId(this, agentId);
     if (previousAgentId !== this.skillsAgentId) {
@@ -270,72 +336,87 @@ export class SkillsPage extends LitElement {
     }
   }
 
+  private selectHubTab(tab: PluginsHubTab) {
+    if (tab === "skills") {
+      return;
+    }
+    if (tab === "workshop") {
+      this.context.navigate("skill-workshop");
+      return;
+    }
+    this.context.navigate("plugins", tab === "discover" ? { search: "?tab=discover" } : undefined);
+  }
+
   override render() {
     const error = this.skillsError ?? this.agentsError;
     return html`
-      <section class="content-header">
+      <section class="content-header content-header--page plugins-content-header">
         <div>
-          <div class="page-title">${titleForRoute("skills")}</div>
-          <div class="page-sub">${subtitleForRoute("skills")}</div>
+          <h1 class="page-title">${titleForRoute("skills")}</h1>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        renderSkills({
-          connected: this.connected,
-          loading: this.skillsLoading || this.agentsLoading,
-          report: this.skillsReport,
-          agentsList: this.agentsList,
-          selectedAgentId: this.skillsAgentId ?? this.agentsList?.defaultId ?? null,
-          error,
-          filter: this.skillsFilter,
-          statusFilter: this.skillsStatusFilter,
-          edits: this.skillEdits,
-          messages: this.skillMessages,
-          busyKey: this.skillsBusyKey,
-          detailKey: this.skillsDetailKey,
-          detailTab: this.skillsDetailTab,
-          clawhubVerdicts: this.clawhubVerdicts,
-          clawhubVerdictsLoading: this.clawhubVerdictsLoading,
-          clawhubVerdictsError: this.clawhubVerdictsError,
-          skillCardContents: this.skillCardContents,
-          skillCardLoadingKey: this.skillCardLoadingKey,
-          skillCardErrors: this.skillCardErrors,
-          clawhubQuery: this.clawhubSearchQuery,
-          clawhubResults: this.clawhubSearchResults,
-          clawhubSearchLoading: this.clawhubSearchLoading,
-          clawhubSearchError: this.clawhubSearchError,
-          clawhubDetail: this.clawhubDetail,
-          clawhubDetailSlug: this.clawhubDetailSlug,
-          clawhubDetailLoading: this.clawhubDetailLoading,
-          clawhubDetailError: this.clawhubDetailError,
-          clawhubInstallSlug: this.clawhubInstallSlug,
-          clawhubInstallMessage: this.clawhubInstallMessage,
-          onAgentChange: (agentId) => this.changeAgent(agentId),
-          onFilterChange: (next) => (this.skillsFilter = next),
-          onStatusFilterChange: (next) => (this.skillsStatusFilter = next),
-          onRefresh: () => void this.refreshPage(),
-          onToggle: (key, enabled) => void updateSkillEnabled(this, key, enabled),
-          onEdit: (key, value) => updateSkillEdit(this, key, value),
-          onSaveKey: (key) => void saveSkillApiKey(this, key),
-          onInstall: (skillKey, name, installId) =>
-            void installSkill(this, skillKey, name, installId),
-          onDetailOpen: (key) => {
-            this.skillsDetailKey = key;
-            this.skillsDetailTab = "overview";
-          },
-          onDetailClose: () => (this.skillsDetailKey = null),
-          onDetailTabChange: (tab) => this.changeDetailTab(tab),
-          onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
-          onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
-          onClawHubDetailClose: () => closeClawHubDetail(this),
-          onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
-            void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
-        }),
-        "skills",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(html`
+        <div class="plugins-hub-tabs-row">
+          ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
+        </div>
+        <wa-tab-panel
+          id="plugins-hub-panel"
+          name="skills"
+          active
+          aria-labelledby="plugins-tab-skills"
+        >
+          ${renderSkills({
+            connected: this.connected,
+            loading: this.skillsLoading || this.agentsLoading,
+            report: this.skillsReport,
+            agentsList: this.agentsList,
+            selectedAgentId: this.skillsAgentId ?? this.agentsList?.defaultId ?? null,
+            error,
+            filter: this.skillsFilter,
+            statusFilter: this.skillsStatusFilter,
+            edits: this.skillEdits,
+            messages: this.skillMessages,
+            operation: this.skillOperation,
+            detailKey: this.skillsDetailKey,
+            detailTab: this.skillsDetailTab,
+            clawhubVerdicts: this.clawhubVerdicts,
+            clawhubVerdictsLoading: this.clawhubVerdictsLoading,
+            clawhubVerdictsError: this.clawhubVerdictsError,
+            skillCardContents: this.skillCardContents,
+            skillCardLoadingKey: this.skillCardLoadingKey,
+            skillCardErrors: this.skillCardErrors,
+            clawhubQuery: this.clawhubSearchQuery,
+            clawhubResults: this.clawhubSearchResults,
+            clawhubSearchLoading: this.clawhubSearchLoading,
+            clawhubSearchError: this.clawhubSearchError,
+            clawhubDetail: this.clawhubDetail,
+            clawhubDetailSlug: this.clawhubDetailSlug,
+            clawhubDetailLoading: this.clawhubDetailLoading,
+            clawhubDetailError: this.clawhubDetailError,
+            clawhubInstallMessage: this.clawhubInstallMessage,
+            onAgentChange: (agentId) => this.changeAgent(agentId),
+            onFilterChange: (next) => (this.skillsFilter = next),
+            onStatusFilterChange: (next) => (this.skillsStatusFilter = next),
+            onRefresh: () => void this.refreshPage(),
+            onToggle: (key, enabled) => void updateSkillEnabled(this, key, enabled),
+            onEdit: (key, value) => updateSkillEdit(this, key, value),
+            onSaveKey: (key) => void saveSkillApiKey(this, key),
+            onInstall: (skillKey, name, installId) =>
+              void installSkill(this, skillKey, name, installId),
+            onDetailOpen: (key) => {
+              this.skillsDetailKey = key;
+              this.skillsDetailTab = "overview";
+            },
+            onDetailClose: () => (this.skillsDetailKey = null),
+            onDetailTabChange: (tab) => this.changeDetailTab(tab),
+            onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
+            onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
+            onClawHubDetailClose: () => closeClawHubDetail(this),
+            onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
+              void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
+          })}
+        </wa-tab-panel>
+      `)}
     `;
   }
 }

@@ -169,6 +169,7 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is still honored, but `chatmode` is preferred. Per-channel `groups.<channelId>.requireMention` settings win over both.
 - After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days after the bot last replied in that thread and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
+- Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
 
 ## Threading and sessions
 
@@ -177,19 +178,31 @@ Use `channels.mattermost.replyToMode` to control whether channel and group repli
 - `off` (default): only reply in a thread when the inbound post is already in one.
 - `first`: for top-level channel/group posts, start a thread under that post and route the conversation to a thread-scoped session.
 - `all` and `batched`: same behavior as `first` for Mattermost today, because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
-- Direct messages ignore this setting and stay non-threaded.
+- Direct messages default to `off` even when `replyToMode` is set.
+
+Use `channels.mattermost.replyToModeByChatType` to override the mode for `direct`, `group`, or `channel` chats. Set `direct` to opt direct messages into threading:
+
+- `off` (default): direct messages stay non-threaded in one rolling session.
+- `first`, `all`, or `batched`: each top-level direct message starts a Mattermost thread backed by a fresh, independent session.
 
 ```json5
 {
   channels: {
     mattermost: {
       replyToMode: "all",
+      replyToModeByChatType: {
+        direct: "first",
+      },
     },
   },
 }
 ```
 
-Thread-scoped sessions use the triggering post id as the thread root.
+Notes:
+
+- Thread-scoped sessions use the triggering post id as the thread root.
+- `first` and `all` are currently equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
+- Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
 
 ## Access control (DMs)
 
@@ -280,15 +293,15 @@ Notes:
 
 ## Preview streaming
 
-Mattermost streams thinking, tool activity, and partial reply text into a single **draft preview post** that finalizes in place when the final answer is safe to send. The preview updates on the same post id instead of spamming the channel with per-chunk messages. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
+Mattermost streams thinking, tool activity, and partial reply text into a **draft preview post** that finalizes in place when the final answer is safe to send. In `partial` mode the preview updates on the same post id instead of spamming the channel with per-chunk messages. In `block` mode the preview rotates between completed text and tool-activity blocks, so earlier blocks stay visible as their own posts instead of being overwritten by the next one. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
 
-Preview streaming is **on by default** in `partial` mode. Configure via `channels.mattermost.streaming` (a mode string, boolean, or an object like `{ mode: "progress" }`):
+Preview streaming is **on by default** in `partial` mode. Configure via `channels.mattermost.streaming.mode` (legacy scalar/boolean `streaming` values are migrated by `openclaw doctor --fix`):
 
 ```json5
 {
   channels: {
     mattermost: {
-      streaming: "partial", // off | partial | block | progress
+      streaming: { mode: "partial" }, // off | partial | block | progress
     },
   },
 }
@@ -297,9 +310,9 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
 <AccordionGroup>
   <Accordion title="Streaming modes">
     - `partial` (default): one preview post that is edited as the reply grows, then finalized with the complete answer.
-    - `block` uses append-style draft chunks inside the preview post.
+    - `block` rotates the preview between completed text and tool-activity blocks, so each block stays visible as its own post instead of being overwritten in place. Parallel and consecutive tool updates share the current tool-activity post.
     - `progress` shows a status preview while generating and only posts the final answer at completion.
-    - `off` disables preview streaming.
+    - `off` disables preview streaming. With `streaming.block.enabled: true`, completed assistant blocks are still delivered as normal block replies (separate posts) rather than a single coalesced final post.
 
   </Accordion>
   <Accordion title="Streaming behavior notes">
@@ -403,7 +416,7 @@ When a user clicks a button:
 
 ### Direct API integration (external scripts)
 
-External scripts and webhooks can post buttons directly via the Mattermost REST API instead of going through the agent's `message` tool. Use `buildButtonAttachments()` from the plugin when possible; if posting raw JSON, follow these rules:
+External scripts and webhooks can post buttons directly via the Mattermost REST API instead of going through the agent's `message` tool. Prefer OpenClaw's `message` tool. For direct integrations, import `buildButtonAttachments` from `@openclaw/mattermost/api.js`; if posting raw JSON, follow these rules:
 
 **Payload structure:**
 

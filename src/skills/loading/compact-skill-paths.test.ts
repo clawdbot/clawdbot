@@ -1,4 +1,5 @@
 // Compact skill path tests cover short path formatting for skill prompt payloads.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -172,5 +173,28 @@ describe("compactSkillPaths", () => {
 
     expect(prompt).toMatch(/<location>[^<]+SKILL\.md<\/location>/);
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
+
+  it("loads skills when the shared state database is unavailable", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-load-")));
+    const blockedParent = path.join(root, "state-blocker");
+    fs.writeFileSync(blockedParent, "not a directory", "utf8");
+    const skillDir = path.join(root, "workspace", "skills", "available-skill");
+
+    try {
+      const prompt = withEnv({ OPENCLAW_STATE_DIR: path.join(blockedParent, "state") }, () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: path.join(root, "workspace"),
+          skillDir,
+          name: "available-skill",
+          description: "Available despite missing lifecycle state",
+        }),
+      );
+
+      expect(prompt).toContain("available-skill");
+      expect(prompt).toContain("Available despite missing lifecycle state");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

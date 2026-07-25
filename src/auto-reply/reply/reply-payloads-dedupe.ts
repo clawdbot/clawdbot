@@ -6,9 +6,10 @@ import {
 import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import {
   channelRouteTargetsMatchExact,
   stringifyRouteThreadId,
@@ -46,7 +47,7 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
   const sentSet = new Set<string>();
   for (const sentMediaUrl of sentMediaUrls) {
-    const normalized = normalizeMediaForDedupe(sentMediaUrl);
+    const normalized = normalizeMediaReferenceForComparison(sentMediaUrl);
     if (normalized) {
       sentSet.add(normalized);
     }
@@ -56,18 +57,24 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
 
   let nextPayloads: ReplyPayload[] | undefined;
-  for (let index = 0; index < payloads.length; index++) {
-    const payload = payloads[index];
+  for (const [index, payload] of payloads.entries()) {
+    // Delivery operations apply to the message created by this payload. Keep
+    // its content intact so dedupe cannot silently skip the operation.
+    if (hasEnabledDeliveryOperation(payload)) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
+    const stripSingle = mediaUrl && sentSet.has(normalizeMediaReferenceForComparison(mediaUrl));
 
     let filteredUrls: string[] | undefined;
     let strippedMediaUrls = false;
     if (mediaUrls?.length) {
-      for (let mediaIndex = 0; mediaIndex < mediaUrls.length; mediaIndex++) {
-        const url = mediaUrls[mediaIndex];
-        if (sentSet.has(normalizeMediaForDedupe(url))) {
+      for (const [mediaIndex, url] of mediaUrls.entries()) {
+        if (sentSet.has(normalizeMediaReferenceForComparison(url))) {
           strippedMediaUrls = true;
           if (!filteredUrls) {
             filteredUrls = mediaUrls.slice(0, mediaIndex);
@@ -87,10 +94,15 @@ export function filterMessagingToolMediaDuplicates(params: {
       continue;
     }
 
+    const nextMediaUrl = stripSingle ? undefined : mediaUrl;
+    const nextMediaUrls = filteredUrls?.length ? filteredUrls : undefined;
     const nextPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
-      mediaUrl: stripSingle ? undefined : mediaUrl,
-      mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
+      mediaUrl: nextMediaUrl,
+      mediaUrls: nextMediaUrls,
+      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls
+        ? { audioAsVoice: undefined }
+        : {}),
     });
     if (!nextPayloads) {
       nextPayloads = payloads.slice(0, index);
@@ -101,23 +113,9 @@ export function filterMessagingToolMediaDuplicates(params: {
   return nextPayloads ?? payloads;
 }
 
-function normalizeMediaForDedupe(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file://")) {
-    return trimmed;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol === "file:") {
-      return decodeURIComponent(parsed.pathname || "");
-    }
-  } catch {
-    // Keep fallback below for non-URL-like inputs.
-  }
-  return trimmed.replace(/^file:\/\//i, "");
+export function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
+  const pin = payload.delivery?.pin;
+  return pin === true || (typeof pin === "object" && pin.enabled);
 }
 
 function normalizeProviderForComparison(value?: string): string | undefined {
@@ -253,7 +251,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
 }
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */
-export function getMatchingMessagingToolReplyTargets(params: {
+function getMatchingMessagingToolReplyTargets(params: {
   config?: OpenClawConfig;
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -392,13 +390,14 @@ export function resolveMessagingToolPayloadDedupe(params: {
       Array.isArray(target.mediaUrls) &&
       target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim())),
   );
+  const allTargetsMatchRoute = matchingRoute && matchingTargets.length === sentTargets.length;
 
   return {
     shouldDedupePayloads: matchingRoute || sentTargets.length === 0,
     matchingRoute,
     routeSentTexts,
     routeSentMediaUrls,
-    useGlobalSentTextEvidenceFallback: matchingRoute && !hasTargetTextEvidence,
-    useGlobalSentMediaUrlEvidenceFallback: matchingRoute && !hasTargetMediaUrlEvidence,
+    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && !hasTargetTextEvidence,
+    useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && !hasTargetMediaUrlEvidence,
   };
 }

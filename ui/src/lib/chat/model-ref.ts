@@ -1,6 +1,8 @@
 // Chat model reference normalization.
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
+const LEGACY_OPENAI_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
+
 export type ChatModelOverride =
   | {
       kind: "qualified";
@@ -10,6 +12,11 @@ export type ChatModelOverride =
       kind: "raw";
       value: string;
     };
+
+export function normalizeChatModelProviderId(provider: string): string {
+  const normalized = provider.trim().toLowerCase();
+  return LEGACY_OPENAI_PROVIDER_IDS.has(normalized) ? "openai" : normalized;
+}
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {
   const trimmedModel = model.trim();
@@ -55,10 +62,7 @@ export function normalizeChatModelOverrideValue(
   return resolveUniqueCatalogValueById(trimmed, catalog) || trimmed;
 }
 
-export function resolveServerChatModelValue(
-  model?: string | null,
-  provider?: string | null,
-): string {
+function resolveServerChatModelValue(model?: string | null, provider?: string | null): string {
   if (typeof model !== "string") {
     return "";
   }
@@ -141,18 +145,32 @@ export function resolvePreferredServerChatModelValue(
       : resolveServerChatModelValue(trimmedModel, trimmedProvider);
   }
 
+  const qualifiedServerValue = buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
+  const normalizedModel = trimmedModel.toLowerCase();
+  const normalizedProvider = normalizeChatModelProviderId(trimmedProvider);
+  const serverProviderOwnsRawModelId = catalog.some(
+    (entry) =>
+      entry.id.trim().toLowerCase() === normalizedModel &&
+      normalizeChatModelProviderId(entry.provider) === normalizedProvider,
+  );
+
+  // Session model/provider fields form one server-owned pair. Prefer the provider-qualified
+  // route only when the catalog confirms that provider owns this raw nested model id.
+  if (serverProviderOwnsRawModelId && hasCatalogQualifiedValue(catalog, qualifiedServerValue)) {
+    return qualifiedServerValue;
+  }
+
   if (hasCatalogQualifiedValue(catalog, trimmedModel)) {
     return trimmedModel;
+  }
+
+  if (hasCatalogQualifiedValue(catalog, qualifiedServerValue)) {
+    return qualifiedServerValue;
   }
 
   const matchedCatalogValue = resolveUniqueCatalogValueById(trimmedModel, catalog);
   if (matchedCatalogValue) {
     return matchedCatalogValue;
-  }
-
-  const qualifiedServerValue = buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
-  if (hasCatalogQualifiedValue(catalog, qualifiedServerValue)) {
-    return qualifiedServerValue;
   }
 
   // Without catalog confirmation, preserve slash-containing server values as-is.
@@ -161,7 +179,7 @@ export function resolvePreferredServerChatModelValue(
   return resolveServerChatModelValue(trimmedModel, trimmedProvider);
 }
 
-export function formatChatModelDisplay(value: string): string {
+function formatChatModelDisplay(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
@@ -190,7 +208,7 @@ function createNameProviderKey(name: string, provider?: string | null): string {
   return `${name.toLowerCase()}\u0000${provider?.trim().toLowerCase() ?? ""}`;
 }
 
-export type ChatModelDisplayLookup = ReadonlyMap<string, string>;
+type ChatModelDisplayLookup = ReadonlyMap<string, string>;
 
 export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<string, string> {
   const nameToValues = new Map<string, Set<string>>();
@@ -242,7 +260,7 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   return displayLookup;
 }
 
-export function formatCatalogEntryDisplay(
+function formatCatalogEntryDisplay(
   entry: ModelCatalogEntry,
   displayLookup: ChatModelDisplayLookup,
 ): string {
@@ -259,17 +277,6 @@ export function formatCatalogChatModelDisplayFromLookup(
   }
 
   return displayLookup.get(trimmed.toLowerCase()) ?? formatChatModelDisplay(trimmed);
-}
-
-export function formatCatalogChatModelDisplay(value: string, catalog: ModelCatalogEntry[]): string {
-  return formatCatalogChatModelDisplayFromLookup(value, buildCatalogDisplayLookup(catalog));
-}
-
-export function buildChatModelOption(
-  entry: ModelCatalogEntry,
-  catalog: ModelCatalogEntry[] = [entry],
-): { value: string; label: string } {
-  return buildChatModelOptionFromLookup(entry, buildCatalogDisplayLookup(catalog));
 }
 
 export function buildChatModelOptionFromLookup(

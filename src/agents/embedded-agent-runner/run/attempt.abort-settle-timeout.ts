@@ -1,3 +1,4 @@
+import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 /**
  * Resolves how long aborted attempts wait for cleanup to settle.
  */
@@ -19,5 +20,5 @@ export function resolveEmbeddedAbortSettleTimeoutMs(
   if (override !== undefined) {
     return override;
   }
-  return env.OPENCLAW_TEST_FAST === "1" ? 250 : 2_000;
+  return isFastTestRuntimeEnv(env) ? 250 : 2_000;
 }

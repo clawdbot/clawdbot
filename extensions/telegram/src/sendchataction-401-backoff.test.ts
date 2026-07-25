@@ -178,6 +178,7 @@ describe("createTelegramSendChatActionHandler", () => {
 
   it.each([
     ["recoverable network", () => makeNetworkError(), 1000],
+    ["snippet-only network", () => new Error("socket hang up"), 1000],
     ["Telegram 429", () => makeTelegramError("Too Many Requests", 429, { retry_after: 2 }), 2000],
     ["Telegram 5xx", () => makeTelegramError("Bad Gateway", 502), 1000],
   ])("cools down transient %s errors", async (_name, makeError, expectedCooldownMs) => {

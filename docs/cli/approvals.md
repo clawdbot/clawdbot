@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw approvals` and `openclaw exec-policy`"
 read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
+  - You need to list or resolve a pending approval without a chat surface
 title: "Approvals"
 ---
 
@@ -44,9 +45,17 @@ For remote host approvals, use `openclaw approvals set --gateway` or `openclaw a
 openclaw approvals get
 openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
+openclaw approvals pending
+openclaw approvals resolve <id> <allow-once|allow-always|deny>
 ```
 
-`get` shows the effective exec policy for the target: the requested `tools.exec` policy, the host approvals-file policy, and the merged effective result.
+`get` shows the effective exec policy for the target: the requested `tools.exec` policy, the host approvals-file policy, and the merged effective result. Nodes with a host-native policy, such as the Windows companion, show that policy directly instead of applying OpenClaw approvals-file policy math.
+
+For file-backed nodes, the merged view requires a host-resolved policy snapshot. Older nodes show the effective policy as unavailable instead of assuming the Gateway's requested policy also applies on the host.
+
+<Note>
+Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults.
+</Note>
 
 Precedence:
 
@@ -54,6 +63,33 @@ Precedence:
 - Requested `tools.exec` policy can narrow or broaden intent, but the effective result is derived from host rules.
 - `--node` combines the node host approvals file with gateway `tools.exec` policy (both apply at runtime).
 - If gateway config is unavailable, the CLI falls back to the node approvals snapshot and notes that the final runtime policy could not be computed.
+
+## Pending approvals
+
+List pending exec, plugin, and OpenClaw system-agent approvals from the Gateway:
+
+```bash
+openclaw approvals pending
+openclaw approvals pending --json
+```
+
+Complete enumeration and the matching operator-wide `resolve` flow use `operator.admin` because approval records otherwise retain requester/reviewer filtering. Resolution also requests the dedicated `operator.approvals` scope. The standard CLI operator grant includes both scopes; a restricted third-party client should not request admin merely to emulate this command.
+
+Human output shows the approval kind, agent/session attribution, request age, time until expiry, a shortened command or summary, and a shell-neutral `id64_<base64url>` id token. A `Full request text` block always follows the compact table with every complete token and a losslessly escaped request, so terminal-width shortening cannot hide a suffix or the token needed for resolution. Copy the complete token into `resolve`. Unsafe terminal characters in other fields are shown as visible Unicode escapes. JSON output returns normalized entries under `approvals`, preserving the original raw `id`, `summary`, `createdAtMs`, and `expiresAtMs` for scripts; raw ids remain accepted by `resolve` unless they use the reserved `id64_` display-token prefix.
+
+If a supplied `id64_` value matches both a literal raw id and the decoded display token for another approval, the CLI rejects it as ambiguous instead of risking resolution of the wrong request.
+
+Resolve one approval by its full id:
+
+```bash
+openclaw approvals resolve <id> allow-once
+openclaw approvals resolve <id> allow-always
+openclaw approvals resolve <id> deny --reason "Not expected during maintenance"
+```
+
+The CLI reads the unified approval record to select its kind, checks the requested decision against the record's allowed decisions, and then calls the unified resolver. A first successful decision exits `0`. Repeating the recorded decision also exits `0` and reports `already resolved (same decision)`. A conflicting decision, missing approval, expired approval, or decision unavailable for that approval kind prints a clear error and exits non-zero.
+
+`--reason` adds a local note to the CLI confirmation. The current Gateway approval record has no free-text resolution-reason field, so this note is not persisted or sent to other approval surfaces.
 
 ## Replace approvals from a file
 
@@ -67,6 +103,19 @@ openclaw approvals set --gateway --file ./exec-approvals.json
 ```
 
 `set` accepts JSON5, not only strict JSON. Use either `--file` or `--stdin`, not both.
+
+Host-native Windows nodes use their own policy shape:
+
+```bash
+openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
+{
+  defaultAction: "deny",
+  rules: [{ pattern: "hostname", action: "allow" }]
+}
+EOF
+```
+
+The CLI reads the node's current hash first and sends it with the update, so concurrent local edits are rejected instead of overwritten. `rules` is required because this operation replaces the node's complete rule list; `defaultAction` is optional. A node that reports its native policy as disabled cannot be configured remotely; enable or configure the policy on that host first. Host-native policies do not support the `allowlist add|remove` helpers.
 
 ## "Never prompt" / YOLO example
 
@@ -85,14 +134,13 @@ openclaw approvals set --stdin <<'EOF'
 EOF
 ```
 
-Node variant: same body with `openclaw approvals set --node <id|name|ip> --stdin`.
+For nodes that expose an OpenClaw approvals file, use the same body with `openclaw approvals set --node <id|name|ip> --stdin`. Host-native nodes require their owner-specific shape shown above.
 
 This changes the **host approvals file** only. To keep the requested OpenClaw policy aligned, also set:
 
 ```bash
 openclaw config set tools.exec.host gateway
-openclaw config set tools.exec.security full
-openclaw config set tools.exec.ask off
+openclaw config set tools.exec.mode full
 ```
 
 `tools.exec.host=gateway` is explicit here because `host=auto` still means "sandbox when available, otherwise gateway": YOLO is about approvals, not routing. Use `gateway` (or `/exec host=gateway`) when you want host exec even with a sandbox configured.
@@ -127,9 +175,11 @@ No target flag means the local approvals file on disk.
 
 `allowlist add|remove` also supports `--agent <id>` (defaults to `"*"`, applying to all agents).
 
+`pending` and `resolve` always use the Gateway because pending requests are live Gateway state. They support the shared Gateway connection options `--url`, `--token`, and `--timeout`; `pending` also supports `--json`.
+
 ## Notes
 
-- The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
+- The node host must advertise `system.execApprovals.get/set` (macOS app, headless node host, or Windows companion).
 - Approvals files are stored per host in the OpenClaw state dir: `$OPENCLAW_STATE_DIR/exec-approvals.json`, or `~/.openclaw/exec-approvals.json` when the variable is unset.
 
 ## Related

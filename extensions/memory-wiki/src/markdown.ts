@@ -1,6 +1,7 @@
 // Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   asFiniteNumber,
   normalizeLowercaseStringOrEmpty,
@@ -114,7 +115,7 @@ export type WikiPageSummary = {
   updatedAt?: string;
 };
 
-export type WikiPageSummaryScanResult =
+type WikiPageSummaryScanResult =
   | { status: "valid"; page: WikiPageSummary }
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };
@@ -198,7 +199,11 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const parsed = YAML.parse(match[1]) as unknown;
+  const frontmatter = match[1];
+  if (frontmatter === undefined) {
+    return { hasFrontmatter: false, frontmatter: {}, body: content };
+  }
+  const parsed: unknown = YAML.parse(frontmatter);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
     // so an edit cannot silently replace scalar or sequence frontmatter.
@@ -408,13 +413,41 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
   return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
 }
 
+type MarkdownAstNode = {
+  type?: string;
+  position?: {
+    start?: { offset?: number };
+    end?: { offset?: number };
+  };
+  children?: MarkdownAstNode[];
+};
+
+function maskMarkdownCode(markdown: string): string {
+  const masked = markdown.split("");
+  const visit = (node: MarkdownAstNode): void => {
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start?.offset;
+      const end = node.position?.end?.offset;
+      if (start !== undefined && end !== undefined) {
+        for (let index = start; index < end; index++) {
+          if (masked[index] !== "\n" && masked[index] !== "\r") {
+            masked[index] = " ";
+          }
+        }
+      }
+      return;
+    }
+    for (const child of node.children ?? []) {
+      visit(child);
+    }
+  };
+  visit(fromMarkdown(markdown) as MarkdownAstNode);
+  return masked.join("");
+}
+
 function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  // Strip fenced code blocks and inline code before link extraction to avoid
-  // false positives from [[...]] patterns in code (bash tests, Scala generics).
-  const searchable = markdown
-    .replace(/(^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g, "\n")
-    .replace(/`[^`]+`/g, "``")
-    .replace(RELATED_BLOCK_PATTERN, "");
+  const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();
@@ -615,7 +648,7 @@ export function renderMarkdownFence(content: string, infoString = "text"): strin
   return `${fence}${infoString}\n${content}\n${fence}`;
 }
 
-export function inferWikiPageKind(relativePath: string): WikiPageKind | null {
+function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
   if (normalized.startsWith("entities/")) {
     return "entity";
@@ -726,3 +759,4 @@ export function toWikiPageSummary(params: {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

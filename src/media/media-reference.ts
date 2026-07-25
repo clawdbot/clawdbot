@@ -228,10 +228,18 @@ export async function resolveInboundMediaReference(
   };
 }
 
+/** Resolves a media reference while preserving whether it belongs to the inbound store. */
+export async function resolveMediaReferenceLocalPathInfo(source: string) {
+  const normalizedSource = normalizeMediaReferenceSource(source);
+  const inboundReference = await resolveInboundMediaReference(normalizedSource);
+  return inboundReference
+    ? { kind: "inbound" as const, path: inboundReference.physicalPath }
+    : { kind: "local" as const, path: normalizedSource };
+}
+
 /** Converts inbound media references for callers that need a direct local file path. */
 export async function resolveMediaReferenceLocalPath(source: string): Promise<string> {
-  const normalizedSource = normalizeMediaReferenceSource(source);
-  return (await resolveInboundMediaReference(normalizedSource))?.physicalPath ?? normalizedSource;
+  return (await resolveMediaReferenceLocalPathInfo(source)).path;
 }
 
 async function resolveInboundMediaPath(id: string, source: string): Promise<string> {

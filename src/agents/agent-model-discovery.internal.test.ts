@@ -1,10 +1,15 @@
 /** Tests internal model discovery imports avoid public SDK facade coupling. */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+let modelDiscovery: typeof import("./agent-model-discovery.js");
 
 describe("agent-model-discovery internal runtime", () => {
-  it("loads without the public agent-sessions SDK facade", async () => {
-    const module = await import("./agent-model-discovery.js");
-    expect(typeof module.discoverAuthStorage).toBe("function");
-    expect(typeof module.discoverModels).toBe("function");
+  beforeAll(async () => {
+    modelDiscovery = await import("./agent-model-discovery.js");
+  });
+
+  it("loads without the public agent-sessions SDK facade", () => {
+    expect(typeof modelDiscovery.discoverAuthStorage).toBe("function");
+    expect(typeof modelDiscovery.discoverModels).toBe("function");
   });
 });

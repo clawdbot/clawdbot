@@ -1,19 +1,24 @@
 /** Tests secrets configure plan generation and target validation. */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import {
-  buildConfigureCandidates,
   buildConfigureCandidatesForScope,
   buildSecretsConfigurePlan,
   collectConfigureProviderChanges,
   hasConfigurePlanChanges,
 } from "./configure-plan.js";
+import { resolveConfigSecretTargetByPath } from "./target-registry.js";
 
 describe("secrets configure plan helpers", () => {
+  beforeAll(() => {
+    resolveConfigSecretTargetByPath(["channels", "telegram", "botToken"]);
+    buildConfigureCandidatesForScope({ config: {} as OpenClawConfig });
+  });
+
   it("builds configure candidates from supported configure targets", () => {
     const config = {
       talk: {
@@ -30,7 +35,7 @@ describe("secrets configure plan helpers", () => {
       },
     } as OpenClawConfig;
 
-    const candidates = buildConfigureCandidates(config);
+    const candidates = buildConfigureCandidatesForScope({ config });
     const paths = candidates.map((entry) => entry.path);
     expect(paths).toContain(TALK_TEST_PROVIDER_API_KEY_PATH);
     expect(paths).toContain("channels.telegram.botToken");

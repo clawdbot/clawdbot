@@ -9,5 +9,4 @@ describe("command-path-matches", () => {
     expect(matchesCommandPath(["status", "watch"], ["status"], { exact: true })).toBe(false);
     expect(matchesCommandPath(["config", "get"], ["config", "get"], { exact: true })).toBe(true);
   });
-
 });

@@ -1,6 +1,7 @@
-// Control UI tests cover workboard status persistence behavior.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+// Control UI tests cover workboard status persistence behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { WorkboardCard } from "../../lib/workboard/index.ts";
@@ -127,14 +128,23 @@ async function chooseWorkboardSelectOption(
 ): Promise<void> {
   const field = workboardField(scope, label);
   expect(await field.count()).toBe(1);
-  await field.locator(".workboard-select__trigger").click();
-  await field.getByRole("option", { exact: true, name: optionLabel }).click();
+  const optionValue = await field.locator("wa-option").evaluateAll((options, optionText) => {
+    const option = options.find(
+      (candidate) => (candidate as HTMLElement & { label?: string }).label === optionText,
+    );
+    return option?.getAttribute("value") ?? null;
+  }, optionLabel);
+  expect(optionValue).not.toBeNull();
+  await field.locator("wa-select").evaluate((select, value) => {
+    (select as HTMLElement & { value: string }).value = String(value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }, optionValue);
 }
 
 async function workboardSelectValue(scope: Page | Locator, label: string): Promise<string> {
   const field = workboardField(scope, label);
   expect(await field.count()).toBe(1);
-  return (await field.locator(".workboard-select__value").textContent()) ?? "";
+  return field.getByRole("combobox").inputValue();
 }
 
 function workboardColumn(page: Page, title: string) {
@@ -187,7 +197,7 @@ async function waitForRequestCount(
       stableSince = null;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(
@@ -316,13 +326,17 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await workboardCard(page, "Todo", "Persist queue status")
         .locator('button[aria-label="Edit card"]')
         .click();
+      const editDialog = page.getByRole("dialog", { name: "Edit card" });
+      await editDialog.waitFor({ timeout: 10_000 });
       await page.getByLabel("Title").fill("Persisted renamed card");
       await page.getByLabel("Notes").fill("Edited notes survive reopening.");
       await chooseWorkboardSelectOption(page, "Priority", "High");
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
-      expect(requestParams(updateRequests[0])).toMatchObject({
+      expect(
+        requestParams(expectDefined(updateRequests[0], "workboard update request")),
+      ).toMatchObject({
         id: "card-1",
         patch: {
           notes: "Edited notes survive reopening.",
@@ -332,7 +346,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
         },
       });
       try {
-        await page.locator('[role="dialog"]').waitFor({ state: "detached", timeout: 10_000 });
+        await editDialog.waitFor({ state: "detached", timeout: 10_000 });
       } catch (err) {
         const requests = await gateway.getRequests("workboard.cards.update");
         throw new Error(
@@ -345,7 +359,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await workboardCard(page, "Todo", "Persisted renamed card")
         .locator('button[aria-label="Edit card"]')
         .click();
-      await page.locator('[role="dialog"]').waitFor({ timeout: 10_000 });
+      await editDialog.waitFor({ timeout: 10_000 });
       await expect.poll(() => page.getByLabel("Title").inputValue()).toBe("Persisted renamed card");
       await expect
         .poll(() => page.getByLabel("Notes").inputValue())
@@ -356,11 +370,11 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
         path: path.join(artifactDir, "workboard-edit-reopen.png"),
       });
       await page
-        .locator('[role="dialog"] .workboard-modal__actions')
+        .locator('openclaw-modal-dialog[label="Edit card"] .workboard-modal__actions')
         .last()
         .getByRole("button", { name: "Cancel" })
         .click();
-      await page.locator('[role="dialog"]').waitFor({ state: "detached", timeout: 10_000 });
+      await editDialog.waitFor({ state: "detached", timeout: 10_000 });
 
       await dispatchHtml5Drag(
         workboardCard(page, "Todo", "Persisted renamed card"),

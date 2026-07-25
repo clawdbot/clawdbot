@@ -12,6 +12,7 @@ title: "Menu bar"
 - A root "Context" item opens a submenu with recent sessions instead of expanding them in the root menu.
 - A "Nodes" block in the root menu lists paired **devices** only (from `node.list`), not client/presence entries.
 - A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available.
+- **Quick Chat** opens the floating main-session composer; its current global shortcut appears beside the item.
 
 ## State model
 

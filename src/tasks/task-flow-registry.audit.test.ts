@@ -1,8 +1,12 @@
 // Covers managed task-flow audit summaries and stale-flow classification.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import {
+  createRunningTaskRun as createRunningTaskRunOrNull,
+  finalizeTaskRunByRunId,
+} from "./task-executor.js";
 import {
   listTaskFlowAuditFindings,
   type TaskFlowAuditCode,
@@ -10,16 +14,17 @@ import {
 } from "./task-flow-registry.audit.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
+  requestFlowCancel,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  configureTaskFlowRegistryRuntime,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -88,20 +93,24 @@ describe("task-flow-registry audit", () => {
   });
 
   it("surfaces restore failures as task-flow audit findings", () => {
+    const loadSnapshot = vi.fn(() => {
+      throw new Error("boom");
+    });
     configureTaskFlowRegistryRuntime({
       store: {
-        loadSnapshot: () => {
-          throw new Error("boom");
-        },
+        loadSnapshot,
         saveSnapshot: () => {},
       },
     });
 
-    const findings = listTaskFlowAuditFindings();
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe("error");
-    expect(findings[0]?.code).toBe("restore_failed");
-    expect(findings[0]?.detail).toContain("boom");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const findings = listTaskFlowAuditFindings();
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.severity).toBe("error");
+      expect(findings[0]?.code).toBe("restore_failed");
+      expect(findings[0]?.detail).toContain("boom");
+    }
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("clears restore-failed findings after a clean reset and restore", () => {
@@ -226,6 +235,25 @@ describe("task-flow-registry audit", () => {
     });
   });
 
+  it("does not flag retained terminal blocked flows after their task is pruned", () => {
+    const now = 60 * 60_000;
+    const flow: TaskFlowRecord = {
+      flowId: "flow-terminal-blocked",
+      syncMode: "task_mirrored",
+      ownerKey: "agent:main:main",
+      revision: 0,
+      status: "blocked",
+      notifyPolicy: "done_only",
+      goal: "Historical blocked task",
+      blockedTaskId: "task-pruned",
+      createdAt: 1,
+      updatedAt: 100,
+      endedAt: 100,
+    };
+
+    expect(listTaskFlowAuditFindings({ flows: [flow], now })).toStrictEqual([]);
+  });
+
   it("reports cancel-stuck before maintenance finalizes the flow", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const flow = createManagedTaskFlow({
@@ -240,6 +268,52 @@ describe("task-flow-registry audit", () => {
 
       const findings = listTaskFlowAuditFindings({ now: 6 * 60_000 });
       expect(requireFinding(findings, "cancel_stuck", flow.flowId).flow?.flowId).toBe(flow.flowId);
+    });
+  });
+
+  it("counts provisional subagent cancellation as active during audit", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const now = Date.now();
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Cancel subagent work",
+        status: "running",
+        createdAt: now - 6 * 60_000,
+        updatedAt: now - 6 * 60_000,
+      });
+      const runId = "run-provisional-cancel-audit";
+      const task = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:provisional-cancel",
+        runId,
+        task: "Wait for kill reconciliation",
+        startedAt: now - 6 * 60_000,
+        lastEventAt: now - 6 * 60_000,
+      });
+      expect(task.runId).toBe(runId);
+      requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        cancelRequestedAt: now - 6 * 60_000,
+        updatedAt: now - 6 * 60_000,
+      });
+      finalizeTaskRunByRunId({
+        runId,
+        runtime: "subagent",
+        status: "cancelled",
+        endedAt: now - 6 * 60_000,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+
+      expect(
+        listTaskFlowAuditFindings({ now }).find(
+          (finding) => finding.code === "cancel_stuck" && finding.flow?.flowId === flow.flowId,
+        ),
+      ).toBeUndefined();
     });
   });
 });

@@ -8,7 +8,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,

@@ -8,7 +8,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type OrphanedTrailingUserPromptMergeParams = {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 };
 
 /** Result of merging or dropping a trailing user leaf before provider submission. */
@@ -34,31 +34,15 @@ export type MessageMergeStrategy = {
   ) => OrphanedTrailingUserPromptMergeResult;
 };
 
-/** Default strategy used by embedded attempts when no test override is installed. */
-export const DEFAULT_MESSAGE_MERGE_STRATEGY_ID: MessageMergeStrategyId =
-  "orphan-trailing-user-prompt";
+/** Strategy used by embedded attempts. */
+const DEFAULT_MESSAGE_MERGE_STRATEGY_ID: MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
 const defaultMessageMergeStrategy: MessageMergeStrategy = {
   id: DEFAULT_MESSAGE_MERGE_STRATEGY_ID,
   mergeOrphanedTrailingUserPrompt,
 };
 
-let activeMessageMergeStrategy = defaultMessageMergeStrategy;
-
-/** Returns the active merge strategy for the current process. */
+/** Returns the transcript merge strategy used by embedded attempts. */
 export function resolveMessageMergeStrategy(): MessageMergeStrategy {
-  return activeMessageMergeStrategy;
-}
-
-function registerMessageMergeStrategy(strategy: MessageMergeStrategy): () => void {
-  const previous = activeMessageMergeStrategy;
-  activeMessageMergeStrategy = strategy;
-  return () => {
-    activeMessageMergeStrategy = previous;
-  };
-}
-
-/** Installs a process-local merge strategy override and returns a restore callback. */
-export function registerMessageMergeStrategyForTest(strategy: MessageMergeStrategy): () => void {
-  return registerMessageMergeStrategy(strategy);
+  return defaultMessageMergeStrategy;
 }

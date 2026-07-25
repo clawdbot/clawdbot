@@ -1,4 +1,5 @@
 // Mattermost tests cover client plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -13,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 import {
   createMattermostClient,
+  createMattermostDirectChannelWithRetry,
   createMattermostPost,
   normalizeMattermostBaseUrl,
   readMattermostError,
@@ -59,6 +61,13 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
     throw new Error("expected JSON object request body");
   }
   return parsed as Record<string, unknown>;
+}
+
+function requireRequestCall(
+  calls: readonly { url: string; init?: RequestInit }[],
+  index = 0,
+): { url: string; init?: RequestInit } {
+  return expectDefined(calls[index], `Mattermost request call ${index}`);
 }
 
 function streamingMattermostResponse(body: unknown): {
@@ -128,7 +137,7 @@ async function updatePostAndCapture(
   await updateMattermostPost(client, "post1", update);
   return {
     calls,
-    body: parseRequestJson(calls[0].init),
+    body: parseRequestJson(requireRequestCall(calls).init),
   };
 }
 
@@ -359,6 +368,45 @@ describe("createMattermostClient", () => {
     );
   });
 
+  it("rejects relative API path segments before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    await expect(client.request("/posts/../users/me")).rejects.toThrow(
+      "Mattermost API path must not contain unsafe path segments",
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects encoded relative API path segments before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    await expect(client.request("/posts/%2e%2e/users/me")).rejects.toThrow(
+      "Mattermost API path must not contain unsafe path segments",
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects URL-normalized relative API path bypasses before fetch", async () => {
+    const { client, calls } = createTestClient();
+
+    for (const path of [
+      "/posts/..?x=1",
+      "/posts/%2e%2e?x=1",
+      "/posts\\..\\users/me",
+      "/posts/.\n./users/me",
+      "/posts/.%0a./users/me",
+      "/posts/%2e%2e%2fusers%80%2f..%2fme",
+    ]) {
+      await expect(client.request(path)).rejects.toThrow(
+        "Mattermost API path must not contain unsafe path segments",
+      );
+    }
+
+    expect(calls).toEqual([]);
+  });
+
   it("sends Authorization header with Bearer token", async () => {
     const { mockFetch, calls } = createMockFetch({ body: { id: "u1" } });
     const client = createMattermostClient({
@@ -367,7 +415,7 @@ describe("createMattermostClient", () => {
       fetchImpl: mockFetch,
     });
     await client.request("/users/me");
-    const headers = new Headers(calls[0].init?.headers);
+    const headers = new Headers(requireRequestCall(calls).init?.headers);
     expect(headers.get("Authorization")).toBe("Bearer my-secret-token");
   });
 
@@ -379,7 +427,7 @@ describe("createMattermostClient", () => {
       fetchImpl: mockFetch,
     });
     await client.request("/posts", { method: "POST", body: JSON.stringify({ message: "hi" }) });
-    const headers = new Headers(calls[0].init?.headers);
+    const headers = new Headers(requireRequestCall(calls).init?.headers);
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
@@ -426,7 +474,7 @@ describe("createMattermostPost", () => {
       message: "Hello world",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.channel_id).toBe("ch123");
     expect(body.message).toBe("Hello world");
   });
@@ -445,7 +493,7 @@ describe("createMattermostPost", () => {
       rootId: "root456",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.root_id).toBe("root456");
   });
 
@@ -463,7 +511,7 @@ describe("createMattermostPost", () => {
       fileIds: ["file1", "file2"],
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.file_ids).toEqual(["file1", "file2"]);
   });
 
@@ -490,7 +538,7 @@ describe("createMattermostPost", () => {
       props,
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body).toEqual({
       channel_id: "ch123",
       message: "Pick an option",
@@ -511,7 +559,7 @@ describe("createMattermostPost", () => {
       message: "No props",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.props).toBeUndefined();
   });
 });
@@ -522,10 +570,7 @@ describe("updateMattermostPost", () => {
   it("sends PUT to /posts/{id}", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
-    const firstCall = calls[0];
-    if (!firstCall) {
-      throw new Error("expected Mattermost update post request");
-    }
+    const firstCall = requireRequestCall(calls);
     expect(firstCall.url).toContain("/posts/post1");
     if (!firstCall.init) {
       throw new Error("expected Mattermost update post request init");
@@ -562,5 +607,42 @@ describe("updateMattermostPost", () => {
     expect(body.id).toBe("post1");
     expect(body.message).toBeUndefined();
     expect(body.props).toEqual({ attachments: [] });
+  });
+});
+
+describe("createMattermostDirectChannelWithRetry delay cap", () => {
+  it("keeps maxDelayMs authoritative when initialDelayMs exceeds it", async () => {
+    vi.useFakeTimers();
+    try {
+      const mockFetch = vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
+        .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
+        .mockResolvedValueOnce(Response.json({ id: "dm-channel-cap" }, { status: 201 }));
+      const client = createMattermostClient({
+        baseUrl: "https://mattermost.example.com",
+        botToken: "test-token",
+        fetchImpl: mockFetch,
+      });
+      const delays: number[] = [];
+      // The config schema allows initialDelayMs above the defaulted 10s
+      // maxDelayMs cap; the cap must still bound every retry delay instead of
+      // the base delay overriding it (regression guard for the core-retry
+      // migration, which raises maxDelayMs to the minDelayMs floor).
+      const promise = createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 60_000,
+        onRetry: (_attempt, delayMs) => {
+          delays.push(delayMs);
+        },
+      });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+      expect(result.id).toBe("dm-channel-cap");
+      expect(delays).toEqual([10_000, 10_000]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

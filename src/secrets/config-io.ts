@@ -9,7 +9,9 @@ const silentConfigIoLogger = {
 /**
  * Creates config I/O for secrets commands with config-loader logging suppressed.
  */
-export function createSecretsConfigIO(params: { env: NodeJS.ProcessEnv }) {
+export function createSecretsConfigIO(params: {
+  env: NodeJS.ProcessEnv;
+}): ReturnType<typeof createConfigIO> {
   // Secrets command output is owned by the CLI command so --json stays machine-parseable.
   return createConfigIO({
     env: params.env,

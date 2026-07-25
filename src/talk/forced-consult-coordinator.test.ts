@@ -47,6 +47,20 @@ describe("realtime voice forced consult coordinator", () => {
     }
   });
 
+  it("does not retroactively cancel a delivered handle", () => {
+    const coordinator = createRealtimeVoiceForcedConsultCoordinator();
+    const handle = coordinator.prepare("Can you check this?", { id: "forced-1" });
+    coordinator.markStarted(handle!);
+    coordinator.markDelivered(handle!);
+
+    coordinator.markCancelled(handle!);
+
+    expect(coordinator.isCancelled(handle!)).toBe(false);
+    expect(
+      coordinator.recordNativeConsult({ question: "Can you check this?" }, "native-call"),
+    ).toMatchObject({ kind: "already_delivered", handle: { id: "forced-1" } });
+  });
+
   it("tracks native-first consults during the dedupe window", () => {
     vi.useFakeTimers();
     try {
@@ -174,7 +188,7 @@ describe("realtime voice forced consult coordinator", () => {
     expect(scheduledDelays).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 
-  it("reports cancelled handles until the dedupe window expires", () => {
+  it("matches cancelled handles until the dedupe window expires", () => {
     vi.useFakeTimers();
     try {
       const coordinator = createRealtimeVoiceForcedConsultCoordinator();
@@ -183,8 +197,15 @@ describe("realtime voice forced consult coordinator", () => {
       coordinator.markCancelled(pending!);
 
       expect(coordinator.isCancelled(pending!)).toBe(true);
+      expect(
+        coordinator.recordNativeConsult({ question: "check status" }, "native-call"),
+      ).toMatchObject({ kind: "already_delivered", handle: { id: "forced-1" } });
+      expect(coordinator.nativeCallIds(pending!)).toEqual(["native-call"]);
       vi.advanceTimersByTime(2_001);
       expect(coordinator.isCancelled(pending!)).toBe(false);
+      expect(coordinator.recordNativeConsult({ question: "check status" })).toMatchObject({
+        kind: "none",
+      });
     } finally {
       vi.useRealTimers();
     }

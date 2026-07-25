@@ -1,6 +1,12 @@
 // Covers duration, UTC/zoned timestamp, timezone, and relative time formatting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatUtcTimestamp, formatZonedTimestamp, resolveTimezone } from "./format-datetime.js";
+import {
+  createTimeZoneDayKeyFormatter,
+  formatUtcTimestamp,
+  formatZonedTimestamp,
+  resolveTimeZoneDayStartMs,
+  resolveTimezone,
+} from "./format-datetime.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -43,6 +49,7 @@ describe("format-duration", () => {
         { input: 90000, expected: "1m30s" },
         { input: 3600000, expected: "1h" },
         { input: 3660000, expected: "1h1m" },
+        { input: 3630000, expected: "1h30s" },
         { input: 5400000, expected: "1h30m" },
         { input: 86400000, expected: "1d" },
         { input: 90000000, expected: "1d1h" },
@@ -127,6 +134,24 @@ describe("format-datetime", () => {
       { input: "", expected: undefined },
     ] as const)("resolves $input", ({ input, expected }) => {
       expect(resolveTimezone(input)).toBe(expected);
+    });
+  });
+
+  describe("calendar days", () => {
+    it("formats event instants with the offset active in the requested timezone", () => {
+      const formatViennaDay = createTimeZoneDayKeyFormatter("Europe/Vienna");
+
+      expect(formatViennaDay(new Date("2026-03-28T22:30:00.000Z"))).toBe("2026-03-28");
+      expect(formatViennaDay(new Date("2026-03-29T22:30:00.000Z"))).toBe("2026-03-30");
+    });
+
+    it("resolves calendar boundaries across a DST-short day", () => {
+      const start = resolveTimeZoneDayStartMs("2026-03-29", "Europe/Vienna");
+      const next = resolveTimeZoneDayStartMs("2026-03-30", "Europe/Vienna");
+
+      expect(start).toBe(Date.parse("2026-03-28T23:00:00.000Z"));
+      expect(next).toBe(Date.parse("2026-03-29T22:00:00.000Z"));
+      expect(next! - start!).toBe(23 * 60 * 60 * 1000);
     });
   });
 

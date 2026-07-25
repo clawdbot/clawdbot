@@ -18,11 +18,6 @@ type CommandResult = {
 
 const COMMAND_TIMEOUT_MS = 120_000;
 const tempDirs: string[] = [];
-const WORKSPACE_PACKAGE_NAMES = [
-  "@openclaw/gateway-protocol",
-  "@openclaw/gateway-client",
-  "@openclaw/sdk",
-] as const;
 
 type PackageManifest = {
   name: string;
@@ -35,6 +30,14 @@ type PackedPackage = {
   manifest: PackageManifest;
   tarball: string;
 };
+
+function resolveWorkspacePackageRoot(repoRoot: string, packageName: string): string {
+  const prefix = "@openclaw/";
+  if (!packageName.startsWith(prefix)) {
+    throw new Error(`unsupported workspace package name: ${packageName}`);
+  }
+  return path.join(repoRoot, "packages", packageName.slice(prefix.length));
+}
 
 function runCommand(
   command: string,
@@ -190,18 +193,55 @@ function normalizeWorkspaceDependencies(
   const normalized: Record<string, string> = {};
   for (const [name, spec] of Object.entries(dependencies)) {
     normalized[name] =
-      name.startsWith("@openclaw/") && spec === "workspace:*" ? "0.0.0-private" : spec;
+      name.startsWith("@openclaw/") && spec.startsWith("workspace:") ? "0.0.0-private" : spec;
   }
   return normalized;
 }
 
-async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
+async function readRawPackageManifest(packageRoot: string): Promise<PackageManifest> {
   const packageJson = await fs.readFile(path.join(packageRoot, "package.json"), "utf8");
-  const manifest = JSON.parse(packageJson) as PackageManifest;
+  return JSON.parse(packageJson) as PackageManifest;
+}
+
+async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
+  const manifest = await readRawPackageManifest(packageRoot);
   return {
     ...manifest,
     dependencies: normalizeWorkspaceDependencies(manifest.dependencies),
   };
+}
+
+async function collectWorkspacePackageRoots(params: {
+  repoRoot: string;
+  entryRoot: string;
+}): Promise<string[]> {
+  const orderedRoots: string[] = [];
+  const visitedNames = new Set<string>();
+
+  async function visit(packageRoot: string, expectedName?: string): Promise<void> {
+    const manifest = await readRawPackageManifest(packageRoot);
+    if (expectedName && manifest.name !== expectedName) {
+      throw new Error(
+        `workspace dependency ${expectedName} resolved to unexpected package ${manifest.name}`,
+      );
+    }
+    if (visitedNames.has(manifest.name)) {
+      return;
+    }
+    visitedNames.add(manifest.name);
+
+    const workspaceDependencies = Object.entries(manifest.dependencies ?? {})
+      .filter(([, spec]) => spec.startsWith("workspace:"))
+      .map(([name]) => name)
+      .toSorted();
+    for (const dependencyName of workspaceDependencies) {
+      await visit(resolveWorkspacePackageRoot(params.repoRoot, dependencyName), dependencyName);
+    }
+    orderedRoots.push(packageRoot);
+  }
+
+  await visit(params.entryRoot);
+  return orderedRoots;
 }
 
 function tarballFileName(manifest: PackageManifest): string {
@@ -343,16 +383,16 @@ describe("OpenClaw SDK package e2e", () => {
 
   it("packs and imports from an external temp consumer", async () => {
     const repoRoot = process.cwd();
-    const packageRoots = [
-      path.join(repoRoot, "packages", "gateway-protocol"),
-      path.join(repoRoot, "packages", "gateway-client"),
-      path.join(repoRoot, "packages", "sdk"),
-    ];
+    const packageRoots = await collectWorkspacePackageRoots({
+      repoRoot,
+      entryRoot: path.join(repoRoot, "packages", "sdk"),
+    });
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-consumer-"));
     tempDirs.push(tempDir);
 
-    for (const packageName of WORKSPACE_PACKAGE_NAMES) {
-      await runPnpmCommand(["--filter", packageName, "build"], {
+    for (const packageRoot of packageRoots) {
+      const manifest = await readRawPackageManifest(packageRoot);
+      await runPnpmCommand(["--filter", manifest.name, "build"], {
         cwd: repoRoot,
         timeoutMs: 180_000,
       });

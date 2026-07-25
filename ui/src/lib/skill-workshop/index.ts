@@ -5,7 +5,7 @@ export type SkillWorkshopProposalStatus =
   | "quarantined"
   | "stale";
 
-export type SkillWorkshopFile = {
+type SkillWorkshopFile = {
   path: string;
   size: string;
   contents: string;

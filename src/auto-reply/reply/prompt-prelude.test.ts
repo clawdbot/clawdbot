@@ -291,6 +291,42 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toContain("https://example.com/photo.jpg");
   });
 
+  it("carries preprojected media without duplicating its model-facing bytes", () => {
+    const body = "[media attached: /tmp/tlon.png (image/png) | /tmp/tlon.png]\ninspect this";
+    const sessionCtx = finalizeInboundContext({
+      Body: body,
+      BodyForAgent: body,
+      Provider: "tlon",
+      ChatType: "direct",
+    });
+    const media = [{ path: "/tmp/tlon.png", contentType: "image/png", kind: "image" as const }];
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: body,
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+      media,
+    });
+
+    expect(envelope.prefixedCommandBody).toBe(body);
+    expect(envelope.queuedBody).toBe(body);
+    expect(envelope.transcriptCommandBody).toBe(body);
+    expect(envelope.media).toEqual([
+      {
+        path: "/tmp/tlon.png",
+        url: undefined,
+        contentType: "image/png",
+        kind: "image",
+        transcribed: false,
+        messageId: undefined,
+      },
+    ]);
+  });
+
   it("keeps soft reset user notes visible without leaking startup context into transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",

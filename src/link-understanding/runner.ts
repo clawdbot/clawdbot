@@ -41,6 +41,21 @@ function resolveTimeoutMsFromConfig(params: {
   return resolveTimeoutMs(configured, DEFAULT_LINK_TIMEOUT_SECONDS);
 }
 
+function resolveFetchTimeoutMsFromConfig(params: {
+  config?: LinkToolsConfig;
+  entries: LinkModelConfig[];
+}): number {
+  // The HTTP fetch phase is independent of any single CLI execution, so honor
+  // an explicit global link-tools timeout first. Otherwise use the largest
+  // per-entry timeout so slower entries are not capped by the first entry.
+  if (params.config?.timeoutSeconds != null) {
+    return resolveTimeoutMs(params.config.timeoutSeconds, DEFAULT_LINK_TIMEOUT_SECONDS);
+  }
+  return Math.max(
+    ...params.entries.map((entry) => resolveTimeoutMsFromConfig({ config: params.config, entry })),
+  );
+}
+
 function isLinkUrlTemplate(value: string): boolean {
   return value.includes("LinkUrl") || value.includes("LinkFinalUrl");
 }
@@ -220,8 +235,8 @@ export async function runLinkUnderstanding(params: {
   }
 
   const outputs: string[] = [];
+  const timeoutMs = resolveFetchTimeoutMsFromConfig({ config, entries });
   for (const url of links) {
-    const timeoutMs = resolveTimeoutMsFromConfig({ config, entry: entries[0] });
     let fetched: Awaited<ReturnType<typeof fetchLinkContent>>;
     try {
       fetched = await fetchLinkContent({ url, timeoutMs });

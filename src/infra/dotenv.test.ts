@@ -215,6 +215,22 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("loads global env when the working directory was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw new Error("ENOENT: uv_cwd");
+        });
+        delete process.env.FOO;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+      });
+    });
+  });
+
   it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
@@ -283,7 +299,10 @@ describe("loadDotEnv", () => {
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
+            "CLOUDSDK_CONFIG=./attacker-gcloud-config",
             "CLOUDSDK_PYTHON=./attacker-python",
+            "CLOUDSDK_PYTHON_ARGS=-cprint('attacker')",
+            "CLOUDSDK_PYTHON_SITEPACKAGES=1",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
             "SLACK_API_URL=http://evil-slack.example.com/api/",
@@ -308,7 +327,10 @@ describe("loadDotEnv", () => {
         delete process.env.NODE_V8_COVERAGE;
         deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
         delete process.env.ANTHROPIC_BASE_URL;
+        delete process.env.CLOUDSDK_CONFIG;
         delete process.env.CLOUDSDK_PYTHON;
+        delete process.env.CLOUDSDK_PYTHON_ARGS;
+        delete process.env.CLOUDSDK_PYTHON_SITEPACKAGES;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
         delete process.env.SLACK_API_URL;
@@ -333,7 +355,10 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+        expect(process.env.CLOUDSDK_CONFIG).toBeUndefined();
         expect(process.env.CLOUDSDK_PYTHON).toBeUndefined();
+        expect(process.env.CLOUDSDK_PYTHON_ARGS).toBeUndefined();
+        expect(process.env.CLOUDSDK_PYTHON_SITEPACKAGES).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
         expect(process.env.SLACK_API_URL).toBeUndefined();
@@ -440,18 +465,22 @@ describe("loadDotEnv", () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
         const pathOverrideEnvKeys = [
+          "NPM_CONFIG_PREFIX",
           "OPENCLAW_AGENT_DIR",
           "OPENCLAW_BUNDLED_PLUGINS_DIR",
           "OPENCLAW_OAUTH_DIR",
           "PI_CODING_AGENT_DIR",
+          "PNPM_HOME",
         ] as const;
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            `NPM_CONFIG_PREFIX=${path.join(cwdDir, ".npm-prefix")}`,
             "OPENCLAW_AGENT_DIR=./evil-agent",
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "OPENCLAW_OAUTH_DIR=./evil-oauth",
             "PI_CODING_AGENT_DIR=./evil-pi-agent",
+            `PNPM_HOME=${path.join(cwdDir, ".pnpm")}`,
           ].join("\n"),
         );
 
@@ -719,6 +748,22 @@ describe("loadCliDotEnv", () => {
     });
   });
 
+  it("loads global CLI env when the working directory was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw new Error("ENOENT: uv_cwd");
+        });
+        delete process.env.FOO;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+      });
+    });
+  });
+
   it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
@@ -849,8 +894,8 @@ describe("workspace .env blocklist completeness", () => {
           rootDir: "/plugins/runtime-cloud",
           source: "/plugins/runtime-cloud/index.js",
           manifestPath: "/plugins/runtime-cloud/openclaw.plugin.json",
-          providerAuthEnvVars: {
-            "runtime-cloud": ["RUNTIME_CLOUD_API_KEY"],
+          setup: {
+            providers: [{ id: "runtime-cloud", envVars: ["RUNTIME_CLOUD_API_KEY"] }],
           },
         };
         await writeEnvFile(
@@ -920,7 +965,6 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_GATEWAY_URL",
           "OPENCLAW_CLAWHUB_URL",
           "CLAWHUB_URL",
-          "OPENCLAW_CLAWHUB_TOKEN",
           "CLAWHUB_TOKEN",
           "CLAWHUB_AUTH_TOKEN",
           "CLAWHUB_CONFIG_PATH",
@@ -937,6 +981,10 @@ describe("workspace .env blocklist completeness", () => {
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
           "BROWSER_EXECUTABLE_PATH",
+          "CLOUDSDK_CONFIG",
+          "CLOUDSDK_PYTHON",
+          "CLOUDSDK_PYTHON_ARGS",
+          "CLOUDSDK_PYTHON_SITEPACKAGES",
           "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
           "OPENCLAW_SKIP_CHANNELS",
           "OPENCLAW_SKIP_PROVIDERS",
@@ -1017,6 +1065,7 @@ describe("workspace .env blocklist completeness", () => {
             "IRC_HOST=evil-irc.example.com",
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
             "SYNOLOGY_NAS_HOST=evil-synology.example.com",
+            "AZURE_SPEECH_ENDPOINT=https://evil-speech.example.com",
             "SAFE_PROVIDER_URL=https://allowed.example.com",
           ].join("\n"),
         );
@@ -1026,6 +1075,7 @@ describe("workspace .env blocklist completeness", () => {
         delete process.env.IRC_HOST;
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
         delete process.env.SYNOLOGY_NAS_HOST;
+        delete process.env.AZURE_SPEECH_ENDPOINT;
         delete process.env.SAFE_PROVIDER_URL;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
@@ -1035,6 +1085,7 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.IRC_HOST).toBeUndefined();
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_NAS_HOST).toBeUndefined();
+        expect(process.env.AZURE_SPEECH_ENDPOINT).toBeUndefined();
         expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
       });
     });
@@ -1070,18 +1121,21 @@ describe("workspace .env blocklist completeness", () => {
           [
             "FUTURE_PROVIDER_API_HOST=https://evil.example.com",
             "FUTURE_PROVIDER_BASE_URL=https://evil.example.com/v1",
+            "FUTURE_PROVIDER_ENDPOINT=https://evil.example.com/api",
             "SAFE_PROVIDER_URL=https://allowed.example.com",
           ].join("\n"),
         );
 
         delete process.env.FUTURE_PROVIDER_API_HOST;
         delete process.env.FUTURE_PROVIDER_BASE_URL;
+        delete process.env.FUTURE_PROVIDER_ENDPOINT;
         delete process.env.SAFE_PROVIDER_URL;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.FUTURE_PROVIDER_API_HOST).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_BASE_URL).toBeUndefined();
+        expect(process.env.FUTURE_PROVIDER_ENDPOINT).toBeUndefined();
         expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
       });
     });

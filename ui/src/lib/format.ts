@@ -1,11 +1,18 @@
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
-import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  formatDurationCompact,
+  formatDurationHuman,
+} from "../../../src/infra/format-time/format-duration.ts";
+import {
+  formatRelativeTimestamp,
+  formatTimeAgo,
+} from "../../../src/infra/format-time/format-relative.ts";
 import { t } from "../i18n/index.ts";
 
-export { formatRelativeTimestamp, formatDurationHuman };
-export { stripThinkingTags } from "../lib/strip-thinking-tags.ts";
+export { formatByteSize } from "@openclaw/normalization-core";
+export { formatRelativeTimestamp, formatTimeAgo, formatDurationCompact, formatDurationHuman };
 
 export function formatUnknownText(
   value: unknown,
@@ -38,7 +45,7 @@ export function formatUnknownText(
   return Object.prototype.toString.call(value);
 }
 
-export type UiTimeFormatPreference = "auto" | "12" | "24";
+type UiTimeFormatPreference = "auto" | "12" | "24";
 
 // Resolved `agents.defaults.timeFormat`, threaded in once at bootstrap. "auto"
 // (or unset) keeps the browser locale default so existing deployments render
@@ -111,7 +118,7 @@ export function clampText(value: string, max = 120): string {
   if (value.length <= max) {
     return value;
   }
-  return `${value.slice(0, Math.max(0, max - 1))}…`;
+  return `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 export function truncateText(
@@ -126,7 +133,7 @@ export function truncateText(
     return { text: value, truncated: false, total: value.length };
   }
   return {
-    text: value.slice(0, Math.max(0, max)),
+    text: truncateUtf16Safe(value, Math.max(0, max)),
     truncated: true,
     total: value.length,
   };

@@ -1,5 +1,4 @@
 // Discord plugin module implements rest behavior.
-import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
 import {
@@ -24,11 +23,11 @@ import {
 } from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
-export { DiscordError, RateLimitError } from "./rest-errors.js";
+export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
-export type RuntimeProfile = "serverless" | "persistent";
-export type RequestPriority = RestRequestPriority;
-export type RequestSchedulerOptions = {
+type RuntimeProfile = "serverless" | "persistent";
+type RequestPriority = RestRequestPriority;
+type RequestSchedulerOptions = {
   lanes?: Partial<
     Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
   >;
@@ -63,7 +62,7 @@ export type RequestData = {
   headers?: Record<string, string>;
 };
 
-export type QueuedRequest = {
+type QueuedRequest = {
   method: string;
   path: string;
   data?: RequestData;
@@ -149,52 +148,6 @@ function isZlibMaxOutputLengthError(err: unknown): boolean {
     "code" in err &&
     (err as { code?: unknown }).code === "ERR_BUFFER_TOO_LARGE"
   );
-}
-
-function escapeMultipartQuotedValue(value: string): string {
-  return value.replace(/["\r\n]/g, (ch) => (ch === '"' ? "%22" : ch === "\r" ? "%0D" : "%0A"));
-}
-
-async function formDataToMultipartBody(body: FormData, headers: Headers): Promise<BodyInit> {
-  const boundary = `----openclaw-discord-${randomBytes(12).toString("hex")}`;
-  headers.set("Content-Type", `multipart/form-data; boundary=${boundary}`);
-  const chunks: Buffer[] = [];
-  const push = (value: string | Buffer) => {
-    chunks.push(typeof value === "string" ? Buffer.from(value) : value);
-  };
-  for (const [key, value] of body.entries()) {
-    push(`--${boundary}\r\n`);
-    const escapedKey = escapeMultipartQuotedValue(key);
-    if (typeof value === "string") {
-      push(`Content-Disposition: form-data; name="${escapedKey}"\r\n\r\n`);
-      push(value);
-      push("\r\n");
-      continue;
-    }
-    const filename = (value as Blob & { name?: unknown }).name;
-    const escapedFilename = escapeMultipartQuotedValue(
-      typeof filename === "string" && filename.length > 0 ? filename : "blob",
-    );
-    push(`Content-Disposition: form-data; name="${escapedKey}"; filename="${escapedFilename}"\r\n`);
-    if (value.type) {
-      push(`Content-Type: ${value.type}\r\n`);
-    }
-    push("\r\n");
-    push(Buffer.from(await value.arrayBuffer()));
-    push("\r\n");
-  }
-  push(`--${boundary}--\r\n`);
-  return Buffer.concat(chunks) as unknown as BodyInit;
-}
-
-async function normalizeFetchBody(
-  body: BodyInit | undefined,
-  headers: Headers,
-): Promise<BodyInit | undefined> {
-  if (body instanceof FormData) {
-    return await formDataToMultipartBody(body, headers);
-  }
-  return body;
 }
 
 export class RequestClient {
@@ -297,7 +250,7 @@ export class RequestClient {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
-        body: await normalizeFetchBody(body, headers),
+        body,
         signal,
       });
       const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);

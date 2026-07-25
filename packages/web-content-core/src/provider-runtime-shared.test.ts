@@ -80,6 +80,43 @@ describe("hasWebProviderEntryCredential", () => {
     ).toBe(true);
   });
 
+  it("does not treat env secret refs as literal credentials when env resolution misses", () => {
+    expect(
+      hasWebProviderEntryCredential({
+        provider,
+        config: {},
+        toolConfig: undefined,
+        resolveRawValue: () => "${CUSTOM_API_KEY}",
+        resolveEnvValue: () => undefined,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat fallback env secret refs as literal credentials", () => {
+    expect(
+      hasWebProviderEntryCredential({
+        provider,
+        config: {},
+        toolConfig: undefined,
+        resolveRawValue: () => undefined,
+        resolveFallbackRawValue: () => "$CUSTOM_API_KEY",
+        resolveEnvValue: () => undefined,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps non-reference config strings as literal credentials", () => {
+    expect(
+      hasWebProviderEntryCredential({
+        provider,
+        config: {},
+        toolConfig: undefined,
+        resolveRawValue: () => "literal-secret",
+        resolveEnvValue: () => undefined,
+      }),
+    ).toBe(true);
+  });
+
   it("falls back to provider auth before env probing", () => {
     expect(
       hasWebProviderEntryCredential({

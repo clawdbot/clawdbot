@@ -5,15 +5,17 @@
   },
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerAuthAliases": {
+    "x-ai": "xai"
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelIdNormalization": {
     "providers": {
       "xai": {
         "aliases": {
-          "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
-          "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
-          "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
-          "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning"
+          "grok-4.3-latest": "grok-4.3",
+          "grok-4.5-latest": "grok-4.5",
+          "grok-build-latest": "grok-4.5"
         }
       }
     }
@@ -32,6 +34,9 @@
     }
   },
   "modelCatalog": {
+    "discovery": {
+      "xai": "refreshable"
+    },
     "suppressions": [
       {
         "provider": "xai",
@@ -84,6 +89,7 @@
       "provider": "xai",
       "method": "api-key",
       "choiceId": "xai-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
@@ -98,6 +104,7 @@
       "provider": "xai",
       "method": "oauth",
       "choiceId": "xai-oauth",
+      "appGuidedAuth": "device-code",
       "choiceLabel": "xAI OAuth",
       "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
       "groupId": "xai",
@@ -109,6 +116,7 @@
       "provider": "xai",
       "method": "device-code",
       "choiceId": "xai-device-code",
+      "appGuidedAuth": "device-code",
       "choiceLabel": "xAI device code",
       "choiceHint": "Compatibility alias for xAI OAuth device-code sign-in",
       "assistantVisibility": "manual-only",
@@ -137,11 +145,11 @@
     },
     "codeExecution.enabled": {
       "label": "Enable Code Execution",
-      "help": "Enable the code_execution tool for remote xAI sandbox analysis."
+      "help": "Expose code_execution on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.enabled": {
       "label": "Enable X Search",
-      "help": "Enable the x_search tool for searching X posts with xAI."
+      "help": "Expose x_search on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.model": {
       "label": "X Search Model",
@@ -186,15 +194,13 @@
     "mediaUnderstandingProviders": ["xai"],
     "speechProviders": ["xai"],
     "realtimeTranscriptionProviders": ["xai"],
+    "realtimeVoiceProviders": ["xai"],
     "imageGenerationProviders": ["xai"],
     "tools": ["code_execution", "x_search"]
   },
   "mediaUnderstandingProviderMetadata": {
     "xai": {
       "capabilities": ["audio"],
-      "defaultModels": {
-        "audio": "grok-stt"
-      },
       "autoPriority": {
         "audio": 25
       }
@@ -212,10 +218,6 @@
           "rootPath": "plugins.entries.xai.config",
           "overlayPath": "webSearch",
           "required": ["apiKey"]
-        },
-        {
-          "rootPath": "tools.web.search.grok",
-          "required": ["apiKey"]
         }
       ]
     },
@@ -231,16 +233,9 @@
           "rootPath": "plugins.entries.xai.config",
           "overlayPath": "webSearch",
           "required": ["apiKey"]
-        },
-        {
-          "rootPath": "tools.web.search.grok",
-          "required": ["apiKey"]
         }
       ]
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

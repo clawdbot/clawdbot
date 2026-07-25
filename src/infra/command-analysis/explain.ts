@@ -35,9 +35,7 @@ function riskLabel(risk: CommandRisk): string {
 }
 
 /** Summarizes parsed shell-command explanation data for display. */
-export function summarizeCommandExplanation(
-  explanation: CommandExplanation,
-): CommandExplanationSummary {
+function summarizeCommandExplanation(explanation: CommandExplanation): CommandExplanationSummary {
   const riskKinds = uniqueStrings(explanation.risks.map((risk) => risk.kind));
   const warningLines = explanation.risks.map((risk) => {
     const label = riskLabel(risk);
@@ -51,7 +49,7 @@ export function summarizeCommandExplanation(
   };
 }
 
-export function summarizeCommandSegmentsForDisplay(
+function summarizeCommandSegmentsForDisplay(
   segments: readonly ExecCommandSegment[],
 ): CommandExplanationSummary {
   const riskKinds: string[] = [];
@@ -118,7 +116,7 @@ export async function resolveCommandAnalysisSummaryForDisplay(params: {
   };
 }
 
-export async function explainCommandForDisplay(
+async function explainCommandForDisplay(
   command: string,
 ): Promise<{ explanation: CommandExplanation; summary: CommandExplanationSummary } | null> {
   try {

@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
@@ -29,7 +28,6 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
-  resetDiagnosticTraceContextForTest();
   resetLogger();
   setLoggerOverride(null);
 });
@@ -62,6 +60,30 @@ describe("file log redaction", () => {
     expect(content).not.toContain(secret);
   });
 
+  it("redacts structured authorization fields before writing JSONL file logs", () => {
+    const logPath = logPathTracker.nextPath();
+    const digestResponse = ["runtime", "digest", "response", "1234567890abcdef"].join("-");
+    const awsScopeField = ["Cred", "ential", "=test-fixture-scope"].join("");
+    const awsProofField = ["runtime", "aws", "proof", "1234567890abcdef"].join("-");
+    setLoggerOverride({ level: "info", file: logPath });
+
+    getLogger().warn({
+      message: [
+        `Authorization: Digest username="example", response="${digestResponse}"`,
+        `Authorization: AWS4-HMAC-SHA256 ${awsScopeField}, Signature=${awsProofField}`,
+      ].join("\n"),
+    });
+
+    const content = fs.readFileSync(logPath, "utf8");
+    expect(() => JSON.parse(content.trim())).not.toThrow();
+    expect(content).toContain("Authorization: Digest");
+    expect(content).toContain("Authorization: AWS4-HMAC-SHA256");
+    expect(content).not.toContain(digestResponse);
+    expect(content).not.toContain(awsProofField);
+    expect(content).not.toContain("response=");
+    expect(content).not.toContain("Signature=");
+  });
+
   it("redacts sensitive structured fields before emitting diagnostic log records", async () => {
     const logPath = logPathTracker.nextPath();
     setLoggerOverride({ level: "info", file: logPath });
@@ -86,7 +108,7 @@ describe("file log redaction", () => {
     }
   });
 
-  it("honors logging redaction opt-out for structured file log fields", () => {
+  it("keeps structured file log fields redacted when the retired opt-out is present", () => {
     const logPath = logPathTracker.nextPath();
     const configPath = logPathTracker.nextPath();
     fs.writeFileSync(
@@ -109,10 +131,10 @@ describe("file log redaction", () => {
     });
 
     const content = fs.readFileSync(logPath, "utf8");
-    expect(content).toContain("token-value-1234567890");
-    expect(content).toContain("ya29.fake-access-token-with-enough-length");
-    expect(content).toContain("abcd-efgh-ijkl-mnop");
-    expect(content).toContain(secret);
+    expect(content).not.toContain("token-value-1234567890");
+    expect(content).not.toContain("ya29.fake-access-token-with-enough-length");
+    expect(content).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(content).not.toContain(secret);
   });
 
   it("uses logging.file from the active config path", () => {
@@ -190,6 +212,18 @@ describe("file log redaction", () => {
     expect(record.hostname).toBeTypeOf("string");
     expect(record.hostname).not.toBe("");
     expect(record.message).toBe("request completed");
+  });
+
+  it("keeps bounded file-log messages UTF-16 safe", () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const prefix = "x".repeat(4_095);
+
+    getLogger().info(`${prefix}😀tail`);
+
+    const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
+    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    expect(record.message).toBe(`${prefix}...(truncated)`);
   });
 
   it("retries hostname resolution after an empty value and caches the first real value", () => {

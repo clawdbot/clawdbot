@@ -1,40 +1,66 @@
 // Xai tests cover responses tool shared plugin behavior.
 import { describe, expect, it } from "vitest";
-import { testing } from "./responses-tool-shared.js";
+import {
+  buildXaiResponsesToolBody,
+  extractXaiWebSearchContent,
+  requireXaiResponseTextAndCitations,
+  requireXaiResponseTextCitationsAndInline,
+} from "./responses-tool-shared.js";
 
 describe("xai responses tool helpers", () => {
   it("builds the shared xAI Responses tool body", () => {
     expect(
-      testing.buildXaiResponsesToolBody({
-        model: "grok-4-1-fast",
+      buildXaiResponsesToolBody({
+        model: "grok-4.3",
         inputText: "search for openclaw",
         tools: [{ type: "x_search" }],
         maxTurns: 2,
+        reasoningEffort: "none",
       }),
     ).toEqual({
-      model: "grok-4-1-fast",
+      model: "grok-4.3",
       input: [{ role: "user", content: "search for openclaw" }],
       tools: [{ type: "x_search" }],
+      store: false,
+      reasoning: { effort: "none" },
       max_turns: 2,
+    });
+  });
+
+  it("keeps custom model reasoning untouched while disabling response storage", () => {
+    expect(
+      buildXaiResponsesToolBody({
+        model: "grok-build-0.1",
+        inputText: "run code",
+        tools: [{ type: "code_interpreter" }],
+      }),
+    ).toEqual({
+      model: "grok-build-0.1",
+      input: [{ role: "user", content: "run code" }],
+      tools: [{ type: "code_interpreter" }],
+      store: false,
     });
   });
 
   it("falls back to annotation citations when the API omits top-level citations", () => {
     expect(
-      testing.resolveXaiResponseTextAndCitations({
-        output: [
-          {
-            type: "message",
-            content: [
-              {
-                type: "output_text",
-                text: "Found it",
-                annotations: [{ type: "url_citation", url: "https://example.com/a" }],
-              },
-            ],
-          },
-        ],
-      }),
+      requireXaiResponseTextAndCitations(
+        {
+          output: [
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Found it",
+                  annotations: [{ type: "url_citation", url: "https://example.com/a" }],
+                },
+              ],
+            },
+          ],
+        },
+        "xAI tool failed",
+      ),
     ).toEqual({
       content: "Found it",
       citations: ["https://example.com/a"],
@@ -43,7 +69,7 @@ describe("xai responses tool helpers", () => {
 
   it("ignores malformed output, content, and annotation entries", () => {
     expect(
-      testing.extractXaiWebSearchContent({
+      extractXaiWebSearchContent({
         output: [
           null,
           {
@@ -72,10 +98,13 @@ describe("xai responses tool helpers", () => {
 
   it("prefers explicit top-level citations when present", () => {
     expect(
-      testing.resolveXaiResponseTextAndCitations({
-        output_text: "Done",
-        citations: ["https://example.com/b"],
-      }),
+      requireXaiResponseTextAndCitations(
+        {
+          output_text: "Done",
+          citations: ["https://example.com/b"],
+        },
+        "xAI tool failed",
+      ),
     ).toEqual({
       content: "Done",
       citations: ["https://example.com/b"],
@@ -88,12 +117,12 @@ describe("xai responses tool helpers", () => {
       citations: ["https://example.com/b"],
       inline_citations: [{ start_index: 0, end_index: 4, url: "https://example.com/b" }],
     };
-    expect(testing.resolveXaiResponseTextCitationsAndInline(data, true)).toEqual({
+    expect(requireXaiResponseTextCitationsAndInline(data, "xAI tool failed", true)).toEqual({
       content: "Done",
       citations: ["https://example.com/b"],
       inlineCitations: [{ start_index: 0, end_index: 4, url: "https://example.com/b" }],
     });
-    expect(testing.resolveXaiResponseTextCitationsAndInline(data, false)).toEqual({
+    expect(requireXaiResponseTextCitationsAndInline(data, "xAI tool failed", false)).toEqual({
       content: "Done",
       citations: ["https://example.com/b"],
       inlineCitations: undefined,
@@ -101,7 +130,7 @@ describe("xai responses tool helpers", () => {
   });
 
   it("rejects successful Responses tool payloads without answer text", () => {
-    expect(() => testing.requireXaiResponseTextAndCitations({}, "xAI tool failed")).toThrow(
+    expect(() => requireXaiResponseTextAndCitations({}, "xAI tool failed")).toThrow(
       "xAI tool failed: malformed JSON response",
     );
   });

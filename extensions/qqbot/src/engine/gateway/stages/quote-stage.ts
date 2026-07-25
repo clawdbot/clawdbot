@@ -7,6 +7,7 @@
  *   3. Otherwise → id-only placeholder so the pipeline still knows it's a reply
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   formatMessageReferenceForAgent,
   type AttachmentProcessor,
@@ -89,7 +90,7 @@ export async function resolveQuote(
         attachmentProcessor,
       );
       log?.debug?.(
-        `Quote detected via msg_elements[0] (cache miss): id=${event.refMsgIdx}, content="${(refBody ?? "").slice(0, 80)}..."`,
+        `Quote detected via msg_elements[0] (cache miss): id=${event.refMsgIdx}, content="${truncateUtf16Safe(refBody ?? "", 80)}..."`,
       );
       return {
         id: event.refMsgIdx,

@@ -223,6 +223,7 @@ openclaw browser select 9 OptionA OptionB
 openclaw browser download e12 report.pdf
 openclaw browser waitfordownload report.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf
+openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref e12
 openclaw browser upload media://inbound/file.pdf
 openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
 openclaw browser dialog --accept
@@ -264,7 +265,12 @@ openclaw browser set device "iPhone 14"
 
 Notes:
 
-- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
+- The agent-facing `browser` tool exposes `action=download` (required `ref` and
+  `path`) and `action=waitfordownload` (optional `path`). Both return the saved
+  download URL, suggested filename, and guarded local path. Explicit download
+  interception is available for managed Playwright profiles; existing-session
+  profiles return an unsupported-operation error.
+- Prefer atomic chooser uploads: pass the trigger `--ref` with the upload so OpenClaw arms and clicks in one request. Paths-only `upload` remains supported when a later trigger is intentional. Use `--input-ref` or `--element` to set a file input directly. `dialog` is an arming call; run it before the click/press that triggers the dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` accepts files from the OpenClaw temp uploads root and
@@ -275,9 +281,10 @@ Notes:
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
 Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
-can prove the replacement tab, such as same URL or a single old tab becoming a
-single new tab after form submission. Raw target ids are still volatile; prefer
-`suggestedTargetId` from `tabs` in scripts.
+can prove the replacement tab, such as a unique old/new pair for the same URL or
+a single old tab becoming a single new tab after form submission. Ambiguous
+duplicate-URL replacements receive fresh handles. Raw target ids are still
+volatile; prefer `suggestedTargetId` from `tabs` in scripts.
 
 Snapshot flags at a glance:
 
@@ -321,6 +328,13 @@ OpenClaw supports two "snapshot" styles:
 - If Playwright is unavailable, ARIA snapshots can still be useful for
   inspection, but refs may not be actionable. Re-snapshot with `--format ai`
   or `--interactive` when you need action refs.
+- When the driver exposes stable document identity, consecutive AI and role
+  snapshots for the same profile, tab, document, and option family append
+  `[new]` to ref-bearing lines absent from the previous snapshot. Navigation
+  starts a fresh unmarked baseline; existing-session snapshots omit deltas.
+  The first snapshot establishes the baseline without markers; later responses
+  also expose `newElements`, and add a count footer when the value is nonzero.
+  Structured `--format aria` snapshots with `axN` refs do not use delta markers.
 - Docker proof for the raw-CDP fallback path: `pnpm test:docker:browser-cdp-snapshot`
   starts Chromium with CDP, runs `browser doctor --deep`, and verifies role
   snapshots include link URLs, cursor-promoted clickables, and iframe metadata.
@@ -328,6 +342,10 @@ OpenClaw supports two "snapshot" styles:
 Ref behavior:
 
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
+- A batch stops after a committed main-frame navigation—including a same-URL
+  reload—or after the page closes. Its `aborted` summary reports the action
+  number and skipped count; take a fresh snapshot before issuing dependent
+  actions, or use separate act calls when navigation is expected.
 - `/act` returns the current raw `targetId` after action-triggered replacement
   when it can prove the replacement tab. Keep using stable tab ids/labels for
   follow-up commands.
@@ -335,6 +353,41 @@ Ref behavior:
 - Unknown or stale `axN` refs fail fast instead of falling through to
   Playwright's `aria-ref` selector. Run a fresh snapshot on the same tab when
   that happens.
+
+## Browser batch CLI
+
+`openclaw browser batch` runs an array of nested `/act` actions in one `/act`
+call (the same `kind="batch"` runtime reached through the agent tool), so CLI
+users and scripts can combine actions like `wait`, `click`, `type`, and
+`evaluate` into a single replayable plan without per-action round trips. Each
+entry in `actions[]` is a `BrowserActRequest` — the closed union the `/act`
+route accepts (`click`, `clickCoords`, `type`, `press`, `hover`,
+`scrollIntoView`, `drag`, `select`, `fill`, `resize`, `wait`, `evaluate`,
+`close`, `batch`) — not arbitrary `openclaw browser` subcommands. `batch` is
+not supported on `profile="user"` and other existing-session (chrome-mcp)
+profiles; send actions individually there.
+
+- CLI: `openclaw browser batch --actions '<json>'`, `openclaw browser batch
+--actions-file plan.json`, or `openclaw browser batch --actions-file -` to
+  read the JSON array from stdin. `--continue` sets `stopOnError=false`; the
+  default is to stop on first error. `--target-id` scopes the whole batch to
+  one tab.
+- Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is
+  not a nested action). A nested action that changes page state — such as a
+  `click` that triggers navigation, or an `evaluate` that mutates the DOM — can
+  invalidate earlier refs for the rest of the batch. Put state-changing actions
+  first, or split into a follow-up batch after re-snapshotting. Navigation and
+  re-snapshotting happen outside the batch (`openclaw browser navigate` /
+  `snapshot`), since `open`, `navigate`, and `snapshot` are not `/act` kinds.
+- Target id conflicts: a nested action may omit `targetId` or repeat the
+  request-level `targetId`; an explicit nested `targetId` that resolves to a
+  different tab is rejected with `ACT_TARGET_ID_MISMATCH` before any action
+  runs. Batched actions share the request's tab by design.
+- Error summary: the response is `{ "results": [{ "ok": true }, { "ok": false,
+"error": "<message>" }, ...] }`, one entry per action in order. When
+  `stopOnError` is the default, the array ends at the first failure; with
+  `--continue` it covers every action. Any failed entry makes the CLI exit
+  nonzero; pass `--json` to preserve the full ordered response for scripts.
 
 ## Wait power-ups
 
@@ -382,10 +435,10 @@ When an action fails (e.g. "not visible", "strict mode violation", "covered"):
 Examples:
 
 ```bash
-openclaw browser status --json
-openclaw browser snapshot --interactive --json
-openclaw browser requests --filter api --json
-openclaw browser cookies --json
+openclaw browser --json status
+openclaw browser --json snapshot --interactive
+openclaw browser --json requests --filter api
+openclaw browser --json cookies
 ```
 
 Role snapshots in JSON include `refs` plus a small `stats` block (lines/chars/refs/interactive) so tools can reason about payload size and density.

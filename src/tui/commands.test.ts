@@ -1,6 +1,11 @@
 // Verifies TUI command definitions and parser metadata.
-import { describe, expect, it } from "vitest";
-import { getSlashCommands, helpText, parseCommand } from "./commands.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  getSlashCommands,
+  helpText,
+  parseCommand,
+  shouldSubmitExactArgumentCompletion,
+} from "./commands.js";
 
 describe("parseCommand", () => {
   it("normalizes aliases and keeps command args", () => {
@@ -17,12 +22,27 @@ describe("parseCommand", () => {
     expect(parseCommand("/gwstatus")).toEqual({ name: "gateway-status", args: "" });
   });
 
+  it("accepts the hidden retired-name alias", () => {
+    const retiredCommand = "/crestodian repair gateway"; // hidden alias
+    expect(parseCommand(retiredCommand)).toEqual({
+      name: "openclaw",
+      args: "repair gateway",
+    });
+    expect(getSlashCommands().map((command) => command.name)).not.toContain("crestodian"); // hidden alias
+    expect(helpText()).not.toContain("/crestodian"); // hidden alias
+  });
+
   it("returns empty name for empty input", () => {
     expect(parseCommand("   ")).toEqual({ name: "", args: "" });
   });
 });
 
 describe("getSlashCommands", () => {
+  beforeAll(() => {
+    // Provider thinking policies are process-stable; warm the fallback before timing assertions.
+    getSlashCommands({ provider: "minimax", model: "MiniMax-M3", thinkingLevels: [] });
+  });
+
   it("provides level completions for built-in toggles", () => {
     const commands = getSlashCommands();
     const verbose = commands.find((command) => command.name === "verbose");
@@ -36,14 +56,29 @@ describe("getSlashCommands", () => {
     ]);
   });
 
+  it.each([
+    { commandName: "verbose", level: "full", description: "Set verbose on/off/full" },
+    { commandName: "reasoning", level: "stream", description: "Set reasoning on/off/stream" },
+  ])(
+    "exposes and submits the canonical /$commandName $level completion",
+    ({ commandName, level, description }) => {
+      const commands = getSlashCommands();
+      const command = commands.find((candidate) => candidate.name === commandName);
+
+      expect(command?.description).toBe(description);
+      expect(command?.getArgumentCompletions?.(level)).toEqual([{ value: level, label: level }]);
+      expect(shouldSubmitExactArgumentCompletion(`/${commandName} ${level}`, commands)).toBe(true);
+    },
+  );
+
   it("keeps session status on the shared command path and exposes gateway status separately", () => {
     const commands = getSlashCommands();
     const status = commands.find((command) => command.name === "status");
     const gatewayStatus = commands.find((command) => command.name === "gateway-status");
-    const crestodian = commands.find((command) => command.name === "crestodian");
+    const openclaw = commands.find((command) => command.name === "openclaw");
     expect(status?.description).toBe("Show current status.");
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
-    expect(crestodian?.description).toBe("Return to Crestodian");
+    expect(openclaw?.description).toBe("Return to OpenClaw");
   });
 
   it("distinguishes new-session and reset command descriptions", () => {
@@ -71,17 +106,47 @@ describe("getSlashCommands", () => {
     ]);
   });
 
-  it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", async () => {
+  it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", () => {
     const commands = getSlashCommands({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
+      provider: "minimax",
+      model: "MiniMax-M3",
       thinkingLevels: [], // empty from lightweight session row
     });
     const think = commands.find((command) => command.name === "think");
     // Should fall back to listThinkingLevelLabels, not return empty completions
-    const completions = await think?.getArgumentCompletions?.("");
-    expect(completions?.length).toBeGreaterThan(0);
+    const completions = think?.getArgumentCompletions?.("");
+    expect(Array.isArray(completions)).toBe(true);
+    if (!Array.isArray(completions)) {
+      throw new Error("expected synchronous thinking-level completions");
+    }
+    expect(completions).toEqual([
+      { value: "off", label: "off" },
+      { value: "adaptive", label: "adaptive" },
+    ]);
   });
+
+  it.each([
+    { model: "gpt-5.6-sol", agentRuntime: "codex", supportsUltra: true },
+    { model: "gpt-5.6-terra", agentRuntime: "codex", supportsUltra: true },
+    { model: "gpt-5.6-luna", agentRuntime: "codex", supportsUltra: false },
+    { model: "gpt-5.6-luna", agentRuntime: "openclaw", supportsUltra: true },
+  ])(
+    "uses the $agentRuntime profile for openai/$model thinking completions",
+    ({ model, agentRuntime, supportsUltra }) => {
+      const think = getSlashCommands({
+        provider: "openai",
+        model,
+        agentRuntime,
+        thinkingLevels: [],
+      }).find((command) => command.name === "think");
+      const completions = think?.getArgumentCompletions?.("");
+      if (!Array.isArray(completions)) {
+        throw new Error("expected synchronous thinking-level completions");
+      }
+
+      expect(completions.some((choice) => choice.value === "ultra")).toBe(supportsUltra);
+    },
+  );
 
   it("merges dynamic gateway commands", () => {
     const commands = getSlashCommands({
@@ -108,11 +173,18 @@ describe("getSlashCommands", () => {
     expect(names).toEqual(
       expect.not.arrayContaining(["commands", "status", "compact", "context", "tools"]),
     );
-    expect(names).toEqual(expect.arrayContaining(["goal", "btw", "side", "stop", "t"]));
+    expect(names).toEqual(expect.arrayContaining(["goal", "btw", "side", "queue", "stop", "t"]));
   });
 });
 
 describe("helpText", () => {
+  it.each(["/verbose <on|off|full>", "/reasoning <on|off|stream>"])(
+    "includes the full canonical directive levels for %s",
+    (usage) => {
+      expect(helpText()).toContain(usage);
+    },
+  );
+
   it("includes slash command help for aliases", () => {
     const output = helpText();
     expect(output).toContain("/elevated <on|off|ask|full>");
@@ -120,7 +192,7 @@ describe("helpText", () => {
     expect(output).toContain("/fast <status|auto|on|off>");
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
-    expect(output).toContain("/crestodian [request]");
+    expect(output).toContain("/openclaw [request]");
   });
 
   it("does not advertise Gateway-owned commands in local mode", () => {

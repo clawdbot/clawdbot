@@ -5,12 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import type { PortConnections } from "../../infra/ports.js";
+import type { PortListener, PortUsageStatus } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
+
+type PortConnections = Awaited<
+  ReturnType<typeof import("../../infra/ports.js").inspectPortConnections>
+>;
 
 const callGatewayStatusProbe = vi.fn<
   (opts?: unknown) => Promise<{
@@ -36,19 +40,30 @@ const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) =
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
 >(async () => []);
-const inspectPortUsage = vi.fn(async (port: number) => ({
-  port,
-  status: "free" as const,
-  listeners: [],
-  hints: [],
-}));
+type PortUsageTestSummary = {
+  port: number;
+  status: PortUsageStatus;
+  listeners: PortListener[];
+  hints: string[];
+};
+
+const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsageTestSummary>>(
+  async (port: number) => ({
+    port,
+    status: "free",
+    listeners: [],
+    hints: [],
+  }),
+);
 const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
   async (port: number) => ({
     port,
     connections: [],
   }),
 );
-const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
+const readLastGatewayErrorLine = vi.fn<
+  (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
+>(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);
 const loadInstalledPluginIndexInstallRecords = vi.fn<
   (params?: {
     env?: NodeJS.ProcessEnv;
@@ -166,7 +181,8 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../daemon/diagnostics.js", () => ({
-  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) => readLastGatewayErrorLine(env),
+  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv, options?: { requirePatternMatch?: boolean }) =>
+    readLastGatewayErrorLine(env, options),
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -291,6 +307,13 @@ describe("gatherDaemonStatus", () => {
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
+    inspectPortUsage.mockReset();
+    inspectPortUsage.mockImplementation(async (port: number) => ({
+      port,
+      status: "free" as const,
+      listeners: [],
+      hints: [],
+    }));
     inspectPortConnections.mockClear();
     inspectWindowsGatewayFirewall.mockClear();
     inspectWindowsGatewayFirewall.mockResolvedValue({
@@ -300,6 +323,8 @@ describe("gatherDaemonStatus", () => {
       message: "Windows LAN firewall diagnostics do not apply.",
       details: [],
     });
+    readLastGatewayErrorLine.mockReset();
+    readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
@@ -355,6 +380,26 @@ describe("gatherDaemonStatus", () => {
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it("reports the heap limit from the installed Gateway service", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+        NODE_OPTIONS: "--max-old-space-size=6144",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.gatewayHeap).toMatchObject({ appliedMiB: 6144 });
+    expect(status.service.gatewayHeap?.memorySource).toMatch(/^(constrained|physical)$/u);
   });
 
   it("includes Windows firewall diagnostics during deep LAN gateway status", async () => {
@@ -414,32 +459,6 @@ describe("gatherDaemonStatus", () => {
     };
     expect(probeInput.requireRpc).toBe(true);
     expect(probeInput.configPath).toBe("/tmp/openclaw-daemon/openclaw.json");
-  });
-
-  it("uses configured handshake timeout as the default daemon probe budget", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        handshakeTimeoutMs: 30_000,
-        auth: { token: "daemon-token" },
-      },
-    };
-
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
-
-    const probeInput = callArg(callGatewayStatusProbe) as {
-      config?: unknown;
-      preauthHandshakeTimeoutMs?: number;
-      timeoutMs?: number;
-    };
-    expect(probeInput.config).toBe(daemonLoadedConfig);
-    expect(probeInput.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(probeInput.timeoutMs).toBe(30_000);
   });
 
   it("reuses the shared CLI config snapshot when the daemon uses the same config path", async () => {
@@ -1129,6 +1148,95 @@ describe("gatherDaemonStatus", () => {
     });
   });
 
+  it("includes the last gateway error when the service is listening but the RPC probe fails", async () => {
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+      hints: [],
+    });
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://127.0.0.1:19001",
+      error: "gateway closed (1000): ",
+    });
+    readLastGatewayErrorLine.mockResolvedValueOnce(
+      "parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(readLastGatewayErrorLine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+      { requirePatternMatch: true },
+    );
+    expect(status.port?.status).toBe("busy");
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.lastError).toBe(
+      "parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
+  });
+
+  it("does not read local gateway errors for an explicit probe URL", async () => {
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+      hints: [],
+    });
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://remote.example:18790",
+      error: "gateway closed (1000): ",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: { url: "wss://remote.example:18790" },
+      probe: true,
+      deep: false,
+    });
+
+    expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
+    expect(status.lastError).toBeUndefined();
+  });
+
+  it("does not read local gateway errors in remote mode", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://remote.example:18790" },
+        auth: { token: "daemon-token" },
+      },
+    };
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+      hints: [],
+    });
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://remote.example:18790",
+      error: "gateway closed (1000): ",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
+    expect(status.lastError).toBeUndefined();
+  });
+
   it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {
     // Gateway is still running an older version than the invoking CLI.
     // An npm plugin pinned to the running gateway version must NOT be
@@ -1226,3 +1334,4 @@ describe("gatherDaemonStatus", () => {
     expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

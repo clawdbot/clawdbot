@@ -1,9 +1,11 @@
 // Chutes OAuth tests cover OAuth endpoints, local callback handling, and fetch preconnect behavior.
 import { describe, expect, it, vi } from "vitest";
-import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { loginChutes } from "./chutes-oauth.js";
+
+const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
+const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 
 const urlToString = (url: Request | URL | string): string => {
   if (typeof url === "string") {

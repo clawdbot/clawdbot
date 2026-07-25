@@ -1,6 +1,7 @@
 // Nextcloud Talk plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasOwnProperty,
   type ChannelAccountEntry,
@@ -8,53 +9,11 @@ import {
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-secret-basic-runtime").SecretTargetRegistryEntry[] =
-  [
-    {
-      id: "channels.nextcloud-talk.accounts.*.apiPassword",
-      targetType: "channels.nextcloud-talk.accounts.*.apiPassword",
-      configFile: "openclaw.json",
-      pathPattern: "channels.nextcloud-talk.accounts.*.apiPassword",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-    {
-      id: "channels.nextcloud-talk.accounts.*.botSecret",
-      targetType: "channels.nextcloud-talk.accounts.*.botSecret",
-      configFile: "openclaw.json",
-      pathPattern: "channels.nextcloud-talk.accounts.*.botSecret",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-    {
-      id: "channels.nextcloud-talk.apiPassword",
-      targetType: "channels.nextcloud-talk.apiPassword",
-      configFile: "openclaw.json",
-      pathPattern: "channels.nextcloud-talk.apiPassword",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-    {
-      id: "channels.nextcloud-talk.botSecret",
-      targetType: "channels.nextcloud-talk.botSecret",
-      configFile: "openclaw.json",
-      pathPattern: "channels.nextcloud-talk.botSecret",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-  ];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "nextcloud-talk",
+  account: ["apiPassword", "botSecret"],
+  channel: ["apiPassword", "botSecret"],
+});
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };

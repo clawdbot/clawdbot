@@ -5,7 +5,7 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
-import type { SkillEligibilityContext, SkillSnapshot } from "../../skills/types.js";
+import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { SkillEntry } from "../../skills/types.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
@@ -53,10 +53,7 @@ function mapPathFromWorkspaceToContainer(params: {
   if (!relativePath) {
     return params.targetWorkspaceDir.replace(/\\/g, "/");
   }
-  return containerJoin(
-    params.targetWorkspaceDir,
-    ...relativePath.split(path.sep).filter(Boolean),
-  );
+  return containerJoin(params.targetWorkspaceDir, ...relativePath.split(path.sep).filter(Boolean));
 }
 
 export function mapSandboxSkillEntriesForPrompt(params: {
@@ -105,6 +102,25 @@ export function mapSandboxSkillEntriesForPrompt(params: {
       },
     };
   });
+}
+
+export function mapSandboxSkillUsagePaths(params: {
+  paths?: SkillUsagePath[];
+  skillsWorkspaceDir: string;
+  skillsPromptWorkspaceDir: string;
+}): SkillUsagePath[] | undefined {
+  if (!params.paths || params.skillsWorkspaceDir === params.skillsPromptWorkspaceDir) {
+    return params.paths;
+  }
+  return params.paths.map((entry) => ({
+    ...entry,
+    readPath:
+      mapPathFromWorkspaceToContainer({
+        filePath: entry.readPath,
+        sourceWorkspaceDir: params.skillsWorkspaceDir,
+        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
+      }) ?? entry.readPath,
+  }));
 }
 
 export function resolveSandboxSkillRuntimeInputs(params: {

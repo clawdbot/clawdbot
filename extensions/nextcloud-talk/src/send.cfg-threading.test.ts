@@ -149,6 +149,48 @@ describe("nextcloud-talk send cfg threading", () => {
     });
   });
 
+  it("strips mixed-case provider and room prefixes before sending", async () => {
+    const cfg = { source: "provided" } as const;
+    mockNextcloudMessageResponse(12344, 1_706_000_000);
+
+    const result = await sendMessageNextcloudTalk("NC-TALK:ROOM:Ops", "hello", {
+      cfg,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/Ops/message",
+      expect.any(Object),
+    );
+    expect(result.roomToken).toBe("Ops");
+    expect(result.receipt.raw).toEqual([
+      {
+        channel: "nextcloud-talk",
+        conversationId: "Ops",
+        messageId: "12344",
+      },
+    ]);
+  });
+
+  it("preserves caller-authored text on the low-level send path", async () => {
+    const cfg = { source: "provided" } as const;
+    const text = "Example:\n⚠️ 🛠️ `search repos (agent)` failed";
+    mockNextcloudMessageResponse(12346, 1_706_000_001);
+
+    await sendMessageNextcloudTalk("room:abc123", text, {
+      cfg,
+      accountId: "work",
+      replyTo: "parent-1",
+    });
+
+    expect(hoisted.generateNextcloudTalkSignature).toHaveBeenCalledWith({
+      body: text,
+      secret: "secret-value",
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ message: text, replyTo: "parent-1" }),
+    );
+  });
+
   it("sends with provided cfg even when the runtime store is not initialized", async () => {
     const cfg = { source: "provided" } as const;
     hoisted.record.mockImplementation(() => {
@@ -312,9 +354,28 @@ describe("nextcloud-talk send cfg threading", () => {
     expect(hoisted.resolveNextcloudTalkAccount).not.toHaveBeenCalled();
   });
 
-  it("uses provided cfg for sendReaction and posts the reaction payload", async () => {
+  it("uses provided cfg, posts the reaction payload, and discards the success body", async () => {
     const cfg = { source: "provided" } as const;
-    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    const events: string[] = [];
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            events.push("cancel");
+          },
+        }),
+        { status: 201 },
+      ),
+    );
+    hoisted.mockFetchGuard.mockImplementationOnce(
+      async (p: { url: string; init?: RequestInit }) => ({
+        response: await globalThis.fetch(p.url, p.init),
+        release: async () => {
+          events.push("release");
+        },
+        finalUrl: p.url,
+      }),
+    );
 
     const result = await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
       cfg,
@@ -345,6 +406,7 @@ describe("nextcloud-talk send cfg threading", () => {
       },
     );
     expect(result).toEqual({ ok: true });
+    expect(events).toEqual(["cancel", "release"]);
   });
 
   it("surfaces sendReaction HTTP failures", async () => {

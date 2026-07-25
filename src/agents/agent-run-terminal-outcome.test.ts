@@ -2,17 +2,23 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,
+  mergeAgentRunAttemptTerminal,
   mergeAgentRunTerminalOutcome,
+  normalizeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+  type AgentRunAttemptTerminal,
 } from "./agent-run-terminal-outcome.js";
 
 describe("agent run terminal outcome", () => {
   it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
     expect(
-      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map((timeoutPhase) =>
-        buildAgentRunTerminalOutcome({
-          status: "timeout",
-          timeoutPhase,
-        }).reason
+      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map(
+        (timeoutPhase) =>
+          buildAgentRunTerminalOutcome({
+            status: "timeout",
+            timeoutPhase,
+          }).reason,
       ),
     ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
   });
@@ -51,7 +57,7 @@ describe("agent run terminal outcome", () => {
     });
 
     expect(rpcCancel.reason).toBe("cancelled");
-    expect(rpcCancel.status).toBe("timeout");
+    expect(rpcCancel.status).toBe("error");
     expect(mergeAgentRunTerminalOutcome(rpcCancel, lateCompletion)).toBe(rpcCancel);
     expect(
       buildAgentRunTerminalOutcome({
@@ -77,7 +83,7 @@ describe("agent run terminal outcome", () => {
 
     expect(restartCancel).toMatchObject({
       reason: "cancelled",
-      status: "timeout",
+      status: "error",
       stopReason: "restart",
     });
     expect(mergeAgentRunTerminalOutcome(restartCancel, lateCompletion)).toBe(restartCancel);
@@ -205,6 +211,35 @@ describe("agent run terminal outcome", () => {
     });
   });
 
+  it("classifies abandoned successful waits as incomplete failures", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "ok",
+        livenessState: "abandoned",
+      }),
+    ).toEqual({
+      reason: "abandoned",
+      status: "error",
+      error: "Agent run ended before producing a complete result.",
+      livenessState: "abandoned",
+    });
+  });
+
+  it("keeps explicit cancellation ahead of abandoned liveness", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "error",
+        stopReason: "stop",
+        livenessState: "abandoned",
+      }),
+    ).toEqual({
+      reason: "cancelled",
+      status: "error",
+      stopReason: "stop",
+      livenessState: "abandoned",
+    });
+  });
+
   it("keeps a hard timeout over later aborts or failures for the same run", () => {
     const timeout = buildAgentRunTerminalOutcome({
       status: "timeout",
@@ -238,5 +273,247 @@ describe("agent run terminal outcome", () => {
     });
 
     expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
+  });
+});
+
+describe("agent run attempt terminal", () => {
+  it("keeps timeout phase and source precedence in the canonical owner", () => {
+    const failure = new Error("provider failed while aborting");
+    const failed = mergeAgentRunAttemptTerminal(
+      { kind: "ok" },
+      { kind: "failed", source: "prompt", error: failure },
+    );
+    const externallyAborted = mergeAgentRunAttemptTerminal(failed, {
+      kind: "aborted",
+      source: "external",
+    });
+    const timedOut = mergeAgentRunAttemptTerminal(externallyAborted, {
+      kind: "timeout",
+      phase: "compaction",
+      source: "run_budget",
+    });
+
+    expect(timedOut).toEqual({
+      kind: "timeout",
+      phase: "compaction",
+      source: "external",
+      aborted: true,
+      failure: { source: "prompt", error: failure },
+    });
+
+    expect(
+      mergeAgentRunAttemptTerminal(
+        { kind: "timeout", phase: "prompt", source: "idle" },
+        { kind: "aborted", source: "external" },
+      ),
+    ).toEqual({ kind: "timeout", phase: "prompt", source: "external", aborted: true });
+    expect(
+      mergeAgentRunAttemptTerminal(
+        { kind: "aborted", source: "runtime" },
+        { kind: "timeout", phase: "compaction", source: "observation" },
+      ),
+    ).toEqual({ kind: "aborted", source: "runtime", timeoutObservation: "compaction" });
+    expect(
+      mergeAgentRunAttemptTerminal(
+        { kind: "aborted", source: "external" },
+        { kind: "aborted", source: "yield_cleanup" },
+      ),
+    ).toEqual({ kind: "aborted", source: "external" });
+    expect(
+      mergeAgentRunAttemptTerminal(
+        { kind: "aborted", source: "runtime" },
+        { kind: "aborted", source: "yield_cleanup" },
+      ),
+    ).toEqual({ kind: "aborted", source: "runtime" });
+    const observedAbort = mergeAgentRunAttemptTerminal(
+      { kind: "aborted", source: "runtime" },
+      { kind: "timeout", phase: "compaction", source: "observation" },
+    );
+    expect(
+      mergeAgentRunAttemptTerminal(observedAbort, {
+        kind: "aborted",
+        source: "external",
+      }),
+    ).toEqual({
+      kind: "aborted",
+      source: "external",
+      timeoutObservation: "compaction",
+    });
+    expect(
+      mergeAgentRunAttemptTerminal(observedAbort, {
+        kind: "timeout",
+        phase: "prompt",
+        source: "runtime",
+      }),
+    ).toEqual({ kind: "timeout", phase: "compaction", source: "runtime", aborted: true });
+    expect(
+      mergeAgentRunAttemptTerminal(
+        { kind: "timeout", phase: "prompt", source: "runtime" },
+        { kind: "timeout", phase: "compaction", source: "observation" },
+      ),
+    ).toEqual({ kind: "timeout", phase: "compaction", source: "runtime" });
+    const failedObservation = {
+      kind: "failed" as const,
+      source: "compaction" as const,
+      error: failure,
+      timeoutObservation: "compaction" as const,
+    };
+    expect(
+      mergeAgentRunAttemptTerminal(
+        { kind: "failed", source: "compaction", error: failure },
+        { kind: "timeout", phase: "compaction", source: "observation" },
+      ),
+    ).toEqual(failedObservation);
+    expect(
+      mergeAgentRunAttemptTerminal(
+        { kind: "timeout", phase: "compaction", source: "observation" },
+        { kind: "failed", source: "compaction", error: failure },
+      ),
+    ).toEqual(failedObservation);
+  });
+
+  it("converges across terminal observation orderings", () => {
+    const error = new Error("provider failed");
+    const facts = [
+      { kind: "failed", source: "prompt", error },
+      { kind: "aborted", source: "runtime" },
+      { kind: "timeout", phase: "compaction", source: "observation" },
+      { kind: "timeout", phase: "prompt", source: "runtime" },
+    ] as const;
+    const orders = [
+      [0, 1, 2, 3],
+      [3, 2, 1, 0],
+      [2, 0, 3, 1],
+      [1, 3, 0, 2],
+    ] as const;
+
+    for (const order of orders) {
+      const terminal = order.reduce<AgentRunAttemptTerminal>(
+        (current, index) => mergeAgentRunAttemptTerminal(current, facts[index]),
+        { kind: "ok" },
+      );
+      expect(terminal).toEqual({
+        kind: "timeout",
+        phase: "compaction",
+        source: "runtime",
+        aborted: true,
+        failure: { source: "prompt", error },
+      });
+    }
+  });
+
+  it("projects canonical terminal variants into the existing event fields", () => {
+    expect(
+      projectAgentRunAttemptTerminal({
+        kind: "timeout",
+        phase: "tool_execution",
+        source: "idle",
+      }),
+    ).toMatchObject({
+      idleTimedOut: true,
+      timedOut: true,
+      timedOutDuringToolExecution: true,
+    });
+    expect(
+      projectAgentRunAttemptTerminal({ kind: "aborted", source: "yield_cleanup" }),
+    ).toMatchObject({ aborted: false, cleanupYieldAborted: true });
+    expect(
+      projectAgentRunAttemptTerminal({ kind: "failed", source: "prompt", error: null }),
+    ).toMatchObject({ failed: true, interrupted: false, promptError: null });
+    expect(
+      projectAgentRunAttemptTerminal({
+        kind: "timeout",
+        phase: "prompt",
+        source: "runtime",
+        failure: { source: "prompt", error: null },
+      }),
+    ).toMatchObject({ failed: true, interrupted: true, timedOut: true });
+    expect(
+      projectAgentRunAttemptTerminal({
+        kind: "timeout",
+        phase: "compaction",
+        source: "observation",
+      }),
+    ).toMatchObject({ timedOut: false, timedOutDuringCompaction: true });
+  });
+
+  it("normalizes the shipped harness shape through the same precedence owner", () => {
+    const error = new Error("request timed out");
+    expect(
+      normalizeAgentRunAttemptTerminal({
+        aborted: true,
+        externalAbort: true,
+        promptError: error,
+        promptErrorSource: "prompt",
+        timedOut: true,
+        timedOutDuringCompaction: true,
+      }),
+    ).toEqual({
+      kind: "timeout",
+      phase: "compaction",
+      source: "external",
+      aborted: true,
+      failure: { source: "prompt", error },
+    });
+    expect(
+      normalizeAgentRunAttemptTerminal({
+        timedOut: true,
+        idleTimedOut: true,
+        timedOutByRunBudget: true,
+      }),
+    ).toEqual({ kind: "timeout", phase: "prompt", source: "run_budget" });
+    expect(normalizeAgentRunAttemptTerminal({ timedOutByRunBudget: true })).toEqual({
+      kind: "timeout",
+      phase: "prompt",
+      source: "run_budget",
+    });
+    expect(
+      projectAgentRunAttemptTerminal(normalizeAgentRunAttemptTerminal({ timedOut: true })),
+    ).toMatchObject({ timedOut: true, aborted: false });
+    expect(normalizeAgentRunAttemptTerminal({ externalAbort: true })).toEqual({
+      kind: "aborted",
+      source: "external",
+    });
+    expect(
+      normalizeAgentRunAttemptTerminal({
+        promptError: error,
+        promptErrorSource: "compaction",
+        timedOutDuringCompaction: true,
+      }),
+    ).toEqual({
+      kind: "failed",
+      source: "compaction",
+      error,
+      timeoutObservation: "compaction",
+    });
+    const abortedCompaction = normalizeAgentRunAttemptTerminal({
+      aborted: true,
+      timedOutDuringCompaction: true,
+    });
+    expect(abortedCompaction).toEqual({
+      kind: "aborted",
+      source: "runtime",
+      timeoutObservation: "compaction",
+    });
+    expect(projectAgentRunAttemptTerminal(abortedCompaction)).toMatchObject({
+      aborted: true,
+      timedOut: false,
+      timedOutDuringCompaction: true,
+    });
+    expect(
+      setAgentRunAttemptTerminalFailure(
+        {
+          kind: "failed",
+          source: "compaction",
+          error,
+          timeoutObservation: "compaction",
+        },
+        { source: "prompt", error: new Error("replacement") },
+      ),
+    ).toMatchObject({
+      kind: "failed",
+      source: "prompt",
+      timeoutObservation: "compaction",
+    });
   });
 });

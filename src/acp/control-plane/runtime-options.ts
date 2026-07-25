@@ -277,15 +277,13 @@ export function mergeRuntimeOptions(params: {
   patch?: Partial<AcpSessionRuntimeOptions>;
 }): AcpSessionRuntimeOptions {
   const current = normalizeRuntimeOptions(params.current);
-  const patch = normalizeRuntimeOptions(validateRuntimeOptionPatch(params.patch));
-  const mergedExtras = {
-    ...current.backendExtras,
-    ...patch.backendExtras,
-  };
+  const patch = validateRuntimeOptionPatch(params.patch);
   return normalizeRuntimeOptions({
     ...current,
     ...patch,
-    ...(Object.keys(mergedExtras).length > 0 ? { backendExtras: mergedExtras } : {}),
+    ...(patch.backendExtras
+      ? { backendExtras: { ...current.backendExtras, ...patch.backendExtras } }
+      : {}),
   });
 }
 
@@ -331,7 +329,7 @@ export function buildRuntimeConfigOptionPairs(
   if (normalized.model) {
     pairs.set(resolveRuntimeConfigOptionKey("model", advertisedConfigOptionKeys), normalized.model);
   }
-  if (normalized.thinking) {
+  if (normalized.thinking && shouldEmitThinkingConfigOption(advertisedConfigOptionKeys)) {
     pairs.set(
       resolveRuntimeConfigOptionKey("thinking", advertisedConfigOptionKeys),
       normalized.thinking,
@@ -359,6 +357,16 @@ export function buildRuntimeConfigOptionPairs(
     }
   }
   return [...pairs.entries()];
+}
+
+function shouldEmitThinkingConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
+  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
+  return (
+    advertisedKeys.size === 0 ||
+    RUNTIME_CONFIG_OPTION_ALIASES.thinking.some((alias) =>
+      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
+    )
+  );
 }
 
 function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {

@@ -1,6 +1,7 @@
 // Memory Host SDK module implements qmd query parser behavior.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./error-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 // Parser for qmd query JSON output, including noisy CLI wrapper output.
 
@@ -81,7 +82,7 @@ function isQmdNoResultsLine(line: string): boolean {
 
 /** Bound stderr context included in parse errors. */
 function summarizeQmdStderr(raw: string): string {
-  return raw.length <= 120 ? raw : `${raw.slice(0, 117)}...`;
+  return raw.length <= 120 ? raw : `${truncateUtf16Safe(raw, 117)}...`;
 }
 
 /** Parse and normalize a strict qmd JSON array payload. */

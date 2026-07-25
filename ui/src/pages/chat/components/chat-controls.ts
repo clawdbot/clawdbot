@@ -1,320 +1,125 @@
-// Chat-owned quota, settings, refresh, and display controls.
+// Chat-owned composer display controls: the View menu plus model controls.
 import { html } from "lit";
-import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
-import {
-  normalizeChatAutoScrollMode,
-  type ChatAutoScrollMode,
-  type UiSettings,
-} from "../../../app/settings.ts";
+import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
-import {
-  renderProviderQuotaPill,
-  type ProviderQuotaPillProps,
-} from "../../../components/provider-quota-pill.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import { isCronSessionKey } from "../../../lib/session-display.ts";
-import {
-  isSessionKeyTiedToAgent,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../../lib/sessions/session-key.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 
-export type ChatControlsProps = {
-  agentsList: AgentsListResult | null;
-  connected: boolean;
-  hideCronSessions: boolean;
-  loading: boolean;
-  manualRefreshInFlight: boolean;
+type ChatControlsProps = {
+  paneId: string;
   model: ChatModelControlsProps;
   onboarding: boolean;
-  quota: ProviderQuotaPillProps;
-  runId: string | null;
-  sending: boolean;
   settings: UiSettings;
-  settingsOpen: boolean;
-  sessionKey: string;
-  sessionsResult: SessionsListResult | null;
-  stream: string | null;
-  onRefresh: () => Promise<void> | void;
+  viewMenuOpen: boolean;
   onSettingsChange: (next: UiSettings) => void;
-  onSettingsOpenChange: (
+  onViewMenuOpenChange: (
     open: boolean,
     options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
   ) => void;
-  onToggleCronSessions?: () => void;
 };
 
-function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
-  switch (mode) {
-    case "always":
-      return t("chat.autoScrollAlways");
-    case "off":
-      return t("chat.autoScrollOff");
-    case "near-bottom":
-      return t("chat.autoScrollNearBottom");
-  }
-  return t("chat.autoScrollNearBottom");
-}
+type ChatViewMenuRow = {
+  label: string;
+  checked: boolean;
+  onToggle: () => void;
+};
 
-function nextChatAutoScrollMode(mode: ChatAutoScrollMode): ChatAutoScrollMode {
-  switch (mode) {
-    case "near-bottom":
-      return "always";
-    case "always":
-      return "off";
-    case "off":
-      return "near-bottom";
-  }
-  return "near-bottom";
-}
-
-function renderChatAutoScrollToggle(props: {
-  settings: UiSettings;
-  onSettingsChange: (next: UiSettings) => void;
-}) {
-  const mode = normalizeChatAutoScrollMode(props.settings.chatAutoScroll);
-  const label = `${t("chat.autoScrollMode")}: ${chatAutoScrollLabel(mode)}`;
-  const active = mode !== "off";
-  return html`
-    <openclaw-tooltip .content=${label}>
-      <button
-        class="btn btn--sm btn--icon chat-settings-action ${active ? "active" : ""}"
-        data-chat-auto-scroll-toggle="true"
-        data-chat-auto-scroll-mode=${mode}
-        aria-label=${label}
-        aria-pressed=${active}
-        @click=${() => {
-          props.onSettingsChange({
-            ...props.settings,
-            chatAutoScroll: nextChatAutoScrollMode(mode),
-          });
-        }}
-      >
-        ${icons.scrollText}
-        <span class="chat-settings-action__text">${t("chat.autoScrollMode")}</span>
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
-function renderCronFilterIcon(hiddenCount: number) {
-  return html`
-    <span style="position: relative; display: inline-flex; align-items: center;">
-      ${icons.clock}
-      ${hiddenCount > 0
-        ? html`<span
-            style="
-              position: absolute;
-              top: -5px;
-              right: -6px;
-              background: var(--color-accent, #6366f1);
-              color: #fff;
-              border-radius: var(--radius-full);
-              font-size: 9px;
-              line-height: 1;
-              padding: 1px 3px;
-              pointer-events: none;
-            "
-            >${hiddenCount}</span
-          >`
-        : ""}
-    </span>
-  `;
-}
-
-function countHiddenCronSessions(
-  props: Pick<ChatControlsProps, "agentsList" | "sessionKey" | "sessionsResult">,
-): number {
-  const sessions = props.sessionsResult;
-  if (!sessions?.sessions) {
-    return 0;
-  }
-  const activeAgentId = normalizeAgentId(
-    parseAgentSessionKey(props.sessionKey)?.agentId ?? props.agentsList?.defaultId ?? "main",
-  );
-  const defaultAgentId = normalizeAgentId(props.agentsList?.defaultId ?? "main");
-
-  return sessions.sessions.filter(
-    (row) =>
-      isCronSessionKey(row.key) &&
-      row.key !== props.sessionKey &&
-      isSessionKeyTiedToAgent(row.key, activeAgentId, defaultAgentId),
-  ).length;
+function chatViewMenuRows(props: ChatControlsProps): ChatViewMenuRow[] {
+  const { settings, onboarding } = props;
+  // Onboarding pins the display: no thinking noise, tool calls visible.
+  const showThinking = onboarding ? false : settings.chatShowThinking;
+  const showToolCalls = onboarding ? true : settings.chatShowToolCalls;
+  const persistCommentary = settings.chatPersistCommentary !== false;
+  return [
+    {
+      label: t("chat.view.reasoning"),
+      checked: showThinking,
+      onToggle: () =>
+        props.onSettingsChange({ ...settings, chatShowThinking: !settings.chatShowThinking }),
+    },
+    {
+      label: t("chat.view.toolCalls"),
+      checked: showToolCalls,
+      onToggle: () =>
+        props.onSettingsChange({ ...settings, chatShowToolCalls: !settings.chatShowToolCalls }),
+    },
+    {
+      label: t("chat.view.commentary"),
+      checked: persistCommentary,
+      onToggle: () =>
+        props.onSettingsChange({ ...settings, chatPersistCommentary: !persistCommentary }),
+    },
+  ];
 }
 
 export function renderChatControls(props: ChatControlsProps) {
-  const hideCron = props.hideCronSessions;
-  const hiddenCronCount = hideCron ? countHiddenCronSessions(props) : 0;
-  const disableThinkingToggle = props.onboarding;
-  const showThinking = props.onboarding ? false : props.settings.chatShowThinking;
-  const showToolCalls = props.onboarding ? true : props.settings.chatShowToolCalls;
-  const persistCommentary = props.settings.chatPersistCommentary === true;
-  const thinkingLabel = disableThinkingToggle
-    ? t("chat.onboardingDisabled")
-    : t("chat.thinkingToggle");
-  const toolCallsLabel = disableThinkingToggle
-    ? t("chat.onboardingDisabled")
-    : t("chat.toolCallsToggle");
-  const commentaryLabel = disableThinkingToggle
-    ? t("chat.onboardingDisabled")
-    : t("chat.commentaryToggle");
-  const refreshDisabled =
-    !props.connected ||
-    props.manualRefreshInFlight ||
-    props.loading ||
-    props.sending ||
-    props.stream !== null ||
-    Boolean(props.runId);
-  const cronLabel = hideCron
-    ? hiddenCronCount > 0
-      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-      : t("chat.showCronSessions")
-    : t("chat.hideCronSessions");
-  const settingsOpen = props.settingsOpen;
-  const settingsLabel = t("chat.settings");
-  const settingsTitle = t("chat.settings");
-
+  const open = props.viewMenuOpen;
+  const menuTitle = props.onboarding ? t("chat.onboardingDisabled") : t("chat.view.menu");
+  const menuId = `chat-view-menu-${encodeURIComponent(props.paneId)}`;
+  const rows = chatViewMenuRows(props);
   return html`
+    <div class="chat-view-menu-wrapper">
+      <openclaw-tooltip .content=${menuTitle}>
+        <wa-dropdown
+          id=${menuId}
+          class="chat-view-menu"
+          placement="top-start"
+          aria-label=${menuTitle}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            event.preventDefault();
+            const value = event.detail.item.value;
+            const index = value?.startsWith("view-") ? Number(value.slice(5)) : -1;
+            if (!props.onboarding && Number.isInteger(index)) {
+              rows[index]?.onToggle();
+            }
+          }}
+          .open=${open}
+          @wa-show=${() => {
+            if (!open) {
+              props.onViewMenuOpenChange(true);
+            }
+          }}
+          @wa-hide=${() => {
+            if (open) {
+              props.onViewMenuOpenChange(false, { restoreFocus: true });
+            }
+          }}
+        >
+          <button
+            slot="trigger"
+            class="chat-view-menu-trigger ${open ? "chat-view-menu-trigger--open" : ""}"
+            type="button"
+            aria-label=${menuTitle}
+          >
+            ${icons.eye}
+          </button>
+          ${rows.map(
+            (row, index) => html`
+              <wa-dropdown-item
+                class="chat-view-menu__item"
+                type="checkbox"
+                value=${`view-${index}`}
+                .checked=${row.checked}
+                ?disabled=${props.onboarding}
+              >
+                <span class="chat-view-menu__text">${row.label}</span>
+              </wa-dropdown-item>
+            `,
+          )}
+        </wa-dropdown>
+      </openclaw-tooltip>
+    </div>
     <div
       class="chat-composer-model-control"
       @click=${() => {
-        if (props.settingsOpen) {
-          props.onSettingsOpenChange(false);
+        if (open) {
+          props.onViewMenuOpenChange(false);
         }
       }}
     >
       ${renderChatModelControls(props.model)}
-    </div>
-    ${renderProviderQuotaPill(props.quota)}
-    <div class="chat-settings-popover-wrapper">
-      <openclaw-tooltip .content=${settingsTitle}>
-        <button
-          class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"
-          type="button"
-          aria-label=${settingsTitle}
-          aria-expanded=${settingsOpen}
-          aria-controls="chat-composer-settings-popover"
-          @click=${(event: Event) => {
-            event.stopPropagation();
-            (event.currentTarget as HTMLElement)
-              .closest(".agent-chat__composer-controls")
-              ?.querySelectorAll("details.chat-controls__inline-select[open]")
-              .forEach((details) => details.removeAttribute("open"));
-            props.onSettingsOpenChange(!settingsOpen, {
-              trigger: event.currentTarget as HTMLElement,
-            });
-          }}
-        >
-          <span class="chat-settings-chip__icon">${icons.settings}</span>
-          <span class="chat-settings-chip__text">${settingsLabel}</span>
-          <span class="chat-settings-chip__chevron">${icons.chevronDown}</span>
-        </button>
-      </openclaw-tooltip>
-      <div
-        id="chat-composer-settings-popover"
-        class="chat-settings-popover ${settingsOpen ? "chat-settings-popover--open" : ""}"
-        role="dialog"
-        aria-label=${settingsTitle}
-      >
-        <div class="chat-settings-popover__section">
-          <span class="chat-settings-popover__label">${settingsLabel}</span>
-          <div class="chat-settings-popover__toggles">
-            <openclaw-tooltip .content=${t("common.refresh")}>
-              <button
-                class="btn btn--sm btn--icon chat-settings-action"
-                ?disabled=${refreshDisabled}
-                @click=${() => {
-                  if (!refreshDisabled) {
-                    void props.onRefresh();
-                  }
-                }}
-                aria-label=${t("common.refresh")}
-              >
-                ${icons.refresh}
-                <span class="chat-settings-action__text">${t("common.refresh")}</span>
-              </button>
-            </openclaw-tooltip>
-            ${renderChatAutoScrollToggle(props)}
-            <openclaw-tooltip .content=${thinkingLabel}>
-              <button
-                class="btn btn--sm btn--icon chat-settings-action ${showThinking ? "active" : ""}"
-                ?disabled=${disableThinkingToggle}
-                @click=${() => {
-                  if (disableThinkingToggle) {
-                    return;
-                  }
-                  props.onSettingsChange({
-                    ...props.settings,
-                    chatShowThinking: !props.settings.chatShowThinking,
-                  });
-                }}
-                aria-pressed=${showThinking}
-                aria-label=${thinkingLabel}
-              >
-                ${icons.brain}
-                <span class="chat-settings-action__text">${t("cron.form.thinking")}</span>
-              </button>
-            </openclaw-tooltip>
-            <openclaw-tooltip .content=${toolCallsLabel}>
-              <button
-                class="btn btn--sm btn--icon chat-settings-action ${showToolCalls ? "active" : ""}"
-                ?disabled=${disableThinkingToggle}
-                @click=${() => {
-                  if (disableThinkingToggle) {
-                    return;
-                  }
-                  props.onSettingsChange({
-                    ...props.settings,
-                    chatShowToolCalls: !props.settings.chatShowToolCalls,
-                  });
-                }}
-                aria-pressed=${showToolCalls}
-                aria-label=${toolCallsLabel}
-              >
-                ${icons.wrench}
-                <span class="chat-settings-action__text">${t("agents.tabs.tools")}</span>
-              </button>
-            </openclaw-tooltip>
-            <openclaw-tooltip .content=${commentaryLabel}>
-              <button
-                class="btn btn--sm btn--icon chat-settings-action ${persistCommentary
-                  ? "active"
-                  : ""}"
-                ?disabled=${disableThinkingToggle}
-                @click=${() => {
-                  if (disableThinkingToggle) {
-                    return;
-                  }
-                  props.onSettingsChange({
-                    ...props.settings,
-                    chatPersistCommentary: !persistCommentary,
-                  });
-                }}
-                aria-pressed=${persistCommentary}
-                aria-label=${commentaryLabel}
-              >
-                ${persistCommentary ? icons.pin : icons.pinOff}
-                <span class="chat-settings-action__text">${t("chat.commentaryLabel")}</span>
-              </button>
-            </openclaw-tooltip>
-            <openclaw-tooltip .content=${cronLabel}>
-              <button
-                class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
-                @click=${() => {
-                  props.onToggleCronSessions?.();
-                }}
-                aria-pressed=${hideCron}
-                aria-label=${cronLabel}
-              >
-                ${renderCronFilterIcon(hiddenCronCount)}
-                <span class="chat-settings-action__text">${t("cron.jobList.history")}</span>
-              </button>
-            </openclaw-tooltip>
-          </div>
-        </div>
-      </div>
     </div>
   `;
 }

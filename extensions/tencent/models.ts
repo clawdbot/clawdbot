@@ -24,3 +24,25 @@ export function buildTokenHubModelDefinition(
     api: "openai-completions",
   };
 }
+
+// ---------- TokenPlan provider ----------
+
+export const TOKENPLAN_PROVIDER_ID = "tencent-tokenplan";
+
+const TOKENPLAN_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
+  providerId: TOKENPLAN_PROVIDER_ID,
+  catalog: manifest.modelCatalog.providers[TOKENPLAN_PROVIDER_ID],
+});
+
+export const TOKENPLAN_BASE_URL = TOKENPLAN_MANIFEST_PROVIDER.baseUrl;
+
+export const TOKENPLAN_MODEL_CATALOG: ModelDefinitionConfig[] = TOKENPLAN_MANIFEST_PROVIDER.models;
+
+export function buildTokenPlanModelDefinition(
+  model: (typeof TOKENPLAN_MODEL_CATALOG)[number],
+): ModelDefinitionConfig {
+  return {
+    ...model,
+    api: "openai-completions",
+  };
+}

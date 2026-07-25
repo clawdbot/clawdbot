@@ -108,6 +108,12 @@ function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string })
   return sanitizeTerminalText(label);
 }
 
+function formatLastActive(now: number, lastActiveAtMs: unknown): string | null {
+  return typeof lastActiveAtMs === "number" && Number.isFinite(lastActiveAtMs)
+    ? formatTimeAgo(Math.max(0, now - lastActiveAtMs))
+    : null;
+}
+
 function formatNodeApprovalState(raw: unknown): NodeApprovalState | null {
   return raw === "approved" ||
     raw === "pending-approval" ||
@@ -176,7 +182,6 @@ function mergePairedNodeWithEffectiveNode(
   return {
     ...paired,
     ...effective,
-    token: paired?.token,
     createdAtMs: paired?.createdAtMs,
     lastConnectedAtMs: paired?.lastConnectedAtMs ?? effective.connectedAtMs,
     displayName: effective.displayName ?? paired?.displayName,
@@ -222,12 +227,6 @@ async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | nul
   } catch {
     return null;
   }
-}
-
-function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNodeListRow, "token"> {
-  const copy: Record<string, unknown> = { ...node };
-  delete copy.token;
-  return copy as Omit<PairedNodeListRow, "token">;
 }
 
 /** Register node status, describe, and paired-node list commands. */
@@ -301,6 +300,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             const versions = formatNodeVersions(n);
             const pathEnv = formatPathEnv(n.pathEnv);
             const client = formatClientLabel(n);
+            const lastActive = formatLastActive(now, n.lastActiveAtMs);
             const detailParts = [
               client ? `client: ${client}` : null,
               n.deviceFamily ? `device: ${n.deviceFamily}` : null,
@@ -308,6 +308,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               perms ? `perms: ${perms}` : null,
               versions,
               pathEnv ? `path: ${pathEnv}` : null,
+              lastActive ? `input: ${lastActive}${n.active ? " (active)" : ""}` : null,
             ]
               .filter(Boolean)
               .map((part) => sanitizeTerminalText(String(part)));
@@ -428,6 +429,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               uiVersion?: string;
             },
           );
+          const lastActive = formatLastActive(Date.now(), obj.lastActiveAtMs);
 
           const { heading, ok, warn, muted } = getNodesTheme();
           const status = `${paired ? ok("paired") : warn("unpaired")} · ${
@@ -444,6 +446,12 @@ export function registerNodesStatusCommands(nodes: Command) {
             perms ? { Field: "Perms", Value: sanitizeTerminalText(perms) } : null,
             versions ? { Field: "Version", Value: sanitizeTerminalText(versions) } : null,
             pathEnv ? { Field: "PATH", Value: sanitizeTerminalText(pathEnv) } : null,
+            lastActive
+              ? {
+                  Field: "Last input",
+                  Value: `${lastActive}${obj.active === true ? " (active node)" : ""}`,
+                }
+              : null,
             { Field: "Status", Value: status },
             approvalState
               ? { Field: "Approval", Value: formatApprovalStateLabel(approvalState) }
@@ -548,7 +556,13 @@ export function registerNodesStatusCommands(nodes: Command) {
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,
-              paired: filteredPaired.map(sanitizePairedNodeForListJson),
+              // Current gateways emit no token, but the permissive parser keeps
+              // unknown fields; strip so an older gateway's legacy node token
+              // never reaches JSON output.
+              paired: filteredPaired.map((row) => {
+                const { token: _token, ...rest } = row as { token?: unknown };
+                return rest;
+              }),
             });
             return;
           }

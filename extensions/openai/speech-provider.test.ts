@@ -58,6 +58,7 @@ describe("buildOpenAISpeechProvider", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -376,6 +377,68 @@ describe("buildOpenAISpeechProvider", () => {
     }
   });
 
+  it("treats a blank environment API key as missing across speech entry points", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "   ");
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const providerConfig = {
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+    };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig,
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI API key missing");
+    await expect(
+      provider.synthesizeTelephony?.({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI API key missing");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("trims a valid environment API key for normal and telephony synthesis", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "  sk-env  ");
+    const provider = buildOpenAISpeechProvider();
+    const authorizationHeaders: Array<string | null> = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      authorizationHeaders.push(new Headers(init?.headers).get("authorization"));
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    }) as unknown as typeof fetch;
+    const providerConfig = {
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+    };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(true);
+    await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+    await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      timeoutMs: 1_000,
+    });
+
+    expect(authorizationHeaders).toEqual(["Bearer sk-env", "Bearer sk-env"]);
+  });
+
   it("preserves talk responseFormat overrides", () => {
     const provider = buildOpenAISpeechProvider();
 
@@ -417,40 +480,6 @@ describe("buildOpenAISpeechProvider", () => {
       model: "tts-1",
       speed: 218 / 175,
     });
-  });
-
-  it("maps persona prompt fields to instructions when instructions are unset", async () => {
-    const provider = buildOpenAISpeechProvider();
-
-    const prepared = await provider.prepareSynthesis?.({
-      text: "hello",
-      cfg: {} as never,
-      providerConfig: {
-        apiKey: "sk-test",
-        model: "gpt-4o-mini-tts",
-        voice: "cedar",
-      },
-      persona: {
-        id: "alfred",
-        label: "Alfred",
-        prompt: {
-          profile: "A brilliant British butler.",
-          scene: "A quiet late-night study.",
-          sampleContext: "The speaker is answering a trusted operator.",
-          style: "Refined and lightly amused.",
-          accent: "British English.",
-          pacing: "Measured.",
-          constraints: ["Do not read configuration values aloud."],
-        },
-      },
-      target: "audio-file",
-      timeoutMs: 1_000,
-    });
-
-    expect(prepared?.providerConfig?.instructions).toContain("Persona: Alfred");
-    expect(prepared?.providerConfig?.instructions).toContain(
-      "Constraint: Do not read configuration values aloud.",
-    );
   });
 
   it("uses wav for Groq-compatible OpenAI TTS endpoints", async () => {
@@ -535,28 +564,33 @@ describe("buildOpenAISpeechProvider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("honors explicit responseFormat overrides and clears voice-note compatibility when not opus", async () => {
-    const provider = buildOpenAISpeechProvider();
-    mockSpeechFetchExpectingFormat("wav");
+  it.each([
+    { responseFormat: "wav" as const, voiceCompatible: false },
+    { responseFormat: "mp3" as const, voiceCompatible: true },
+  ])(
+    "marks configured $responseFormat voice-note compatibility as $voiceCompatible",
+    async ({ responseFormat, voiceCompatible }) => {
+      const provider = buildOpenAISpeechProvider();
+      mockSpeechFetchExpectingFormat(responseFormat);
 
-    const result = await provider.synthesize({
-      text: "hello",
-      cfg: {} as never,
-      providerConfig: {
-        apiKey: "sk-test",
-        baseUrl: "https://proxy.example.com/openai/v1",
-        model: "canopylabs/orpheus-v1-english",
-        voice: "daniel",
-        responseFormat: "wav",
-      },
-      target: "voice-note",
-      timeoutMs: 1_000,
-    });
+      const result = await provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat,
+        },
+        target: "voice-note",
+        timeoutMs: 1_000,
+      });
 
-    expect(result.outputFormat).toBe("wav");
-    expect(result.fileExtension).toBe(".wav");
-    expect(result.voiceCompatible).toBe(false);
-  });
+      expect(result.outputFormat).toBe(responseFormat);
+      expect(result.fileExtension).toBe(`.${responseFormat}`);
+      expect(result.voiceCompatible).toBe(voiceCompatible);
+    },
+  );
 
   it("passes extra_body config through to OpenAI-compatible speech requests", async () => {
     const provider = buildOpenAISpeechProvider();

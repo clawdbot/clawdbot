@@ -64,14 +64,8 @@ type HookReplayScope = {
   dispatchScope: Record<string, unknown>;
 };
 
-function resolveMappedHookExternalContentSource(params: {
-  subPath: string;
-  payload: Record<string, unknown>;
-  sessionKey: string;
-}) {
-  const payloadSource =
-    typeof params.payload.source === "string" ? params.payload.source.trim().toLowerCase() : "";
-  if (params.subPath === "gmail" || payloadSource === "gmail") {
+function resolveMappedHookExternalContentSource(params: { subPath: string; sessionKey: string }) {
+  if (params.subPath === "gmail") {
     return "gmail" as const;
   }
   return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
@@ -439,7 +433,6 @@ export function createHooksRequestHandler(
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
             externalContentSource: resolveMappedHookExternalContentSource({
               subPath,
-              payload: payload as Record<string, unknown>,
               sessionKey: sessionKey.value,
             }),
           });

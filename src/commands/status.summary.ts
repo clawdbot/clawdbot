@@ -5,16 +5,26 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import {
+  listActiveDegradedPlugins,
+  toPublicPluginVerificationDiagnostic,
+} from "../plugins/runtime-degraded-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  listActiveDegradedSecretOwners,
+  redactSecretDegradationReason,
+} from "../secrets/runtime-degraded-state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
@@ -203,7 +213,7 @@ function selectRecentSessionCandidates(
 
 function listSessionCandidates(storePath: string, agentId?: string) {
   return (
-    listSessionEntries({
+    listSessionEntriesReadOnly({
       ...(agentId ? { agentId } : {}),
       storePath,
     })
@@ -335,10 +345,7 @@ export async function getStatusSummary(
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-  // Configure maintenance store before reading task summaries so cron-backed tasks are in scope.
-  taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
-  });
+  taskMaintenanceModule.configureTaskRegistryMaintenance();
   const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
@@ -432,8 +439,9 @@ export async function getStatusSummary(
             selectedModelComparisonLabel,
             configuredSessionModelComparisonLabel,
           ) &&
-          hasUserPinnedModelSelection(entry);
-        // Session rows show the live selected model but warn only for user-pinned differences.
+          (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
+        // Session rows show the live selected model and warn for user-pinned
+        // differences as well as runtime fallback selections (#96126).
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
@@ -493,7 +501,11 @@ export async function getStatusSummary(
           model,
           configuredModel: configuredSessionModelLabel,
           selectedModel: selectedModelLabel,
-          modelSelectionReason: modelSelectionDiffers ? "session override" : null,
+          modelSelectionReason: modelSelectionDiffers
+            ? hasUserPinnedModelSelection(entry)
+              ? "session override"
+              : "fallback selected"
+            : null,
           runtime,
           contextTokens,
           flags: buildFlags(entry),
@@ -560,6 +572,24 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    degradedSecretOwners: listActiveDegradedSecretOwners().map(
+      ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
+        const redactedReason: string = redactSecretDegradationReason(reason);
+        return {
+          ownerKind,
+          ownerId,
+          state,
+          degradationState: degradationState ?? "cold",
+          paths: ownerPaths,
+          reason: redactedReason,
+        };
+      },
+    ),
+    degradedPlugins: listActiveDegradedPlugins().map(({ pluginId, state, diagnostic }) => ({
+      pluginId,
+      state,
+      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
+    })),
     tasks,
     taskAudit,
     ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),

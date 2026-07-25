@@ -9,32 +9,30 @@ import {
   readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
   resolveClaudeCliBindingSessionId,
-  resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.claude.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
 
 const ANTHROPIC_PROVIDER = "anthropic";
 
-export {
-  mergeImportedChatHistoryMessages,
-  readClaudeCliFallbackSeed,
-  readClaudeCliSessionMessages,
-  resolveClaudeCliBindingSessionId,
-  resolveClaudeCliSessionFilePath,
-};
+export { readClaudeCliFallbackSeed, resolveClaudeCliBindingSessionId };
 export type { ClaudeCliFallbackSeed };
 
-/** Augments local chat history with bound Claude CLI session messages when applicable. */
-export function augmentChatHistoryWithCliSessionImports(params: {
+type CliSessionHistoryAugmentation = {
+  messages: unknown[];
+  imported: boolean;
+};
+
+/** Resolves chat history plus whether a bound external transcript was actually incorporated. */
+export function resolveChatHistoryWithCliSessionImports(params: {
   entry: SessionEntry | undefined;
   provider?: string;
   localMessages: unknown[];
   homeDir?: string;
-}): unknown[] {
+}): CliSessionHistoryAugmentation {
   const cliSessionBinding = getCliSessionBinding(params.entry, CLAUDE_CLI_PROVIDER);
   const cliSessionId = cliSessionBinding?.sessionId;
   if (!cliSessionId) {
-    return params.localMessages;
+    return { messages: params.localMessages, imported: false };
   }
 
   const normalizedProvider = normalizeProviderId(params.provider ?? "");
@@ -44,7 +42,7 @@ export function augmentChatHistoryWithCliSessionImports(params: {
     normalizedProvider !== ANTHROPIC_PROVIDER &&
     params.localMessages.length > 0
   ) {
-    return params.localMessages;
+    return { messages: params.localMessages, imported: false };
   }
 
   const importedMessages = readClaudeCliSessionMessages({
@@ -53,8 +51,21 @@ export function augmentChatHistoryWithCliSessionImports(params: {
     localSessionId: params.entry?.sessionId,
     reseedReceipt: cliSessionBinding.reseedReceipt,
   });
-  return mergeImportedChatHistoryMessages({
+  if (importedMessages.length === 0) {
+    return { messages: params.localMessages, imported: false };
+  }
+  const messages = mergeImportedChatHistoryMessages({
     localMessages: params.localMessages,
     importedMessages,
   });
+  return messages.length > params.localMessages.length
+    ? { messages, imported: true }
+    : { messages: params.localMessages, imported: false };
+}
+
+/** Augments local chat history with bound Claude CLI session messages when applicable. */
+export function augmentChatHistoryWithCliSessionImports(
+  params: Parameters<typeof resolveChatHistoryWithCliSessionImports>[0],
+): unknown[] {
+  return resolveChatHistoryWithCliSessionImports(params).messages;
 }

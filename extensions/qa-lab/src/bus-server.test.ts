@@ -137,6 +137,103 @@ describe("qa-bus server", () => {
     });
   });
 
+  it("resumes an account after its last acknowledged cursor when the client restarts", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const consumed = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "first", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "consumed before restart",
+    });
+    const firstPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(firstPoll.events.map((event) => event.cursor)).toEqual([1]);
+
+    await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPoll.cursor,
+      timeoutMs: 0,
+    });
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
+    const queuedDuringRestart = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "second", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "queued during restart",
+    });
+
+    const restartedPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    const restartedMessageIds = restartedPoll.events.flatMap((event) =>
+      "message" in event ? [event.message.id] : [],
+    );
+    expect(restartedMessageIds).toEqual([queuedDuringRestart.id]);
+    expect(restartedMessageIds).not.toContain(consumed.id);
+
+    state.reset();
+    const queuedAfterReset = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "third", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "queued after bus reset",
+    });
+    const resetPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(
+      resetPoll.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
+    ).toEqual([queuedAfterReset.id]);
+  });
+
+  it("paginates a burst without advancing past events omitted by the poll limit", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    for (let index = 1; index <= 101; index += 1) {
+      state.addInboundMessage({
+        accountId: "acct-a",
+        conversation: { id: "burst", kind: "direct" },
+        senderId: "acct-a-user",
+        text: `burst event ${index}`,
+      });
+    }
+
+    const firstPage = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(firstPage.events).toHaveLength(100);
+    expect(firstPage.cursor).toBe(100);
+
+    const secondPage = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPage.cursor,
+      timeoutMs: 0,
+    });
+    expect(secondPage.events).toHaveLength(1);
+    expect(secondPage.events[0]?.cursor).toBe(101);
+    expect(secondPage.cursor).toBe(101);
+  });
+
   it("rejects malformed poll numeric fields before long-polling", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
@@ -169,6 +266,19 @@ describe("qa-bus server", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "search limit must be an integer at least 1.",
+    });
+  });
+
+  it("returns a controlled error when a v1 POST body contains malformed JSON", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusRawJson(bus.baseUrl, "/v1/reset", "{");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Malformed JSON body",
     });
   });
 

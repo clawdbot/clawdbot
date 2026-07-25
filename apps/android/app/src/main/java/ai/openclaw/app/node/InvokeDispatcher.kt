@@ -9,11 +9,14 @@ import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Runtime state for SMS search, split so permission prompts are not reported as hard unavailability. */
 internal enum class SmsSearchAvailabilityReason {
@@ -76,6 +79,7 @@ class InvokeDispatcher(
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val callLogHandler: CallLogHandler,
+  private val mobileUiHandler: MobileUiHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
@@ -91,7 +95,10 @@ class InvokeDispatcher(
   private val onCanvasA2uiReset: () -> Unit,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
+  private val mobileUiAvailable: () -> Boolean,
 ) {
+  private val canvasCommandMutex = Mutex()
+
   /** Dispatches one gateway node.invoke command after foreground and availability gates pass. */
   suspend fun handleInvoke(
     command: String,
@@ -112,19 +119,40 @@ class InvokeDispatcher(
     }
     availabilityError(spec.availability)?.let { return it }
 
+    if (command.startsWith(OpenClawCanvasCommand.NamespacePrefix)) {
+      // GatewaySession may deliver invokes concurrently. Canvas presentation, navigation, and
+      // A2UI evaluation share one WebView and must observe command arrival order.
+      return canvasCommandMutex.withLock { dispatchInvoke(command, paramsJson) }
+    }
+    return dispatchInvoke(command, paramsJson)
+  }
+
+  private suspend fun dispatchInvoke(
+    command: String,
+    paramsJson: String?,
+  ): GatewaySession.InvokeResult {
     // Command strings come from OpenClawProtocolConstants; the registry above owns advertised availability.
     return when (command) {
       // Canvas commands
       OpenClawCanvasCommand.Present.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
-        canvas.navigate(url)
+        withCanvasAvailable {
+          check(canvas.showAndAwaitHost()) { "canvas host unavailable" }
+          canvas.navigate(url)
+          GatewaySession.InvokeResult.ok(null)
+        }
+      }
+      OpenClawCanvasCommand.Hide.rawValue -> {
+        canvas.hide()
         GatewaySession.InvokeResult.ok(null)
       }
-      OpenClawCanvasCommand.Hide.rawValue -> GatewaySession.InvokeResult.ok(null)
       OpenClawCanvasCommand.Navigate.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
-        canvas.navigate(url)
-        GatewaySession.InvokeResult.ok(null)
+        withCanvasAvailable {
+          check(canvas.showAndAwaitHost()) { "canvas host unavailable" }
+          canvas.navigate(url)
+          GatewaySession.InvokeResult.ok(null)
+        }
       }
       OpenClawCanvasCommand.Eval.rawValue -> {
         val js =
@@ -232,6 +260,10 @@ class InvokeDispatcher(
 
       // CallLog command
       OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
+
+      // Mobile accessibility commands
+      OpenClawMobileUiCommand.Observe.rawValue -> mobileUiHandler.handleObserve(paramsJson)
+      OpenClawMobileUiCommand.Act.rawValue -> mobileUiHandler.handleAct(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
@@ -352,6 +384,15 @@ class InvokeDispatcher(
           GatewaySession.InvokeResult.error(
             code = "INVALID_REQUEST",
             message = "INVALID_REQUEST: unknown command",
+          )
+        }
+      InvokeCommandAvailability.MobileUiAvailable ->
+        if (mobileUiAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "MOBILE_UI_UNAVAILABLE",
+            message = "MOBILE_UI_UNAVAILABLE: accessibility service is not connected",
           )
         }
     }

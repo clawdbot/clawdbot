@@ -5,7 +5,9 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { CliBackendConfig } from "../config/types.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AgentPlanStep } from "../channels/streaming.js";
+import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
 import type {
@@ -13,7 +15,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
 
-type CliUsage = {
+export type CliUsage = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -34,13 +36,21 @@ type CliProcessDiagnostics = {
   useResume: boolean;
 };
 
+type CliTerminalFailure = {
+  reason: "max_turns";
+  limit?: number;
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
   rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
+  /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
+  diagnosticUsage?: CliUsage;
   errorText?: string;
+  terminalFailure?: CliTerminalFailure;
   diagnostics?: {
     process?: CliProcessDiagnostics;
   };
@@ -54,12 +64,38 @@ export type CliOutput = {
   yielded?: true;
 };
 
+function normalizeCliContextValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\s+/g, " ");
+  return normalized ? truncateUtf16Safe(normalized, 200) : undefined;
+}
+
+export function formatCliOutputError(
+  output: CliOutput,
+  attribution: { runId?: string; sessionId?: string } = {},
+): string {
+  if (output.terminalFailure?.reason !== "max_turns") {
+    return output.errorText || "CLI failed.";
+  }
+
+  const runId = normalizeCliContextValue(attribution.runId);
+  const sessionId = normalizeCliContextValue(attribution.sessionId);
+  const cliSessionId = normalizeCliContextValue(output.sessionId);
+  const context = [
+    runId ? `OpenClaw run: ${runId}.` : undefined,
+    sessionId ? `OpenClaw session: ${sessionId}.` : undefined,
+    cliSessionId ? `Claude session: ${cliSessionId}.` : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+  const limit = output.terminalFailure.limit;
+  return [
+    `Claude CLI stopped after reaching the maximum number of turns${limit ? ` (limit: ${limit})` : ""}.`,
+    ...context,
+    "Tool actions may already have run; verify their effects before retrying.",
+    "Retry with a higher --max-turns value or a narrower task.",
+  ].join(" ");
+}
+
 export const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
-const CLI_STREAM_JSON_MIN_TURN_RAW_CHARS = 1_024;
-const CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_RAW_CHARS = 64 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
-const CLI_STREAM_JSON_MIN_TURN_LINES = 100;
-const CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_LINES = 100_000;
 const CLI_STREAM_JSON_MISSING_RESULT_ERROR = "CLI stream-json output ended without a result event.";
 
 /** Incremental assistant text emitted while parsing a streaming CLI response. */
@@ -87,10 +123,16 @@ export type CliThinkingProgress = {
   progressTokens: number;
 };
 
+export type CliPlanUpdate = {
+  steps: AgentPlanStep[];
+};
+
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
   name: string;
+  // Preserve the producer kind: a server-native start without its result is not a failed local call.
+  kind: "tool_use" | "server_tool_use" | "mcp_tool_use";
   args: Record<string, unknown>;
 };
 
@@ -119,12 +161,22 @@ function isGeminiStreamJsonDialect(params: {
   );
 }
 
+function isClaudeStreamJsonDialect(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+}): boolean {
+  if (params.backend.jsonlDialect) {
+    return params.backend.jsonlDialect === "claude-stream-json";
+  }
+  return isClaudeCliProvider(params.providerId);
+}
+
 function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: string }): boolean {
   return supportsCliJsonlToolEvents(params);
 }
 
 /** Returns whether JSONL output carries correlated provider tool events. */
-export function supportsCliJsonlToolEvents(params: {
+function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
@@ -377,6 +429,57 @@ function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
   return "";
 }
 
+function readClaudeMaxTurnsFailure(
+  parsed: Record<string, unknown>,
+): CliTerminalFailure | undefined {
+  const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
+  const terminalReason =
+    typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
+  if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
+    return undefined;
+  }
+  const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
+  for (const error of errors) {
+    if (typeof error !== "string") {
+      continue;
+    }
+    const match = error.match(/maximum number of turns\s*\((\d+)\)/i);
+    if (match) {
+      const limit = Number.parseInt(match[1] ?? "", 10);
+      if (Number.isSafeInteger(limit) && limit > 0) {
+        return {
+          reason: "max_turns",
+          limit,
+        };
+      }
+    }
+  }
+  return { reason: "max_turns" };
+}
+
+function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(parsed.errors)) {
+    return undefined;
+  }
+  for (const error of parsed.errors) {
+    if (typeof error === "string" && error.trim()) {
+      return error.trim();
+    }
+  }
+  return undefined;
+}
+
+function resolveCliTerminalErrorText(
+  parsed: Record<string, unknown>,
+  terminalFailure: CliTerminalFailure | undefined,
+): string {
+  const explicitErrorText = collectExplicitCliErrorText(parsed);
+  return (
+    ((terminalFailure ? readClaudeMaxTurnsErrorText(parsed) : undefined) ?? explicitErrorText) ||
+    (terminalFailure ? "Reached maximum number of turns." : "")
+  );
+}
+
 function pickCliSessionId(
   parsed: Record<string, unknown>,
   backend: CliBackendConfig,
@@ -406,37 +509,13 @@ function shouldUnwrapNestedCliResultText(params: {
   return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
 }
 
-function normalizePositiveInt(
-  value: number | undefined,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    return fallback;
-  }
-  return Math.min(Math.max(value, min), max);
-}
-
 export function resolveCliStreamJsonOutputLimits(
-  backend: CliBackendConfig,
+  _backend: CliBackendConfig,
 ): CliStreamJsonOutputLimits {
-  const configured = backend.reliability?.outputLimits;
-  const maxTurnRawChars = normalizePositiveInt(
-    configured?.maxTurnRawChars,
-    CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-    CLI_STREAM_JSON_MIN_TURN_RAW_CHARS,
-    CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_RAW_CHARS,
-  );
   return {
-    maxTurnRawChars,
-    maxPendingLineChars: maxTurnRawChars,
-    maxTurnLines: normalizePositiveInt(
-      configured?.maxTurnLines,
-      CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
-      CLI_STREAM_JSON_MIN_TURN_LINES,
-      CLI_STREAM_JSON_MAX_CONFIGURABLE_TURN_LINES,
-    ),
+    maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+    maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
+    maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
   };
 }
 
@@ -462,7 +541,7 @@ function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
 
 /** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
 /** Parses a single JSON payload emitted by a CLI backend. */
-export function parseCliJson(
+function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
   providerId?: string,
@@ -479,6 +558,21 @@ export function parseCliJson(
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
+    const terminalFailure = isClaudeStreamJsonDialect({
+      backend,
+      providerId: providerId ?? "",
+    })
+      ? readClaudeMaxTurnsFailure(parsed)
+      : undefined;
+    if (terminalFailure) {
+      return {
+        text: "",
+        sessionId,
+        usage,
+        errorText: resolveCliTerminalErrorText(parsed, terminalFailure),
+        terminalFailure,
+      };
+    }
     const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
     const shouldClassifyError =
       parsed.is_error === true ||
@@ -529,13 +623,17 @@ function parseClaudeCliJsonlResult(params: {
     return null;
   }
   if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
-    const errorText = collectExplicitCliErrorText(params.parsed);
+    const terminalFailure = isClaudeStreamJsonDialect(params)
+      ? readClaudeMaxTurnsFailure(params.parsed)
+      : undefined;
+    const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
     if (errorText) {
       return {
         text: "",
         sessionId: params.sessionId,
         usage: params.usage,
         errorText,
+        ...(terminalFailure ? { terminalFailure } : {}),
       };
     }
     if (typeof params.parsed.result !== "string") {
@@ -588,6 +686,7 @@ function parseClaudeCliStreamingDelta(params: {
 type PendingToolUse = {
   toolCallId: string;
   name: string;
+  kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
 };
 
@@ -611,6 +710,7 @@ function emitToolStartOnce(
   tracker: ToolUseTracker,
   toolCallId: string,
   name: string,
+  kind: CliToolUseStartDelta["kind"],
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
@@ -620,7 +720,7 @@ function emitToolStartOnce(
   }
   tracker.startedIds.add(toolCallId);
   tracker.nameById.set(toolCallId, name);
-  onToolUseStart?.({ toolCallId, name, args });
+  onToolUseStart?.({ toolCallId, name, kind, args });
 }
 
 function emitToolResultOnce(
@@ -643,7 +743,7 @@ function emitToolResultOnce(
   });
 }
 
-function isClaudeToolUseBlockType(type: unknown): boolean {
+function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
   return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
 }
 
@@ -692,7 +792,12 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
-          tracker.pendingByIndex.set(event.index, { toolCallId, name, inputJsonParts: [] });
+          tracker.pendingByIndex.set(event.index, {
+            toolCallId,
+            name,
+            kind: block.type,
+            inputJsonParts: [],
+          });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
         const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
@@ -726,6 +831,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
           tracker,
           pending.toolCallId,
           pending.name,
+          pending.kind,
           parseToolInputJson(pending.inputJsonParts),
           params.onToolUseStart,
         );
@@ -749,7 +855,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
           continue;
         }
         const args: Record<string, unknown> = isRecord(block.input) ? block.input : {};
-        emitToolStartOnce(tracker, toolCallId, name, args, params.onToolUseStart);
+        emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
         const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
         if (!toolCallId) {
@@ -1014,7 +1120,7 @@ function dispatchGeminiCliStreamingToolEvent(params: {
       return;
     }
     const args = isRecord(params.parsed.parameters) ? params.parsed.parameters : {};
-    emitToolStartOnce(params.tracker, toolCallId, name, args, params.onToolUseStart);
+    emitToolStartOnce(params.tracker, toolCallId, name, "tool_use", args, params.onToolUseStart);
     return;
   }
   if (params.parsed.type === "tool_result") {
@@ -1073,15 +1179,20 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
+  onPlanUpdate?: (update: CliPlanUpdate) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
+  onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
   let pendingClaudeText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let diagnosticUsage: CliUsage | undefined;
   let output: CliOutput | null = null;
   let parseErrorText = "";
   let rawChars = 0;
@@ -1125,11 +1236,25 @@ export function createCliJsonlStreamingParser(params: {
     if (parseErrorText) {
       return;
     }
-    sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
-    if (!sessionId && typeof parsed.thread_id === "string") {
-      sessionId = parsed.thread_id.trim();
+    const parsedSessionId =
+      pickCliSessionId(parsed, params.backend) ??
+      (!sessionId && typeof parsed.thread_id === "string" ? parsed.thread_id.trim() : undefined);
+    if (parsedSessionId && parsedSessionId !== sessionId) {
+      sessionId = parsedSessionId;
+      params.onSessionId?.(parsedSessionId);
     }
     const nextUsage = readCliUsage(parsed);
+    const isClaudeTerminalResult =
+      isClaudeStreamJsonDialect({
+        backend: params.backend,
+        providerId: params.providerId,
+      }) && parsed.type === "result";
+    if (isClaudeTerminalResult && nextUsage && usage) {
+      diagnosticUsage = nextUsage;
+    }
+    if (nextUsage) {
+      params.onUsage?.(nextUsage, isClaudeTerminalResult);
+    }
     const shouldUseUsage =
       !isClaudeStreamJsonResult({
         backend: params.backend,
@@ -1138,6 +1263,9 @@ export function createCliJsonlStreamingParser(params: {
       }) || !usage;
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
+    }
+    if (parsed.type === "assistant" && isRecord(parsed.message)) {
+      params.onAssistantMessage?.(parsed.message);
     }
     const geminiErrorText = isGeminiStreamJsonDialect(params)
       ? readGeminiCliStreamJsonError(parsed)
@@ -1164,11 +1292,53 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
-      output = result;
+      if (result.errorText) {
+        output = result;
+        return;
+      }
+      // Empty terminal result can follow already-streamed text; keep that text.
+      const nextText = (result.text || assistantText.trim() || texts.join("\n").trim()).trim();
+      const previousText = output?.text?.trim() ?? "";
+      // Claude Code may emit an interim result while background agents run, then
+      // a second result after task-notification. Preserve earlier result text
+      // when the later envelope does not already include it.
+      let text = nextText;
+      if (
+        previousText &&
+        nextText &&
+        previousText !== nextText &&
+        !nextText.startsWith(previousText)
+      ) {
+        text = `${previousText}\n${nextText}`;
+      } else if (!nextText) {
+        text = previousText;
+      }
+      output = {
+        ...result,
+        text,
+        ...(diagnosticUsage ? { diagnosticUsage } : {}),
+      };
       return;
     }
 
     const item = isRecord(parsed.item) ? parsed.item : null;
+    if (item?.type === "todo_list" && Array.isArray(item.items)) {
+      const steps = item.items.flatMap((entry) => {
+        if (!isRecord(entry) || typeof entry.text !== "string") {
+          return [];
+        }
+        return [
+          {
+            step: entry.text,
+            // codex exec JSONL exposes only a completed boolean for todo items.
+            status: entry.completed === true ? ("completed" as const) : ("pending" as const),
+          },
+        ];
+      });
+      if (steps.length > 0) {
+        params.onPlanUpdate?.({ steps });
+      }
+    }
     if (item && typeof item.text === "string") {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {
@@ -1335,7 +1505,13 @@ export function createCliJsonlStreamingParser(params: {
     },
     getOutput() {
       if (parseErrorText) {
-        return { text: "", sessionId, usage, errorText: parseErrorText };
+        return {
+          text: "",
+          sessionId,
+          usage,
+          ...(diagnosticUsage ? { diagnosticUsage } : {}),
+          errorText: parseErrorText,
+        };
       }
       if (output) {
         return output;
@@ -1351,7 +1527,7 @@ export function createCliJsonlStreamingParser(params: {
 
 /** Parses complete JSONL CLI output into the final assistant result and metadata. */
 /** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
-export function parseCliJsonl(
+function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
   providerId: string,
@@ -1412,7 +1588,12 @@ export function parseCliJsonl(
         usage,
       });
       if (claudeResult) {
-        return claudeResult;
+        if (claudeResult.text || claudeResult.errorText) {
+          return claudeResult;
+        }
+        // Live sessions reparse the completed JSONL transcript, so preserve
+        // streamed text here as well as in the incremental parser above.
+        return { ...claudeResult, text: streamJsonText.trim() || texts.join("\n").trim() };
       }
 
       const claudeDelta = parseClaudeCliStreamingDelta({
@@ -1506,3 +1687,4 @@ export function extractCliErrorMessage(raw: string): string | null {
 
   return errorText || null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

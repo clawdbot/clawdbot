@@ -4,7 +4,7 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>$(OPENCLAW_APP_BUNDLE_ID).bgrefresh</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).bgrefresh</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -13,7 +13,7 @@
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconName</key>
-	<string>AppIcon</string>
+	<string>$(ASSETCATALOG_COMPILER_APPICON_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -31,7 +31,7 @@
 			<string>ai.openclawfoundation.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>openclaw</string>
+				<string>$(OPENCLAW_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
@@ -67,9 +67,13 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenClaw uses your location when you allow location sharing.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.</string>
+	<string>OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>OpenClaw may use motion data to support device-aware interactions and automations.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>OpenClaw lets your assistant read photos you allow and lets you choose photos to share.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
@@ -79,9 +83,13 @@
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>OpenClawAppGroupIdentifier</key>
-	<string>$(OPENCLAW_APP_GROUP_ID)</string>
+	<string>$(OPENCLAW_ACTIVE_APP_GROUP_ID)</string>
 	<key>OpenClawCanonicalVersion</key>
 	<string>$(OPENCLAW_IOS_VERSION)</string>
+	<key>OpenClawGitCommit</key>
+	<string>$(OPENCLAW_GIT_COMMIT)</string>
+	<key>OpenClawBuildTimestamp</key>
+	<string>$(OPENCLAW_BUILD_TIMESTAMP)</string>
 	<key>OpenClawPushMode</key>
 	<string>$(OPENCLAW_PUSH_MODE)</string>
 	<key>OpenClawPushRelayBaseURL</key>

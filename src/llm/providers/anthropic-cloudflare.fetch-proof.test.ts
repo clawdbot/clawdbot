@@ -50,7 +50,11 @@ describe("Anthropic Cloudflare guard-specific SSRF blocking proof", () => {
     } satisfies Model<"anthropic-messages">;
 
     const { streamAnthropic } = await import("@openclaw/ai/internal/anthropic");
-    const stream = streamAnthropic(blockedModel, context, { apiKey: "sk-ant-test" });
+    const stream = streamAnthropic(blockedModel, context, {
+      apiKey: "sk-ant-test",
+      // Retries only repeat the same deterministic guard rejection.
+      maxRetries: 0,
+    });
     const result = await stream.result();
 
     expect(result.stopReason).toBe("error");

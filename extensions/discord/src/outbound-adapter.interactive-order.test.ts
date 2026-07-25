@@ -67,7 +67,7 @@ describe("discordOutbound shared interactive ordering", () => {
         chunkMode: undefined,
         cfg: {},
         maxLinesPerMessage: undefined,
-        replyTo: undefined,
+        reply: undefined,
         silent: undefined,
         tableMode: undefined,
         textLimit: undefined,

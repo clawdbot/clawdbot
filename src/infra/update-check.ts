@@ -1,17 +1,19 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
-import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+import {
+  fetchNpmPackageTargetStatus,
+  type NpmMetadataCommandRunner,
+} from "./update-check-package-target.js";
 
-export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
+type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
-export type GitUpdateStatus = {
+type GitUpdateStatus = {
   root: string;
   sha: string | null;
   tag: string | null;
@@ -24,7 +26,7 @@ export type GitUpdateStatus = {
   error?: string;
 };
 
-export type DepsStatus = {
+type DepsStatus = {
   manager: PackageManager;
   status: "ok" | "missing" | "stale" | "unknown";
   lockfilePath: string | null;
@@ -32,7 +34,7 @@ export type DepsStatus = {
   reason?: string;
 };
 
-export type RegistryStatus = {
+type RegistryStatus = {
   latestVersion: string | null;
   tag?: string;
   error?: string;
@@ -45,7 +47,7 @@ export type ExtendedStableFailureReason =
   | "exact_package_mismatch"
   | "unsupported_git_channel";
 
-export type ExtendedStableResolutionResult =
+type ExtendedStableResolutionResult =
   | {
       status: "resolved";
       selector: "extended-stable";
@@ -57,16 +59,9 @@ export type ExtendedStableResolutionResult =
       reason: ExtendedStableFailureReason;
     };
 
-export type NpmTagStatus = {
+type NpmTagStatus = {
   tag: string;
   version: string | null;
-  error?: string;
-};
-
-export type NpmPackageTargetStatus = {
-  target: string;
-  version: string | null;
-  nodeEngine: string | null;
   error?: string;
 };
 
@@ -78,53 +73,6 @@ export type UpdateCheckResult = {
   deps?: DepsStatus;
   registry?: RegistryStatus;
 };
-
-type NpmMetadataCommandRunner = (
-  argv: string[],
-  options: {
-    timeoutMs: number;
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-    maxOutputBytes?: number;
-  },
-) => Promise<{
-  stdout: string;
-  stderr: string;
-  code: number | null;
-}>;
-
-function toOptionalTrimmedString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function parseNpmPackageTargetMetadata(raw: string): {
-  version: string | null;
-  nodeEngine: string | null;
-} {
-  const parsed = JSON.parse(raw.trim()) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { version: null, nodeEngine: null };
-  }
-  const rec = parsed as Record<string, unknown>;
-  const engines = rec.engines && typeof rec.engines === "object" ? rec.engines : null;
-  const nodeEngine =
-    toOptionalTrimmedString(rec["engines.node"]) ??
-    (engines ? toOptionalTrimmedString((engines as Record<string, unknown>).node) : null);
-  return {
-    version: toOptionalTrimmedString(rec.version),
-    nodeEngine,
-  };
-}
-
-function formatNpmViewError(res: { stdout: string; stderr: string }): string {
-  const raw = (res.stderr.trim() || res.stdout.trim()).split("\n").slice(-3).join("\n");
-  return raw ? `npm view failed: ${raw}` : "npm view failed";
-}
-
-function packageTargetSpec(params: { target: string; spec?: string }): string {
-  const spec = params.spec?.trim();
-  return spec || `openclaw@${params.target.trim() || "latest"}`;
-}
 
 const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
 const PUBLIC_NPM_PACKAGE_NAME = "openclaw";
@@ -161,61 +109,6 @@ function resolveExtendedStableRegistryTarget(params: {
   };
 }
 
-function npmRegistryTargetUrl(params: {
-  registryUrl: string;
-  packageName: string;
-  target: string;
-}): string {
-  const baseUrl = params.registryUrl.endsWith("/") ? params.registryUrl : `${params.registryUrl}/`;
-  return new URL(
-    `${encodeURIComponent(params.packageName)}/${encodeURIComponent(params.target)}`,
-    baseUrl,
-  ).toString();
-}
-
-async function fetchNpmPackageTargetStatusFromRegistry(params: {
-  target: string;
-  timeoutMs: number;
-  registryUrl?: string;
-  packageName?: string;
-}): Promise<NpmPackageTargetStatus> {
-  let res: Response | undefined;
-  try {
-    res = await fetchWithTimeout(
-      npmRegistryTargetUrl({
-        registryUrl: params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL,
-        packageName: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
-        target: params.target,
-      }),
-      {},
-      Math.max(250, params.timeoutMs),
-    );
-    if (!res.ok) {
-      return {
-        target: params.target,
-        version: null,
-        nodeEngine: null,
-        error: `HTTP ${res.status}`,
-      };
-    }
-    const json = await readProviderJsonResponse<{
-      version?: unknown;
-      engines?: { node?: unknown };
-    }>(res, "npm package target status");
-    return {
-      target: params.target,
-      version: toOptionalTrimmedString(json.version),
-      nodeEngine: toOptionalTrimmedString(json.engines?.node),
-    };
-  } catch (err) {
-    return { target: params.target, version: null, nodeEngine: null, error: String(err) };
-  } finally {
-    if (res?.bodyUsed !== true) {
-      await res?.body?.cancel().catch(() => undefined);
-    }
-  }
-}
-
 /** Resolves the extended-stable selector and verifies its exact package manifest. */
 export async function resolveExtendedStablePackage(params: {
   installKind: "git" | "package" | "unknown";
@@ -229,7 +122,7 @@ export async function resolveExtendedStablePackage(params: {
 
   const timeoutMs = params.timeoutMs ?? 3500;
   const registryTarget = resolveExtendedStableRegistryTarget(params);
-  const selector = await fetchNpmPackageTargetStatusFromRegistry({
+  const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
     timeoutMs,
     ...registryTarget,
@@ -241,7 +134,7 @@ export async function resolveExtendedStablePackage(params: {
     };
   }
 
-  const exact = await fetchNpmPackageTargetStatusFromRegistry({
+  const exact = await fetchNpmPackageTargetStatus({
     target: selector.version,
     timeoutMs,
     ...registryTarget,
@@ -297,7 +190,7 @@ async function detectGitRoot(root: string): Promise<string | null> {
   return top ? path.resolve(top) : null;
 }
 
-export async function checkGitUpdateStatus(params: {
+async function checkGitUpdateStatus(params: {
   root: string;
   timeoutMs?: number;
   fetch?: boolean;
@@ -356,10 +249,28 @@ export async function checkGitUpdateStatus(params: {
         .catch(() => false)
     : null;
 
-  const counts =
-    upstream && upstream.length > 0
+  // Freeze the post-fetch upstream for both graph queries. Resolve via @{upstream} rather than
+  // its display name so dashed remotes stay operands on older Git versions. Three-dot rev-list
+  // still counts disconnected or truncated histories, so require a visible common ancestor.
+  const upstreamCommitRes =
+    upstream && sha
       ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-list", "--left-right", "--count", `HEAD...${upstream}`],
+          ["git", "-C", root, "rev-parse", "--verify", "@{upstream}^{commit}"],
+          { timeoutMs },
+        ).catch(() => null)
+      : null;
+  const upstreamCommit =
+    upstreamCommitRes?.code === 0 ? upstreamCommitRes.stdout.trim() || null : null;
+  const mergeBase =
+    sha && upstreamCommit
+      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", sha, upstreamCommit], {
+          timeoutMs,
+        }).catch(() => null)
+      : null;
+  const counts =
+    sha && upstreamCommit && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
+      ? await runCommandWithTimeout(
+          ["git", "-C", root, "rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`],
           { timeoutMs },
         ).catch(() => null)
       : null;
@@ -429,7 +340,7 @@ async function resolveDepsMarker(params: { root: string; manager: PackageManager
   return { lockfilePath: null, markerPath: null };
 }
 
-export async function checkDepsStatus(params: {
+async function checkDepsStatus(params: {
   root: string;
   manager: PackageManager;
 }): Promise<DepsStatus> {
@@ -497,7 +408,7 @@ export async function checkDepsStatus(params: {
   };
 }
 
-export async function fetchNpmLatestVersion(params?: {
+async function fetchNpmLatestVersion(params?: {
   timeoutMs?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -516,7 +427,7 @@ export async function fetchNpmLatestVersion(params?: {
   };
 }
 
-export async function fetchNpmRegistryVersionForChannel(params: {
+async function fetchNpmRegistryVersionForChannel(params: {
   channel: UpdateChannel;
   timeoutMs?: number;
   cwd?: string;
@@ -535,54 +446,6 @@ export async function fetchNpmRegistryVersionForChannel(params: {
     tag: res.tag,
     ...(res.reason ? { error: res.reason, reason: res.reason } : {}),
   };
-}
-
-export async function fetchNpmPackageTargetStatus(params: {
-  target: string;
-  timeoutMs?: number;
-  spec?: string;
-  command?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runCommand?: NpmMetadataCommandRunner;
-}): Promise<NpmPackageTargetStatus> {
-  const timeoutMs = params.timeoutMs ?? 3500;
-  const target = params.target;
-  if (!params.command && !params.runCommand) {
-    return await fetchNpmPackageTargetStatusFromRegistry({ target, timeoutMs });
-  }
-  const runCommand = params.runCommand ?? runCommandWithTimeout;
-  try {
-    const res = await runCommand(
-      [
-        params.command ?? "npm",
-        "view",
-        packageTargetSpec({ target, spec: params.spec }),
-        "version",
-        "engines.node",
-        "--json",
-        "--global",
-      ],
-      {
-        timeoutMs: Math.max(250, timeoutMs),
-        cwd: params.cwd,
-        env: params.env,
-        maxOutputBytes: 1024 * 1024,
-      },
-    );
-    if (res.code !== 0) {
-      return {
-        target,
-        version: null,
-        nodeEngine: null,
-        error: formatNpmViewError(res),
-      };
-    }
-    const { version, nodeEngine } = parseNpmPackageTargetMetadata(res.stdout);
-    return { target, version, nodeEngine };
-  } catch (err) {
-    return { target, version: null, nodeEngine: null, error: String(err) };
-  }
 }
 
 export async function fetchNpmTagVersion(params: {
@@ -672,10 +535,9 @@ export function compareSemverStrings(a: string | null, b: string | null): number
       return openClawReleaseCmp;
     }
   }
-  return compareComparableSemver(
-    parseComparableSemver(a, { normalizeLegacyDotBeta: true }),
-    parseComparableSemver(b, { normalizeLegacyDotBeta: true }),
-  );
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 export async function checkUpdateStatus(params: {

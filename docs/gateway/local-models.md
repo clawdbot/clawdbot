@@ -184,6 +184,8 @@ Behavior notes for local/proxied `/v1` backends:
 - Native-OpenAI-only request shaping does not apply: no `service_tier`, no Responses `store`, no OpenAI reasoning-compat payload shaping, no prompt-cache hints.
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) are not injected on custom proxy URLs.
 
+Compat declarations are only for the custom endpoint described by this provider row. Catalog-known routes use provider-owned capabilities instead; see the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations).
+
 Compat overrides for stricter OpenAI-compatible backends:
 
 - **String-only content**: some servers accept only string `messages[].content`, not structured content-part arrays. Set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
@@ -263,7 +265,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down: confir
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts: set `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message` - unless a run must keep direct `message` delivery semantics) and defaults larger tool catalogs behind structured Tool Search controls. See [Experimental Features -> Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for details and how to confirm it's on.
+3. **Try lean mode** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts: set `agents.defaults.experimental.localModelLean: true`. It drops heavyweight browser, cron, message, media-generation, voice, and PDF tools unless explicitly required, and defaults larger tool catalogs behind structured Tool Search controls while keeping `exec` directly visible. See [Experimental Features -> Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for details and how to confirm it's on.
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 

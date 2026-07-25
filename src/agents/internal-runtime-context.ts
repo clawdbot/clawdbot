@@ -3,6 +3,8 @@
  * Protects runtime-generated prompt blocks from user text and removes old
  * context formats before replaying or comparing messages.
  */
+import { escapeRegExp } from "../shared/regexp.js";
+
 /** Opening delimiter for protected OpenClaw runtime context blocks. */
 export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
 /** Closing delimiter for protected OpenClaw runtime context blocks. */
@@ -35,10 +37,6 @@ export function escapeInternalRuntimeContextDelimiters(value: string): string {
   return value
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function findDelimitedTokenIndex(text: string, token: string, from: number): number {
@@ -308,4 +306,46 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
     }
     return currentRuntimeContextIndexes.has(index);
   });
+}
+
+/**
+ * Moves current-turn runtime-context carrier messages to the absolute tail of
+ * the request (after the active user turn and any tool-call scaffolding).
+ *
+ * Prompt-cache rationale: a per-turn carrier that is stripped on replay makes
+ * the next request diverge at the carrier's slot. Placed BEFORE the active user
+ * turn, that slot precedes everything that gets reused, so the whole tail
+ * (user turn + tool loop) re-bills every turn. Placed at the ABSOLUTE tail, the
+ * divergence lands exactly where the next turn's new bytes (the assistant reply)
+ * begin anyway, so the request is an append-only prefix-extension through the
+ * active user turn — only the trailing carrier is ever re-billed.
+ *
+ * Runs after {@link stripHistoricalRuntimeContextCustomMessages}, so only the
+ * current-turn carrier(s) remain. When there is no active user turn to anchor
+ * after, messages are returned unchanged.
+ */
+export function relocateCurrentRuntimeContextCarrierToTail<T>(messages: T[]): T[] {
+  const lastIndex = messages.length - 1;
+  if (lastIndex < 0 || !messages.some(isOpenClawRuntimeContextCustomMessage)) {
+    return messages;
+  }
+  // Already tail-placed (a contiguous carrier run ends the array): no-op so the
+  // serialized bytes stay stable across re-attempts of the same request.
+  let firstNonCarrierFromEnd = lastIndex;
+  while (
+    firstNonCarrierFromEnd >= 0 &&
+    isOpenClawRuntimeContextCustomMessage(messages[firstNonCarrierFromEnd])
+  ) {
+    firstNonCarrierFromEnd -= 1;
+  }
+  const rest = messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
+  // No active user turn to anchor after — leave placement to the strip pass.
+  if (!rest.some(isUserMessage)) {
+    return messages;
+  }
+  if (firstNonCarrierFromEnd === rest.length - 1) {
+    return messages;
+  }
+  const carriers = messages.filter(isOpenClawRuntimeContextCustomMessage);
+  return [...rest, ...carriers];
 }

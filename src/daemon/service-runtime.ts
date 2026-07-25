@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
-export type GatewayServiceSystemdRuntime = {
+type GatewayServiceSystemdRuntime = {
   unit?: string;
   killMode?: string;
   tasksCurrent?: number;
@@ -32,8 +32,8 @@ export type GatewayServiceRuntime = {
   systemd?: GatewayServiceSystemdRuntime;
 };
 
-export const SYSTEMD_TASKS_CURRENT_WARNING_THRESHOLD = 200;
-export const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;
+const SYSTEMD_TASKS_CURRENT_WARNING_THRESHOLD = 200;
+const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;
 
 // EX_CONFIG (78) from sysexits.h. The generated systemd unit pins
 // RestartPreventExitStatus=78 (see systemd-unit.ts) so the gateway's
@@ -43,7 +43,7 @@ export const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;
 // is stale from earlier crashes and must not drive start-limit detection.
 const SYSTEMD_NO_RESTART_EXIT_STATUS = 78;
 
-export function isRiskySystemdKillMode(value: string | undefined): boolean {
+function isRiskySystemdKillMode(value: string | undefined): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
   return normalized === "process" || normalized === "none";
 }

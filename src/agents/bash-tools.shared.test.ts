@@ -3,7 +3,7 @@
  * Covers strict env parsing and compact session labels.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deriveSessionName, readEnvInt } from "./bash-tools.shared.js";
+import { chunkString, deriveSessionName, readEnvInt } from "./bash-tools.shared.js";
 
 describe("readEnvInt", () => {
   afterEach(() => {
@@ -68,5 +68,24 @@ describe("deriveSessionName", () => {
       expect(typeof label).toBe("string");
       expect(elapsedMs).toBeLessThan(100);
     }
+  });
+});
+
+describe("chunkString", () => {
+  it("preserves surrogate pairs at chunk boundaries", () => {
+    const input = "a".repeat(8191) + "🚀b";
+    expect(chunkString(input, 8192)).toEqual(["a".repeat(8191), "🚀b"]);
+  });
+
+  it("returns single chunk for input smaller than limit", () => {
+    expect(chunkString("hello", 8192)).toEqual(["hello"]);
+  });
+
+  it("emits a whole code point when the limit is one UTF-16 unit", () => {
+    expect(chunkString("😀a", 1)).toEqual(["😀", "a"]);
+  });
+
+  it("preserves every code point across mixed chunk boundaries", () => {
+    expect(chunkString("aa🚀bb", 2)).toEqual(["aa", "🚀", "bb"]);
   });
 });

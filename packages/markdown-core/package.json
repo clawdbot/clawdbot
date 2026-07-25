@@ -56,7 +56,9 @@
     }
   },
   "dependencies": {
+    "@openclaw/normalization-core": "workspace:*",
     "markdown-it": "14.3.0",
+    "markdown-it-cjk-friendly": "2.0.2",
     "yaml": "2.9.0"
   }
 }

@@ -1,4 +1,5 @@
 // Google provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
@@ -22,12 +23,12 @@ import {
   GOOGLE_VIDEO_MAX_DURATION_SECONDS,
   GOOGLE_VIDEO_MIN_DURATION_SECONDS,
 } from "./generation-provider-metadata.js";
+import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 120;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
@@ -35,14 +36,6 @@ const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
   return configured ? resolveGoogleGenerativeAiApiOrigin(configured) : undefined;
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function assertGeneratedVideoBufferWithinLimit(buffer: Buffer, maxBytes: number): void {
@@ -465,7 +458,15 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const restBaseUrl = resolveGoogleVideoRestBaseUrl(configuredBaseUrl);
-      const authHeaders = parseGeminiAuth(apiKey).headers;
+      const authHeaders = {
+        ...parseGeminiAuth(apiKey).headers,
+        ...resolveGoogleApiClientHeaders({
+          baseUrl: restBaseUrl,
+          api: "google-generative-ai",
+          capability: "video",
+          transport: "http",
+        }),
+      };
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
       const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });
@@ -556,7 +557,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       if (generatedVideos.length === 0) {
         throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
       }
-      const maxVideoBytes = resolveGeneratedVideoMaxBytes(req);
+      const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
       const videos = await Promise.all(
         generatedVideos.map(async (entry, index) => {
           const inline = entry.video as

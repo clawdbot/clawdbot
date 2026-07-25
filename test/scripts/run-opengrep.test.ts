@@ -80,7 +80,10 @@ describe("run-opengrep.sh", () => {
     git(repo, "add", ".");
     git(repo, "commit", "-qm", "initial");
 
-    fs.appendFileSync(path.join(repo, ".github/actions/ensure-base-commit/action.yml"), "# changed\n");
+    fs.appendFileSync(
+      path.join(repo, ".github/actions/ensure-base-commit/action.yml"),
+      "# changed\n",
+    );
     const argsPath = path.join(repo, "opengrep-args.txt");
     const binDir = path.join(repo, "bin");
     fs.mkdirSync(binDir);
@@ -110,7 +113,7 @@ describe("run-opengrep.sh", () => {
     );
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.22.0");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.25.0");
     expect(sarif.runs[0].results).toEqual([]);
     expect(fs.existsSync(argsPath)).toBe(false);
   });

@@ -1,9 +1,10 @@
 // Bounded child-process output buffer for voice-call tunnel/process diagnostics.
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_MAX_OUTPUT_CHARS = 16_384;
 
 /** Captured child output plus truncation flag. */
-export type BoundedChildOutput = {
+type BoundedChildOutput = {
   text: string;
   truncated: boolean;
 };
@@ -24,7 +25,7 @@ export function appendBoundedChildOutput(
     return { text: appended, truncated: current.truncated };
   }
   return {
-    text: appended.slice(-maxChars),
+    text: sliceUtf16Safe(appended, -maxChars),
     truncated: true,
   };
 }

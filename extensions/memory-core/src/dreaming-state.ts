@@ -6,7 +6,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 
-export const MEMORY_CORE_PLUGIN_ID = "memory-core";
+const MEMORY_CORE_PLUGIN_ID = "memory-core";
 export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
 export const DREAMING_SESSION_INGESTION_FILES_NAMESPACE = "dreaming-session-ingestion-files";
 export const DREAMING_SESSION_INGESTION_SEEN_NAMESPACE = "dreaming-session-ingestion-seen";
@@ -15,13 +15,11 @@ export const SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "short-term-phase-signals";
 export const SHORT_TERM_META_NAMESPACE = "short-term-meta";
 export const SHORT_TERM_LOCK_NAMESPACE = "short-term-locks";
 
-export const DREAMING_WORKSPACE_STATE_MAX_ENTRIES = 50_000;
+const DREAMING_WORKSPACE_STATE_MAX_ENTRIES = 50_000;
 export const SHORT_TERM_LOCK_MAX_ENTRIES = 4_096;
 export const SESSION_SEEN_HASHES_PER_CHUNK = 512;
 
-export type MemoryCoreOpenKeyedStore = <T>(
-  options: OpenKeyedStoreOptions,
-) => PluginStateKeyedStore<T>;
+type MemoryCoreOpenKeyedStore = <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
 
 type WorkspaceValue<T> = {
   version: 1;
@@ -31,7 +29,7 @@ type WorkspaceValue<T> = {
   value: T;
 };
 
-export type MemoryCoreWorkspaceEntry<T> = { key: string; value: T };
+type MemoryCoreWorkspaceEntry<T> = { key: string; value: T };
 
 type MemoryCoreWorkspaceParams = {
   namespace: string;
@@ -49,21 +47,6 @@ let configuredOpenKeyedStore: MemoryCoreOpenKeyedStore | undefined;
 
 export function configureMemoryCoreDreamingState(openKeyedStore: MemoryCoreOpenKeyedStore): void {
   configuredOpenKeyedStore = openKeyedStore;
-}
-
-export async function configureMemoryCoreDreamingStateForTests(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-  const { createPluginStateKeyedStoreForTests } =
-    await import("openclaw/plugin-sdk/plugin-state-test-runtime");
-  const testEnv = { ...env };
-  configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>(MEMORY_CORE_PLUGIN_ID, { ...options, env: testEnv }),
-  );
-}
-
-export function resetMemoryCoreDreamingStateForTests(): void {
-  configuredOpenKeyedStore = undefined;
 }
 
 export function openMemoryCoreStateStore<T>(

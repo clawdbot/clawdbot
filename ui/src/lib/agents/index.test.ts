@@ -1,9 +1,51 @@
 // Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
-import { loadAgents, loadToolsCatalog, loadToolsEffective, setDefaultAgent } from "./index.ts";
-import type { AgentsConfigCapability, AgentsState } from "./index.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import {
+  createAgentCapability,
+  loadToolsCatalog,
+  loadToolsEffective,
+  setDefaultAgent,
+} from "./index.ts";
+import type { AgentsState } from "./index.ts";
+
+type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function createGatewayHarness(client: GatewayBrowserClient) {
+  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
+    client,
+    phase: "connected",
+  };
+  const listeners = new Set<(next: typeof snapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    publish(connected: boolean) {
+      snapshot = { client, phase: connected ? "connected" : "reconnecting" };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}
 
 function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -12,6 +54,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
       request,
     } as unknown as AgentsState["client"],
     connected: true,
+    requestGeneration: 0,
     agentsLoading: false,
     agentsError: null,
     agentsList: null,
@@ -24,6 +67,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
         loading: false,
         error: null,
         deletedSessions: [],
+        groups: [],
       },
     },
     toolsCatalogLoading: false,
@@ -85,59 +129,102 @@ function createSaveState(): {
   };
 }
 
-describe("loadAgents", () => {
-  it("preserves selected agent when it still exists in the list", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = "kimi";
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
+describe("createAgentCapability lifecycle", () => {
+  it("starts a fresh list request after a same-client reconnect", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
 
-    await loadAgents(state);
+    const staleLoad = agents.refreshList();
+    harness.publish(false);
+    harness.publish(true);
+    const currentLoad = agents.refreshList();
 
-    expect(state.agentsSelectedId).toBe("kimi");
+    first.resolve({ defaultId: "old", agents: [{ id: "old" }] });
+    await staleLoad;
+    expect(agents.state.agentsList).toBeNull();
+    expect(agents.state.agentsLoading).toBe(true);
+
+    const current = { defaultId: "main", agents: [{ id: "main" }] };
+    second.resolve(current);
+    await currentLoad;
+    expect(agents.state.agentsList).toEqual(current);
+    expect(agents.state.agentsLoading).toBe(false);
+    agents.dispose();
   });
 
-  it("resets to default when selected agent is removed", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = "removed-agent";
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
+  it("isolates file requests across a same-client reconnect", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
 
-    await loadAgents(state);
+    const staleLoad = agents.refreshFiles("main");
+    harness.publish(false);
+    harness.publish(true);
+    const currentLoad = agents.refreshFiles("main");
 
-    expect(state.agentsSelectedId).toBe("main");
+    first.resolve({ agentId: "main", workspace: "old", files: [] });
+    await staleLoad;
+    expect(agents.files("main").list).toBeNull();
+    expect(agents.files("main").loading).toBe(true);
+
+    const current = { agentId: "main", workspace: "new", files: [] };
+    second.resolve(current);
+    await currentLoad;
+    expect(agents.files("main").list).toEqual(current);
+    expect(agents.files("main").loading).toBe(false);
+    agents.dispose();
   });
 
-  it("sets default when no agent is selected", async () => {
-    const { state, request } = createState();
-    state.agentsSelectedId = null;
-    request.mockResolvedValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "main", name: "main" },
-        { id: "kimi", name: "kimi" },
-      ],
-    });
+  it("invalidates cached and in-flight file lists for changed agents", async () => {
+    const pending = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce({ agentId: "main", workspace: "old", files: [] })
+      .mockReturnValueOnce(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
 
-    await loadAgents(state);
+    await agents.refreshFiles("main");
+    expect(agents.files("main").list?.workspace).toBe("old");
 
-    expect(state.agentsSelectedId).toBe("main");
+    const staleLoad = agents.refreshFiles("main");
+    agents.invalidateFiles(["main"]);
+    pending.resolve({ agentId: "main", workspace: "stale", files: [] });
+    await staleLoad;
+
+    expect(agents.files("main").list).toBeNull();
+    expect(agents.files("main").loading).toBe(false);
+    agents.dispose();
+  });
+
+  it("does not commit a list request after disposal", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<TestRequest>().mockReturnValue(pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+
+    const load = agents.refreshList();
+    agents.dispose();
+    pending.resolve({ defaultId: "stale", agents: [{ id: "stale" }] });
+    await load;
+
+    expect(agents.state.agentsList).toBeNull();
+    expect(agents.state.agentsLoading).toBe(false);
   });
 });
 
@@ -201,6 +288,39 @@ describe("loadToolsCatalog", () => {
 
     expect(state.toolsCatalogResult).toBeNull();
     expect(state.toolsCatalogError).toBeNull();
+    expect(state.toolsCatalogLoading).toBe(false);
+  });
+
+  it("keeps a replacement-client catalog load isolated from the old request", async () => {
+    const { state, request: oldRequest } = createState();
+    let resolveOld!: (value: unknown) => void;
+    let resolveNext!: (value: unknown) => void;
+    oldRequest.mockReturnValue(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    );
+    const nextRequest = vi.fn<TestRequest>().mockReturnValue(
+      new Promise((resolve) => {
+        resolveNext = resolve;
+      }),
+    );
+
+    const oldLoad = loadToolsCatalog(state, "main");
+    state.client = { request: nextRequest } as unknown as AgentsState["client"];
+    state.requestGeneration += 1;
+    state.toolsCatalogLoading = false;
+    state.toolsCatalogLoadingAgentId = null;
+    const nextLoad = loadToolsCatalog(state, "main");
+
+    resolveOld({ agentId: "main", profiles: [], groups: [{ id: "old" }] });
+    await oldLoad;
+    expect(state.toolsCatalogResult).toBeNull();
+    expect(state.toolsCatalogLoading).toBe(true);
+
+    resolveNext({ agentId: "main", profiles: [], groups: [{ id: "new" }] });
+    await nextLoad;
+    expect(state.toolsCatalogResult?.groups).toEqual([{ id: "new" }]);
     expect(state.toolsCatalogLoading).toBe(false);
   });
 });
@@ -276,6 +396,39 @@ describe("loadToolsEffective", () => {
     expect(state.toolsEffectiveResult).toBeNull();
     expect(state.toolsEffectiveResultKey).toBeNull();
     expect(state.toolsEffectiveError).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("keeps a replacement-client effective-tools load isolated from the old request", async () => {
+    const { state, request: oldRequest } = createState();
+    let resolveOld!: (value: unknown) => void;
+    let resolveNext!: (value: unknown) => void;
+    oldRequest.mockReturnValue(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    );
+    const nextRequest = vi.fn<TestRequest>().mockReturnValue(
+      new Promise((resolve) => {
+        resolveNext = resolve;
+      }),
+    );
+
+    const oldLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+    state.client = { request: nextRequest } as unknown as AgentsState["client"];
+    state.requestGeneration += 1;
+    state.toolsEffectiveLoading = false;
+    state.toolsEffectiveLoadingKey = null;
+    const nextLoad = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    resolveOld({ agentId: "main", profile: "old", groups: [] });
+    await oldLoad;
+    expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(true);
+
+    resolveNext({ agentId: "main", profile: "new", groups: [] });
+    await nextLoad;
+    expect(state.toolsEffectiveResult?.profile).toBe("new");
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 

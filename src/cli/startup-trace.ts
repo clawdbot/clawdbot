@@ -2,7 +2,7 @@
 import process from "node:process";
 import { isTruthyEnvValue } from "../infra/env.js";
 
-export type GatewayStartupTraceSource = "entry" | "cli.main";
+type GatewayStartupTraceSource = "entry" | "cli.main";
 
 export function createGatewayStartupTrace(
   argv: string[],

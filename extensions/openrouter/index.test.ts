@@ -36,35 +36,6 @@ import {
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
-function createOpenRouterDoneStream(params: { responseId: string; totalCost: number }) {
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
-    stream.push({
-      type: "done",
-      reason: "stop",
-      message: {
-        role: "assistant",
-        api: "openai-completions",
-        provider: "openrouter",
-        model: "openrouter/auto",
-        content: [{ type: "text", text: "ok" }],
-        responseId: params.responseId,
-        stopReason: "stop",
-        timestamp: Date.now(),
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: params.totalCost },
-        },
-      } as never,
-    });
-  });
-  return stream;
-}
-
 function createOpenRouterDoneStreamWithoutGeneration() {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
@@ -85,36 +56,10 @@ function createOpenRouterDoneStreamWithoutGeneration() {
   return stream;
 }
 
-function createOpenRouterAbortedStream() {
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
-    stream.push({
-      type: "error",
-      reason: "aborted",
-      error: {
-        role: "assistant",
-        api: "openai-completions",
-        provider: "openrouter",
-        model: "openrouter/auto",
-        content: [],
-        responseId: "gen-aborted",
-        stopReason: "aborted",
-        timestamp: Date.now(),
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
-        },
-      } as never,
-    });
-  });
-  return stream;
-}
-
 type OpenRouterManifest = {
+  modelCatalog?: {
+    discovery?: Record<string, string>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -134,6 +79,10 @@ function readManifest(): OpenRouterManifest {
 }
 
 describe("openrouter provider hooks", () => {
+  it("declares runtime text catalog discovery", () => {
+    expect(readManifest().modelCatalog?.discovery).toEqual({ openrouter: "runtime" });
+  });
+
   it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const {
       providers,
@@ -156,6 +105,10 @@ describe("openrouter provider hooks", () => {
     });
 
     expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
+    expect(providers[0]).toMatchObject({
+      resolveUsageAuth: expect.any(Function),
+      fetchUsageSnapshot: expect.any(Function),
+    });
     expect(speechProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(imageProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
@@ -333,6 +286,40 @@ describe("openrouter provider hooks", () => {
       "Analysis models: google/gemini-3.5-flash, moonshotai/kimi-k2.6, deepseek/deepseek-v4-pro.",
     );
     expect(contribution?.dynamicSuffix).toContain("Final Fusion model: google/gemini-3.5-flash.");
+  });
+
+  it("keeps bounded Fusion model IDs on valid UTF-16 boundaries", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const boundaryModelId = `${"a".repeat(255)}😀tail`;
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: [boundaryModelId],
+                        model: boundaryModelId,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution?.dynamicSuffix).toContain(`Analysis models: ${"a".repeat(255)}.`);
+    expect(contribution?.dynamicSuffix).toContain(`Final Fusion model: ${"a".repeat(255)}.`);
   });
 
   it("describes Fusion config from the canonical OpenRouter model key", async () => {
@@ -579,12 +566,6 @@ describe("openrouter provider hooks", () => {
       } as never)?.defaultLevel,
     ).toBe("high");
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-pro",
-      } as never),
-    ).toBe(true);
-    expect(
       provider.resolveThinkingProfile?.({
         provider: "openrouter",
         modelId: "openai/gpt-5.4",
@@ -802,172 +783,6 @@ describe("openrouter provider hooks", () => {
     expect(headers.get("authorization")).toBe("Bearer or-test-key");
     expect(headers.get("http-referer")).toBe("https://openclaw.ai");
     expect(headers.get("x-openrouter-title")).toBe("OpenClaw");
-  });
-
-  it("reconciles OpenRouter streamed usage with generation metadata cost", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const fetchMock = vi.fn(async (url: string) => {
-      expect(url).toBe("https://openrouter.ai/api/v1/generation?id=gen-cost-1");
-      return new Response(JSON.stringify({ data: { total_cost: 0.0042 } }), {
-        headers: { "Content-Type": "application/json" },
-        status: 200,
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const baseStreamFn = vi.fn(() =>
-      createOpenRouterDoneStream({ responseId: "gen-cost-1", totalCost: 0.001 }),
-    );
-
-    try {
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "openrouter",
-        modelId: "openrouter/auto",
-        streamFn: baseStreamFn,
-      } as never);
-      if (!wrapped) {
-        throw new Error("expected OpenRouter wrapper");
-      }
-      const stream = await wrapped(
-        {
-          provider: "openrouter",
-          api: "openai-completions",
-          id: "openrouter/auto",
-          baseUrl: "https://openrouter.ai/api/v1",
-          compat: {},
-        } as never,
-        { messages: [] } as never,
-        { apiKey: "or-test-key" } as never,
-      );
-      const message = await stream.result();
-
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(message.usage.cost.total).toBe(0.0042);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("falls back to streamed cost estimate when generation metadata response is oversized", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    // Body exceeds the 16 MiB cap; readProviderJsonResponse must reject it and
-    // applyOpenRouterBilledCost must fall back to the streamed estimate.
-    const oversizedBody = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1).fill(0x78));
-        controller.close();
-      },
-    });
-    const fetchMock = vi.fn(async (url: string) => {
-      expect(url).toBe("https://openrouter.ai/api/v1/generation?id=gen-oversized-1");
-      return new Response(oversizedBody, {
-        headers: { "Content-Type": "application/json" },
-        status: 200,
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const baseStreamFn = vi.fn(() =>
-      createOpenRouterDoneStream({ responseId: "gen-oversized-1", totalCost: 0.001 }),
-    );
-
-    try {
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "openrouter",
-        modelId: "openrouter/auto",
-        streamFn: baseStreamFn,
-      } as never);
-      if (!wrapped) {
-        throw new Error("expected OpenRouter wrapper");
-      }
-      const stream = await wrapped(
-        {
-          provider: "openrouter",
-          api: "openai-completions",
-          id: "openrouter/auto",
-          baseUrl: "https://openrouter.ai/api/v1",
-          compat: {},
-        } as never,
-        { messages: [] } as never,
-        { apiKey: "or-test-key" } as never,
-      );
-      const message = await stream.result();
-
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(message.usage.cost.total).toBe(0.001);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("does not fetch generation metadata for custom OpenRouter-compatible routes", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const baseStreamFn = vi.fn(() =>
-      createOpenRouterDoneStream({ responseId: "gen-custom-route", totalCost: 0.001 }),
-    );
-
-    try {
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "openrouter",
-        modelId: "openrouter/auto",
-        streamFn: baseStreamFn,
-      } as never);
-      if (!wrapped) {
-        throw new Error("expected OpenRouter wrapper");
-      }
-      const stream = await wrapped(
-        {
-          provider: "openrouter",
-          api: "openai-completions",
-          id: "openrouter/auto",
-          baseUrl: "https://proxy.example.test/api/v1",
-          compat: {},
-        } as never,
-        { messages: [] } as never,
-        { apiKey: "or-test-key" } as never,
-      );
-      const message = await stream.result();
-
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(message.usage.cost.total).toBe(0.001);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("does not fetch generation metadata for aborted stream errors", async () => {
-    const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const baseStreamFn = vi.fn(() => createOpenRouterAbortedStream());
-
-    try {
-      const wrapped = provider.wrapStreamFn?.({
-        provider: "openrouter",
-        modelId: "openrouter/auto",
-        streamFn: baseStreamFn,
-      } as never);
-      if (!wrapped) {
-        throw new Error("expected OpenRouter wrapper");
-      }
-      const stream = await wrapped(
-        {
-          provider: "openrouter",
-          api: "openai-completions",
-          id: "openrouter/auto",
-          baseUrl: "https://openrouter.ai/api/v1",
-          compat: {},
-        } as never,
-        { messages: [] } as never,
-        { apiKey: "or-test-key" } as never,
-      );
-      const message = await stream.result();
-
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(message.stopReason).toBe("aborted");
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 
   it("merges resolved OpenRouter model params into transport params", async () => {
@@ -1418,3 +1233,4 @@ describe("openrouter provider hooks", () => {
     expect(payloads[1]?.reasoning).toEqual({ effort: "high" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

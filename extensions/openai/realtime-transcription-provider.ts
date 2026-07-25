@@ -45,6 +45,8 @@ type RealtimeEvent = {
   type: string;
   delta?: string;
   transcript?: string;
+  item_id?: string;
+  previous_item_id?: string | null;
   error?: unknown;
 };
 
@@ -73,6 +75,10 @@ const OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS = 5;
 const OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS = 1000;
 const OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-transcribe";
+const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
+  "OpenAI Realtime transcription requires an OpenAI Platform API key";
+const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
+  "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
 
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
@@ -139,29 +145,125 @@ function buildOpenAIRealtimeTranscriptionSessionPayload(
 async function resolveOpenAIRealtimeTranscriptionAuthorization(
   config: OpenAIRealtimeTranscriptionSessionConfig,
 ): Promise<string> {
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-  if (apiKey) {
-    return apiKey;
+  if (config.apiKey) {
+    return config.apiKey;
   }
   const authToken = await resolveProviderAuthProfileApiKey({
     provider: "openai",
     cfg: config.cfg,
+    profileTypes: ["api_key"],
   });
-  if (!authToken) {
-    throw new Error("OpenAI API key or Codex OAuth missing");
+  if (authToken) {
+    const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
+      authToken,
+      auditContext: "openai-realtime-transcription-session",
+      session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
+      authRejectedMessage: OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED,
+    });
+    return clientSecret.value;
   }
-  const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
-    authToken,
-    auditContext: "openai-realtime-transcription-session",
-    session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
-  });
-  return clientSecret.value;
+  const envApiKey = process.env.OPENAI_API_KEY?.trim();
+  if (envApiKey) {
+    return envApiKey;
+  }
+  throw new Error(OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED);
 }
 
 function createOpenAIRealtimeTranscriptionSession(
   config: OpenAIRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
-  let pendingTranscript = "";
+  const pendingTranscripts = new Map<string, string>();
+  const committedItemIds: string[] = [];
+  const committedItems = new Set<string>();
+  const previousItemIds = new Map<string, string | null | undefined>();
+  const settledItemIds = new Set<string>();
+  const completedTranscripts = new Map<string, string | undefined>();
+  const unkeyedTranscript = "__openclaw_unkeyed_transcript__";
+
+  const resetTranscriptionState = () => {
+    pendingTranscripts.clear();
+    committedItemIds.length = 0;
+    committedItems.clear();
+    previousItemIds.clear();
+    settledItemIds.clear();
+    completedTranscripts.clear();
+  };
+
+  const commitItem = (itemId: string, previousItemId: string | null | undefined) => {
+    if (committedItems.has(itemId)) {
+      return;
+    }
+    committedItems.add(itemId);
+    previousItemIds.set(itemId, previousItemId);
+    committedItemIds.push(itemId);
+
+    const arrivalOrder = committedItemIds.splice(0);
+    const successors = new Map<string, string>();
+    for (const candidateId of arrivalOrder) {
+      const previousId = previousItemIds.get(candidateId);
+      if (previousId) {
+        successors.set(previousId, candidateId);
+      }
+    }
+    const seen = new Set<string>();
+    const appendChain = (startId: string) => {
+      let candidateId: string | undefined = startId;
+      while (candidateId && !seen.has(candidateId)) {
+        seen.add(candidateId);
+        committedItemIds.push(candidateId);
+        candidateId = successors.get(candidateId);
+      }
+    };
+    for (const candidateId of arrivalOrder) {
+      const previousId = previousItemIds.get(candidateId);
+      if (previousId == null || settledItemIds.has(previousId)) {
+        appendChain(candidateId);
+      }
+    }
+    for (const candidateId of arrivalOrder) {
+      appendChain(candidateId);
+    }
+  };
+
+  const flushCompletedTranscripts = () => {
+    while (committedItemIds.length > 0) {
+      const itemId = committedItemIds[0];
+      if (!itemId || !completedTranscripts.has(itemId)) {
+        return;
+      }
+      const previousItemId = previousItemIds.get(itemId);
+      if (
+        previousItemId &&
+        !settledItemIds.has(previousItemId) &&
+        !committedItems.has(previousItemId)
+      ) {
+        return;
+      }
+      committedItemIds.shift();
+      committedItems.delete(itemId);
+      previousItemIds.delete(itemId);
+      settledItemIds.add(itemId);
+      const transcript = completedTranscripts.get(itemId);
+      completedTranscripts.delete(itemId);
+      pendingTranscripts.delete(itemId);
+      if (transcript) {
+        config.onTranscript?.(transcript);
+      }
+    }
+  };
+
+  const completeItem = (itemId: string | undefined, transcript: string | undefined) => {
+    const key = itemId ?? unkeyedTranscript;
+    pendingTranscripts.delete(key);
+    if (!itemId || !committedItems.has(itemId)) {
+      if (transcript) {
+        config.onTranscript?.(transcript);
+      }
+      return;
+    }
+    completedTranscripts.set(itemId, transcript);
+    flushCompletedTranscripts();
+  };
 
   const handleEvent = (
     event: RealtimeEvent,
@@ -173,22 +275,32 @@ function createOpenAIRealtimeTranscriptionSession(
         transport.markReady();
         return;
 
+      case "input_audio_buffer.committed":
+        if (event.item_id) {
+          commitItem(event.item_id, event.previous_item_id);
+        }
+        return;
+
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
-          pendingTranscript += event.delta;
+          const key = event.item_id ?? unkeyedTranscript;
+          const pendingTranscript = `${pendingTranscripts.get(key) ?? ""}${event.delta}`;
+          pendingTranscripts.set(key, pendingTranscript);
           config.onPartial?.(pendingTranscript);
         }
         return;
 
       case "conversation.item.input_audio_transcription.completed":
-        if (event.transcript) {
-          config.onTranscript?.(event.transcript);
-        }
-        pendingTranscript = "";
+        completeItem(event.item_id, event.transcript);
+        return;
+
+      case "conversation.item.input_audio_transcription.failed":
+        completeItem(event.item_id, undefined);
+        config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
         return;
 
       case "input_audio_buffer.speech_started":
-        pendingTranscript = "";
+        pendingTranscripts.delete(event.item_id ?? unkeyedTranscript);
         config.onSpeechStart?.();
         return;
 
@@ -239,6 +351,9 @@ function createOpenAIRealtimeTranscriptionSession(
       });
     },
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
+      // A reconnect starts a new provider session. Retaining outstanding item
+      // state would splice pre-disconnect deltas into the first new turn.
+      resetTranscriptionState();
       transport.sendJson({
         type: "session.update",
         session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
@@ -259,8 +374,8 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
-        process.env.OPENAI_API_KEY ||
-        isProviderAuthProfileConfigured({ provider: "openai", cfg }),
+        process.env.OPENAI_API_KEY?.trim() ||
+        isProviderAuthProfileConfigured({ provider: "openai", cfg, profileTypes: ["api_key"] }),
       ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);

@@ -1,16 +1,20 @@
 // Outbound bridge tests cover channel message handoff from core to outbound adapters.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  createChannelMessageAdapterFromOutbound,
-  type ChannelMessageOutboundBridgeResult,
-} from "./outbound-bridge.js";
+import { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
 import type {
   ChannelMessageSendPayloadContext,
   ChannelMessageSendPollContext,
   ChannelMessageSendTextContext,
   MessageReceipt,
 } from "./types.js";
+
+type OutboundBridgeAdapter = Parameters<
+  typeof createChannelMessageAdapterFromOutbound
+>[0]["outbound"];
+type ChannelMessageOutboundBridgeResult = Awaited<
+  ReturnType<NonNullable<OutboundBridgeAdapter["sendText"]>>
+>;
 
 const cfg = {} as OpenClawConfig;
 

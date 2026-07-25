@@ -120,7 +120,7 @@ describe("parseCliProfileArgs", () => {
       "--profile",
       "smoke-ci",
       "--category",
-      "agent-runtime-and-provider-execution.agent-turn-execution",
+      "agent-runtime.agent-turn-execution",
     ]);
     if (!res.ok) {
       throw new Error(res.error);
@@ -132,7 +132,7 @@ describe("parseCliProfileArgs", () => {
       "qa",
       "run",
       "--category",
-      "agent-runtime-and-provider-execution.agent-turn-execution",
+      "agent-runtime.agent-turn-execution",
     ]);
   });
 
@@ -162,7 +162,7 @@ describe("parseCliProfileArgs", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "agent-runtime-and-provider-execution",
+      "agent-runtime",
     ]);
     if (!res.ok) {
       throw new Error(res.error);
@@ -176,7 +176,7 @@ describe("parseCliProfileArgs", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "agent-runtime-and-provider-execution",
+      "agent-runtime",
     ]);
   });
 

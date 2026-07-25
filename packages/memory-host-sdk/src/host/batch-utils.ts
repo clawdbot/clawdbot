@@ -46,27 +46,14 @@ function normalizePositiveInteger(value: number | undefined): number | undefined
   return Math.floor(value);
 }
 
-/** Split provider requests into max-sized groups while preserving order. */
-export function splitBatchRequests<T>(requests: T[], maxRequests: number): T[][] {
-  const limit = normalizePositiveInteger(maxRequests) ?? 1;
-  if (requests.length <= limit) {
-    return [requests];
-  }
-  const groups: T[][] = [];
-  for (let i = 0; i < requests.length; i += limit) {
-    groups.push(requests.slice(i, i + limit));
-  }
-  return groups;
-}
-
 export function splitBatchRequestsByLimits<T>(
   requests: T[],
   limits: { maxRequests: number; maxJsonlBytes?: number },
 ): T[][] {
   const maxRequests = normalizePositiveInteger(limits.maxRequests) ?? 1;
   const maxJsonlBytes = normalizePositiveInteger(limits.maxJsonlBytes);
-  if (!maxJsonlBytes) {
-    return splitBatchRequests(requests, maxRequests);
+  if (requests.length === 0) {
+    return maxJsonlBytes ? [] : [requests];
   }
 
   const groups: T[][] = [];
@@ -77,7 +64,9 @@ export function splitBatchRequestsByLimits<T>(
     const separatorBytes = current.length === 0 ? 0 : 1;
     const wouldExceedRequests = current.length >= maxRequests;
     const wouldExceedBytes =
-      current.length > 0 && currentBytes + separatorBytes + requestBytes > maxJsonlBytes;
+      maxJsonlBytes !== undefined &&
+      current.length > 0 &&
+      currentBytes + separatorBytes + requestBytes > maxJsonlBytes;
     if (current.length > 0 && (wouldExceedRequests || wouldExceedBytes)) {
       groups.push(current);
       current = [];

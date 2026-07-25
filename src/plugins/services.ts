@@ -1,11 +1,13 @@
 /** Starts, stops, and inspects plugin service registrations. */
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
@@ -27,6 +29,7 @@ function createServiceContext(params: {
   startupTrace?: PluginServiceStartupTrace;
   workspaceDir?: string;
   service: PluginServiceRegistration;
+  gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
 }): OpenClawPluginServiceContext {
   const isDiagnosticsExporter =
     params.service?.pluginId === params.service?.service.id &&
@@ -41,6 +44,7 @@ function createServiceContext(params: {
     workspaceDir: params.workspaceDir,
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
+    ...(params.gatewayEvents ? { gatewayEvents: params.gatewayEvents } : {}),
     ...(params.startupTrace
       ? {
           startupTrace: createScopedPluginServiceStartupTrace(
@@ -57,6 +61,45 @@ function createServiceContext(params: {
           },
         }
       : {}),
+  };
+}
+
+function createScopedGatewayEvents(params: {
+  pluginId: string;
+  broadcast?: GatewayPluginEventBroadcastFn;
+}): {
+  gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
+  revoke: () => void;
+} {
+  if (!params.broadcast) {
+    return { revoke: () => undefined };
+  }
+  let active = true;
+  return {
+    gatewayEvents: {
+      emit: (event, payload: PluginJsonValue, opts) => {
+        if (!active) {
+          throw new Error("plugin service gateway event emitter is no longer active");
+        }
+        if (!/^[a-z][a-z0-9_-]*$/u.test(event)) {
+          throw new Error(`invalid plugin gateway event name: ${event}`);
+        }
+        if (!isPluginJsonValue(payload)) {
+          throw new Error("plugin gateway event payload must be bounded JSON");
+        }
+        if (
+          opts?.scope !== "operator.read" &&
+          opts?.scope !== "operator.write" &&
+          opts?.scope !== "operator.admin"
+        ) {
+          throw new Error("plugin gateway event scope must be an operator scope");
+        }
+        params.broadcast?.(`plugin.${params.pluginId}.${event}`, payload, opts.scope);
+      },
+    },
+    revoke: () => {
+      active = false;
+    },
   };
 }
 
@@ -97,20 +140,27 @@ export async function startPluginServices(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   startupTrace?: PluginServiceStartupTrace;
+  broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
 }): Promise<PluginServicesHandle> {
   const running: Array<{
     id: string;
     stop?: () => void | Promise<void>;
+    revokeGatewayEvents: () => void;
   }> = [];
   let failedCount = 0;
   for (const entry of params.registry.services) {
     const service = entry.service;
     const traceName = createPluginServiceTraceName(entry);
+    const scopedGatewayEvents = createScopedGatewayEvents({
+      pluginId: entry.pluginId,
+      broadcast: params.broadcastPluginEvent,
+    });
     const serviceContext = createServiceContext({
       config: params.config,
       startupTrace: params.startupTrace,
       workspaceDir: params.workspaceDir,
       service: entry,
+      gatewayEvents: scopedGatewayEvents.gatewayEvents,
     });
     try {
       const startService = () =>
@@ -123,8 +173,10 @@ export async function startPluginServices(params: {
       running.push({
         id: service.id,
         stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
+        revokeGatewayEvents: scopedGatewayEvents.revoke,
       });
     } catch (err) {
+      scopedGatewayEvents.revoke();
       failedCount += 1;
       const error = err as Error;
       log.error(
@@ -141,13 +193,14 @@ export async function startPluginServices(params: {
   return {
     stop: async () => {
       for (const entry of running.toReversed()) {
-        if (!entry.stop) {
-          continue;
-        }
         try {
-          await withPluginHttpRouteRegistry(params.registry, () => entry.stop?.());
+          if (entry.stop) {
+            await withPluginHttpRouteRegistry(params.registry, () => entry.stop?.());
+          }
         } catch (err) {
           log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
+        } finally {
+          entry.revokeGatewayEvents();
         }
       }
     },

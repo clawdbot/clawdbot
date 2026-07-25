@@ -9,6 +9,7 @@ import {
   type ProviderUsageSnapshot,
   type UsageWindow,
 } from "openclaw/plugin-sdk/provider-usage";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 type CopilotUsageResponse = {
   quota_snapshots?: {
@@ -22,9 +23,10 @@ export async function fetchCopilotUsage(
   token: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  githubDomain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
 ): Promise<ProviderUsageSnapshot> {
   const res = await fetchJson(
-    "https://api.github.com/copilot_internal/user",
+    `https://api.${githubDomain}/copilot_internal/user`,
     {
       headers: {
         Authorization: `token ${token}`,
@@ -36,16 +38,14 @@ export async function fetchCopilotUsage(
   );
 
   if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
     return buildUsageHttpErrorSnapshot({
       provider: "github-copilot",
       status: res.status,
     });
   }
 
-  const data = await readProviderJsonResponse<CopilotUsageResponse>(
-    res,
-    "github-copilot-usage",
-  );
+  const data = await readProviderJsonResponse<CopilotUsageResponse>(res, "github-copilot-usage");
   const windows: UsageWindow[] = [];
 
   if (data.quota_snapshots?.premium_interactions) {

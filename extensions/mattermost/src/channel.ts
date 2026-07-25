@@ -23,6 +23,7 @@ import {
   type MessagePresentation,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationButtonAction,
   resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -33,6 +34,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   chunkTextForOutbound,
@@ -61,7 +63,7 @@ import {
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
-import { mattermostSetupAdapter } from "./setup-core.js";
+import { mattermostSetupAdapter, mattermostSetupContract } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
@@ -107,8 +109,15 @@ const MATTERMOST_PRESENTATION_CAPABILITIES = {
   },
 } satisfies ChannelOutboundAdapter["presentationCapabilities"];
 
-function hasMattermostPresentationButtons(presentation: MessagePresentation): boolean {
-  return buildMattermostPresentationButtons(presentation).some((row) => row.length > 0);
+function hasMattermostPresentationNavigation(presentation: MessagePresentation): boolean {
+  return presentation.blocks.some(
+    (block) =>
+      block.type === "buttons" &&
+      block.buttons.some((button) => {
+        const action = resolveMessagePresentationButtonAction(button);
+        return action?.type === "url" || (action?.type === "web-app" && Boolean(action.url));
+      }),
+  );
 }
 
 function readMattermostPresentationButtons(payload: {
@@ -366,11 +375,15 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    conversationReadOrigin,
   }) => {
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
       const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      if (!account.enabled) {
+        throw new Error(`Mattermost account "${resolvedAccountId}" is disabled`);
+      }
       const reactionsEnabled =
         account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
       if (!reactionsEnabled) {
@@ -378,6 +391,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       }
 
       const { postId, emojiName, remove } = parseMattermostReactActionParams(params);
+      // The runner preserves the caller's spelling in `target` and puts the
+      // directory-resolved provider destination in `to` before dispatch.
+      const authorizedTarget = normalizeOptionalString(params.to);
       if (remove) {
         const result = await (
           await loadMattermostChannelRuntime()
@@ -386,6 +402,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
           postId,
           emojiName,
           accountId: resolvedAccountId,
+          authorizedTarget,
+          conversationReadOrigin,
         });
         if (!result.ok) {
           throw new Error(result.error);
@@ -405,6 +423,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         postId,
         emojiName,
         accountId: resolvedAccountId,
+        authorizedTarget,
+        conversationReadOrigin,
       });
       if (!result.ok) {
         throw new Error(result.error);
@@ -595,8 +615,9 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
   ];
   mediaUrlCandidates.push(...readMattermostStringArrayParam(params, "mediaUrls"));
 
-  let hasUnsupportedAttachmentPayload =
-    typeof params.buffer === "string" || typeof params.base64 === "string";
+  let hasUnsupportedAttachmentPayload = Boolean(
+    readMattermostStringParam(params, "buffer") ?? readMattermostStringParam(params, "base64"),
+  );
   if (Array.isArray(params.attachments)) {
     for (const attachment of params.attachments) {
       if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
@@ -611,8 +632,9 @@ function collectMattermostAttachmentMedia(params: Record<string, unknown>): {
         readMattermostStringParam(record, "fileUrl"),
         readMattermostStringParam(record, "url"),
       );
-      hasUnsupportedAttachmentPayload ||= typeof record.buffer === "string";
-      hasUnsupportedAttachmentPayload ||= typeof record.base64 === "string";
+      hasUnsupportedAttachmentPayload ||= Boolean(
+        readMattermostStringParam(record, "buffer") ?? readMattermostStringParam(record, "base64"),
+      );
     }
   }
 
@@ -627,6 +649,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -643,19 +666,24 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       return null;
     }
     const buttons = buildMattermostPresentationButtons(presentation);
-    if (!hasMattermostPresentationButtons(presentation)) {
+    const hasButtons = buttons.some((row) => row.length > 0);
+    if (!hasButtons && !hasMattermostPresentationNavigation(presentation)) {
       return null;
     }
     return {
       ...payload,
       text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-      channelData: {
-        ...payload.channelData,
-        mattermost: {
-          ...(payload.channelData?.mattermost as Record<string, unknown> | undefined),
-          presentationButtons: buttons,
-        },
-      },
+      ...(hasButtons
+        ? {
+            channelData: {
+              ...payload.channelData,
+              mattermost: {
+                ...(payload.channelData?.mattermost as Record<string, unknown> | undefined),
+                presentationButtons: buttons,
+              },
+            },
+          }
+        : {}),
     };
   },
   sendPayload: async (ctx) => {
@@ -759,6 +787,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       ...meta,
     },
     setup: mattermostSetupAdapter,
+    setupContract: mattermostSetupContract,
     setupWizard: mattermostSetupWizard,
     capabilities: {
       chatTypes: ["direct", "channel", "group", "thread"],
@@ -770,7 +799,14 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
-    reload: { configPrefixes: ["channels.mattermost"] },
+    reload: {
+      configPrefixes: ["channels.mattermost"],
+      /**
+       * accounts.default is promoted; named resolution merges only channel-wide fields
+       * plus the selected account. Monitor debounce and durable ingress use accountId.
+       */
+      accountScopedRestart: true,
+    },
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
@@ -796,6 +832,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     }),
     messaging: {
       targetPrefixes: ["mattermost"],
+      directTargetStyle: "user-prefixed",
+      targetIdComparison: "case-sensitive",
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
@@ -866,7 +904,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       }),
     }),
     gateway: {
-      resolveGatewayAuthBypassPaths: ({ cfg }) => resolveMattermostGatewayAuthBypassPaths(cfg),
+      // Same function as the public gateway-auth artifact so the pre-plugin
+      // fast path and the loaded plugin cannot drift (pinned by contract test).
+      resolveGatewayAuthBypassPaths: resolveMattermostGatewayAuthBypassPaths,
       startAccount: async (ctx) => {
         const account = ctx.account;
         const statusSink = createAccountStatusSink({
@@ -922,16 +962,19 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       matchesMattermostToolContextTarget({ target, toolContext }),
     resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
       const ambientThreadId = threadId != null ? String(threadId) : undefined;
-      const resolvedThreadId =
-        replyDelivery?.chatType === "direct"
-          ? undefined
-          : replyDelivery
-            ? replyToIsExplicit
-              ? (replyToId ?? ambientThreadId)
-              : (ambientThreadId ?? replyToId ?? undefined)
-            : (ambientThreadId ?? replyToId);
+      // Direct chats stay flat when their effective mode is off. Opted-in DMs
+      // preserve the thread root for routed replies and message-tool follow-ups.
+      const isFlatDirect =
+        replyDelivery?.chatType === "direct" && replyDelivery.replyToMode === "off";
+      const resolvedThreadId = isFlatDirect
+        ? undefined
+        : replyDelivery
+          ? replyToIsExplicit
+            ? (replyToId ?? ambientThreadId)
+            : (ambientThreadId ?? replyToId ?? undefined)
+          : (ambientThreadId ?? replyToId);
       return {
-        replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
+        replyToId: isFlatDirect ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,
       };
     },
@@ -939,3 +982,4 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   security: mattermostSecurityAdapter,
   outbound: mattermostOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

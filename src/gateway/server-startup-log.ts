@@ -7,12 +7,13 @@ import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import { legacyModelKey, modelKey } from "../agents/model-selection-normalize.js";
+import { legacyModelKey, modelKey } from "../agents/model-ref-shared.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
 } from "../agents/model-selection-shared.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
@@ -25,7 +26,8 @@ type StartupThinkLevel =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 /** Emit startup summary lines after Gateway bind and plugin loading complete. */
 export async function logGatewayStartup(params: {
@@ -39,6 +41,7 @@ export async function logGatewayStartup(params: {
   tlsEnabled?: boolean;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string) => void };
   isNixMode: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const { provider: agentProvider, model: agentModel } = resolveConfiguredModelRef({
     cfg: params.cfg,
@@ -69,6 +72,7 @@ export async function logGatewayStartup(params: {
   for (const warning of await collectConfiguredChannelStartupWarnings({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   })) {
     params.log.warn(warning);
   }
@@ -95,7 +99,8 @@ function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefin
     value === "high" ||
     value === "xhigh" ||
     value === "adaptive" ||
-    value === "max"
+    value === "max" ||
+    value === "ultra"
     ? value
     : undefined;
 }
@@ -136,7 +141,6 @@ export function formatAgentModelStartupDetails(params: {
   provider: string;
   model: string;
 }): string {
-  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
   const explicitThinking = resolveExplicitStartupThinking({
@@ -145,25 +149,29 @@ export function formatAgentModelStartupDetails(params: {
     model: params.model,
     defaultAgentThinking: defaultAgentConfig?.thinkingDefault,
   });
-  const resolvedThinking =
-    explicitThinking ??
-    resolveThinkingDefault({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      catalog: configuredCatalog,
-    });
-  const thinking =
-    explicitThinking ??
-    (isConfiguredReasoningDisabled({
-      catalog: configuredCatalog,
-      provider: params.provider,
-      model: params.model,
-    })
-      ? "off"
-      : resolvedThinking === "off"
-        ? "medium"
-        : resolvedThinking);
+  let thinking = explicitThinking;
+  if (thinking === undefined) {
+    const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+    // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
+    // only to discard their default below.
+    if (
+      isConfiguredReasoningDisabled({
+        catalog: configuredCatalog,
+        provider: params.provider,
+        model: params.model,
+      })
+    ) {
+      thinking = "off";
+    } else {
+      const resolvedThinking = resolveThinkingDefault({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        catalog: configuredCatalog,
+      });
+      thinking = resolvedThinking === "off" ? "medium" : resolvedThinking;
+    }
+  }
   const fast = resolveFastModeState({
     cfg: params.cfg,
     provider: params.provider,
@@ -177,6 +185,7 @@ export function formatAgentModelStartupDetails(params: {
 async function collectConfiguredChannelStartupWarnings(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): Promise<string[]> {
   const [blockerModule, presencePolicyModule, pluginRegistryModule] = await Promise.all([
     import("../commands/doctor/shared/channel-plugin-blockers.js"),
@@ -192,6 +201,10 @@ async function collectConfiguredChannelStartupWarnings(params: {
     params.cfg,
     process.env,
     params.activationSourceConfig,
+    {
+      manifestRecords: manifestRegistry.plugins,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+    },
   );
   const blockerWarnings = blockerModule
     .collectConfiguredChannelPluginBlockerWarnings(hits)
@@ -201,11 +214,37 @@ async function collectConfiguredChannelStartupWarnings(params: {
       config: params.cfg,
       activationSourceConfig: params.activationSourceConfig,
       includePersistedAuthState: false,
+      ambientEnvTriggers: params.ambientEnvTriggers,
       manifestRecords: manifestRegistry.plugins,
     })
     .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
     .map(formatConfiguredChannelMissingOwnerStartupWarning);
-  return [...blockerWarnings, ...missingOwnerWarnings];
+  const suppressedAmbientChannelIds =
+    params.ambientEnvTriggers === "suppress"
+      ? presencePolicyModule.listAmbientOnlyConfiguredChannelIds({
+          config: params.cfg,
+          activationSourceConfig: params.activationSourceConfig,
+          env: process.env,
+          includePersistedAuthState: false,
+          manifestRecords: manifestRegistry.plugins,
+        })
+      : [];
+  const suppressionWarning =
+    suppressedAmbientChannelIds.length > 0
+      ? [formatSuppressedAmbientChannelsStartupWarning(suppressedAmbientChannelIds)]
+      : [];
+  return [...suppressionWarning, ...blockerWarnings, ...missingOwnerWarnings];
+}
+
+function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly string[]): string {
+  const safeChannelIds = normalizeSortedUniqueStringEntries(channelIds).map((channelId) =>
+    sanitizeForLog(channelId),
+  );
+  return (
+    `dev gateway suppressed ambient channel auto-configuration for ${safeChannelIds.length} ` +
+    `${safeChannelIds.length === 1 ? "channel" : "channels"}: ${safeChannelIds.join(", ")}. ` +
+    "Use --dev-ambient-channels to re-enable ambient channel triggers."
+  );
 }
 
 function formatConfiguredChannelMissingOwnerStartupWarning(entry: {

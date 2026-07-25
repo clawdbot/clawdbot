@@ -2,6 +2,11 @@ import AppKit
 import Foundation
 import OSLog
 
+enum AppTerminationTiming {
+    static let cleanupDeadlineSeconds = 2.0
+    static let signalExitFailsafeSeconds = 3.0
+}
+
 @MainActor
 final class TerminationSignalWatcher {
     static let shared = TerminationSignalWatcher()
@@ -43,10 +48,16 @@ final class TerminationSignalWatcher {
         // Ensure any pairing prompt can't accidentally approve during shutdown.
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
+        Self.scheduleExitFailsafe()
         NSApp.terminate(nil)
+    }
 
-        // Safety net: don't hang forever if something blocks termination.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+    static func scheduleExitFailsafe() {
+        // AppKit waits in a nested event loop while async termination cleanup runs.
+        // A main-queue failsafe cannot fire from that loop, so enforce the deadline off-main.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds)
+        {
             exit(0)
         }
     }

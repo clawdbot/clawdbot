@@ -3,10 +3,10 @@ title: "Runtime tool fixture — edit"
 scenario:
   id: runtime-tool-edit
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
-      - tools.edit
+      - agent-runtime.tool-edit
   objective: Verify targeted edit behavior is tracked across OpenClaw and Codex while Codex owns edit natively.
   successCriteria:
     - OpenClaw may expose OpenClaw edit while Codex app-server mode may omit duplicate OpenClaw dynamic edit.

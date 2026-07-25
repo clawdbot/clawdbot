@@ -1,7 +1,8 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
-import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
+  cleanupStore,
   makeRuntime,
   mockSessionsConfig,
   resetMockSessionsConfig,
@@ -15,7 +16,8 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand, testing } from "./sessions.js";
+import { sessionsCommand } from "./sessions.js";
+import { testing } from "./sessions.test-support.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -29,7 +31,7 @@ describe("sessionsCommand", () => {
   });
 
   it("renders a tabular view with token percentages", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       "+15555550123": {
         sessionId: "abc123",
         updatedAt: Date.now() - 45 * 60_000,
@@ -44,7 +46,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    cleanupStore(store);
 
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
@@ -66,7 +68,7 @@ describe("sessionsCommand", () => {
         },
       },
     }));
-    const store = writeStore(
+    const store = await writeStore(
       {
         "agent:main:main": {
           sessionId: "main-session",
@@ -81,7 +83,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    cleanupStore(store);
 
     expect(logs.join("\n")).toContain("Runtime");
 
@@ -103,7 +105,7 @@ describe("sessionsCommand", () => {
         },
       },
     }));
-    const store = writeStore(
+    const store = await writeStore(
       {
         "agent:main:main": {
           sessionId: "main-session",
@@ -118,7 +120,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    cleanupStore(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
@@ -127,7 +129,7 @@ describe("sessionsCommand", () => {
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
@@ -138,7 +140,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    cleanupStore(store);
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toBe(
@@ -147,7 +149,7 @@ describe("sessionsCommand", () => {
   });
 
   it("exports freshness metadata in JSON output", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       main: {
         sessionId: "abc123",
         updatedAt: Date.now() - 10 * 60_000,
@@ -181,8 +183,30 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("reports the SQLite database for the store and SQLite-backed sessionFile", async () => {
+    const store = await writeStore({
+      main: {
+        sessionId: "abc123",
+        sessionFile: "sqlite:main:abc123:/tmp/openclaw/agents/main/sessions/sessions.json",
+        updatedAt: Date.now() - 10 * 60_000,
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      path?: string;
+      sessions?: Array<{ key: string; sessionFile?: string }>;
+    }>(sessionsCommand, store);
+
+    expect(payload.path).toMatch(/openclaw-agent\.sqlite$/u);
+    expect(payload.path).not.toContain("sessions.json");
+    expect(payload.sessions?.find((row) => row.key === "main")?.sessionFile).toBe(
+      "sqlite:main:abc123:/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
+    );
+  });
+
   it("exports subagent lineage metadata in JSON output", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       "agent:child:main": {
         sessionId: "child-session",
         updatedAt: Date.now() - 10 * 60_000,
@@ -241,7 +265,7 @@ describe("sessionsCommand", () => {
   });
 
   it("shows preserved stale totals in JSON output", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       main: {
         sessionId: "abc123",
         updatedAt: Date.now() - 10 * 60_000,
@@ -264,7 +288,7 @@ describe("sessionsCommand", () => {
   });
 
   it("applies --active filtering in JSON output", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         recent: {
           sessionId: "recent",
@@ -289,17 +313,19 @@ describe("sessionsCommand", () => {
   });
 
   it("exports runtime policy aliases for collapsed external direct sessions", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         "agent:main:main": {
           sessionId: "telegram-main",
           updatedAt: Date.now() - 60_000,
-          origin: {
-            provider: "telegram",
-            chatType: "direct",
-            to: "telegram:42",
-            accountId: "default",
-          },
+          delivery: normalizeSessionDeliveryState({
+            origin: {
+              provider: "telegram",
+              chatType: "direct",
+              to: "telegram:42",
+              accountId: "default",
+            },
+          }),
         },
       },
       "sessions-runtime-policy-alias",
@@ -321,7 +347,7 @@ describe("sessionsCommand", () => {
   });
 
   it("honors explicit JSON output limits", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
         middle: { sessionId: "middle", updatedAt: Date.now() - 60_000, model: "test:opus" },
@@ -346,7 +372,7 @@ describe("sessionsCommand", () => {
   });
 
   it("allows full JSON output with --limit all", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
         oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
@@ -370,7 +396,7 @@ describe("sessionsCommand", () => {
   });
 
   it("sorts and slices large explicit limits instead of using top-N insertion", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
         oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
@@ -394,7 +420,7 @@ describe("sessionsCommand", () => {
   });
 
   it("rejects invalid --active values", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         demo: {
           sessionId: "demo",
@@ -410,11 +436,11 @@ describe("sessionsCommand", () => {
       "--active must be a positive number of minutes, for example --active 30.",
     ]);
 
-    fs.rmSync(store);
+    cleanupStore(store);
   });
 
   it("rejects partial --active values", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         demo: {
           sessionId: "demo",
@@ -430,11 +456,11 @@ describe("sessionsCommand", () => {
       "--active must be a positive number of minutes, for example --active 30.",
     ]);
 
-    fs.rmSync(store);
+    cleanupStore(store);
   });
 
   it("rejects invalid --limit values", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         demo: {
           sessionId: "demo",
@@ -450,6 +476,6 @@ describe("sessionsCommand", () => {
       '--limit must be a positive integer or "all", for example --limit 25.',
     ]);
 
-    fs.rmSync(store);
+    cleanupStore(store);
   });
 });

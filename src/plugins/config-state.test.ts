@@ -209,6 +209,20 @@ describe("normalizePluginsConfig", () => {
     expect(discoverPlugins).not.toHaveBeenCalled();
   });
 
+  it("normalizes unknown plugin ids to lowercase canonical keys", () => {
+    const result = normalizePluginsConfig({
+      allow: [" Demo-Plugin "],
+      deny: [" OTHER-PLUGIN "],
+      entries: {
+        " CODEX ": { enabled: true },
+      },
+    });
+
+    expect(result.allow).toEqual(["demo-plugin"]);
+    expect(result.deny).toEqual(["other-plugin"]);
+    expect(result.entries.codex?.enabled).toBe(true);
+  });
+
   it("does not consult discovery or manifests for alias lookup", async () => {
     const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins").mockReturnValue({
       candidates: [

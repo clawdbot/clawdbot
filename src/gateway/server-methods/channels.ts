@@ -9,6 +9,7 @@ import {
   validateChannelsLogoutParams,
   validateChannelsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -169,16 +170,14 @@ async function runChannelStatusHook(params: {
   };
 }
 
-type ChannelStatusSummaryOutcome =
-  | { ok: true; value: unknown }
-  | { ok: false; error: string; timedOut?: boolean };
+type Summary = { ok: true; value: unknown } | { ok: false; error: string; timedOut?: boolean };
 
 async function runChannelStatusSummary(params: {
   channelId: ChannelId;
   timeoutMs: number;
   warnings: string[];
   run: () => unknown;
-}): Promise<ChannelStatusSummaryOutcome> {
+}): Promise<Summary> {
   const timeoutMs = Math.max(1, params.timeoutMs);
   const result = await raceWithTimeout({
     timeoutMs,
@@ -186,7 +185,8 @@ async function runChannelStatusSummary(params: {
   });
   const warningPrefix = `${params.channelId} summary`;
   if (result.kind === "value") {
-    return { ok: true, value: result.value };
+    // Summary hooks return the final public record, after account snapshot sanitization.
+    return { ok: true, value: redactChannelStatusSummaryBaseUrl(result.value) };
   }
   if (result.kind === "timeout") {
     const error = `summary timed out after ${timeoutMs}ms`;
@@ -247,7 +247,7 @@ function resolveChannelGatewayAccountId(params: {
 }
 
 /** Log out one channel account through its owning channel plugin. */
-export async function logoutChannelAccount(params: {
+async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;
@@ -282,7 +282,7 @@ export async function logoutChannelAccount(params: {
 }
 
 /** Start one channel account through its owning channel plugin. */
-export async function startChannelAccount(params: {
+async function startChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;
@@ -293,7 +293,7 @@ export async function startChannelAccount(params: {
     throw new Error(`Channel ${params.channelId} does not support runtime start`);
   }
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
-  await params.context.startChannel(params.channelId, resolvedAccountId);
+  await params.context.startChannel(params.channelId, resolvedAccountId, { manual: true });
   const runtime = params.context.getRuntimeSnapshot();
   const started =
     resolveRuntimeAccountSnapshot({
@@ -309,7 +309,7 @@ export async function startChannelAccount(params: {
 }
 
 /** Stop one channel account through its owning channel plugin. */
-export async function stopChannelAccount(params: {
+async function stopChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
   cfg: OpenClawConfig;

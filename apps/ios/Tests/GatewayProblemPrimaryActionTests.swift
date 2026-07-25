@@ -19,6 +19,23 @@ struct GatewayProblemPrimaryActionTests {
         #expect(title == "Update app")
     }
 
+    @Test func `older gateway exposes its copyable update command`() {
+        let problem = GatewayConnectionProblem(
+            kind: .protocolMismatch,
+            owner: .gateway,
+            title: "Gateway update required",
+            message: "The gateway is older than this app.",
+            actionLabel: "Copy update command",
+            actionCommand: "openclaw update",
+            retryable: false,
+            pauseReconnect: true)
+
+        let title = GatewayProblemPrimaryAction.title(for: problem, retryTitle: "Retry connection")
+
+        #expect(title == "Copy update command")
+        #expect(problem.actionCommand == "openclaw update")
+    }
+
     @Test func `reset-suggesting problem uses reset title when provided`() {
         let problem = GatewayConnectionProblem(
             kind: .gatewayAuthTokenMismatch,

@@ -46,6 +46,33 @@ describe("OpenClawSchema talk validation", () => {
     ).not.toThrow();
   });
 
+  it("accepts realtime Talk voice detection and reasoning defaults", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            vadThreshold: 0.45,
+            silenceDurationMs: 650,
+            prefixPaddingMs: 250,
+            reasoningEffort: "low",
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["VAD below zero", { vadThreshold: -0.1 }],
+    ["VAD above one", { vadThreshold: 1.1 }],
+    ["zero silence duration", { silenceDurationMs: 0 }],
+    ["fractional silence duration", { silenceDurationMs: 1.5 }],
+    ["negative prefix padding", { prefixPaddingMs: -1 }],
+    ["fractional prefix padding", { prefixPaddingMs: 1.5 }],
+    ["empty reasoning effort", { reasoningEffort: "" }],
+  ])("rejects invalid realtime Talk %s", (_label, realtime) => {
+    expect(() => OpenClawSchema.parse({ talk: { realtime } })).toThrow();
+  });
+
   it("rejects invalid realtime Talk consult routing", () => {
     expect(() =>
       OpenClawSchema.parse({
@@ -86,6 +113,18 @@ describe("OpenClawSchema talk validation", () => {
       }),
     ).toThrow(/talk\.provider|talk\.providers|missing "acme"/i);
   });
+
+  it.each(["constructor", "__proto__"])(
+    "rejects inherited Object.prototype key %s as a Talk provider",
+    (provider) => {
+      const providers = { elevenlabs: { voiceId: "voice-123" } };
+
+      expect(OpenClawSchema.safeParse({ talk: { provider, providers } }).success).toBe(false);
+      expect(
+        OpenClawSchema.safeParse({ talk: { realtime: { provider, providers } } }).success,
+      ).toBe(false);
+    },
+  );
 
   it("rejects multi-provider talk config without talk.provider", () => {
     expect(() =>

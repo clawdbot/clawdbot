@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TOOL_DISPLAY_CONFIG, type ToolDisplayConfig } from "../src/agents/tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-config.js";
+
+type ToolDisplayConfig = typeof TOOL_DISPLAY_CONFIG;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");

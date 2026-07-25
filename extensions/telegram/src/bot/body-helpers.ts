@@ -1,6 +1,9 @@
 // Telegram helper module supports body helpers behavior.
 import type { Chat, Message, MessageOrigin, User } from "grammy/types";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelInboundMediaInput,
+  NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -22,8 +25,10 @@ type TelegramMediaFileRef =
   | NonNullable<Message["document"]>
   | NonNullable<Message["sticker"]>;
 
+export type TelegramMediaKind = Exclude<NonNullable<ChannelInboundMediaInput["kind"]>, "unknown">;
+
 type TelegramPrimaryMedia = {
-  placeholder: string;
+  kind: TelegramMediaKind;
   fileRef: TelegramMediaFileRef;
 };
 
@@ -42,33 +47,27 @@ export function resolveTelegramPrimaryMedia(
   }
   const photo = msg.photo?.[msg.photo.length - 1];
   if (photo) {
-    return { placeholder: "<media:image>", fileRef: photo };
+    return { kind: "image", fileRef: photo };
   }
   if (msg.video) {
-    return { placeholder: "<media:video>", fileRef: msg.video };
+    return { kind: "video", fileRef: msg.video };
   }
   if (msg.video_note) {
-    return { placeholder: "<media:video>", fileRef: msg.video_note };
+    return { kind: "video", fileRef: msg.video_note };
   }
   if (msg.audio) {
-    return { placeholder: "<media:audio>", fileRef: msg.audio };
+    return { kind: "audio", fileRef: msg.audio };
   }
   if (msg.voice) {
-    return { placeholder: "<media:audio>", fileRef: msg.voice };
+    return { kind: "audio", fileRef: msg.voice };
   }
   if (msg.document) {
-    return { placeholder: "<media:document>", fileRef: msg.document };
+    return { kind: "document", fileRef: msg.document };
   }
   if (msg.sticker) {
-    return { placeholder: "<media:sticker>", fileRef: msg.sticker };
+    return { kind: "sticker", fileRef: msg.sticker };
   }
   return undefined;
-}
-
-export function resolveTelegramMediaPlaceholder(
-  msg: TelegramMediaMessage | undefined | null,
-): string | undefined {
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
 }
 
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
@@ -154,8 +153,29 @@ function renderRichBlocks(value: unknown): string {
     return telegramHtmlToPlainTextFallback(value.html);
   }
   const parts: string[] = [];
-  for (const key of ["text", "title", "subtitle", "caption", "credit"] as const) {
+  for (const key of [
+    "text",
+    "summary",
+    "label",
+    "title",
+    "subtitle",
+    "credit",
+    "expression",
+  ] as const) {
     parts.push(renderRichInlineText(value[key]));
+  }
+  if (value.caption !== undefined) {
+    const caption = value.caption;
+    if (isRecord(caption) && caption.credit !== undefined) {
+      parts.push(
+        joinRichText(
+          [renderRichInlineText(caption.text), renderRichInlineText(caption.credit)],
+          "\n",
+        ),
+      );
+    } else {
+      parts.push(renderRichInlineText(caption));
+    }
   }
   for (const key of ["blocks", "items", "rows", "cells", "headers", "children"] as const) {
     parts.push(renderRichBlocks(value[key]));

@@ -1,3 +1,5 @@
+import { types as utilTypes } from "node:util";
+
 /** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
   | null
@@ -19,9 +21,10 @@ function isJsonValue(value: unknown): value is RuntimeToolInputSchemaJson {
   }
   switch (typeof value) {
     case "boolean":
-    case "number":
     case "string":
       return true;
+    case "number":
+      return Number.isFinite(value);
     case "object":
       if (Array.isArray(value)) {
         return value.every(isJsonValue);
@@ -38,10 +41,41 @@ function isJsonObject(value: RuntimeToolInputSchemaJson): value is {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isNonFiniteNumberValue(value: unknown): boolean {
+  if (typeof value === "number") {
+    return !Number.isFinite(value);
+  }
+  if (value === null || typeof value !== "object" || !utilTypes.isNumberObject(value)) {
+    return false;
+  }
+  return !Number.isFinite(Number.prototype.valueOf.call(value));
+}
+
 function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInputSchemaProjection {
+  const nonFiniteNumber = {
+    path: null as string | null,
+  };
+  const paths = new WeakMap<object, string>();
+  let isRoot = true;
   let text: string | undefined;
   try {
-    text = JSON.stringify(value);
+    text = JSON.stringify(value, function (this: object, key, entry) {
+      const holderPath = paths.get(this);
+      const entryPath = isRoot
+        ? path
+        : holderPath === undefined
+          ? `${path}.${key}`
+          : Array.isArray(this)
+            ? `${holderPath}[${key}]`
+            : `${holderPath}.${key}`;
+      isRoot = false;
+      if (nonFiniteNumber.path === null && isNonFiniteNumberValue(entry)) {
+        nonFiniteNumber.path = entryPath;
+      } else if (entry && typeof entry === "object") {
+        paths.set(entry, entryPath);
+      }
+      return entry;
+    });
   } catch {
     return {
       schema: {},
@@ -52,6 +86,13 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
     return {
       schema: {},
       violations: [`${path} is not JSON-serializable`],
+    };
+  }
+  if (nonFiniteNumber.path !== null) {
+    const violationPath = nonFiniteNumber.path;
+    return {
+      schema: {},
+      violations: [`${violationPath} is not JSON-serializable`],
     };
   }
   const parsed = JSON.parse(text) as unknown;

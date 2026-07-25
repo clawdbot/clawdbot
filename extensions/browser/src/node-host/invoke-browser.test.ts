@@ -1,6 +1,14 @@
 // Browser tests cover invoke browser plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import nodePath from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
+import { toErrorObject } from "../infra/errors.js";
+
+const BROWSER_PROXY_MAX_FILES = 256;
+const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 
 const controlServiceMocks = vi.hoisted(() => ({
   createBrowserControlContext: vi.fn(() => ({ control: true })),
@@ -60,7 +68,7 @@ vi.mock("../sdk-node-runtime.js", () => ({
               "abort",
               () =>
                 reject(
-                  toLintErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
+                  toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
                 ),
               { once: true },
             );
@@ -106,6 +114,12 @@ vi.mock("../browser/request-policy.js", () => ({
     }
     return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
   }),
+  isBrowserHostLocalRoute: vi.fn((method: string, path: string) => {
+    if (method === "POST" && path === "/profiles/import") {
+      return true;
+    }
+    return method === "GET" && path === "/system-profiles";
+  }),
   normalizeBrowserRequestPath: vi.fn((path: string) => path),
   resolveRequestedBrowserProfile: vi.fn(
     ({
@@ -139,13 +153,7 @@ vi.mock("../control-service.js", () => ({
   startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
-let resetBrowserProxyCommandStateForTests: typeof import("./invoke-browser.js").resetBrowserProxyCommandStateForTests;
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
-
-beforeAll(async () => {
-  ({ resetBrowserProxyCommandStateForTests, runBrowserProxyCommand } =
-    await import("./invoke-browser.js"));
-});
 
 type BrowserDispatchRequest = {
   path?: string;
@@ -162,9 +170,8 @@ function firstBrowserDispatchRequest(): BrowserDispatchRequest {
 }
 
 describe("runBrowserProxyCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
-    resetBrowserProxyCommandStateForTests();
     dispatcherMocks.dispatch.mockReset();
     dispatcherMocks.createBrowserRouteDispatcher.mockReset().mockImplementation(() => ({
       dispatch: dispatcherMocks.dispatch,
@@ -189,6 +196,119 @@ describe("runBrowserProxyCommand", () => {
       defaultProfile: "openclaw",
     });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValue(true);
+    vi.resetModules();
+    ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
+  });
+
+  it("serializes plural action downloads without reading nested page paths", async () => {
+    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-action-"));
+    const firstPath = nodePath.join(tempDir, "first.txt");
+    const secondPath = nodePath.join(tempDir, "second.txt");
+    const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
+    const result = {
+      ok: true,
+      downloads: [
+        { path: firstPath, suggestedFilename: "first.txt" },
+        null,
+        { path: 42 },
+        { path: secondPath, suggestedFilename: "second.txt" },
+        { path: firstPath, suggestedFilename: "first-copy.txt" },
+      ],
+      result: {
+        path: nestedPagePath,
+        downloads: [{ path: nestedPagePath }],
+      },
+    };
+
+    try {
+      await Promise.all([
+        fs.writeFile(firstPath, "first browser download", "utf8"),
+        fs.writeFile(secondPath, "second browser download", "utf8"),
+        fs.writeFile(nestedPagePath, "must stay on the node", "utf8"),
+      ]);
+      dispatcherMocks.dispatch.mockResolvedValueOnce({ status: 200, body: result });
+
+      const payload = JSON.parse(
+        await runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
+      ) as {
+        result: unknown;
+        files?: Array<{ path: string; base64: string; mimeType?: string }>;
+      };
+
+      expect(payload.result).toEqual(result);
+      expect(
+        payload.files?.map((file) => ({
+          path: file.path,
+          contents: Buffer.from(file.base64, "base64").toString("utf8"),
+          mimeType: file.mimeType,
+        })),
+      ).toEqual([
+        { path: firstPath, contents: "first browser download", mimeType: "image/png" },
+        { path: secondPath, contents: "second browser download", mimeType: "image/png" },
+      ]);
+      expect(payload.files?.some((file) => file.path === nestedPagePath)).toBe(false);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an aggregate above the proxy transport budget", async () => {
+    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-limit-"));
+    const firstPath = nodePath.join(tempDir, "first.bin");
+    const secondPath = nodePath.join(tempDir, "second.bin");
+    try {
+      await Promise.all([fs.writeFile(firstPath, ""), fs.writeFile(secondPath, "")]);
+      await Promise.all([
+        fs.truncate(firstPath, BROWSER_PROXY_MAX_FILE_BYTES),
+        fs.truncate(
+          secondPath,
+          BROWSER_PROXY_MAX_TOTAL_FILE_BYTES - BROWSER_PROXY_MAX_FILE_BYTES + 1,
+        ),
+      ]);
+      dispatcherMocks.dispatch.mockResolvedValueOnce({
+        status: 200,
+        body: { downloads: [{ path: firstPath }, { path: secondPath }] },
+      });
+
+      const error = await runBrowserProxyCommand(
+        JSON.stringify({ method: "POST", path: "/act" }),
+      ).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        `browser proxy file read failed for ${secondPath}: Error: browser proxy files exceed 16 MiB aggregate limit`,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects too many unique files before reading them", async () => {
+    dispatcherMocks.dispatch.mockResolvedValueOnce({
+      status: 200,
+      body: {
+        downloads: Array.from({ length: BROWSER_PROXY_MAX_FILES + 1 }, (_, index) => ({
+          path: `/missing/browser-download-${index}.bin`,
+        })),
+      },
+    });
+
+    await expect(
+      runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
+    ).rejects.toThrow("browser proxy response exceeds 256 file limit");
+  });
+
+  it("rejects a result whose encoded node frame would exceed the transport limit", async () => {
+    dispatcherMocks.dispatch.mockResolvedValueOnce({
+      status: 200,
+      body: { result: "\\".repeat(7 * 1024 * 1024) },
+    });
+
+    await expect(
+      runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
+    ).rejects.toThrow("browser proxy payload exceeds 24 MiB encoded limit");
   });
 
   it("adds profile and browser status details on ws-backed timeouts", async () => {
@@ -289,11 +409,16 @@ describe("runBrowserProxyCommand", () => {
     await result;
   });
 
-  it("keeps non-timeout browser errors intact", async () => {
-    dispatcherMocks.dispatch.mockResolvedValue({
-      status: 500,
-      body: { error: "tab not found" },
-    });
+  it.each([
+    { status: 500, body: { error: "tab not found" }, expected: "500: tab not found" },
+    {
+      status: 404,
+      body: { error: 'tab not found: browser tab "abc"' },
+      expected: "404: tab not found",
+    },
+    { status: 503, body: { error: "" }, expected: "HTTP 503" },
+  ])("preserves legacy node errors without envelope opt-in: $expected", async (response) => {
+    dispatcherMocks.dispatch.mockResolvedValue(response);
 
     await expect(
       runBrowserProxyCommand(
@@ -304,7 +429,52 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow("tab not found");
+    ).rejects.toThrow(response.expected);
+  });
+
+  it("preserves only validated browser error metadata in the proxy envelope", async () => {
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 409,
+      body: {
+        error: "headed mode needs a display",
+        reason: "no_display_for_headed_profile",
+        details: {
+          profile: "openclaw",
+          requestedHeadless: false,
+          headlessSource: "config",
+          displayPresent: false,
+          remediation: "untrusted",
+        },
+        untrusted: "drop me",
+      },
+    });
+
+    const result = JSON.parse(
+      await runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/start",
+          profile: "openclaw",
+          errorEnvelope: "browser-v1",
+        }),
+      ),
+    );
+
+    expect(result).toEqual({
+      error: {
+        status: 409,
+        body: {
+          error: "headed mode needs a display",
+          reason: "no_display_for_headed_profile",
+          details: {
+            profile: "openclaw",
+            requestedHeadless: false,
+            headlessSource: "config",
+            displayPresent: false,
+          },
+        },
+      },
+    });
   });
 
   it("rejects unauthorized query.profile when allowProfiles is configured", async () => {
@@ -393,6 +563,20 @@ describe("runBrowserProxyCommand", () => {
         }),
       ),
     ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects host-local system profile listing on a browser node", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: [] } },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({ method: "GET", path: "/system-profiles", timeoutMs: 50 }),
+      ),
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot run host-local browser routes");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
@@ -494,17 +678,3 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

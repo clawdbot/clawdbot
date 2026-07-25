@@ -14,6 +14,9 @@ export type GatewayServiceInstallArgs = {
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
+  // Verified before a config rewrite; Windows uses this to bridge a transient
+  // listener gap while replacing a Startup-folder fallback.
+  startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
 };
 
 export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
@@ -28,6 +31,42 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
   disable?: boolean;
   warn?: (message: string) => void;
+  onMutation?: (mutation: GatewayLifecycleMutation) => void;
+};
+
+export type GatewayLifecycleMutationMode =
+  | "enable"
+  | "bootstrap"
+  | "kickstart"
+  | "bootout"
+  | "disable"
+  | "disable-stop"
+  | "disable-bootout"
+  | "handoff-kickstart"
+  | "handoff-reload"
+  | "systemctl-start"
+  | "systemctl-stop"
+  | "systemctl-restart"
+  | "startup-entry-start"
+  | "startup-entry-stop"
+  | "startup-entry-restart"
+  | "schtasks-start"
+  | "schtasks-stop"
+  | "schtasks-end"
+  | "schtasks-restart"
+  | "sigterm"
+  | "sigusr1"
+  | "rpc"
+  | "launchd-bootstrap"
+  | "service-repair"
+  | "scheduled"
+  | "deferred"
+  | "coalesced"
+  | "reload"
+  | "start-after-exit";
+
+export type GatewayLifecycleMutation = {
+  mode: GatewayLifecycleMutationMode;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
@@ -66,13 +105,17 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "temporary-program" | "version-mismatch";
+  code: "missing-program" | "port-mismatch" | "temporary-program" | "version-mismatch";
   message: string;
 };
 
 export type GatewayServiceStartResult =
+  | {
+      outcome: "already-running";
+      state: GatewayServiceState;
+      issues: GatewayServiceStartRepairIssue[];
+    }
   | { outcome: "started"; state: GatewayServiceState }
-  | { outcome: "scheduled"; state: GatewayServiceState }
   | { outcome: "missing-install"; state: GatewayServiceState }
   | {
       outcome: "repair-required";

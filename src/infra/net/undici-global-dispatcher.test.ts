@@ -164,7 +164,6 @@ import {
   resolveEnvHttpProxyUrl,
 } from "./proxy-env.js";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./proxy/active-proxy-state.js";
@@ -215,7 +214,6 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGlobalUndiciStreamTimeoutsForTests();
-    resetActiveManagedProxyStateForTests();
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
     vi.mocked(isWSL2Sync).mockReturnValue(false);
@@ -645,7 +643,6 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGlobalUndiciStreamTimeoutsForTests();
-    resetActiveManagedProxyStateForTests();
     setCurrentDispatcher(new Agent());
     vi.mocked(isWSL2Sync).mockReturnValue(false);
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);

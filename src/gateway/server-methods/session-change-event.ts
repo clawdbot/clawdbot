@@ -1,11 +1,12 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
+import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export type SessionChangedPayload = {
+type SessionChangedPayload = {
   sessionKey?: string;
   agentId?: string;
   reason: string;
@@ -22,6 +23,7 @@ export function emitSessionsChanged(
   >,
   payload: SessionChangedPayload,
 ) {
+  invalidateSessionSharingSnapshot(payload.sessionKey);
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
     return;
@@ -35,6 +37,16 @@ export function emitSessionsChanged(
       )
     : null;
   const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
+  const activeRunState = sessionRow
+    ? resolveVisibleActiveSessionRunState({
+        context,
+        requestedKey: payload.sessionKey ?? sessionRow.key,
+        canonicalKey: sessionRow.key,
+        sessionId: sessionRow.sessionId,
+        agentId: sessionRow.key === "global" ? payload.agentId : undefined,
+        defaultAgentId,
+      })
+    : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {
@@ -45,14 +57,8 @@ export function emitSessionsChanged(
             ...buildGatewaySessionEventFields({
               sessionRow,
               agentId: payload.agentId,
-              hasActiveRun: hasVisibleActiveSessionRun({
-                context,
-                requestedKey: payload.sessionKey ?? sessionRow.key,
-                canonicalKey: sessionRow.key,
-                sessionId: sessionRow.sessionId,
-                agentId: sessionRow.key === "global" ? payload.agentId : undefined,
-                defaultAgentId,
-              }),
+              hasActiveRun: activeRunState?.active,
+              activeRunIds: activeRunState?.runIds,
             }),
             effectiveFastMode: sessionRow.effectiveFastMode,
             effectiveFastModeSource: sessionRow.effectiveFastModeSource,
@@ -63,6 +69,12 @@ export function emitSessionsChanged(
         : {}),
     },
     connIds,
-    { dropIfSlow: true },
+    {
+      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      dropIfSlow: true,
+      // Scope only to a concrete key; a `[undefined]` scope filters no connection
+      // correctly and would strip draft gating, so fall back to an unscoped send.
+      ...(sessionRow?.key ? { sessionKeys: [sessionRow.key] } : {}),
+    },
   );
 }

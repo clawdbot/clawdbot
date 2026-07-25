@@ -217,6 +217,22 @@ describe("Codex app inventory cache", () => {
     );
   });
 
+  it("keeps serialized app/list error messages on a UTF-16 boundary", () => {
+    const error = new Error(`${"x".repeat(499)}🚀tail`);
+
+    expect(serializeCodexAppInventoryError(error).message).toBe(`${"x".repeat(499)}...`);
+  });
+
+  it("keeps serialized app/list error data on a UTF-16 boundary", () => {
+    const error = Object.assign(new Error("app list failed"), {
+      data: { label: `${"x".repeat(499)}🚀tail` },
+    });
+
+    expect(serializeCodexAppInventoryError(error).data).toEqual({
+      label: `${"x".repeat(499)}...`,
+    });
+  });
+
   it("forces a post-install refresh past an older in-flight app/list", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";

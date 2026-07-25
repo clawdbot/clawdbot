@@ -95,6 +95,18 @@ export function registerDevicesCli(program: Command) {
 
   devicesCallOpts(
     devices
+      .command("rename")
+      .description("Assign an operator label to a paired device")
+      .requiredOption("--device <id>", "Device id")
+      .requiredOption("--name <label>", "Operator-assigned label (max 64 characters)")
+      .action(async (opts: DevicesRpcOpts) => {
+        const { runDevicesRenameCommand } = await loadDevicesRuntime();
+        await runDevicesRenameCommand(opts);
+      }),
+  );
+
+  devicesCallOpts(
+    devices
       .command("rotate")
       .description("Rotate a device token for a role")
       .requiredOption("--device <id>", "Device id")

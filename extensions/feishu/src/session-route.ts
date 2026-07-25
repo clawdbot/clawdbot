@@ -4,46 +4,42 @@ import {
   stripChannelTargetPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/channel-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveFeishuAccount } from "./accounts.js";
+import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
+import { resolveFeishuGroupConfig } from "./policy.js";
+import { normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 
 export function resolveFeishuOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
-  let trimmed = stripChannelTargetPrefix(params.target, "feishu", "lark");
-  if (!trimmed) {
+  const rawTarget = stripChannelTargetPrefix(params.target, "feishu", "lark");
+  const target = normalizeFeishuTarget(rawTarget);
+  if (!target) {
     return null;
   }
-
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  let isGroup = false;
-  let typeExplicit = false;
-
-  if (lower.startsWith("group:") || lower.startsWith("chat:") || lower.startsWith("channel:")) {
-    trimmed = trimmed.replace(/^(group|chat|channel):/i, "").trim();
-    isGroup = true;
-    typeExplicit = true;
-  } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
-    trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
-    isGroup = false;
-    typeExplicit = true;
-  }
-
-  if (!typeExplicit) {
-    const idLower = normalizeLowercaseStringOrEmpty(trimmed);
-    if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
-      isGroup = false;
-    }
-  }
+  const isGroup = resolveReceiveIdType(rawTarget) === "chat_id";
+  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const groupSessionScope = isGroup
+    ? resolveConfiguredFeishuGroupSessionScope({
+        groupConfig: resolveFeishuGroupConfig({ cfg: account.config, groupId: target }),
+        feishuCfg: account.config,
+      })
+    : undefined;
+  // Sender/topic-scoped inbound sessions cannot be recovered from a bare outbound chat id.
+  const recipientSessionExact = isGroup
+    ? target.startsWith("oc_") && groupSessionScope === "group"
+    : target.startsWith("ou_");
 
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "feishu",
     accountId: params.accountId,
+    recipientSessionExact,
     peer: {
       kind: isGroup ? "group" : "direct",
-      id: trimmed,
+      id: target,
     },
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `feishu:group:${trimmed}` : `feishu:${trimmed}`,
-    to: trimmed,
+    from: isGroup ? `feishu:group:${target}` : `feishu:${target}`,
+    to: target,
   });
 }

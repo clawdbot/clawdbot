@@ -1,6 +1,5 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.PermissionRequester
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -93,6 +92,7 @@ internal class CameraClipSession(
 
 class CameraCaptureManager(
   private val context: Context,
+  private val defaultFacing: () -> String = { "front" },
 ) {
   /** Base64 JSON response for camera.snap after resize and JPEG budget enforcement. */
   data class Payload(
@@ -116,18 +116,10 @@ class CameraCaptureManager(
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
 
-  @Volatile private var permissionRequester: PermissionRequester? = null
-
   /** Supplies the foreground Activity lifecycle required by CameraX use-case binding. */
   fun attachLifecycleOwner(owner: LifecycleOwner) {
     // CameraX binds use cases to an Activity lifecycle; background services cannot capture alone.
     lifecycleOwner = owner
-  }
-
-  /** Supplies the Activity-owned permission launcher used by camera and microphone commands. */
-  fun attachPermissionRequester(requester: PermissionRequester) {
-    // Permission prompts must be launched by the Activity that owns the ActivityResult registry.
-    permissionRequester = requester
   }
 
   /** Lists CameraX devices with stable Camera2 ids where available. */
@@ -139,30 +131,16 @@ class CameraCaptureManager(
         .sortedBy { it.id }
     }
 
-  private suspend fun ensureCameraPermission() {
+  private fun ensureCameraPermission() {
     val granted = checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     if (granted) return
-
-    val requester =
-      permissionRequester
-        ?: throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
-    val results = requester.requestIfMissing(listOf(Manifest.permission.CAMERA))
-    if (results[Manifest.permission.CAMERA] != true) {
-      throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
-    }
+    throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
   }
 
-  private suspend fun ensureMicPermission() {
+  private fun ensureMicPermission() {
     val granted = checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     if (granted) return
-
-    val requester =
-      permissionRequester
-        ?: throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-    val results = requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))
-    if (results[Manifest.permission.RECORD_AUDIO] != true) {
-      throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-    }
+    throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
   }
 
   /** Captures one still image and returns a gateway-sized JPEG payload. */
@@ -171,7 +149,7 @@ class CameraCaptureManager(
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
       val params = parseJsonParamsObject(paramsJson)
-      val facing = parseFacing(params) ?: "front"
+      val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
       val quality = (parseQuality(params) ?: 0.95).coerceIn(0.1, 1.0)
       val maxWidth = parseMaxWidth(params) ?: 1600
       val deviceId = parseDeviceId(params)
@@ -250,21 +228,15 @@ class CameraCaptureManager(
   suspend fun clip(paramsJson: String?): FilePayload =
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
-      val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
       val params = parseJsonParamsObject(paramsJson)
-      val facing = parseFacing(params) ?: "front"
+      val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
       val durationMs = (parseDurationMs(params) ?: 3_000).coerceIn(200, 60_000)
       val includeAudio = parseIncludeAudio(params) ?: true
       val deviceId = parseDeviceId(params)
       if (includeAudio) ensureMicPermission()
-
-      android.util.Log.w(
-        "CameraCaptureManager",
-        "clip: start facing=$facing duration=$durationMs audio=$includeAudio deviceId=${deviceId ?: "-"}",
-      )
+      val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
 
       val provider = context.cameraProvider()
-      android.util.Log.w("CameraCaptureManager", "clip: got camera provider")
 
       // Use LOWEST quality for smallest files over WebSocket
       val recorder =
@@ -300,65 +272,39 @@ class CameraCaptureManager(
           check(!file.exists() || file.delete()) { "failed to delete temporary camera clip" }
         },
       ).use { session ->
-        android.util.Log.w("CameraCaptureManager", "clip: binding preview + videoCapture to lifecycle")
-        val camera = provider.bindToLifecycle(owner, selector, preview, videoCapture)
-        android.util.Log.w("CameraCaptureManager", "clip: bound, cameraInfo=${camera.cameraInfo}")
+        provider.bindToLifecycle(owner, selector, preview, videoCapture)
 
         // Give camera pipeline time to initialize before recording
-        android.util.Log.w("CameraCaptureManager", "clip: warming up camera 1.5s...")
         kotlinx.coroutines.delay(1_500)
 
         val clipFile = session.ownFile(File.createTempFile("openclaw-clip-", ".mp4", context.cacheDir))
         val outputOptions = FileOutputOptions.Builder(clipFile).build()
 
         val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
-        android.util.Log.w("CameraCaptureManager", "clip: starting recording to ${clipFile.absolutePath}")
         val recording =
           videoCapture.output
             .prepareRecording(context, outputOptions)
             .apply {
               if (includeAudio) withAudioEnabled()
             }.start(context.mainExecutor()) { event ->
-              android.util.Log.w("CameraCaptureManager", "clip: event ${event.javaClass.simpleName}")
-              if (event is VideoRecordEvent.Status) {
-                android.util.Log.w("CameraCaptureManager", "clip: recording status update")
-              }
               if (event is VideoRecordEvent.Finalize) {
-                android.util.Log.w(
-                  "CameraCaptureManager",
-                  "clip: finalize hasError=${event.hasError()} error=${event.error} cause=${event.cause}",
-                )
                 finalized.complete(event)
               }
             }
         session.ownRecording(recording)
 
-        android.util.Log.w("CameraCaptureManager", "clip: recording started, delaying ${durationMs}ms")
         kotlinx.coroutines.delay(durationMs.toLong())
-        android.util.Log.w("CameraCaptureManager", "clip: stopping recording")
         recording.close()
 
         val finalizeEvent =
           try {
             withTimeout(15_000) { finalized.await() }
-          } catch (err: kotlinx.coroutines.TimeoutCancellationException) {
-            android.util.Log.e("CameraCaptureManager", "clip: finalize timed out", err)
+          } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
             throw IllegalStateException("UNAVAILABLE: camera clip finalize timed out")
           }
         if (finalizeEvent.hasError()) {
-          android.util.Log.e(
-            "CameraCaptureManager",
-            "clip: FAILED error=${finalizeEvent.error}, cause=${finalizeEvent.cause}",
-            finalizeEvent.cause,
-          )
-          // Check file size for debugging
-          val fileSize = withContext(Dispatchers.IO) { if (clipFile.exists()) clipFile.length() else -1 }
-          android.util.Log.e("CameraCaptureManager", "clip: file exists=${clipFile.exists()} size=$fileSize")
           throw IllegalStateException("UNAVAILABLE: camera clip failed (error=${finalizeEvent.error})")
         }
-
-        val fileSize = withContext(Dispatchers.IO) { clipFile.length() }
-        android.util.Log.w("CameraCaptureManager", "clip: SUCCESS file size=$fileSize")
 
         FilePayload(
           file = session.transferFile(),
@@ -475,6 +421,11 @@ class CameraCaptureManager(
   @SuppressLint("UnsafeOptInUsageError")
   private fun cameraIdOrNull(info: CameraInfo): String? = runCatching { Camera2CameraInfo.from(info).cameraId }.getOrNull()
 }
+
+internal fun resolveCameraFacing(
+  explicitFacing: String?,
+  preferredFacing: String,
+): String = explicitFacing ?: preferredFacing.takeIf { it == "back" } ?: "front"
 
 private suspend fun Context.cameraProvider(): ProcessCameraProvider =
   suspendCancellableCoroutine { cont ->

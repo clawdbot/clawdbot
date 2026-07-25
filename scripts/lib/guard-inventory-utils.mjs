@@ -239,10 +239,9 @@ export function formatGroupedInventoryHuman(params, inventory) {
 /** Parse TypeScript files and collect sorted inventory entries from each source file. */
 export async function collectTypeScriptInventory(params) {
   const inventory = [];
-  const scriptKind = params.scriptKind ?? params.ts.ScriptKind.TS;
 
   for (const filePath of params.files) {
-    const cacheKey = `${scriptKind}:${filePath}`;
+    const cacheKey = `${params.scriptKind ?? "auto"}:${filePath}`;
     let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
     if (!sourceFile) {
       let source = sourceTextCache.get(filePath);
@@ -258,7 +257,7 @@ export async function collectTypeScriptInventory(params) {
         source,
         params.ts.ScriptTarget.Latest,
         true,
-        scriptKind,
+        params.scriptKind,
       );
       parsedTypeScriptSourceCache.set(cacheKey, sourceFile);
     }

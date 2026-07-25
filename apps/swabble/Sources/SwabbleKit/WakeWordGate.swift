@@ -58,8 +58,6 @@ public enum WakeWordGate {
         let normalized: String
         let start: TimeInterval
         let end: TimeInterval
-        let range: Range<String.Index>?
-        let text: String
     }
 
     private struct TriggerTokens {
@@ -68,7 +66,6 @@ public enum WakeWordGate {
     }
 
     private struct MatchCandidate {
-        let index: Int
         let endIndex: Int
         let tokenCount: Int
         let triggerEnd: TimeInterval
@@ -87,35 +84,10 @@ public enum WakeWordGate {
         let tokens = self.normalizeSegments(segments)
         guard !tokens.isEmpty else { return nil }
 
-        var best: MatchCandidate?
-
-        for trigger in triggerTokens {
-            let count = trigger.tokens.count
-            guard count > 0, tokens.count > count else { continue }
-            for i in 0...(tokens.count - count - 1) {
-                let matched = (0..<count).allSatisfy { tokens[i + $0].normalized == trigger.tokens[$0] }
-                if !matched { continue }
-
-                let triggerEnd = tokens[i + count - 1].end
-                let nextToken = tokens[i + count]
-                let gap = nextToken.start - triggerEnd
-                if gap < config.minPostTriggerGap { continue }
-
-                let endIndex = i + count - 1
-                if let best {
-                    if endIndex < best.endIndex { continue }
-                    if endIndex == best.endIndex, count <= best.tokenCount { continue }
-                }
-
-                best = MatchCandidate(
-                    index: i,
-                    endIndex: endIndex,
-                    tokenCount: count,
-                    triggerEnd: triggerEnd,
-                    gap: gap,
-                    trigger: trigger.source)
-            }
-        }
+        let best = self.bestCandidate(
+            triggers: triggerTokens,
+            tokens: tokens,
+            minimumGap: config.minPostTriggerGap)
 
         guard let best else { return nil }
         let command = self.commandText(transcript: transcript, segments: segments, triggerEndTime: best.triggerEnd)
@@ -178,6 +150,59 @@ public enum WakeWordGate {
         return output
     }
 
+    private static func bestCandidate(
+        triggers: [TriggerTokens],
+        tokens: [Token],
+        minimumGap: TimeInterval)
+    -> MatchCandidate? {
+        var best: MatchCandidate?
+        for trigger in triggers {
+            for index in tokens.indices {
+                guard let candidate = self.candidate(
+                    trigger: trigger,
+                    at: index,
+                    tokens: tokens,
+                    minimumGap: minimumGap)
+                else { continue }
+                if self.isPreferred(candidate, over: best) {
+                    best = candidate
+                }
+            }
+        }
+        return best
+    }
+
+    private static func candidate(
+        trigger: TriggerTokens,
+        at index: Int,
+        tokens: [Token],
+        minimumGap: TimeInterval)
+    -> MatchCandidate? {
+        let count = trigger.tokens.count
+        guard count > 0, index + count < tokens.count else { return nil }
+        guard (0..<count).allSatisfy({ tokens[index + $0].normalized == trigger.tokens[$0] }) else {
+            return nil
+        }
+
+        let triggerEnd = tokens[index + count - 1].end
+        let gap = tokens[index + count].start - triggerEnd
+        guard gap >= minimumGap else { return nil }
+        return MatchCandidate(
+            endIndex: index + count - 1,
+            tokenCount: count,
+            triggerEnd: triggerEnd,
+            gap: gap,
+            trigger: trigger.source)
+    }
+
+    private static func isPreferred(_ candidate: MatchCandidate, over current: MatchCandidate?) -> Bool {
+        guard let current else { return true }
+        if candidate.endIndex != current.endIndex {
+            return candidate.endIndex > current.endIndex
+        }
+        return candidate.tokenCount > current.tokenCount
+    }
+
     private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [Token] {
         segments.compactMap { segment in
             let normalized = self.normalizeToken(segment.text)
@@ -185,9 +210,7 @@ public enum WakeWordGate {
             return Token(
                 normalized: normalized,
                 start: segment.start,
-                end: segment.end,
-                range: segment.range,
-                text: segment.text)
+                end: segment.end)
         }
     }
 

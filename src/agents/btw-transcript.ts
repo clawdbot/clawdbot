@@ -7,6 +7,8 @@ import {
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -101,10 +103,19 @@ function isTrailingUserMessage(entry: AgentSessionEntry | undefined): boolean {
 export async function readBtwTranscriptMessages(params: {
   sessionFile: string;
   sessionId: string;
+  sessionKey?: string;
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const entries = parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
+    const marker = parseSqliteSessionFileMarker(params.sessionFile);
+    const entries = marker
+      ? ((await loadTranscriptEvents({
+          agentId: marker.agentId,
+          sessionId: marker.sessionId,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          storePath: marker.storePath,
+        })) as AgentSessionEntry[])
+      : parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is AgentSessionEntry => entry.type !== "session",

@@ -6,9 +6,15 @@ import {
   formatSlackBotStarterThreadLabel,
   isSlackThreadAuthorCurrentBot,
   resolveSlackThreadHistoryFilterPolicy,
-  type SlackThreadRootCandidate,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
+
+type SlackThreadRootCandidate = {
+  userId?: string;
+  botId?: string;
+  text?: string;
+  ts?: string;
+};
 
 describe("isSlackThreadAuthorCurrentBot", () => {
   const identity = { botUserId: "U_BOT", botId: "B1" };
@@ -243,5 +249,12 @@ describe("formatSlackBotStarterThreadLabel", () => {
         starterText: "Line one\n\nLine two",
       }),
     ).toBe("Slack thread DM (assistant root): Line one Line two");
+  });
+
+  it("drops a surrogate-pair emoji whole when it straddles the snippet limit", () => {
+    const starterText = `${"a".repeat(79)}🐱tail`;
+    expect(formatSlackBotStarterThreadLabel({ roomLabel: "DM", starterText })).toBe(
+      `Slack thread DM (assistant root): ${"a".repeat(79)}`,
+    );
   });
 });

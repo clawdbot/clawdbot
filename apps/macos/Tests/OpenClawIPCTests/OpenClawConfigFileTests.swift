@@ -22,6 +22,20 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
+    func `browser control enabled reads config flag`() async {
+        let override = self.makeConfigOverridePath()
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            #expect(OpenClawConfigFile.browserControlEnabled() == true)
+            OpenClawConfigFile.saveDict(["browser": ["enabled": false]])
+            #expect(OpenClawConfigFile.browserControlEnabled() == false)
+            OpenClawConfigFile.setBrowserControlEnabled(true)
+            #expect(OpenClawConfigFile.browserControlEnabled() == true)
+        }
+    }
+
+    @MainActor
+    @Test
     func `remote gateway port parses and matches host`() async {
         let override = self.makeConfigOverridePath()
 

@@ -79,7 +79,7 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   disk?: QaSuiteCommandOptions["disk"];
   preflight?: QaSuiteCommandOptions["preflight"];
   runtimePair?: QaSuiteCommandOptions["runtimePair"];
-  runtimeParityTier?: QaSuiteCommandOptions["runtimeParityTier"];
+  runtimePairLane?: QaSuiteCommandOptions["runtimePairLane"];
 };
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
@@ -141,7 +141,7 @@ function collectCliSuppliedQaRunFlags(
 }
 
 function formatFlagList(flags: readonly string[]): string {
-  return flags.length === 1 ? flags[0] : flags.join(", ");
+  return flags.join(", ");
 }
 
 function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
@@ -468,10 +468,7 @@ export function registerQaLabCli(program: Command) {
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--channel-driver <id>", "QA channel driver: qa-channel, crabline, or live")
-    .option(
-      "--channel <id>",
-      "Internal host QA channel override for --channel-driver; defaults to scenario/default",
-    )
+    .option("--channel <id>", "Channel id for --channel-driver crabline or live")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -513,8 +510,8 @@ export function registerQaLabCli(program: Command) {
     .option("--disk <size>", "Multipass disk size")
     .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. openclaw,codex")
     .option(
-      "--runtime-parity-tier <tier>",
-      "Add scenarios tagged with runtimeParityTier (standard, optional, live-only, soak; repeatable or comma-separated)",
+      "--runtime-pair-lane <lane>",
+      "Add scenarios in a runtimePairLane (core, extended, soak; repeatable or comma-separated)",
       collectString,
       [],
     )
@@ -544,7 +541,7 @@ export function registerQaLabCli(program: Command) {
         disk: opts.disk,
         preflight: opts.preflight,
         runtimePair: opts.runtimePair,
-        runtimeParityTier: opts.runtimeParityTier,
+        runtimePairLane: opts.runtimePairLane,
       });
     });
 
@@ -1000,3 +997,4 @@ export function registerQaLabCli(program: Command) {
     lane.register(qa);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

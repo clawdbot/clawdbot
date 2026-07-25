@@ -69,6 +69,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
     expect(actions).toContain("poll");
     expect(actions).toContain("poll-vote");
+    expect(discovery.capabilities).toEqual(["presentation"]);
     expect(supportsAction({ action: "poll" } as never)).toBe(false);
     expect(supportsAction({ action: "poll-vote" } as never)).toBe(true);
   });
@@ -162,6 +163,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
 
     expect(actions).toEqual(["poll", "poll-vote"]);
+    expect(discovery.capabilities).toEqual(["presentation"]);
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
@@ -189,6 +191,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
 
     expect(actions).toStrictEqual([]);
+    expect(discovery.capabilities).toStrictEqual([]);
   });
 
   it("honors the selected Matrix account during discovery", () => {

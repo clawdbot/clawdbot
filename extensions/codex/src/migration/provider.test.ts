@@ -13,8 +13,8 @@ import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
-import { targetCodexMarketplaceDiscoveryTimeoutMs } from "./apply.js";
 import { buildCodexMigrationProvider } from "./provider.js";
+import { discoverCodexSource } from "./source.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
 
@@ -48,6 +48,8 @@ function makeContext(params: {
   workspaceDir: string;
   overwrite?: boolean;
   includeSecrets?: boolean;
+  targetAgentId?: string;
+  itemKinds?: readonly string[];
   verifyPluginApps?: boolean;
   providerOptions?: MigrationProviderContext["providerOptions"];
   reportDir?: string;
@@ -68,6 +70,8 @@ function makeContext(params: {
     source: params.source,
     stateDir: params.stateDir,
     includeSecrets: params.includeSecrets,
+    targetAgentId: params.targetAgentId,
+    itemKinds: params.itemKinds,
     overwrite: params.overwrite,
     providerOptions:
       params.providerOptions ?? (params.verifyPluginApps ? { verifyPluginApps: true } : undefined),
@@ -168,6 +172,7 @@ function sourceAppCacheKey(fixture: { codexHome: string }): string {
         transport: "stdio",
         command: "codex",
         commandSource: "managed",
+        managedCommandOrder: "desktop-first",
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
         env: {
@@ -192,30 +197,183 @@ afterEach(async () => {
 });
 
 describe("buildCodexMigrationProvider", () => {
-  it("parses target marketplace discovery timeout env strictly", () => {
-    expect(
-      targetCodexMarketplaceDiscoveryTimeoutMs({
-        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "0",
-      }),
-    ).toBe(0);
-    expect(
-      targetCodexMarketplaceDiscoveryTimeoutMs({
-        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "250",
-      }),
-    ).toBe(250);
-
-    for (const value of ["0x10", "1e3", "2.5"]) {
-      expect(
-        targetCodexMarketplaceDiscoveryTimeoutMs({
-          OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: value,
-        }),
-      ).toBe(30_000);
-    }
-  });
-
   beforeEach(() => {
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   });
+
+  it("preserves whitespace in nonempty CODEX_HOME values", async () => {
+    const root = await makeTempRoot();
+    const codexHome = path.join(root, " spaced ");
+    await writeFile(path.join(codexHome, "memories", "MEMORY.md"), "# Memory\n");
+    vi.stubEnv("CODEX_HOME", codexHome);
+
+    const source = await discoverCodexSource({ memoryOnly: true });
+
+    expect(source.codexHome).toBe(codexHome);
+    expect(source.memoryFiles.map((entry) => entry.path)).toEqual([
+      path.join(codexHome, "memories", "MEMORY.md"),
+    ]);
+  });
+
+  it("plans and imports only consolidated Codex memory into the selected agent", async () => {
+    const fixture = await createCodexFixture();
+    const targetWorkspace = path.join(fixture.root, "workspace-research");
+    const reportDir = path.join(fixture.root, "report");
+    await writeFile(path.join(fixture.codexHome, "memories", "MEMORY.md"), "# Memory\n");
+    await writeFile(path.join(fixture.codexHome, "memories", "memory_summary.md"), "# Summary\n");
+    await writeFile(
+      path.join(fixture.codexHome, "memories", "rollout_summaries", "private.md"),
+      "# Raw rollout\n",
+    );
+    const config = {
+      agents: {
+        defaults: { workspace: fixture.workspaceDir },
+        list: [
+          { id: "main", default: true },
+          { id: "research", workspace: targetWorkspace },
+        ],
+      },
+    } as MigrationProviderContext["config"];
+    const context = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      reportDir,
+      config,
+      targetAgentId: "research",
+      itemKinds: ["memory"],
+      verifyPluginApps: true,
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(context);
+
+    expect(appServerRequest).not.toHaveBeenCalled();
+    expect(plan.items.map((item) => item.id)).toEqual([
+      "memory:codex:MEMORY.md",
+      "memory:codex:memory_summary.md",
+    ]);
+    expect(plan.items.every((item) => item.kind === "memory")).toBe(true);
+    expect(plan.items.every((item) => item.target?.startsWith(targetWorkspace))).toBe(true);
+
+    const result = await provider.apply(context, plan);
+
+    expect(result.summary).toMatchObject({ migrated: 2, errors: 0, conflicts: 0 });
+    await expect(
+      fs.readFile(path.join(targetWorkspace, "memory", "imports", "codex", "MEMORY.md"), "utf8"),
+    ).resolves.toBe("# Memory\n");
+    await expect(
+      fs.access(path.join(targetWorkspace, "memory", "imports", "codex", "private.md")),
+    ).rejects.toThrow();
+  });
+
+  it("skips unrelated Codex app-server preparation for memory-only imports", async () => {
+    const fixture = await createCodexFixture();
+    const provider = buildCodexMigrationProvider();
+    const preparation = provider.prepareApply?.(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        itemKinds: ["memory"],
+      }),
+    );
+
+    expect(preparation).toBeUndefined();
+  });
+
+  it("rejects non-file Codex consolidated memory candidates", async () => {
+    const fixture = await createCodexFixture();
+    await fs.mkdir(path.join(fixture.codexHome, "memories", "MEMORY.md"), {
+      recursive: true,
+    });
+    const provider = buildCodexMigrationProvider();
+
+    await expect(
+      provider.plan(
+        makeContext({
+          source: fixture.codexHome,
+          stateDir: fixture.stateDir,
+          workspaceDir: fixture.workspaceDir,
+          itemKinds: ["memory"],
+        }),
+      ),
+    ).rejects.toThrow("must be a regular file");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked Codex consolidated memory candidates",
+    async () => {
+      const fixture = await createCodexFixture();
+      const actualMemory = path.join(fixture.root, "actual-memory.md");
+      const memoryPath = path.join(fixture.codexHome, "memories", "MEMORY.md");
+      await writeFile(actualMemory, "# Memory\n");
+      await fs.mkdir(path.dirname(memoryPath), { recursive: true });
+      await fs.symlink(actualMemory, memoryPath);
+      const provider = buildCodexMigrationProvider();
+
+      await expect(
+        provider.plan(
+          makeContext({
+            source: fixture.codexHome,
+            stateDir: fixture.stateDir,
+            workspaceDir: fixture.workspaceDir,
+            itemKinds: ["memory"],
+          }),
+        ),
+      ).rejects.toThrow("must not be a symbolic link");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked import destination that resolves into Codex memory",
+    async () => {
+      const fixture = await createCodexFixture();
+      const memoryDir = path.join(fixture.codexHome, "memories");
+      await writeFile(path.join(memoryDir, "MEMORY.md"), "# Memory\n");
+      await fs.mkdir(fixture.workspaceDir, { recursive: true });
+      await fs.symlink(memoryDir, path.join(fixture.workspaceDir, "memory"));
+      const provider = buildCodexMigrationProvider();
+
+      await expect(
+        provider.plan(
+          makeContext({
+            source: fixture.codexHome,
+            stateDir: fixture.stateDir,
+            workspaceDir: fixture.workspaceDir,
+            itemKinds: ["memory"],
+          }),
+        ),
+      ).rejects.toThrow("destination must stay in the selected workspace");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "marks a dangling Codex memory destination symlink as a conflict",
+    async () => {
+      const fixture = await createCodexFixture();
+      const target = path.join(fixture.workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+      await writeFile(path.join(fixture.codexHome, "memories", "MEMORY.md"), "# Memory\n");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.symlink(path.join(fixture.root, "missing-memory.md"), target);
+      const provider = buildCodexMigrationProvider();
+
+      const plan = await provider.plan(
+        makeContext({
+          source: fixture.codexHome,
+          stateDir: fixture.stateDir,
+          workspaceDir: fixture.workspaceDir,
+          itemKinds: ["memory"],
+          overwrite: true,
+        }),
+      );
+
+      expect(findItem(plan.items, "memory:codex:MEMORY.md")).toMatchObject({
+        status: "conflict",
+        reason: "target is not a regular file",
+      });
+    },
+  );
 
   it("plans Codex skills while keeping plugins and native config explicit", async () => {
     const fixture = await createCodexFixture();
@@ -292,6 +450,7 @@ describe("buildCodexMigrationProvider", () => {
     expectRecordFields((mockCallArg(appServerRequest) as { startOptions?: unknown }).startOptions, {
       command: "codex",
       commandSource: "managed",
+      managedCommandOrder: "desktop-first",
       env: {
         CODEX_HOME: fixture.codexHome,
         HOME: path.dirname(fixture.codexHome),
@@ -405,9 +564,11 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
     expect(configState.agents?.defaults?.models?.["openai/gpt-5.4-mini"]).toEqual({});
+    expect(configState.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({});
+    expect(configState.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toEqual({});
     expect(configState.agents?.defaults?.model).toEqual({
       fallbacks: [],
-      primary: "openai/gpt-5.5",
+      primary: "openai/gpt-5.6-sol",
     });
   });
 
@@ -820,9 +981,11 @@ describe("buildCodexMigrationProvider", () => {
         details: expect.objectContaining({
           path: ["agents", "defaults"],
           value: expect.objectContaining({
-            model: { primary: "openai/gpt-5.5" },
+            model: { primary: "openai/gpt-5.6-sol" },
             models: expect.objectContaining({
               "openai/gpt-5.4-mini": {},
+              "openai/gpt-5.5": {},
+              "openai/gpt-5.6-sol": {},
             }),
           }),
         }),
@@ -2300,8 +2463,8 @@ describe("buildCodexMigrationProvider", () => {
       reason: "install failed",
     });
     expectRecordFields(findItem(result.items, "config:codex-plugins"), {
-      status: "skipped",
-      reason: "no selected Codex plugins",
+      status: "warning",
+      reason: "selected Codex plugin activation is incomplete",
     });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toBeUndefined();
   });
@@ -2462,3 +2625,4 @@ function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v
     ...overrides,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

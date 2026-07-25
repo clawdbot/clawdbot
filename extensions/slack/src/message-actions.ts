@@ -12,7 +12,13 @@ export function listSlackMessageActions(
 ): ChannelMessageActionName[] {
   const accounts = (
     accountId ? [resolveSlackAccount({ cfg, accountId })] : listEnabledSlackAccounts(cfg)
-  ).filter((account) => account.enabled && account.botTokenSource !== "none");
+  ).filter(
+    (account) =>
+      account.enabled &&
+      (account.identity === "user"
+        ? account.userTokenSource !== "none"
+        : account.botTokenSource !== "none"),
+  );
   if (accounts.length === 0) {
     return [];
   }

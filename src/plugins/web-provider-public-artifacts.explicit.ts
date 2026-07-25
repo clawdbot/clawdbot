@@ -153,7 +153,7 @@ export function loadBundledWebFetchProviderEntriesFromDir(params: {
   });
 }
 
-export function loadBundledRuntimeWebFetchProviderEntriesFromDir(params: {
+function loadBundledRuntimeWebFetchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginWebFetchProviderEntry[] | null {

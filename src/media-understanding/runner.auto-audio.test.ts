@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { MediaUnderstandingConfig } from "../config/types.tools.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { clearMediaUnderstandingBinaryCacheForTests, runCapability } from "./runner.js";
+import { runCapability } from "./runner.js";
+import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
@@ -289,6 +291,55 @@ describe("runCapability auto audio entries", () => {
     expect(seenModel).toBe("gpt-4o-transcribe");
   });
 
+  it("does not leak the active xAI chat model into model-less batch STT", async () => {
+    let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
+    let seenModel: string | undefined;
+
+    await withAudioFixture("openclaw-auto-audio-xai", async ({ ctx, media, cache }) => {
+      const providerRegistry = createProviderRegistry({
+        xai: {
+          id: "xai",
+          capabilities: ["audio"],
+          transcribeAudio: async (req) => {
+            seenModel = req.model;
+            return { text: "xai audio" };
+          },
+        },
+      });
+      const cfg = {
+        models: {
+          providers: {
+            xai: {
+              apiKey: "xai-test-key", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      runResult = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+        activeModel: { provider: "xai", model: "grok-4.3" },
+      });
+    });
+
+    if (!runResult) {
+      throw new Error("expected xAI audio result");
+    }
+    expect(requireCapabilityOutput(runResult, 0)).toEqual({
+      kind: "audio.transcription",
+      attachmentIndex: 0,
+      provider: "xai",
+      text: "xai audio",
+    });
+    expect(seenModel).toBeUndefined();
+  });
+
   it("prefers provider keys over auto-detected local whisper", async () => {
     const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-audio-bin-"));
     try {
@@ -330,6 +381,15 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [
+              {
+                provider: "openai",
+                model: "whisper-1",
+                prompt: "entry prompt",
+                language: "de",
+                capabilities: ["audio"],
+              },
+            ],
             audio: {
               enabled: false,
             },
@@ -351,9 +411,7 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "openai", model: "whisper-1" }],
-            },
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
           },
         },
       },
@@ -381,14 +439,6 @@ describe("runCapability auto audio entries", () => {
               language: "fr",
               _requestPromptOverride: "Focus on names",
               _requestLanguageOverride: "en",
-              models: [
-                {
-                  provider: "openai",
-                  model: "whisper-1",
-                  prompt: "entry prompt",
-                  language: "de",
-                },
-              ],
             },
           },
         },
@@ -398,6 +448,78 @@ describe("runCapability auto audio entries", () => {
     expect(requireCapabilityOutput(result, 0).text).toBe("ok");
     expect(seenLanguage).toBe("en");
     expect(seenPrompt).toBe("Focus on names");
+  });
+
+  it("omits the implicit English audio prompt when a non-English language is configured", async () => {
+    let seenLanguage: string | undefined;
+    let seenPrompt: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenLanguage = req.language;
+        seenPrompt = req.prompt;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
+            audio: {
+              enabled: true,
+              language: "ru",
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(seenLanguage).toBe("ru");
+    expect(seenPrompt).toBeUndefined();
+  });
+
+  it("keeps explicit and English-compatible audio prompts", async () => {
+    const seenPrompts: Array<string | undefined> = [];
+    const runCase = async (audio: MediaUnderstandingConfig) => {
+      await runAutoAudioCase({
+        transcribeAudio: async (req) => {
+          seenPrompts.push(req.prompt);
+          return { text: "ok", model: req.model ?? "unknown" };
+        },
+        cfgExtra: {
+          tools: {
+            media: {
+              audio,
+            },
+          },
+        } as Partial<OpenClawConfig>,
+      });
+    };
+
+    await runCase({
+      enabled: true,
+      language: "ru",
+      prompt: "Transcribe in Russian.",
+      models: [{ provider: "openai", model: "whisper-1" }],
+    });
+    for (const language of ["en-US", "eng", "english"]) {
+      await runCase({
+        enabled: true,
+        language,
+        models: [{ provider: "openai", model: "whisper-1" }],
+      });
+    }
+    await runCase({
+      enabled: true,
+      models: [{ provider: "openai", model: "whisper-1" }],
+    });
+
+    expect(seenPrompts).toEqual([
+      "Transcribe in Russian.",
+      "Transcribe the audio.",
+      "Transcribe the audio.",
+      "Transcribe the audio.",
+      "Transcribe the audio.",
+    ]);
   });
 
   it("uses mistral when only mistral key is configured", async () => {

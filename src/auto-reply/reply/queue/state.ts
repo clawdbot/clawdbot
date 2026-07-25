@@ -3,6 +3,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import {
+  normalizeThinkLevel,
+  resolveSupportedThinkingLevel,
+  resolveThinkingDefaultForModel,
+  type ThinkingCatalogEntry,
+} from "../../thinking.js";
+import {
   completeFollowupRunLifecycle,
   type FollowupRun,
   type QueueDropPolicy,
@@ -10,10 +16,12 @@ import {
   type QueueSettings,
 } from "./types.js";
 
-export type FollowupQueueState = {
+type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
+  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
+  inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
   mode: QueueMode;
   debounceMs: number;
@@ -69,8 +77,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
   );
   while (sourceCount > queue.cap) {
     let evicted = false;
-    for (let entryIndex = 0; entryIndex < queue.summaryElisions.length; entryIndex += 1) {
-      const entry = queue.summaryElisions[entryIndex];
+    for (const [entryIndex, entry] of queue.summaryElisions.entries()) {
       const sourceIndex = entry.sources.findIndex(
         (source) => !queue.activeSummarySources.has(source),
       );
@@ -112,6 +119,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     abortController: new AbortController(),
     items: [],
     draining: false,
+    inFlight: new Set(),
     lastEnqueuedAt: 0,
     mode: settings.mode,
     debounceMs:
@@ -158,6 +166,7 @@ export function clearFollowupQueue(key: string): number {
     }
   }
   queue.items.length = 0;
+  queue.inFlight.clear();
   queue.droppedCount = 0;
   queue.summaryLines = [];
   queue.summarySources = [];
@@ -179,6 +188,11 @@ export function refreshQueuedFollowupSession(params: {
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
+  nextThinking?: {
+    level?: string;
+    catalog?: ThinkingCatalogEntry[];
+    agentRuntime?: string | null;
+  };
 }): void {
   const cleaned = params.key.trim();
   if (!cleaned) {
@@ -199,7 +213,8 @@ export function refreshQueuedFollowupSession(params: {
   const shouldRewriteSelection =
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
-    Object.hasOwn(params, "nextAuthProfileIdSource");
+    Object.hasOwn(params, "nextAuthProfileIdSource") ||
+    params.nextThinking !== undefined;
   if (!shouldRewriteSession && !shouldRewriteSelection) {
     return;
   }
@@ -234,6 +249,23 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+      if (params.nextThinking) {
+        const explicitLevel = normalizeThinkLevel(params.nextThinking.level);
+        run.thinkLevel = explicitLevel
+          ? resolveSupportedThinkingLevel({
+              provider: run.provider,
+              model: run.model,
+              level: explicitLevel,
+              catalog: params.nextThinking.catalog,
+              agentRuntime: params.nextThinking.agentRuntime,
+            })
+          : resolveThinkingDefaultForModel({
+              provider: run.provider,
+              model: run.model,
+              catalog: params.nextThinking.catalog,
+              agentRuntime: params.nextThinking.agentRuntime,
+            });
       }
     }
   };

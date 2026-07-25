@@ -7,6 +7,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "AI_GATEWAY_API_KEY",
@@ -57,6 +58,7 @@ const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "MINIMAX_CODING_API_KEY",
   "MINIMAX_OAUTH_TOKEN",
   "MISTRAL_API_KEY",
+  "MODEL_API_KEY",
   "MODELSTUDIO_API_KEY",
   "MOONSHOT_API_KEY",
   "NVIDIA_API_KEY",
@@ -68,6 +70,7 @@ const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "PERPLEXITY_API_KEY",
   "QIANFAN_API_KEY",
   "QWEN_API_KEY",
+  "QWEN_TOKEN_PLAN_API_KEY",
   "RUNWAY_API_KEY",
   "RUNWAYML_API_SECRET",
   "SENSEAUDIO_API_KEY",
@@ -79,6 +82,7 @@ const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "TAVILY_API_KEY",
   "TOGETHER_API_KEY",
   "TOKENHUB_API_KEY",
+  "TOKENPLAN_API_KEY",
   "VENICE_API_KEY",
   "VLLM_API_KEY",
   "VOLCANO_ENGINE_API_KEY",
@@ -102,7 +106,6 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "CLAWHUB_CONFIG_PATH",
   "CLAWHUB_TOKEN",
   "CLAWHUB_URL",
-  "CLOUDSDK_PYTHON",
   "COMSPEC",
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -115,7 +118,9 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "MINIMAX_API_HOST",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
+  "NPM_CONFIG_PREFIX",
   "NPM_EXECPATH",
+  "PNPM_HOME",
   "OPENAI_API_KEYS",
   "OPENCLAW_AGENT_DIR",
   "OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES",
@@ -174,10 +179,13 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 // Block endpoint redirection for any service without overfitting per-provider names.
 // `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
 // in addition to the bare MATRIX_HOMESERVER listed above.
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_HOMESERVER"];
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_ENDPOINT", "_HOMESERVER"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
+  // Google Cloud SDK launchers treat CLOUDSDK_* values as runtime controls.
+  // Workspace .env must not steer gcloud subprocess interpreters or args.
+  "CLOUDSDK_",
   "OPENAI_API_KEY_",
   // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
   // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
@@ -245,8 +253,10 @@ export { loadGlobalRuntimeDotEnvFiles };
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwdEnvPath = path.join(process.cwd(), ".env");
-  loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  const cwd = tryProcessCwd();
+  if (cwd) {
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+  }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.

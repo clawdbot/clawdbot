@@ -7,7 +7,7 @@ import {
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { resolveQaLiveFrontierPreferredModel } from "./providers/live-frontier/model-selection.runtime.js";
 
-export function resolveQaPreferredLiveModel() {
+function resolveQaPreferredLiveModel() {
   return resolveQaLiveFrontierPreferredModel();
 }
 

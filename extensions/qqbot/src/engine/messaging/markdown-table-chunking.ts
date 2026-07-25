@@ -1,6 +1,8 @@
 // QQ Bot Markdown chunking keeps each sent message self-contained.
 
-export type QQBotBaseMarkdownChunker = (text: string, limit: number) => string[];
+import { formatQQBotMarkdown } from "./markdown-format.js";
+
+type QQBotBaseMarkdownChunker = (text: string, limit: number) => string[];
 
 const QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT = 3600;
 
@@ -16,7 +18,7 @@ type ActiveFence = {
   marker: string;
 };
 
-export type QQBotMarkdownChunker = {
+type QQBotMarkdownChunker = {
   chunkText: (text: string, limit: number) => string[];
   flushPendingText: (limit: number) => string[];
 };
@@ -233,9 +235,7 @@ class QQBotMarkdownChunkingState {
     if (this.textLines.length === 0) {
       return;
     }
-    if (this.flushFenceText(chunks, limit)) {
-      return;
-    }
+    const continuedFenceOpenLine = this.activeFence?.openLine;
     let text = this.textLines.join("\n");
     this.textLines = [];
     if (this.pendingTextFenceOpenLine) {
@@ -248,43 +248,23 @@ class QQBotMarkdownChunkingState {
     if (!text) {
       return;
     }
-    pushBaseChunks(chunks, text, limit, this.baseChunker);
-  }
-
-  private flushFenceText(chunks: string[], limit: number): boolean {
-    const pendingFenceOpenLine = this.pendingTextFenceOpenLine;
-    const firstLineFence = pendingFenceOpenLine ? null : parseFenceLine(this.textLines[0] ?? "");
-    const fence = pendingFenceOpenLine ? parseFenceLine(pendingFenceOpenLine) : firstLineFence;
-    if (!fence) {
-      return false;
+    chunks.push(...formatQQBotMarkdown(text, limit));
+    if (continuedFenceOpenLine) {
+      this.pendingTextFenceOpenLine = continuedFenceOpenLine;
     }
-
-    const bodyLines = pendingFenceOpenLine ? [...this.textLines] : this.textLines.slice(1);
-    this.textLines = [];
-    this.pendingTextFenceOpenLine = null;
-    if (bodyLines.length > 0 && isClosingFenceLine(bodyLines[bodyLines.length - 1], fence)) {
-      bodyLines.pop();
-    }
-    if (this.activeFence && bodyLines.length === 0) {
-      return true;
-    }
-
-    pushFenceLineChunks({
-      chunks,
-      openLine: fence.openLine,
-      closeLine: fence.closeLine,
-      bodyLines,
-      limit,
-      baseChunker: this.baseChunker,
-    });
-    return true;
   }
 
   private consumePendingFenceLinePrefix(text: string): string {
     if (!this.pendingFenceLineFragment) {
       return text;
     }
-    const separator = shouldJoinFenceLineFragments(this.pendingFenceLineFragment, text) ? "" : "\n";
+    const firstLine = text.split("\n", 1)[0] ?? "";
+    const startsWithClosingFence =
+      this.activeFence && isClosingFenceLine(firstLine, this.activeFence);
+    const separator =
+      !startsWithClosingFence && shouldJoinFenceLineFragments(this.pendingFenceLineFragment, text)
+        ? ""
+        : "\n";
     const merged = `${this.pendingFenceLineFragment}${separator}${text}`;
     this.pendingFenceLineFragment = null;
     return merged;
@@ -375,7 +355,24 @@ function pushBaseChunks(
   byteLimit: number,
   baseChunker: QQBotBaseMarkdownChunker,
 ): void {
-  for (const chunk of baseChunker(text, byteLimit)) {
+  const baseChunks = baseChunker(text, byteLimit).filter(Boolean);
+  for (let index = 0; index + 1 < baseChunks.length; index += 1) {
+    const chunk = baseChunks[index] ?? "";
+    if (!/(^|[^\\])(?:\\\\)*\\$/u.test(chunk)) {
+      continue;
+    }
+    const next = baseChunks[index + 1] ?? "";
+    const firstCodePoint = next.codePointAt(0);
+    const first = firstCodePoint === undefined ? "" : String.fromCodePoint(firstCodePoint);
+    if (first && utf8ByteLength(chunk + first) <= byteLimit) {
+      baseChunks[index] = chunk + first;
+      baseChunks[index + 1] = next.slice(first.length);
+    } else {
+      baseChunks[index] = chunk.slice(0, -1);
+      baseChunks[index + 1] = `\\${next}`;
+    }
+  }
+  for (const chunk of baseChunks) {
     if (!chunk) {
       continue;
     }
@@ -394,15 +391,20 @@ function splitByUtf8ByteLimit(text: string, byteLimit: number): string[] {
   const chunks: string[] = [];
   let current = "";
   let currentBytes = 0;
-  for (const char of text) {
-    const charBytes = utf8ByteLength(char);
-    if (current && currentBytes + charBytes > byteLimit) {
+  const chars = Array.from(text);
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index] ?? "";
+    const escapedUnit = char === "\\" && chars[index + 1] ? `${char}${chars[index + 1]}` : "";
+    const unit =
+      escapedUnit && utf8ByteLength(escapedUnit) <= byteLimit ? `${char}${chars[++index]}` : char;
+    const unitBytes = utf8ByteLength(unit);
+    if (current && currentBytes + unitBytes > byteLimit) {
       chunks.push(current);
       current = "";
       currentBytes = 0;
     }
-    current += char;
-    currentBytes += charBytes;
+    current += unit;
+    currentBytes += unitBytes;
   }
   if (current) {
     chunks.push(current);
@@ -558,45 +560,6 @@ function renderTableRowAsFields(headers: string[], cells: string[]): string {
     .join("\n");
 }
 
-function pushFenceLineChunks(params: {
-  chunks: string[];
-  openLine: string;
-  closeLine: string;
-  bodyLines: string[];
-  limit: number;
-  baseChunker: QQBotBaseMarkdownChunker;
-}): void {
-  const { chunks, openLine, closeLine, bodyLines, limit, baseChunker } = params;
-  let currentLines: string[] = [];
-  const render = (lines: string[]) => [openLine, ...lines, closeLine].join("\n");
-  const flushCurrent = (): void => {
-    if (currentLines.length === 0) {
-      return;
-    }
-    chunks.push(render(currentLines));
-    currentLines = [];
-  };
-
-  for (const line of bodyLines) {
-    const candidate = [...currentLines, line];
-    if (utf8ByteLength(render(candidate)) <= limit) {
-      currentLines = candidate;
-      continue;
-    }
-    flushCurrent();
-    const singleLineChunk = render([line]);
-    if (utf8ByteLength(singleLineChunk) <= limit) {
-      currentLines = [line];
-      continue;
-    }
-    pushBaseChunks(chunks, singleLineChunk, limit, baseChunker);
-  }
-
-  if (currentLines.length > 0 || bodyLines.length === 0) {
-    chunks.push(render(currentLines));
-  }
-}
-
 function parseFenceLine(line: string): ActiveFence | null {
   const match = line.match(/^(\s*)(`{3,}|~{3,})/);
   if (!match?.[2]) {
@@ -616,6 +579,3 @@ function isClosingFenceLine(line: string, fence: ActiveFence): boolean {
     match?.[2] && match[2][0] === markerChar && match[2].length >= fence.marker.length,
   );
 }
-
-// Exposed for unit testing of the table-cell splitting logic only.
-export const testing = { splitTableCells, splitPartialTableCells };

@@ -26,7 +26,6 @@ describe("resolveAttemptTranscriptPolicy", () => {
       preserveNativeAnthropicToolUseIds: false,
       repairToolUseResultPairing: true,
       preserveSignatures: true,
-      sanitizeThinkingSignatures: false,
       dropThinkingBlocks: true,
       applyGoogleTurnOrdering: false,
       validateGeminiTurns: false,

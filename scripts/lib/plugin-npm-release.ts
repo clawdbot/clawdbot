@@ -3,12 +3,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
-import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
-import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { collectReleaseVersionFloorErrors, parseReleaseVersion } from "./release-version.mjs";
 
-export type PluginPackageJson = {
+type PluginPackageJson = {
   name?: string;
   version?: string;
   type?: string;
@@ -37,6 +38,7 @@ export type PluginPackageJson = {
       pluginSdkVersion?: string;
     };
     release?: {
+      publishToClawHub?: boolean;
       publishToNpm?: boolean;
       requireLatestDependencies?: unknown;
     };
@@ -54,16 +56,16 @@ export type PublishablePluginPackage = {
   packageName: string;
   version: string;
   channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta" | "extended-stable";
   installNpmSpec?: string;
   requiredLatestDependencies?: RequiredLatestDependency[];
 };
 
-export type PluginReleasePlanItem = PublishablePluginPackage & {
+type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
 };
 
-export type PluginReleasePlan = {
+type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
   candidates: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];
@@ -76,7 +78,7 @@ export type GitRangeSelection = {
   headRef: string;
 };
 
-export type ParsedPluginReleaseArgs = {
+type ParsedPluginReleaseArgs = {
   selection: string[];
   selectionMode?: PluginReleaseSelectionMode;
   pluginsFlagProvided: boolean;
@@ -84,16 +86,30 @@ export type ParsedPluginReleaseArgs = {
   headRef?: string;
 };
 
-export type PublishablePluginPackageCandidate<
-  TPackageJson extends PluginPackageJson = PluginPackageJson,
-> = {
-  extensionId: string;
-  packageDir: string;
-  packageJson: TPackageJson;
-  readmeText?: string;
+type ParsedPluginNpmReleaseArgs = ParsedPluginReleaseArgs & {
+  npmDistTag?: "extended-stable";
 };
 
+function parsePluginNpmDistTagOverride(value: string | undefined): "extended-stable" | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  if (value === "extended-stable") {
+    return value;
+  }
+  throw new Error(`Unknown npm dist-tag override: ${value}. Expected "extended-stable".`);
+}
+
+type PublishablePluginPackageCandidate<TPackageJson extends PluginPackageJson = PluginPackageJson> =
+  {
+    extensionId: string;
+    packageDir: string;
+    packageJson: TPackageJson;
+    readmeText?: string;
+  };
+
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const PLUGIN_NPM_VIEW_TIMEOUT_MS = 60_000;
 
 export function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
   dependencies: RequiredLatestDependency[];
@@ -242,7 +258,7 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   let headRef: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+    const arg = expectDefined(argv[index], `plugin release argument at index ${index}`);
     if (arg === "--") {
       continue;
     }
@@ -288,8 +304,31 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   if ((baseRef && !headRef) || (!baseRef && headRef)) {
     throw new Error("Both --base-ref and --head-ref are required together.");
   }
-
   return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
+}
+
+export function parsePluginNpmReleaseArgs(argv: string[]): ParsedPluginNpmReleaseArgs {
+  const baseArgs: string[] = [];
+  let npmDistTag: "extended-stable" | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = expectDefined(argv[index], `plugin npm release argument at index ${index}`);
+    if (arg !== "--npm-dist-tag") {
+      baseArgs.push(arg);
+      continue;
+    }
+    if (npmDistTag !== undefined) {
+      throw new Error("--npm-dist-tag must not be provided more than once.");
+    }
+    npmDistTag = parsePluginNpmDistTagOverride(readRequiredArgValue(argv, index, arg));
+    index += 1;
+  }
+  const parsed = parsePluginReleaseArgs(baseArgs);
+  if (npmDistTag === "extended-stable" && parsed.selectionMode !== "all-publishable") {
+    throw new Error(
+      "extended-stable requires --selection-mode all-publishable without an explicit plugin list.",
+    );
+  }
+  return { ...parsed, npmDistTag };
 }
 
 function readRequiredArgValue(
@@ -365,9 +404,10 @@ export function collectPublishablePluginPackageErrors(
   return errors;
 }
 
-export type PublishablePluginPackageFilters = {
+type PublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
+  npmDistTag?: "extended-stable";
 };
 
 export function collectPublishablePluginPackages(
@@ -417,10 +457,22 @@ export function collectPublishablePluginPackages(
       packageName,
       version,
       channel: parsedVersion.channel,
-      publishTag: resolveNpmPublishPlan(version).publishTag,
+      publishTag: resolveNpmPublishPlan(version, undefined, filters.npmDistTag).publishTag,
       installNpmSpec: normalizeOptionalString(packageJson.openclaw?.install?.npmSpec),
       ...(requiredLatestDependencies.length > 0 ? { requiredLatestDependencies } : {}),
     });
+  }
+
+  if (filters.npmDistTag === "extended-stable") {
+    const rootPackage = readPluginPackageJson(join(rootDir, "package.json")) as PluginPackageJson;
+    const rootVersion = rootPackage.version?.trim() ?? "";
+    for (const plugin of publishable) {
+      if (plugin.version !== rootVersion) {
+        validationErrors.push(
+          `${plugin.extensionId}: package version ${plugin.version} must match root package version ${rootVersion || "<missing>"} for extended-stable publication.`,
+        );
+      }
+    }
   }
 
   if (validationErrors.length > 0) {
@@ -589,22 +641,40 @@ export function assertPluginReleaseVersionFloors(
 
 export type NpmLatestVersionResolver = (packageName: string) => string;
 
+function isNpmViewTimeoutError(error: unknown): error is Error & { code: "ETIMEDOUT" } {
+  return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
+}
+
 function runNpmView(args: string[]): string {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
   writeFileSync(userconfigPath, "");
 
   try {
-    return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    try {
+      return execFileSync("npm", ["view", ...args, "--userconfig", userconfigPath], {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: PLUGIN_NPM_VIEW_TIMEOUT_MS,
+      }).trim();
+    } catch (error) {
+      if (isNpmViewTimeoutError(error)) {
+        throw Object.assign(
+          new Error(`npm view timed out after ${PLUGIN_NPM_VIEW_TIMEOUT_MS}ms.`, {
+            cause: error,
+          }),
+          { code: "ETIMEDOUT" as const },
+        );
+      }
+      throw error;
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
-export function resolveNpmLatestVersion(packageName: string): string {
+function resolveNpmLatestVersion(packageName: string): string {
   const raw = runNpmView([packageName, "dist-tags.latest", "--json"]);
   const parsed = JSON.parse(raw) as unknown;
   if (typeof parsed !== "string" || !parsed.trim()) {
@@ -667,7 +737,10 @@ function isPluginVersionPublished(packageName: string, version: string): boolean
   try {
     runNpmView([`${packageName}@${version}`, "version"]);
     return true;
-  } catch {
+  } catch (error) {
+    if (isNpmViewTimeoutError(error)) {
+      throw error;
+    }
     return false;
   }
 }
@@ -677,6 +750,7 @@ export function collectPluginReleasePlan(params?: {
   selection?: string[];
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
+  npmDistTag?: "extended-stable";
 }): PluginReleasePlan {
   const changedExtensionIds = params?.gitRange
     ? collectChangedExtensionIdsFromGitRange({
@@ -690,6 +764,7 @@ export function collectPluginReleasePlan(params?: {
         ? undefined
         : changedExtensionIds,
     packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
+    npmDistTag: params?.npmDistTag,
   });
   const selectedPublishable =
     params?.selectionMode === "all-publishable"

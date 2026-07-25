@@ -1,8 +1,8 @@
-name: iOS Periphery Dead Code Comment
+name: Periphery Dead Code Comment
 
 on:
   workflow_run: # zizmor: ignore[dangerous-triggers] trusted PR commenter; job gates repository, source event, workflow name, live open PR, and exact current head before reading artifacts or writing comments
-    workflows: ["iOS Periphery Dead Code"]
+    workflows: ["iOS Periphery Dead Code", "macOS Periphery Dead Code"]
     types: [completed]
 
 env:
@@ -21,7 +21,8 @@ jobs:
     if: >
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.name == 'iOS Periphery Dead Code'
+      (github.event.workflow_run.name == 'iOS Periphery Dead Code' ||
+      github.event.workflow_run.name == 'macOS Periphery Dead Code')
     steps:
       - name: Upsert Periphery PR comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -30,8 +31,40 @@ jobs:
             const path = require("node:path");
             const zlib = require("node:zlib");
 
-            const marker = "<!-- openclaw-ios-periphery-dead-code -->";
             const run = context.payload.workflow_run;
+            const workflowConfig = {
+              "iOS Periphery Dead Code": {
+                artifactPrefix: "ios-periphery-dead-code",
+                heading: "### iOS Periphery",
+                marker: "<!-- openclaw-ios-periphery-dead-code -->",
+                repoPathPrefix: "apps/ios/",
+                scanJobName: "Scan iOS dead code",
+                scopeJobName: "Detect iOS scan scope",
+                scopeLabel: "iOS",
+              },
+              "macOS Periphery Dead Code": {
+                artifactPrefix: "macos-periphery-dead-code",
+                heading: "### macOS Periphery",
+                marker: "<!-- openclaw-macos-periphery-dead-code -->",
+                repoPathPrefix: "apps/macos/",
+                scanJobName: "Scan macOS dead code",
+                scopeJobName: "Detect macOS scan scope",
+                scopeLabel: "macOS",
+              },
+            }[run.name];
+            if (!workflowConfig) {
+              core.info(`Skipping unexpected workflow ${run.name ?? "unknown"}.`);
+              return;
+            }
+            const {
+              artifactPrefix,
+              heading,
+              marker,
+              repoPathPrefix,
+              scanJobName,
+              scopeJobName,
+              scopeLabel,
+            } = workflowConfig;
             const pr = run.pull_requests?.[0];
             if (!pr) {
               core.info("No pull request attached to workflow_run.");
@@ -48,11 +81,6 @@ jobs:
               core.info(`Skipping workflow_run for ${run.event ?? "unknown"} event.`);
               return;
             }
-            if (run.name !== "iOS Periphery Dead Code") {
-              core.info(`Skipping unexpected workflow ${run.name ?? "unknown"}.`);
-              return;
-            }
-
             const livePull = await github.rest.pulls.get({
               owner,
               repo,
@@ -78,8 +106,8 @@ jobs:
               filter: "latest",
               per_page: 100,
             });
-            const scopeJob = jobs.find((job) => job.name === "Detect iOS scan scope");
-            const scanJob = jobs.find((job) => job.name === "Scan iOS dead code");
+            const scopeJob = jobs.find((job) => job.name === scopeJobName);
+            const scanJob = jobs.find((job) => job.name === scanJobName);
             const scanSkipped =
               scopeJob?.conclusion === "success" && scanJob?.conclusion === "skipped";
             if (scanSkipped) {
@@ -99,7 +127,7 @@ jobs:
               if (scanSkipped) {
                 return;
               }
-              const artifactName = `ios-periphery-dead-code-${run.id}-${run.run_attempt}`;
+              const artifactName = `${artifactPrefix}-${run.id}-${run.run_attempt}`;
               const artifact = artifacts.find((item) => item.name === artifactName);
               if (!artifact) {
                 core.warning(`No ${artifactName} artifact found.`);
@@ -349,7 +377,7 @@ jobs:
               const location = String(finding.location ?? "");
               const [file, line] = location.split(":");
               return {
-                file: file ? `apps/ios/${file}` : "",
+                file: file ? `${repoPathPrefix}${file}` : "",
                 line: line || "",
                 kind: String(finding.kind ?? ""),
                 name: String(finding.name ?? ""),
@@ -361,27 +389,27 @@ jobs:
             if (scanSkipped) {
               mode = "skipped";
               body += [
-                "### iOS Periphery",
+                heading,
                 "",
-                "Periphery scan skipped because the pull request is a draft or no longer touches iOS scan scope.",
+                `Periphery scan skipped because the pull request is a draft or no longer touches ${scopeLabel} scan scope.`,
               ].join("\n");
             } else if (findings === null) {
               body += [
-                "### iOS Periphery",
+                heading,
                 "",
                 "Periphery did not complete or its report could not be safely read. Check the workflow run for details.",
               ].join("\n");
             } else if (rows.length === 0 && status === 0) {
               mode = "success";
               body += [
-                "### iOS Periphery",
+                heading,
                 "",
                 "No dead Swift code found.",
               ].join("\n");
             } else if (rows.length > 0) {
               const shown = rows.slice(0, 50);
               body += [
-                "### iOS Periphery",
+                heading,
                 "",
                 `Found ${rows.length} dead Swift code ${rows.length === 1 ? "symbol" : "symbols"}. Remove the code or add a narrow Periphery exemption with a comment explaining why it must stay.`,
                 "",
@@ -393,7 +421,7 @@ jobs:
               ].filter(Boolean).join("\n");
             } else {
               body += [
-                "### iOS Periphery",
+                heading,
                 "",
                 "Periphery exited with a non-zero status before producing findings. Check the workflow artifact for stdout/stderr.",
               ].join("\n");
@@ -403,7 +431,7 @@ jobs:
             if (body.length > maxCommentChars) {
               body = [
                 marker,
-                "### iOS Periphery",
+                heading,
                 "",
                 `Found ${rows.length} dead Swift code ${rows.length === 1 ? "symbol" : "symbols"}. The rendered report exceeded the safe comment limit; use the workflow artifact for details.`,
                 "",
@@ -464,19 +492,31 @@ jobs:
               return;
             }
 
-            if (existing) {
-              await github.rest.issues.updateComment({
+            const writeComment = async () => {
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                return;
+              }
+
+              await github.rest.issues.createComment({
                 owner,
                 repo,
-                comment_id: existing.id,
+                issue_number: livePull.data.number,
                 body,
               });
-              return;
-            }
+            };
 
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: livePull.data.number,
-              body,
-            });
+            try {
+              await writeComment();
+            } catch (error) {
+              if (error && typeof error === "object" && error.status === 403) {
+                core.warning(`Skipping Periphery PR comment for #${pr.number}; GitHub token cannot write issue comments for this workflow_run.`);
+                return;
+              }
+              throw error;
+            }

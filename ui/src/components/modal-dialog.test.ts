@@ -7,7 +7,6 @@ import {
   installDialogPolyfill,
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
-import type { OpenClawModalDialog } from "./modal-dialog.ts";
 import "./modal-dialog.ts";
 
 let container: HTMLDivElement;
@@ -33,14 +32,6 @@ async function renderModal() {
   return await getRenderedModalDialog(container);
 }
 
-function expectShadowElement(modal: OpenClawModalDialog, id: string): HTMLElement {
-  const element = modal.shadowRoot?.getElementById(id);
-  if (!(element instanceof HTMLElement)) {
-    throw new Error(`Expected shadow element #${id}`);
-  }
-  return element;
-}
-
 describe("openclaw-modal-dialog", () => {
   beforeEach(() => {
     restoreDialogPolyfill = installDialogPolyfill();
@@ -56,64 +47,42 @@ describe("openclaw-modal-dialog", () => {
   });
 
   it("opens a labelled modal dialog with an optional description", async () => {
-    const { modal, dialog } = await renderModal();
+    const { webAwesomeDialog, dialog } = await renderModal();
 
     expect(dialog.open).toBe(true);
-    expect(dialog.getAttribute("role")).toBe("dialog");
-    expect(dialog.getAttribute("aria-modal")).toBe("true");
-    const labelId = dialog.getAttribute("aria-labelledby");
-    const descriptionId = dialog.getAttribute("aria-describedby");
-    expect(labelId).toBe("openclaw-modal-dialog-label");
-    expect(descriptionId).toBe("openclaw-modal-dialog-description");
-    expect(dialog.getRootNode()).toBe(modal.shadowRoot);
-    expect(dialog.ownerDocument.querySelector(`#${labelId}`)).toBeNull();
-    expect(expectShadowElement(modal, "openclaw-modal-dialog-label").textContent).toBe(
-      "Confirm action",
-    );
-    expect(expectShadowElement(modal, "openclaw-modal-dialog-description").textContent).toBe(
-      "Review the operation before continuing.",
-    );
+    expect(dialog.localName).toBe("dialog");
+    expect(dialog.getAttribute("aria-label")).toBe("Confirm action");
+    expect(dialog.getAttribute("aria-description")).toBe("Review the operation before continuing.");
+    expect(dialog.getRootNode()).toBe(webAwesomeDialog.shadowRoot);
   });
 
   it("focuses the dialog container first", async () => {
-    const { modal, dialog } = await renderModal();
+    const focus = vi.spyOn(HTMLDialogElement.prototype, "focus");
+    const { dialog } = await renderModal();
 
-    expect(modal.shadowRoot?.activeElement).toBe(dialog);
+    expect(focus).toHaveBeenCalledWith();
     expect(document.activeElement).not.toBe(container.querySelector("#first-action"));
+    expect(dialog.open).toBe(true);
   });
 
-  it("cycles Tab and Shift+Tab inside focusable dialog content", async () => {
-    const { dialog } = await renderModal();
-    const first = container.querySelector<HTMLButtonElement>("#first-action");
-    const last = container.querySelector<HTMLButtonElement>("#last-action");
-    expect(first?.id).toBe("first-action");
-    expect(last?.id).toBe("last-action");
-    if (!first || !last) {
-      throw new Error("expected modal focus trap actions");
-    }
+  it("focuses slotted autofocus content", async () => {
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <textarea id="autofocus-target" autofocus></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    await getRenderedModalDialog(container);
 
-    last.focus();
-    const tab = new KeyboardEvent("keydown", {
-      key: "Tab",
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    last.dispatchEvent(tab);
-    expect(tab.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(first);
+    expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
+  });
 
-    first.focus();
-    const shiftTab = new KeyboardEvent("keydown", {
-      key: "Tab",
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    first.dispatchEvent(shiftTab);
-    expect(shiftTab.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(last);
+  it("delegates native modality and light dismissal to Web Awesome", async () => {
+    const { webAwesomeDialog, dialog } = await renderModal();
+
+    expect(webAwesomeDialog.open).toBe(true);
+    expect(webAwesomeDialog.lightDismiss).toBe(true);
+    expect(webAwesomeDialog.withoutHeader).toBe(true);
     expect(dialog.open).toBe(true);
   });
 
@@ -122,14 +91,17 @@ describe("openclaw-modal-dialog", () => {
     const onCancel = vi.fn();
     modal.addEventListener("modal-cancel", onCancel);
 
-    dialog.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-      }),
-    );
+    dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits modal-cancel when the backdrop is clicked", async () => {
+    const { modal, dialog } = await renderModal();
+    const onCancel = vi.fn();
+    modal.addEventListener("modal-cancel", onCancel);
+
+    dialog.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -141,12 +113,27 @@ describe("openclaw-modal-dialog", () => {
     returnTarget.focus();
 
     await renderModal();
-    expect(document.activeElement).not.toBe(returnTarget);
 
     render(nothing, container);
     await nextFrame();
 
     expect(document.activeElement).toBe(returnTarget);
     returnTarget.remove();
+  });
+
+  it("reopens the same dialog element after reconnect", async () => {
+    const focus = vi.spyOn(HTMLDialogElement.prototype, "focus");
+    const { modal, dialog } = await renderModal();
+    const initialFocusCalls = focus.mock.calls.length;
+
+    modal.remove();
+    expect(dialog.open).toBe(false);
+
+    container.append(modal);
+    await modal.updateComplete;
+    await nextFrame();
+
+    expect(dialog.open).toBe(true);
+    expect(focus.mock.calls.length).toBeGreaterThan(initialFocusCalls);
   });
 });

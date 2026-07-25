@@ -1,5 +1,5 @@
 // Tts Local Cli tests cover speech provider plugin behavior.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -9,14 +9,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 type SpeechSynthesisTarget = SpeechSynthesisRequest["target"];
 
 const runFfmpegMock = vi.hoisted(() => vi.fn<(args: string[]) => Promise<string | void>>());
+const debugLogMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   runFfmpeg: runFfmpegMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({ debug: debugLogMock }),
+}));
+
 import { buildCliSpeechProvider } from "./speech-provider.js";
 
 const TEST_CFG = {} as OpenClawConfig;
+const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 
 function createCliFixture(): { dir: string; script: string } {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-tts-test-"));
@@ -255,6 +261,114 @@ describe("buildCliSpeechProvider", () => {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
+
+  it("rejects oversized CLI output files before reading them", async () => {
+    const fixture = createCliFixture();
+    try {
+      writeFileSync(
+        fixture.script,
+        `
+import { truncateSync, writeFileSync } from "node:fs";
+const outIndex = process.argv.indexOf("--out");
+const outputPath = process.argv[outIndex + 1];
+writeFileSync(outputPath, "");
+truncateSync(outputPath, ${MAX_AUDIO_OUTPUT_BYTES + 1});
+`,
+      );
+
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--out", "{{OutputPath}}"],
+            outputFormat: "wav",
+          }),
+        }),
+      ).rejects.toThrow(`File exceeds ${MAX_AUDIO_OUTPUT_BYTES} bytes`);
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-file CLI output artifacts", async () => {
+    const fixture = createCliFixture();
+    try {
+      writeFileSync(
+        fixture.script,
+        `
+import { mkdirSync } from "node:fs";
+const outIndex = process.argv.indexOf("--out");
+mkdirSync(process.argv[outIndex + 1]);
+`,
+      );
+
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--out", "{{OutputPath}}"],
+            outputFormat: "wav",
+          }),
+        }),
+      ).rejects.toThrow("path must be a regular file");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["voice-note", "telephony"] as const)(
+    "rejects oversized ffmpeg output for %s synthesis",
+    async (mode) => {
+      const fixture = createCliFixture();
+      runFfmpegMock.mockImplementation(async (args) => {
+        const outputPath = args.at(-1);
+        if (typeof outputPath !== "string") {
+          throw new Error("missing ffmpeg output path");
+        }
+        writeFileSync(outputPath, "");
+        truncateSync(outputPath, MAX_AUDIO_OUTPUT_BYTES + 1);
+      });
+      try {
+        const providerConfig = baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--out", "{{OutputPath}}"],
+          outputFormat: "wav",
+        });
+        const run =
+          mode === "voice-note"
+            ? synthesize({ providerConfig, target: "voice-note" })
+            : buildCliSpeechProvider().synthesizeTelephony?.({
+                text: "phone reply",
+                cfg: TEST_CFG,
+                providerConfig,
+                providerOverrides: {},
+                timeoutMs: 1000,
+              });
+
+        await expect(run).rejects.toThrow(`File exceeds ${MAX_AUDIO_OUTPUT_BYTES} bytes`);
+      } finally {
+        rmSync(fixture.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["synthesize", "synthesizeTelephony"] as const)(
+    "keeps %s debug previews free of lone surrogates",
+    async (method) => {
+      const text = `${"a".repeat(49)}😀tail`;
+      const providerConfig = { command: "missing-openclaw-tts-test-command" };
+      const run =
+        method === "synthesize"
+          ? synthesize({ providerConfig, text })
+          : buildCliSpeechProvider().synthesizeTelephony?.({
+              text,
+              cfg: TEST_CFG,
+              providerConfig,
+              timeoutMs: 1000,
+            });
+      await expect(run).rejects.toThrow();
+
+      const preview = String(debugLogMock.mock.calls[0]?.[0]);
+      expect(Buffer.from(preview).toString()).toBe(preview);
+    },
+  );
 
   it("can synthesize through a real local CLI fixture and ffmpeg", async () => {
     if (process.env.OPENCLAW_LIVE_TEST !== "1") {

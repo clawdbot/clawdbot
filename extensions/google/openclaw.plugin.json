@@ -46,6 +46,9 @@
     }
   },
   "modelCatalog": {
+    "discovery": {
+      "google": "runtime"
+    },
     "suppressions": [
       {
         "provider": "google",
@@ -64,6 +67,16 @@
       },
       {
         "provider": "google",
+        "model": "gemini-2.0-flash",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-2.5-flash."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.0-flash-001",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-2.5-flash."
+      },
+      {
+        "provider": "google",
         "model": "gemini-2.0-flash-exp",
         "reason": "Google shut down this Gemini 2.0 experimental model. Use google/gemini-2.5-flash."
       },
@@ -76,6 +89,16 @@
         "provider": "google",
         "model": "gemini-2.0-flash-live-001",
         "reason": "Google shut down this Gemini Live model on 2025-12-09. Use google/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.0-flash-lite",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google/gemini-2.5-flash-lite."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.0-flash-lite-001",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google/gemini-2.5-flash-lite."
       },
       {
         "provider": "google",
@@ -229,6 +252,16 @@
       },
       {
         "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash-001",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-gemini-cli",
         "model": "gemini-2.0-flash-exp",
         "reason": "Google shut down this Gemini 2.0 experimental model. Use google-gemini-cli/gemini-2.5-flash."
       },
@@ -241,6 +274,16 @@
         "provider": "google-gemini-cli",
         "model": "gemini-2.0-flash-live-001",
         "reason": "Google shut down this Gemini Live model on 2025-12-09. Use google-gemini-cli/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash-lite",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash-lite."
+      },
+      {
+        "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash-lite-001",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash-lite."
       },
       {
         "provider": "google-gemini-cli",
@@ -394,6 +437,16 @@
       },
       {
         "provider": "google-vertex",
+        "model": "gemini-2.0-flash",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-vertex/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-vertex",
+        "model": "gemini-2.0-flash-001",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-vertex/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-vertex",
         "model": "gemini-2.0-flash-exp",
         "reason": "Google shut down this Gemini 2.0 experimental model. Use google-vertex/gemini-2.5-flash."
       },
@@ -406,6 +459,16 @@
         "provider": "google-vertex",
         "model": "gemini-2.0-flash-live-001",
         "reason": "Google shut down this Gemini Live model on 2025-12-09. Use google-vertex/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google-vertex",
+        "model": "gemini-2.0-flash-lite",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-vertex/gemini-2.5-flash-lite."
+      },
+      {
+        "provider": "google-vertex",
+        "model": "gemini-2.0-flash-lite-001",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-vertex/gemini-2.5-flash-lite."
       },
       {
         "provider": "google-vertex",
@@ -628,7 +691,9 @@
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Google Gemini API key",
+      "choiceHint": "Free API key from aistudio.google.com/apikey",
       "groupId": "google",
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
@@ -642,8 +707,9 @@
       "provider": "google-gemini-cli",
       "method": "oauth",
       "choiceId": "google-gemini-cli",
+      "appGuidedAuth": "oauth",
       "choiceLabel": "Gemini CLI OAuth",
-      "choiceHint": "Google OAuth with project-aware token payload",
+      "choiceHint": "Sign in with your Google account (opens a browser)",
       "groupId": "google",
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
@@ -674,7 +740,8 @@
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"]
+    "webSearchProviders": ["gemini"],
+    "usageProviders": ["google-gemini-cli"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {
@@ -691,9 +758,6 @@
       },
       "nativeDocumentInputs": ["pdf"]
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

@@ -1,77 +1,133 @@
-title: Threaded follow-up
+title: Thread follow-up and native relation
 
 scenario:
   id: thread-follow-up
-  surface: thread
+  surface: channels
   coverage:
     primary:
-      - channels.threads
       - channels.thread-parent-child-placement
+      - channels.native-threads
     secondary:
-      - channels.qa-channel
-  objective: Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.
+      - channels.automatic-final-reply
+  objective: Verify a follow-up sent inside a thread receives one reply in the same thread.
   successCriteria:
-    - Agent creates or uses a thread for deeper work.
-    - Follow-up messages stay attached to the thread.
-    - Thread report references the correct prior context.
+    - The transport accepts a normalized threaded inbound message.
+    - The visible reply carries the same normalized thread id.
+    - No matching reply leaks into the top-level conversation.
   docsRefs:
     - docs/channels/qa-channel.md
-    - docs/channels/group-messages.md
+    - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - extensions/qa-channel/src/protocol.ts
-    - extensions/qa-lab/src/bus-state.ts
+    - extensions/qa-lab/src/qa-transport.ts
+    - extensions/qa-lab/src/live-transports/slack/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "matrix:adapter": 8,
+        "matrix:all": 1,
+        "matrix:fast": 1,
+        "matrix:transport": 0,
+        "slack:adapter": 4,
+      }
     kind: flow
-    summary: Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.
+    summary: Send a deterministic follow-up through the shared host and require native thread relation evidence.
     config:
-      requiredChannelDriver: qa-channel
-      prompt: "@openclaw reply in one short sentence inside this thread only. Do not use ACP or any external runtime. Confirm you stayed in-thread."
+      rootMarker: QA-THREAD-ROOT-OK
+      replyMarker: QA-THREAD-FOLLOW-UP-OK
 
 flow:
   steps:
-    - name: keeps follow-up inside the thread
+    - name: replies inside the originating thread
       actions:
-        - call: reset
-        - call: handleQaAction
-          saveAs: threadPayload
-          args:
-            - env:
-                ref: env
-              action: thread-create
-              args:
-                channelId: qa-room
-                title: QA deep dive
-        - set: threadId
+        - resetTransport: true
+        - set: conversationId
           value:
-            expr: "threadPayload?.thread?.id"
+            expr: "transport.id !== 'crabline' ? 'main' : transport.label.includes('telegram') ? '-1001234567890' : transport.label.includes('slack') ? 'C12345678' : '!qa:matrix.test'"
+        - set: senderId
+          value:
+            expr: "transport.id !== 'crabline' ? 'driver' : transport.label.includes('telegram') ? '100001' : transport.label.includes('slack') ? 'U12345678' : '@driver:matrix.test'"
+        - set: conversationKind
+          value:
+            expr: "transport.id === 'crabline' ? 'group' : 'channel'"
+        - if:
+            expr: transport.id === 'qa-channel'
+            then:
+              - call: handleQaAction
+                saveAs: threadPayload
+                args:
+                  - env:
+                      ref: env
+                    action: thread-create
+                    args:
+                      channelId:
+                        ref: conversationId
+                      title: QA thread follow-up
+              - set: threadId
+                value:
+                  expr: threadPayload?.thread?.id
+            else:
+              - sendInbound:
+                  conversation:
+                    id:
+                      ref: conversationId
+                    kind:
+                      ref: conversationKind
+                  senderId:
+                    ref: senderId
+                  senderName: QA Driver
+                  text:
+                    expr: "`@openclaw Reply exactly: ${config.rootMarker}`"
+                saveAs: rootInbound
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      ref: conversationId
+                    kind:
+                      ref: conversationKind
+                  textIncludes:
+                    ref: config.rootMarker
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 45000)
+              - set: threadId
+                value:
+                  expr: rootInbound.id
         - assert:
-            expr: "Boolean(threadId)"
+            expr: Boolean(threadId)
             message: missing thread id
+        - set: outboundStartIndex
+          value:
+            expr: state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length
         - sendInbound:
             conversation:
-              id: qa-room
-              kind: channel
-              title: QA Room
-            senderId: alice
-            senderName: Alice
+              id:
+                ref: conversationId
+              kind:
+                ref: conversationKind
+            senderId:
+              ref: senderId
+            senderName: QA Driver
             text:
-              expr: config.prompt
+              expr: "`${transport.id === 'qa-channel' ? '' : '@openclaw '}Reply exactly: ${config.replyMarker}`"
             threadId:
               ref: threadId
-            threadTitle: QA deep dive
-        - call: waitForOutboundMessage
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind:
+                ref: conversationKind
+            sinceIndex:
+              ref: outboundStartIndex
+            textIncludes:
+              ref: config.replyMarker
+            threadId:
+              ref: threadId
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
           saveAs: outbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-room' && candidate.threadId === threadId"
-            - expr: "env.providerMode === 'mock-openai' ? 15000 : 45000"
         - assert:
-            expr: "!state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && !candidate.threadId)"
-            message: thread reply leaked into root channel
-        - assert:
-            expr: "!['acp backend','acpx','not configured'].some((needle) => normalizeLowercaseStringOrEmpty(outbound.text).includes(needle))"
+            expr: "!state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.replyMarker) && candidate.threadId !== threadId)"
             message:
-              expr: "`thread reply fell back to ACP error: ${outbound.text}`"
-      detailsExpr: outbound.text
+              expr: "`thread reply leaked outside ${threadId}; transcript=${formatTransportTranscript(state, { conversationId })}`"
+      detailsExpr: "`${outbound.threadId}: ${outbound.text}`"

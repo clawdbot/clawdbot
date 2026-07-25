@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
-  ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
   assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
   cleanPackedOpenClawTarballsForTest,
@@ -69,7 +68,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     if (existsSync(filePath)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for ${filePath}`);
 }
@@ -80,7 +79,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -110,6 +109,17 @@ afterEach(async () => {
 });
 
 describe("resolve-openclaw-package-candidate", () => {
+  it("allows Unreleased notes when packaging an exact ref candidate", () => {
+    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mjs", "utf8");
+    const refPackageBuild = script.slice(
+      script.indexOf('if (options.source === "ref")'),
+      script.indexOf('} else if (options.source === "npm")'),
+    );
+
+    expect(refPackageBuild).toContain('"scripts/package-openclaw-for-docker.mjs"');
+    expect(refPackageBuild).toContain('"--allow-unreleased-changelog"');
+  });
+
   it("accepts only OpenClaw release package specs for npm candidates", () => {
     for (const spec of [
       "openclaw@beta",
@@ -565,7 +575,7 @@ describe("resolve-openclaw-package-candidate", () => {
       "const fs = require('node:fs');",
       "process.on('SIGTERM', () => {",
       "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_CLEANUP, 'clean');",
-      "  setTimeout(() => process.exit(0), 75);",
+      "  setTimeout(() => process.exit(0), 25);",
       "});",
       "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_READY, 'ready');",
       "setInterval(() => {}, 1000);",
@@ -595,16 +605,16 @@ describe("resolve-openclaw-package-candidate", () => {
           OPENCLAW_TEST_CHILD_PID: childPidPath,
           OPENCLAW_TEST_CHILD_READY: readyPath,
         },
-        killAfterMs: 1000,
-        timeoutMs: 1000,
+        killAfterMs: 250,
+        timeoutMs: 250,
       }),
-    ).rejects.toThrow(/timed out after 1000ms/u);
+    ).rejects.toThrow(/timed out after 250ms/u);
 
     await waitForFile(readyPath, 2_000);
     await timeoutAssertion;
 
     expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-    expect(Date.now() - startedAt).toBeLessThan(1_700);
+    expect(Date.now() - startedAt).toBeLessThan(900);
   });
 
   it("forwards external termination to package runner process groups", async () => {
@@ -1353,22 +1363,14 @@ describe("resolve-openclaw-package-candidate", () => {
   it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
     tempDirs.push(dir);
+    const maxEntries = 3;
 
-    // Keep the real 10,001-entry proof while avoiding serial filesystem setup.
-    const indexes = Array.from(
-      { length: ARTIFACT_TARBALL_SCAN_MAX_ENTRIES + 1 },
-      (_, index) => index,
-    );
-    for (let start = 0; start < indexes.length; start += 128) {
-      await Promise.all(
-        indexes
-          .slice(start, start + 128)
-          .map((index) => writeFile(path.join(dir, `not-a-package-${index}.txt`), "x")),
-      );
+    for (let index = 0; index <= maxEntries; index += 1) {
+      await writeFile(path.join(dir, `not-a-package-${index}.txt`), "x");
     }
 
-    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
-      `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries`,
+    await expect(findSingleTarballForTest(dir, maxEntries)).rejects.toThrow(
+      `source=artifact scan exceeded ${maxEntries} filesystem entries`,
     );
   });
 

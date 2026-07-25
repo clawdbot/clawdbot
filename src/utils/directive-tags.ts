@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
@@ -63,7 +64,9 @@ function normalizeDirectiveWhitespace(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 
-  return normalized.replace(blockPlaceholderRe, (_, i) => blocks[Number(i)]);
+  return normalized.replace(blockPlaceholderRe, (_, i) =>
+    expectDefined(blocks[Number(i)], "blocks entry at number(i)"),
+  );
 }
 
 type StripInlineDirectiveTagsResult = {

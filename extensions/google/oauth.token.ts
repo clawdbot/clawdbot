@@ -3,7 +3,10 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
@@ -13,7 +16,10 @@ import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 const GOOGLE_OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
-async function requestTokenGrant(body: URLSearchParams): Promise<{
+async function requestTokenGrant(
+  body: URLSearchParams,
+  signal?: AbortSignal,
+): Promise<{
   access_token?: string;
   refresh_token?: string;
   expires_in?: unknown;
@@ -26,6 +32,7 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
       "User-Agent": "google-api-nodejs-client/9.15.1",
     },
     body,
+    ...(signal ? { signal } : {}),
   });
 
   if (!response.ok) {
@@ -36,11 +43,11 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
     throw new Error(`Token exchange failed: ${errorText}`);
   }
 
-  return (await response.json()) as {
+  return readProviderJsonResponse<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: unknown;
-  };
+  }>(response, "google.token");
 }
 
 function resolveExpiredTokenTimestampMs(nowMs: number): number {
@@ -67,6 +74,7 @@ async function buildGeminiCliCredentials(params: {
   refreshTokenFallback?: string;
   existing?: Pick<GeminiCliOAuthCredentials, "email" | "projectId">;
   allowIdentityFallback?: boolean;
+  signal?: AbortSignal;
 }): Promise<GeminiCliOAuthCredentials> {
   const accessToken = params.tokenResponse.access_token;
   if (!accessToken) {
@@ -76,7 +84,7 @@ async function buildGeminiCliCredentials(params: {
   let identity: { email?: string; projectId?: string } = params.existing ?? {};
   try {
     if (!identity.email || !identity.projectId) {
-      const discovered = await resolveGeminiCliIdentity(accessToken);
+      const discovered = await resolveGeminiCliIdentity(accessToken, params.signal);
       identity = {
         email: identity.email ?? discovered.email,
         projectId: identity.projectId ?? discovered.projectId,
@@ -103,15 +111,17 @@ async function buildGeminiCliCredentials(params: {
 
 async function resolveGeminiCliIdentity(
   accessToken: string,
+  signal?: AbortSignal,
 ): Promise<{ email?: string; projectId?: string }> {
   return isGeminiCliPersonalOAuth()
-    ? await resolveGooglePersonalOAuthIdentity(accessToken)
-    : await resolveGoogleOAuthIdentity(accessToken);
+    ? await resolveGooglePersonalOAuthIdentity(accessToken, signal)
+    : await resolveGoogleOAuthIdentity(accessToken, signal);
 }
 
 export async function exchangeCodeForTokens(
   code: string,
   verifier: string,
+  signal?: AbortSignal,
 ): Promise<GeminiCliOAuthCredentials> {
   const { clientId, clientSecret } = resolveOAuthClientConfig();
   const body = new URLSearchParams({
@@ -126,7 +136,8 @@ export async function exchangeCodeForTokens(
   }
 
   const refreshed = await buildGeminiCliCredentials({
-    tokenResponse: await requestTokenGrant(body),
+    tokenResponse: await requestTokenGrant(body, signal),
+    signal,
   });
   if (!refreshed.refresh) {
     throw new Error("No refresh token received. Please try again.");

@@ -4,8 +4,10 @@
  * Cleanup and listing commands use the same row shape and fixed-width cells so
  * terminal output stays aligned across commands.
  */
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
 /** Display row derived from a persisted session entry. */
@@ -65,7 +67,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     parentSessionKey: entry?.parentSessionKey,
-    forkedFromParent: entry?.forkedFromParent,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
@@ -108,7 +110,7 @@ function truncateSessionKey(key: string): string {
   // Keep both the stable prefix and suffix; the tail often contains direct
   // recipient or runtime identifiers that distinguish otherwise similar keys.
   const head = Math.max(4, SESSION_KEY_PAD - 10);
-  return `${key.slice(0, head)}...${key.slice(-6)}`;
+  return `${truncateUtf16Safe(key, head)}...${sliceUtf16Safe(key, -6)}`;
 }
 
 /** Formats a session key cell for table output. */

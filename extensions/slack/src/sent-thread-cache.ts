@@ -42,20 +42,20 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
   },
 });
 
-function makeKey(accountId: string, channelId: string, threadTs: string): string {
-  return `${accountId}:${channelId}:${threadTs}`;
+function makeKey(accountId: string, channelId: string, threadTs: string, teamId?: string): string {
+  return `${accountId}:${teamId ? `${teamId}:` : ""}${channelId}:${threadTs}`;
 }
 
 export function recordSlackThreadParticipation(
   accountId: string,
   channelId: string,
   threadTs: string,
-  opts?: { agentId?: string },
+  opts?: { agentId?: string; teamId?: string },
 ): void {
   if (!accountId || !channelId || !threadTs) {
     return;
   }
-  void threadParticipation.register(makeKey(accountId, channelId, threadTs), {
+  void threadParticipation.register(makeKey(accountId, channelId, threadTs, opts?.teamId), {
     // Stored for future per-agent thread routing; current reads only need presence.
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     repliedAt: Date.now(),
@@ -66,23 +66,25 @@ export function hasSlackThreadParticipation(
   accountId: string,
   channelId: string,
   threadTs: string,
+  teamId?: string,
 ): boolean {
   if (!accountId || !channelId || !threadTs) {
     return false;
   }
-  return threadParticipation.peek(makeKey(accountId, channelId, threadTs));
+  return threadParticipation.peek(makeKey(accountId, channelId, threadTs, teamId));
 }
 
 export async function hasSlackThreadParticipationWithPersistence(params: {
   accountId: string;
   channelId: string;
   threadTs: string;
+  teamId?: string;
 }): Promise<boolean> {
   if (!params.accountId || !params.channelId || !params.threadTs) {
     return false;
   }
   return await threadParticipation.lookup(
-    makeKey(params.accountId, params.channelId, params.threadTs),
+    makeKey(params.accountId, params.channelId, params.threadTs, params.teamId),
   );
 }
 

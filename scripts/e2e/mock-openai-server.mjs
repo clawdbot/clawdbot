@@ -196,7 +196,7 @@ function writeImageGeneration(res) {
 }
 
 function resolveResponseText(bodyText) {
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_OK(?:_\d+)?\b/gu));
+  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
@@ -289,6 +289,23 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   );
 }
 
+function mcpAppConformanceEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!/mcp app conformance qa check/i.test(allText)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    if (!hasDeclaredTool(bodyText, "fixture__show")) {
+      return null;
+    }
+    return toolCallEvents("fixture__show", {});
+  }
+  return /initial-result/.test(toolOutput)
+    ? responseEvents("MCP_APP_CONFORMANCE_READY")
+    : responseEvents("MCP_APP_CONFORMANCE_FAIL");
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -299,7 +316,7 @@ const server = http.createServer((req, res) => {
     if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
         object: "list",
-        data: [{ id: "gpt-5.5", object: "model", owned_by: "openclaw-e2e" }],
+        data: [{ id: "gpt-5.6-luna", object: "model", owned_by: "openclaw-e2e" }],
       });
       return;
     }
@@ -334,6 +351,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
+      const appEvents = mcpAppConformanceEvents(body, bodyText);
+      if (appEvents) {
+        writeResponsesEvents(res, body.stream, appEvents);
+        return;
+      }
       const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
       if (codeModeEvents) {
         writeResponsesEvents(res, body.stream, codeModeEvents);

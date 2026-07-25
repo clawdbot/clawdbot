@@ -1,7 +1,9 @@
 // Policy doctor checks and findings for gateway exposure policy.
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../../policy-state.js";
-import { CHECK_IDS } from "../metadata.js";
+import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
+import { CHECK_IDS } from "../check-ids.js";
+import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
 
@@ -15,6 +17,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNonLoopbackBind);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyGatewayNonLoopbackBind,
+      );
     },
   };
   const policyGatewayAuthDisabledCheck: HealthCheck = {
@@ -43,6 +52,9 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayControlUiInsecure);
     },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayControlUiInsecure);
+    },
   };
   const policyGatewayTailscaleFunnelCheck: HealthCheck = {
     id: CHECK_IDS.policyGatewayTailscaleFunnel,
@@ -61,6 +73,9 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRemoteEnabled);
     },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayRemoteEnabled);
+    },
   };
   const policyGatewayHttpEndpointEnabledCheck: HealthCheck = {
     id: CHECK_IDS.policyGatewayHttpEndpointEnabled,
@@ -70,6 +85,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     async detect(ctx) {
       return findingsForCheck(
         await evaluatePolicy(ctx),
+        CHECK_IDS.policyGatewayHttpEndpointEnabled,
+      );
+    },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(
+        ctx,
+        findings,
         CHECK_IDS.policyGatewayHttpEndpointEnabled,
       );
     },
@@ -93,6 +115,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNodeCommandDenied);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyGatewayNodeCommandDenied,
+      );
     },
   };
 
@@ -371,10 +400,10 @@ function gatewayNodeCommandFindings(
         message: `Gateway node command '${command}' is denied by policy but not denied by OpenClaw config.`,
         source: "policy",
         path: "openclaw config",
-        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
-        target: "oc://openclaw.config/gateway/nodes/denyCommands",
+        ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
+        target: "oc://openclaw.config/gateway/nodes/commands/deny",
         requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
-        fixHint: `Add '${command}' to gateway.nodes.denyCommands or update policy after review.`,
+        fixHint: `Add '${command}' to gateway.nodes.commands.deny or update policy after review.`,
       };
     });
 }

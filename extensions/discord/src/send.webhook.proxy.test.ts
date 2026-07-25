@@ -212,6 +212,61 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     globalFetchMock.mockRestore();
   });
 
+  it("accepts Discord's no-body webhook response when wait is false", async () => {
+    const response = new Response(null, { status: 204 });
+    const jsonSpy = vi.spyOn(response, "json");
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+
+    const result = await sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: false,
+    });
+
+    expect(result.messageId).toBe("unknown");
+    expect(jsonSpy).not.toHaveBeenCalled();
+    globalFetchMock.mockRestore();
+  });
+
+  it("keeps a successful send when the webhook response body exceeds the limit", async () => {
+    const tracked = cancelTrackedResponse(`{"id":"${"x".repeat(16 * 1024 * 1024)}"}`, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(tracked.response);
+
+    const result = await sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(result.messageId).toBe("unknown");
+    expect(tracked.wasCanceled()).toBe(true);
+    globalFetchMock.mockRestore();
+  });
+
+  it("keeps a successful send when the webhook response body is malformed", async () => {
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("not json", { status: 200 }));
+
+    const result = await sendWebhookMessageDiscord("hello", {
+      cfg: { channels: { discord: { token: "Bot test-token" } } } as OpenClawConfig,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(result.messageId).toBe("unknown");
+    globalFetchMock.mockRestore();
+  });
+
   it("throws typed rate limit errors for webhook 429 responses", async () => {
     const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ message: "Slow down", retry_after: 0.25, global: false }), {

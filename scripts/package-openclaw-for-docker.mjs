@@ -4,10 +4,14 @@
 // helpers, and GitHub Actions all prepare the exact same npm tarball.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import * as tar from "tar";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
+import { terminateManagedChild } from "./lib/managed-child-process.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
@@ -22,6 +26,11 @@ const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const AI_RUNTIME_PACKAGE = "@openclaw/ai";
 const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 const ACTIVE_CHILD_KILLERS = new Set();
+const PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES = [
+  "OPENCLAW_EXTENSIONS",
+  "OPENCLAW_DOCKER_BUILD_EXTENSIONS",
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+];
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
   SIGINT: 130,
@@ -131,8 +140,11 @@ function resolvePackedOpenClawFileName(value) {
 
 export function parseArgs(argv) {
   const options = {
+    allowUnreleasedChangelog: false,
     outputDir: "",
     outputName: "",
+    packJson: "",
+    pnpmPack: false,
     skipBuild: false,
     sourceDir: ROOT_DIR,
   };
@@ -146,7 +158,9 @@ export function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--output-dir") {
+    if (arg === "--allow-unreleased-changelog") {
+      setOnce(arg, "allowUnreleasedChangelog", true);
+    } else if (arg === "--output-dir") {
       setOnce("--output-dir", "outputDir", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
@@ -164,6 +178,17 @@ export function parseArgs(argv) {
         "outputName",
         readEqualsOptionValue(arg.slice("--output-name=".length), "--output-name"),
       );
+    } else if (arg === "--pack-json") {
+      setOnce("--pack-json", "packJson", readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg?.startsWith("--pack-json=")) {
+      setOnce(
+        "--pack-json",
+        "packJson",
+        readEqualsOptionValue(arg.slice("--pack-json=".length), "--pack-json"),
+      );
+    } else if (arg === "--pnpm-pack") {
+      setOnce(arg, "pnpmPack", true);
     } else if (arg === "--skip-build") {
       setOnce(arg, "skipBuild", true);
     } else if (arg === "--source-dir") {
@@ -182,6 +207,9 @@ export function parseArgs(argv) {
   if (options.outputName) {
     validateOutputName(options.outputName);
   }
+  if (options.packJson && options.pnpmPack) {
+    throw new Error("--pack-json cannot be combined with --pnpm-pack");
+  }
   return options;
 }
 
@@ -193,11 +221,21 @@ function run(command, args, cwd, options = {}) {
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );
     const useProcessGroup = process.platform !== "win32";
-    const child = spawn(command, args, {
+    const env = options.env ?? process.env;
+    // Keep POSIX command selection stable; only Windows needs explicit npm/pnpm shim handling.
+    const invocation =
+      process.platform === "win32" && command === "pnpm"
+        ? resolvePnpmRunner({ cwd, env, npmExecPath: env.npm_execpath, pnpmArgs: args })
+        : process.platform === "win32" && command === "npm"
+          ? resolveNpmRunner({ env, npmArgs: args })
+          : { args, command, shell: false };
+    const child = spawn(invocation.command, invocation.args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: options.env ?? process.env,
+      env: invocation.env ?? env,
       detached: useProcessGroup,
+      shell: invocation.shell,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
     let timedOut = false;
     let outputLimitExceeded = false;
@@ -232,15 +270,7 @@ function run(command, args, cwd, options = {}) {
       resolve(value);
     };
     const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The direct child may already have exited; fall back to child.kill.
-        }
-      }
-      child.kill(signal);
+      terminateManagedChild(child, signal);
     };
     const processGroupAlive = () => {
       if (!useProcessGroup || !child.pid) {
@@ -343,19 +373,28 @@ const PACKAGE_ARTIFACT_BUILD_STEPS = [
   {
     label: "Building OpenClaw package artifacts",
     command: "node",
-    args: ["scripts/build-all.mjs"],
+    // The full profile keeps canonical declaration emission; ciArtifacts is a
+    // PR-CI-only profile whose step env forces dts off and would clobber the
+    // OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 this packaging path requires.
+    args: ["scripts/build-all.mjs", "full"],
   },
 ];
 
 export async function buildPackageArtifacts(sourceDir, options = {}) {
   const runImpl = options.runImpl ?? run;
+  const buildEnv = {
+    ...process.env,
+    OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+  };
+  for (const envName of PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES) {
+    delete buildEnv[envName];
+  }
   for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
     console.error(`==> ${step.label}`);
     await runImpl(step.command, step.args, sourceDir, {
       env: {
-        ...process.env,
-        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
-        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+        ...buildEnv,
       },
       timeoutMs: resolveTimeoutMs(
         "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
@@ -373,6 +412,20 @@ async function runCapture(command, args, cwd, options = {}) {
 
 async function newestOpenClawTarball(outputDir, packOutput) {
   let fromOutput = "";
+  try {
+    const parsed = JSON.parse(packOutput);
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        if (typeof entry?.filename !== "string") {
+          continue;
+        }
+        const filename = resolvePackedOpenClawFileName(entry.filename);
+        if (filename) {
+          fromOutput = filename;
+        }
+      }
+    }
+  } catch {}
   for (const line of packOutput.split(/\r?\n/u)) {
     const filename = resolvePackedOpenClawFileName(line);
     if (filename) {
@@ -398,6 +451,30 @@ async function newestOpenClawTarball(outputDir, packOutput) {
     throw new Error(`missing packed OpenClaw tarball in ${outputDir}`);
   }
   return path.join(outputDir, packed);
+}
+
+async function writePackJson(packOutput, tarball, packJsonPath, sourceDir) {
+  if (!packJsonPath) {
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(packOutput);
+  } catch (error) {
+    throw new Error("npm pack --json output was not valid JSON", { cause: error });
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("npm pack --json output must be an array");
+  }
+  const filename = path.basename(tarball);
+  for (const entry of parsed) {
+    if (entry && typeof entry === "object" && typeof entry.filename === "string") {
+      entry.filename = filename;
+    }
+  }
+  const target = path.resolve(sourceDir, packJsonPath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, `${JSON.stringify(parsed, null, 2)}\n`);
 }
 
 async function cleanPackedOpenClawTarballs(outputDir) {
@@ -435,6 +512,7 @@ export async function prepareBundledAiRuntimePackage(
   options = {},
 ) {
   const packageJsonPath = path.join(sourceDir, "package.json");
+  const aiRuntimePackageJsonPath = path.join(sourceDir, "packages", "ai", "package.json");
   const aiRuntimePath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
   const aiRuntimeBackupPath = path.join(
     sourceDir,
@@ -445,7 +523,14 @@ export async function prepareBundledAiRuntimePackage(
   const extractAiRuntime =
     options.extractAiRuntime ??
     ((tarballPath, destination) =>
-      Promise.resolve(tar.x({ cwd: destination, file: tarballPath, strip: 1 })));
+      // Source-ref validation runs this trusted harness outside the candidate's dependency tree.
+      // Keep extraction on the system tar contract so only the candidate checkout needs install.
+      run("tar", ["-xzf", tarballPath, "-C", destination, "--strip-components=1"], destination, {
+        timeoutMs: resolveTimeoutMs(
+          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+        ),
+      }));
   const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
   let packageJson;
   try {
@@ -453,7 +538,24 @@ export async function prepareBundledAiRuntimePackage(
   } catch (error) {
     throw new Error(`failed to parse ${packageJsonPath}`, { cause: error });
   }
-  if (typeof packageJson.dependencies?.[AI_RUNTIME_PACKAGE] !== "string") {
+  const aiRuntimeDependency = packageJson.dependencies?.[AI_RUNTIME_PACKAGE];
+  let hasAiRuntimeWorkspace = false;
+  try {
+    await fs.access(aiRuntimePackageJsonPath);
+    hasAiRuntimeWorkspace = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  // Release checks can package refs from before the AI runtime was split into a workspace package.
+  if (!hasAiRuntimeWorkspace && aiRuntimeDependency === undefined) {
+    return async () => {};
+  }
+  if (!hasAiRuntimeWorkspace) {
+    throw new Error("@openclaw/ai dependency requires the packages/ai workspace");
+  }
+  if (typeof aiRuntimeDependency !== "string") {
     throw new Error("root package.json must declare @openclaw/ai as a dependency");
   }
 
@@ -569,9 +671,18 @@ export async function prepareBundledAiRuntimePackage(
 
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
-  const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
+  const prepareChangelog =
+    options.prepareChangelog ??
+    ((cwd) =>
+      preparePackageChangelog(cwd, {
+        allowUnreleased: options.allowUnreleasedChangelog,
+      }));
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
   const prepareBundledAiRuntime = options.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
+  const packTool = options.pnpmPack ? "pnpm" : "npm";
+  if (options.packJsonPath && options.pnpmPack) {
+    throw new Error("packJsonPath cannot be combined with pnpmPack");
+  }
   console.error("==> Packing OpenClaw package");
   await prepareChangelog(sourceDir);
   let packOutput;
@@ -579,18 +690,24 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   try {
     await cleanPackedOpenClawTarballs(outputDir);
     cleanupBundledAiRuntime = await prepareBundledAiRuntime(sourceDir, outputDir, runCaptureImpl);
-    packOutput = await runCaptureImpl(
-      "npm",
-      ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
-      sourceDir,
-      {
-        deferForwardedSignalExit: true,
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      },
-    );
+    const packArgs =
+      packTool === "pnpm"
+        ? ["pack", "--silent", "--config.ignore-scripts=true", "--pack-destination", outputDir]
+        : [
+            "pack",
+            ...(options.packJsonPath ? ["--json"] : []),
+            "--silent",
+            "--ignore-scripts",
+            "--pack-destination",
+            outputDir,
+          ];
+    packOutput = await runCaptureImpl(packTool, packArgs, sourceDir, {
+      deferForwardedSignalExit: true,
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+        DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+      ),
+    });
   } finally {
     try {
       await cleanupBundledAiRuntime();
@@ -598,7 +715,37 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
       await restoreChangelog(sourceDir);
     }
   }
-  return await newestOpenClawTarball(outputDir, packOutput);
+  // pnpm reports an absolute destination path. The directory was emptied before packing,
+  // so scan that controlled destination instead of accepting a path from command output.
+  let tarball = await newestOpenClawTarball(outputDir, options.pnpmPack ? "" : packOutput);
+  if (options.outputName) {
+    const target = path.join(outputDir, options.outputName);
+    if (target !== tarball) {
+      await fs.rm(target, { force: true });
+      await fs.rename(tarball, target);
+      tarball = target;
+    }
+  }
+  await writePackJson(packOutput, tarball, options.packJsonPath, sourceDir);
+  return tarball;
+}
+
+export async function writePackageInventoryForDocker(sourceDir, runImpl = run) {
+  // Frozen release refs own their inventory shape; run their writer instead of importing current-main helpers.
+  // Resolve the loader from that checkout too: the workflow harness may install production deps only.
+  const sourceRequire = createRequire(path.join(sourceDir, "package.json"));
+  const tsxModuleUrl = pathToFileURL(sourceRequire.resolve("tsx")).href;
+  await runImpl(
+    "node",
+    ["--import", tsxModuleUrl, path.join(sourceDir, "scripts/write-package-dist-inventory.ts")],
+    sourceDir,
+    {
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
+        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
+      ),
+    },
+  );
 }
 
 async function main() {
@@ -615,40 +762,24 @@ async function main() {
   }
 
   console.error("==> Writing OpenClaw package inventory");
-  await run(
-    "node",
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "-e",
-      "const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
-    ],
-    sourceDir,
-    {
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
-        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
-      ),
-    },
-  );
+  await writePackageInventoryForDocker(sourceDir);
 
-  let tarball = await packOpenClawPackageForDocker(sourceDir, outputDir);
-
-  if (options.outputName) {
-    const target = path.join(outputDir, options.outputName);
-    if (target !== tarball) {
-      await fs.rm(target, { force: true });
-      await fs.rename(tarball, target);
-      tarball = target;
-    }
-  }
+  const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+    allowUnreleasedChangelog: options.allowUnreleasedChangelog,
+    outputName: options.outputName,
+    packJsonPath: options.packJson,
+    pnpmPack: options.pnpmPack,
+  });
 
   console.error("==> Checking OpenClaw package tarball");
   const checkStartedAt = Date.now();
   await run(
     "node",
-    [path.join(ROOT_DIR, "scripts/check-openclaw-package-tarball.mjs"), tarball],
+    [
+      path.join(ROOT_DIR, "scripts/check-openclaw-package-tarball.mjs"),
+      "--require-bundled-workspace-deps",
+      tarball,
+    ],
     sourceDir,
     {
       timeoutMs: resolveTimeoutMs(

@@ -284,6 +284,22 @@ describe("program routes", () => {
     await expectRunFalse(["status"], ["node", "openclaw", "status", "--timeout"]);
   });
 
+  it.each([
+    { path: ["health"], argv: ["node", "openclaw", "health", "--wat"] },
+    { path: ["status"], argv: ["node", "openclaw", "status", "--wat"] },
+    { path: ["sessions"], argv: ["node", "openclaw", "sessions", "--wat"] },
+    {
+      path: ["agents", "list"],
+      argv: ["node", "openclaw", "agents", "list", "--wat"],
+    },
+    { path: ["agents"], argv: ["node", "openclaw", "agents", "--wat"] },
+  ])(
+    "returns false instead of handling unknown routed option for $path",
+    async ({ path, argv }) => {
+      await expectRunFalse(path, argv);
+    },
+  );
+
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
     await expect(
@@ -520,6 +536,24 @@ describe("program routes", () => {
       { json: true, runtime: "cron", status: undefined },
       defaultRuntime,
     );
+
+    await expect(
+      listRoute.run([
+        "node",
+        "openclaw",
+        "tasks",
+        "list",
+        "--json",
+        "--runtime",
+        "   ",
+        "--status",
+        "\t",
+      ]),
+    ).resolves.toBe(true);
+    expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
+      { json: true, runtime: "   ", status: "\t" },
+      defaultRuntime,
+    );
   });
 
   it("routes parent task filter values that command-path discovery sees as positionals", async () => {
@@ -582,6 +616,24 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksAuditJsonCommandMock).toHaveBeenCalledWith(
       { json: true, severity: "error", code: "stale_running", limit: 5 },
+      defaultRuntime,
+    );
+
+    await expect(
+      route.run([
+        "node",
+        "openclaw",
+        "tasks",
+        "audit",
+        "--json",
+        "--severity",
+        "  ",
+        "--code",
+        "\t",
+      ]),
+    ).resolves.toBe(true);
+    expect(tasksAuditJsonCommandMock).toHaveBeenLastCalledWith(
+      { json: true, severity: "  ", code: "\t", limit: undefined },
       defaultRuntime,
     );
   });

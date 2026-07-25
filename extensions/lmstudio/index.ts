@@ -66,6 +66,24 @@ export default definePluginEntry({
           label: LMSTUDIO_PROVIDER_LABEL,
           hint: "Local/self-hosted LM Studio server",
           kind: "custom",
+          appGuidedSetup: {
+            detect: async (ctx) => {
+              const providerSetup = await loadProviderSetup();
+              const result = await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
+              if (!result?.defaultModel) {
+                return null;
+              }
+              const provider = result.configPatch?.models?.providers?.[PROVIDER_ID];
+              return {
+                modelRef: result.defaultModel,
+                detail: `${result.defaultModel.slice(`${PROVIDER_ID}/`.length)} at ${provider?.baseUrl ?? "LM Studio"}`,
+              };
+            },
+            prepare: async (ctx) => {
+              const providerSetup = await loadProviderSetup();
+              return await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
+            },
+          },
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const providerSetup = await loadProviderSetup();
             return await providerSetup.promptAndConfigureLmstudioInteractive({

@@ -1,6 +1,10 @@
 // Discord plugin module implements rest errors behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { parseDiscordRetryAfterBodySeconds, parseRetryAfterHeaderSeconds } from "../retry-after.js";
+import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
+import { parseDiscordRetryAfterBodySeconds } from "../retry-after.js";
+
+const DISCORD_UNKNOWN_VOICE_STATE = 10065;
 
 export function readDiscordCode(body: unknown): number | undefined {
   const value =
@@ -16,6 +20,17 @@ export function readDiscordMessage(body: unknown, fallback: string): string {
       ? (body as { message?: unknown }).message
       : undefined;
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
+  const discordCode =
+    err && typeof err === "object" && "discordCode" in err
+      ? parseStrictNonNegativeInteger(err.discordCode)
+      : undefined;
+  return (
+    discordCode === DISCORD_UNKNOWN_VOICE_STATE ||
+    /unknown voice state/i.test(formatErrorMessage(err))
+  );
 }
 
 export function readRetryAfter(body: unknown, response: Response, fallbackSeconds = 0): number {

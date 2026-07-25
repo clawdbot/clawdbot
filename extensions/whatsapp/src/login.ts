@@ -14,16 +14,68 @@ import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
 const QR_LINK_INSTRUCTION = "Open the WhatsApp app, go to Linked Devices, then scan this QR:";
 const CLEAR_TERMINAL = "\x1b[2J\x1b[H";
 
+type CredentialPersistenceFailure = { error: unknown };
+
 export async function loginWeb(
   verbose: boolean,
   waitForConnection?: typeof waitForWaConnection,
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
+  options?: { beforeCredentialPersistence?: () => Promise<void> },
 ) {
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
-  const socketTiming = resolveWhatsAppSocketTiming(cfg);
-  const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
+  const socketTiming = resolveWhatsAppSocketTiming();
+  const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir, {
+    beforeCredentialPersistence: options?.beforeCredentialPersistence,
+  });
+  const credentialPersistenceState: { failure: CredentialPersistenceFailure | null } = {
+    failure: null,
+  };
+  let resolveCredentialPersistenceFailure = (_failure: CredentialPersistenceFailure) => {};
+  const credentialPersistenceFailurePromise = new Promise<CredentialPersistenceFailure>(
+    (resolve) => {
+      resolveCredentialPersistenceFailure = resolve;
+    },
+  );
+  const onCredentialPersistenceError = (error: unknown) => {
+    if (credentialPersistenceState.failure) {
+      return;
+    }
+    credentialPersistenceState.failure = { error };
+    resolveCredentialPersistenceFailure(credentialPersistenceState.failure);
+  };
+  const credentialPersistenceTasks = new Set<Promise<unknown>>();
+  const onCredentialPersistenceTask = (task: Promise<unknown>) => {
+    credentialPersistenceTasks.add(task);
+    void task.then(
+      () => credentialPersistenceTasks.delete(task),
+      () => credentialPersistenceTasks.delete(task),
+    );
+  };
+  const waitForCredentialPersistence = async () => {
+    // Baileys schedules the final LID key write on nextTick after reporting open.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    while (credentialPersistenceTasks.size > 0) {
+      await Promise.allSettled(credentialPersistenceTasks);
+    }
+  };
+  const credentialPersistenceOptions = options?.beforeCredentialPersistence
+    ? {
+        beforeCredentialPersistence: async () => {
+          try {
+            await options.beforeCredentialPersistence?.();
+          } catch (error) {
+            onCredentialPersistenceError(error);
+            throw error;
+          }
+        },
+        onCredentialPersistenceError,
+        onCredentialPersistenceTask,
+      }
+    : {};
   let qrVersion = 0;
   const onQr = (qr: string) => {
     const currentQrVersion = ++qrVersion;
@@ -47,6 +99,7 @@ export async function loginWeb(
     authDir: account.authDir,
     ...socketTiming,
     onQr,
+    ...credentialPersistenceOptions,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
@@ -59,10 +112,21 @@ export async function loginWeb(
       waitForConnection,
       socketTiming,
       onQr,
+      ...credentialPersistenceOptions,
+      ...(options?.beforeCredentialPersistence
+        ? {
+            credentialPersistenceFailure: credentialPersistenceFailurePromise,
+            getCredentialPersistenceFailure: () => credentialPersistenceState.failure,
+            waitForCredentialPersistence,
+          }
+        : {}),
       onSocketReplaced: (replacementSock) => {
         sock = replacementSock;
       },
     });
+    if (credentialPersistenceState.failure) {
+      throw credentialPersistenceState.failure.error;
+    }
     if (result.outcome === "connected") {
       runtime.log(
         success(

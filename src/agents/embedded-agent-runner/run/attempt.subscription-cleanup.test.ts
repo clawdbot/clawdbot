@@ -1,10 +1,8 @@
 // Coverage for ordered cleanup of embedded attempt subscriptions and resources.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
-import {
-  EMBEDDED_ABORT_SETTLE_TIMEOUT_MS,
-  cleanupEmbeddedAttemptResources,
-} from "./attempt.subscription-cleanup.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 
 function createDeferred<T>() {
   // Manual deferreds let cleanup tests prove ordering around abort settlement.
@@ -91,7 +89,8 @@ describe("cleanupEmbeddedAttemptResources", () => {
       sessionId: "session-1",
     });
 
-    await vi.advanceTimersByTimeAsync(EMBEDDED_ABORT_SETTLE_TIMEOUT_MS - 1);
+    const abortSettleTimeoutMs = resolveEmbeddedAbortSettleTimeoutMs();
+    await vi.advanceTimersByTimeAsync(abortSettleTimeoutMs - 1);
     expect(order).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(1);

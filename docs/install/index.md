@@ -9,7 +9,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 22.19+, 23.11+, or 24+** - Node 24 is the default target; the installer script handles this automatically.
+- **Node 22.22.3+, 24.15+, or 25.9+** - Node 24 is the default target; the installer script handles this automatically.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
@@ -106,7 +106,7 @@ If you already manage Node yourself:
     ```
 
     <Note>
-    Bun is supported for the global CLI install path. For the Gateway runtime, Node remains the recommended daemon runtime.
+    Bun can install the global package, but the resulting `openclaw` executable requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
     </Note>
 
   </Tab>
@@ -148,7 +148,7 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
     Automated fleet provisioning.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
-    CLI-only usage via the Bun runtime.
+    Optional dependency installer and package-script runner.
   </Card>
 </CardGroup>
 

@@ -6,7 +6,7 @@ import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
-export class WhatsAppInboundMediaLimitExceededError extends Error {
+class WhatsAppInboundMediaLimitExceededError extends Error {
   constructor(maxBytes: number) {
     super(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
     this.name = "WhatsAppInboundMediaLimitExceededError";

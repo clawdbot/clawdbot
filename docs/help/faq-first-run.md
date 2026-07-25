@@ -57,12 +57,10 @@ and troubleshooting see the main [FAQ](/help/faq).
     | Skip reason | Meaning |
     | --- | --- |
     | `quiet-hours` | Outside the configured active-hours window |
-    | `empty-heartbeat-file` | `HEARTBEAT.md` exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
-    | `no-tasks-due` | Task mode is active but no task interval is due yet |
+    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
     | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
 
-    In task mode, due timestamps advance only after a real heartbeat run completes.
-    Skipped runs do not mark tasks as completed.
+    Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
 
     Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
 
@@ -141,8 +139,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.19+** is required (Node 24 recommended). `pnpm` is the repo package manager.
-    Bun is **not recommended** for the Gateway.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 24 recommended). `pnpm` is the repo package manager.
+    Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -181,8 +179,10 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="It is stuck on wake up my friend / onboarding will not hatch. What now?">
     That screen depends on the Gateway being reachable and authenticated. The TUI also sends
-    "Wake up, my friend!" automatically on first hatch. If you see that line with **no reply**
-    and tokens stay at 0, the agent never ran.
+    "Wake up, my friend!" automatically on first hatch when a model provider is configured. If
+    you skipped model/auth setup, onboarding shows a "Model auth missing" note and opens the
+    TUI without sending anything — add a provider with `openclaw configure --section model`.
+    If you see the wake-up line with **no reply** and tokens stay at 0, the agent never ran.
 
     1. Restart the Gateway:
 
@@ -223,7 +223,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     **Important:** if you only commit/push your workspace to GitHub, you back up
     **memory + bootstrap files**, but not session history or auth. Those live under
-    `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/sessions/`).
+    `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`).
 
     Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-things-live-on-disk),
     [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
@@ -556,12 +556,17 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
-    OpenClaw supports **OpenAI Codex** via OAuth (ChatGPT sign-in). Use `openai/gpt-5.5`
-    for the default setup: ChatGPT/Codex subscription auth plus native Codex app-server
-    execution. Legacy Codex-prefixed model refs are legacy config repaired by
-    `openclaw doctor --fix`. Direct OpenAI API-key access remains available for non-agent
-    OpenAI API surfaces and, through an ordered `openai` API-key profile, for agent models
-    too. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
+    OpenClaw supports **OpenAI Codex** via OAuth (ChatGPT sign-in). A fresh
+    setup with no primary model uses exact `openai/gpt-5.6-sol` for
+    ChatGPT/Codex subscription auth plus native Codex app-server execution.
+    Reauthentication preserves an existing explicit model, including
+    `openai/gpt-5.5`. If the Codex workspace does not expose GPT-5.6, select
+    `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade. Legacy
+    Codex-prefixed model refs are legacy config repaired by `openclaw doctor
+    --fix`. Direct OpenAI API-key access remains available for non-agent OpenAI
+    API surfaces and, through an ordered `openai` API-key profile, for agent
+    models too. See [Model providers](/concepts/model-providers) and
+    [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
   <Accordion title="Why does OpenClaw still mention legacy OpenAI Codex prefix?">
@@ -569,14 +574,17 @@ and troubleshooting see the main [FAQ](/help/faq).
     ChatGPT/Codex OAuth - OpenAI Codex is folded into it. You may still see a legacy
     `openai-codex` prefix in older config and migration warnings:
 
-    - `openai/gpt-5.5` = ChatGPT/Codex subscription auth with native Codex runtime for agent turns.
+    - `openai/gpt-5.6-sol` = fresh ChatGPT/Codex subscription setup with the native Codex runtime for agent turns.
+    - `openai/gpt-5.5` = explicit supported selection for existing config or accounts without GPT-5.6 access.
     - Legacy `openai-codex/*` model refs = legacy route repaired by `openclaw doctor --fix`.
     - `openai/gpt-5.5` plus an ordered `openai` API-key profile = API-key auth for an OpenAI agent model.
     - Legacy `openai-codex` auth profile ids = legacy ids migrated by `openclaw doctor --fix`.
 
     Want direct OpenAI Platform billing? Set `OPENAI_API_KEY`. Want ChatGPT/Codex
-    subscription auth? Run `openclaw models auth login --provider openai`. Keep the model
-    ref as `openai/gpt-5.5`; legacy Codex-prefixed refs are what `openclaw doctor --fix` rewrites.
+    subscription auth? Run `openclaw models auth login --provider openai`. Keep
+    model refs under the canonical `openai/*` provider. Fresh subscription
+    setup uses exact `openai/gpt-5.6-sol`; doctor repairs legacy Codex-prefixed
+    refs without upgrading an explicit `openai/gpt-5.5` selection.
 
   </Accordion>
 
@@ -667,9 +675,9 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    Not recommended - Bun has runtime bugs, especially with WhatsApp and Telegram. Use
-    **Node** for stable gateways. If you still want to experiment, do it on a
-    non-production gateway without WhatsApp/Telegram.
+    You can use Bun to install dependencies or run package scripts. The OpenClaw CLI and
+    Gateway require **Node** because the canonical state store uses `node:sqlite`; Bun does
+    not provide that API.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">

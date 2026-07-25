@@ -9,6 +9,7 @@ import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-ru
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 
@@ -93,6 +94,30 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       skillsWorkspaceDir: "/workspace",
       workspaceOnly: true,
     });
+  });
+
+  it("maps materialized read paths while preserving original file identities", () => {
+    expect(
+      mapSandboxSkillUsagePaths({
+        paths: [
+          {
+            readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
+            skillFile: "/agent-workspace/skills/demo/SKILL.md",
+            skillName: "demo",
+            skillSource: "workspace",
+          },
+        ],
+        skillsWorkspaceDir: "/state/sandbox-skills",
+        skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
+      }),
+    ).toEqual([
+      {
+        readPath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        skillFile: "/agent-workspace/skills/demo/SKILL.md",
+        skillName: "demo",
+        skillSource: "workspace",
+      },
+    ]);
   });
 
   it("rebuilds sandbox prompts from materialized skill paths", async () => {

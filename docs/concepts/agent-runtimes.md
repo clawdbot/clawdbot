@@ -17,7 +17,7 @@ configuration. They are different layers:
 | Layer         | Examples                                     | Meaning                                                             |
 | ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
 | Provider      | `anthropic`, `github-copilot`, `openai`      | How OpenClaw authenticates, discovers models, and names model refs. |
-| Model         | `claude-opus-4-6`, `gpt-5.5`                 | The model selected for the agent turn.                              |
+| Model         | `claude-opus-4-6`, `gpt-5.6-sol`             | The model selected for the agent turn.                              |
 | Agent runtime | `claude-cli`, `codex`, `copilot`, `openclaw` | The low-level loop or backend that executes the prepared turn.      |
 | Channel       | Discord, Slack, Telegram, WhatsApp           | Where messages enter and leave OpenClaw.                            |
 
@@ -34,7 +34,7 @@ Two runtime families:
   built-in `openclaw` runtime, plus registered plugin harnesses such as
   `codex` and `copilot`.
 - **CLI backends** run a local CLI process while keeping the model ref
-  canonical. For example, `anthropic/claude-opus-4-8` with a model-scoped
+  canonical. For example, `anthropic/claude-opus-5` with a model-scoped
   `agentRuntime.id: "claude-cli"` means "select the Anthropic model, execute
   through Claude CLI." `claude-cli` is not an embedded harness id and must not
   be passed to AgentHarness selection.
@@ -68,7 +68,7 @@ keeps the model ref as `openai/*` and selects the `codex` runtime:
 {
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
 }
@@ -133,7 +133,7 @@ this order:
 
 1. **Model-scoped runtime policy** wins. This lives in a configured provider
    model entry, or in `agents.defaults.models["provider/model"].agentRuntime`
-   / `agents.list[].models["provider/model"].agentRuntime`. A provider
+   / `agents.entries.*.models["provider/model"].agentRuntime`. A provider
    wildcard such as `agents.defaults.models["vllm/*"].agentRuntime` applies
    after exact model policy, so dynamically discovered provider models can
    share one runtime without overriding exact per-model exceptions.
@@ -145,7 +145,7 @@ this order:
 
 Whole-session and whole-agent runtime pins are ignored: `OPENCLAW_AGENT_RUNTIME`,
 session `agentHarnessId`/`agentRuntimeOverride` state, `agents.defaults.agentRuntime`,
-and `agents.list[].agentRuntime`. Run `openclaw doctor --fix` to remove stale
+and `agents.entries.*.agentRuntime`. Run `openclaw doctor --fix` to remove stale
 whole-agent runtime config and convert legacy runtime model refs where intent
 can be preserved.
 
@@ -160,9 +160,9 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-8",
+      model: "anthropic/claude-opus-5",
       models: {
-        "anthropic/claude-opus-4-8": {
+        "anthropic/claude-opus-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -244,7 +244,7 @@ The Codex runtime support contract is documented in
 Status output can show both `Execution` and `Runtime` labels. Read them as
 diagnostics, not provider names:
 
-- A model ref such as `openai/gpt-5.5` is the selected provider/model.
+- A model ref such as `openai/gpt-5.6-sol` is the selected provider/model.
 - A runtime id such as `codex` is the loop executing the turn.
 - A channel label such as Telegram or Discord is where the conversation is happening.
 

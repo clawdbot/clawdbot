@@ -44,6 +44,13 @@ function assertDiscordResponseObject(value: unknown, label: string): Record<stri
   return value as Record<string, unknown>;
 }
 
+function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number | undefined {
+  if (!channel || !("default_auto_archive_duration" in channel)) {
+    return undefined;
+  }
+  return channel.default_auto_archive_duration;
+}
+
 export class DiscordThreadInitialMessageError extends Error {
   readonly initialMessageError: string;
   readonly thread: APIChannel;
@@ -158,25 +165,26 @@ export async function createThreadDiscord(
 ) {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = { name: payload.name };
-  if (payload.autoArchiveMinutes) {
-    body.auto_archive_duration = payload.autoArchiveMinutes;
-  }
   if (!payload.messageId && payload.type !== undefined) {
     body.type = payload.type;
   }
-  let channelType: ChannelType | undefined;
+  let channel: APIChannel | undefined;
   if (!payload.messageId) {
-    // Only detect channel kind for route-less thread creation.
-    // If this lookup fails, keep prior behavior and let Discord validate.
     try {
-      const channel = await getChannel(rest, channelId);
-      channelType = channel?.type;
+      channel = await getChannel(rest, channelId);
     } catch {
-      channelType = undefined;
+      // Channel metadata only enriches standalone creation; Discord still validates it.
     }
   }
+  // Discord clients preselect the parent default, but REST thread creation needs
+  // it explicitly. Keep a caller override authoritative when one was supplied.
+  const archiveDuration =
+    payload.autoArchiveMinutes ?? resolveDefaultThreadAutoArchiveDuration(channel);
+  if (archiveDuration !== undefined) {
+    body.auto_archive_duration = archiveDuration;
+  }
   const isForumLike =
-    channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+    channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
   if (isForumLike) {
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };

@@ -15,11 +15,13 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { tryDispatchAcpReply } from "./dispatch-acp.js";
+import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import {
   appendRecentHistoryImageContext,
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
@@ -30,6 +32,13 @@ const managerMocks = vi.hoisted(() => ({
     turns: { queueDepth: 0 },
     runtimeCache: { activeSessions: 0 },
   })),
+}));
+
+const auditMocks = vi.hoisted(() => ({
+  emitAcpLifecycleStart: vi.fn(),
+  emitAcpRuntimeEvent: vi.fn(),
+  emitAcpLifecycleEnd: vi.fn(),
+  emitAcpLifecycleError: vi.fn(),
 }));
 
 const policyMocks = vi.hoisted(() => ({
@@ -116,6 +125,18 @@ vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   }),
 }));
 
+vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
+  createAcpToolLifecycleTracker: () => ({
+    active: new Map(),
+    terminalToolCallIds: new Set(),
+    saturated: false,
+  }),
+  emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
+  emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
+  emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
+  emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
+}));
+
 vi.mock("../../acp/policy.js", () => ({
   resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
     policyMocks.resolveAcpDispatchPolicyError(cfg),
@@ -155,12 +176,12 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     mediaUnderstandingMocks.applyMediaUnderstanding(params),
   isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
     error instanceof Error && error.name === "MediaUnderstandingSkipError",
-  normalizeAttachments: (ctx: { MediaPath?: string; MediaType?: string }) =>
-    ctx.MediaPath
+  normalizeAttachments: (ctx: { media?: Array<{ path?: string; contentType?: string }> }) =>
+    ctx.media?.[0]?.path
       ? [
           {
-            path: ctx.MediaPath,
-            mime: ctx.MediaType,
+            path: ctx.media[0].path,
+            mime: ctx.media[0].contentType,
             index: 0,
           },
         ]
@@ -304,6 +325,7 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
 
 async function runDispatch(params: {
   bodyForAgent: string;
+  runId?: string;
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
@@ -311,12 +333,18 @@ async function runDispatch(params: {
   originatingTo?: string;
   onReplyStart?: () => void;
   images?: Array<{ data: string; mimeType: string }>;
+  abortSignal?: AbortSignal;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   toolsAllow?: string[];
+  recordProcessed?: (
+    outcome: "completed" | "skipped" | "error",
+    opts?: { reason?: string; error?: string },
+  ) => void;
+  markIdle?: (reason: string) => void;
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -329,8 +357,10 @@ async function runDispatch(params: {
     }),
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
+    ...(params.runId ? { runId: params.runId } : {}),
     sessionKey: targetSessionKey,
     images: params.images,
+    abortSignal: params.abortSignal,
     inboundAudio: false,
     suppressUserDelivery: params.suppressUserDelivery,
     suppressReplyLifecycle: params.suppressReplyLifecycle,
@@ -346,8 +376,8 @@ async function runDispatch(params: {
     bypassForCommand: false,
     toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
-    recordProcessed: vi.fn(),
-    markIdle: vi.fn(),
+    recordProcessed: params.recordProcessed ?? vi.fn(),
+    markIdle: params.markIdle ?? vi.fn(),
   });
 }
 
@@ -434,6 +464,10 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 
 describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
+    auditMocks.emitAcpLifecycleStart.mockReset();
+    auditMocks.emitAcpRuntimeEvent.mockReset();
+    auditMocks.emitAcpLifecycleEnd.mockReset();
+    auditMocks.emitAcpLifecycleError.mockReset();
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockImplementation(
@@ -476,6 +510,74 @@ describe("tryDispatchAcpReply", () => {
     globalThis.fetch = originalFetch;
   });
 
+  it("projects normal ACP dispatch lifecycle and tool events into audit diagnostics", async () => {
+    setReadyAcpResolution();
+    mockToolLifecycleTurn("tool-audit");
+
+    await runDispatch({ bodyForAgent: "audit this turn" });
+
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.any(String),
+        sessionKey,
+        startedAt: expect.any(Number),
+        auditOnly: true,
+      }),
+    );
+    expect(auditMocks.emitAcpRuntimeEvent).toHaveBeenCalledTimes(3);
+    expect(auditMocks.emitAcpRuntimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.any(String),
+        sessionKey,
+        auditOnly: true,
+        event: expect.objectContaining({ type: "tool_call", toolCallId: "tool-audit" }),
+      }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: expect.any(String), sessionKey, auditOnly: true }),
+    );
+    expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
+  });
+
+  it("keeps caller-owned run ids on the shared lifecycle path", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({ bodyForAgent: "audit this turn", runId: "caller-run" });
+
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
+    );
+  });
+
+  it("keeps audit run ids unique when channel message ids repeat", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "first turn",
+      ctxOverrides: { MessageSid: "channel-local-1" },
+    });
+    await runDispatch({
+      bodyForAgent: "second turn",
+      ctxOverrides: { MessageSid: "channel-local-1" },
+    });
+
+    const auditRunIds = [0, 1].map(
+      (index) =>
+        requireRecord(
+          mockArg(auditMocks.emitAcpLifecycleStart, index, 0, `audit start ${index}`),
+          "audit start",
+        ).runId,
+    );
+    expect(new Set(auditRunIds).size).toBe(2);
+    expect([runTurnCall(0).requestId, runTurnCall(1).requestId]).toEqual([
+      "channel-local-1",
+      "channel-local-1",
+    ]);
+  });
+
   it("routes default ACP output to the originating channel as a final reply", async () => {
     setReadyAcpResolution();
     mockRoutedTextTurn("hello");
@@ -514,6 +616,56 @@ describe("tryDispatchAcpReply", () => {
     expect(transcript.promptText).toBe("reply");
     expect(transcript.finalText).toBe("hello");
     expect(routeCall().mirror).toBe(false);
+  });
+
+  it("persists the failed turn so the bound transcript matches the channel reply", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(async () => {
+      throw new Error("acp exploded mid-turn");
+    });
+
+    await runDispatch({ bodyForAgent: "reply" });
+
+    // A failed bound turn used to deliver an error to the channel while writing
+    // nothing to the transcript, so the next resume replayed history that never
+    // mentioned the failure.
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledTimes(1);
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.sessionKey).toBe(sessionKey);
+    expect(transcript.promptText).toBe("reply");
+    expect(String(transcript.finalText)).toContain("acp exploded mid-turn");
+  });
+
+  it("keeps streamed output ahead of the error when a turn fails mid-stream", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(async (params: unknown) => {
+      const handler = params as { onEvent?: (event: unknown) => void };
+      handler.onEvent?.({ type: "text_delta", stream: "output", text: "partial answer" });
+      throw new Error("acp died after streaming");
+    });
+
+    await runDispatch({ bodyForAgent: "reply" });
+
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(String(transcript.finalText)).toContain("partial answer");
+    expect(String(transcript.finalText)).toContain("acp died after streaming");
+  });
+
+  it("preserves an intentionally empty canonical agent prompt", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "",
+      ctxOverrides: { BodyForCommands: "/status", CommandBody: "/status" },
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
   });
 
   it("adds source delivery guidance to tool-only ACP turns", async () => {
@@ -682,6 +834,227 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
+  });
+
+  it("persists delivered ACP output for backend cancellation without a caller abort", async () => {
+    setReadyAcpResolution();
+    const deliveredPayloads: unknown[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredPayloads.push(payload);
+      },
+    });
+    const recordProcessed = vi.fn();
+    const markIdle = vi.fn();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "partial", tag: "agent_message_chunk" });
+        await onEvent({ type: "done", status: "cancelled", stopReason: "cancelled" });
+      },
+    );
+
+    const result = await runDispatch({
+      bodyForAgent: "cancel this turn",
+      dispatcher,
+      recordProcessed,
+      markIdle,
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(deliveredPayloads).toEqual([{ text: "partial" }]);
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledTimes(1);
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.sessionKey).toBe(sessionKey);
+    expect(transcript.promptText).toBe("cancel this turn");
+    expect(transcript.finalText).toBe("partial");
+    expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_aborted" });
+    expect(markIdle).toHaveBeenCalledWith("message_aborted");
+    expect(transcriptMocks.persistAcpDispatchTranscript.mock.invocationCallOrder[0]).toBeLessThan(
+      recordProcessed.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resultStatus: "cancelled",
+      }),
+    );
+    expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
+  });
+
+  it("does not persist final-only output rejected after caller cancellation", async () => {
+    setReadyAcpResolution();
+    const abortController = new AbortController();
+    const base = createDispatcher();
+    const dispatcher = createAbortAwareDispatcher({
+      dispatcher: base.dispatcher,
+      isAborted: () => abortController.signal.aborted,
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "not delivered", tag: "agent_message_chunk" });
+        abortController.abort();
+        await onEvent({ type: "done", status: "cancelled" });
+      },
+    );
+
+    const result = await runDispatch({
+      bodyForAgent: "cancel before delivery",
+      abortSignal: abortController.signal,
+      dispatcher,
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(base.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.promptText).toBe("cancel before delivery");
+    expect(transcript.finalText).toBe("");
+  });
+
+  it("persists live ACP output delivered before caller cancellation", async () => {
+    setReadyAcpResolution();
+    const abortController = new AbortController();
+    const deliveredPayloads: Array<Record<string, unknown>> = [];
+    let markDeliveryStarted!: () => void;
+    let releaseDelivery!: () => void;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const coreDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredPayloads.push(requireRecord(payload, "delivered payload"));
+        markDeliveryStarted();
+        await deliveryGate;
+      },
+    });
+    const dispatcher = createAbortAwareDispatcher({
+      dispatcher: coreDispatcher,
+      isAborted: () => abortController.signal.aborted,
+    });
+    const partial = "Visible before cancellation. ".repeat(4);
+    let markTurnReady!: () => void;
+    let finishTurn!: () => void;
+    let markTurnDone!: () => void;
+    const turnReady = new Promise<void>((resolve) => {
+      markTurnReady = resolve;
+    });
+    const finishTurnGate = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    const turnDone = new Promise<void>((resolve) => {
+      markTurnDone = resolve;
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: partial, tag: "agent_message_chunk" });
+        markTurnReady();
+        await finishTurnGate;
+        await onEvent({ type: "done", status: "cancelled" });
+        markTurnDone();
+      },
+    );
+
+    const dispatchPromise = runDispatch({
+      bodyForAgent: "cancel after delivery",
+      abortSignal: abortController.signal,
+      cfg: createAcpTestConfig({
+        acp: {
+          enabled: true,
+          stream: { deliveryMode: "live" },
+        },
+      }),
+      dispatcher,
+    });
+
+    await turnReady;
+    await deliveryStarted;
+    abortController.abort();
+    finishTurn();
+    await turnDone;
+    const earlyOutcome = await Promise.race([
+      dispatchPromise.then(() => "settled" as const),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 10);
+      }),
+    ]);
+    expect(earlyOutcome).toBe("pending");
+    expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
+
+    releaseDelivery();
+    await dispatchPromise;
+
+    const deliveredText = deliveredPayloads.map((payload) => String(payload.text)).join("\n");
+    expect(deliveredText).not.toBe("");
+    expect(partial).toContain(deliveredText.replaceAll("\n", ""));
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.finalText).toBe(deliveredText.trimEnd());
+  });
+
+  it("keeps caller abort authoritative until completed output settles", async () => {
+    setReadyAcpResolution();
+    const abortController = new AbortController();
+    const { dispatcher } = createDispatcher();
+    const recordProcessed = vi.fn();
+    const markIdle = vi.fn();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "complete", tag: "agent_message_chunk" });
+        await onEvent({ type: "done", status: "completed" });
+        abortController.abort();
+      },
+    );
+
+    const result = await runDispatch({
+      bodyForAgent: "finish first",
+      abortSignal: abortController.signal,
+      dispatcher,
+      recordProcessed,
+      markIdle,
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_aborted" });
+    expect(markIdle).toHaveBeenCalledWith("message_aborted");
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        resultStatus: "completed",
+      }),
+    );
+  });
+
+  it("records an ACP error when output finalization fails", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("visible output");
+    const { dispatcher } = createDispatcher();
+    vi.mocked(dispatcher.waitForIdle)
+      .mockRejectedValueOnce(new Error("output settlement failed"))
+      .mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "finalize this turn",
+      dispatcher,
+    });
+
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({ message: "output settlement failed" }),
+      }),
+    );
   });
 
   it("skips media understanding for text-only ACP turns", async () => {
@@ -962,8 +1335,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: currentPath,
-          MediaType: "image/png",
+          media: [{ path: currentPath, contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -987,7 +1359,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1012,8 +1386,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: currentPath,
-          MediaType: "image/png",
+          media: [{ path: currentPath, contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1041,7 +1414,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 1 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 1 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1072,8 +1447,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: documentPath,
-          MediaType: "application/pdf",
+          media: [{ path: documentPath, contentType: "application/pdf" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1093,7 +1467,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1115,8 +1491,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaUrl: "https://example.com/current.png",
-          MediaType: "image/png",
+          media: [{ url: "https://example.com/current.png", contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1143,7 +1518,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ url: ctx.MediaUrl, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { url: ctx.media?.[0]?.url, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1219,8 +1596,7 @@ describe("tryDispatchAcpReply", () => {
     await runDispatch({
       bodyForAgent: "describe current image and scanned PDF",
       ctxOverrides: {
-        MediaPath: currentPath,
-        MediaType: "image/png",
+        media: [{ path: currentPath, contentType: "image/png" }],
       },
     });
 
@@ -1414,6 +1790,11 @@ describe("tryDispatchAcpReply", () => {
       "ACP dispatch is disabled by policy.",
     );
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledOnce();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
   });
 
   it("fails closed when ACP dispatch cannot enforce restrictive runtime toolsAllow", async () => {
@@ -1429,6 +1810,25 @@ describe("tryDispatchAcpReply", () => {
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("runtime toolsAllow");
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+  });
+
+  it("audits ACP agent-policy rejections as blocked attempts", async () => {
+    setReadyAcpResolution();
+    policyMocks.resolveAcpAgentPolicyError.mockReturnValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP agent is not allowed by policy."),
+    );
+
+    await runDispatch({ bodyForAgent: "test" });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledOnce();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
   });
 
   it("allows wildcard runtime toolsAllow through ACP dispatch", async () => {
@@ -1923,8 +2323,6 @@ describe("tryDispatchAcpReply", () => {
         enabled: true,
         stream: {
           deliveryMode: "live",
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
         },
       },
     });
@@ -1961,8 +2359,6 @@ describe("tryDispatchAcpReply", () => {
         enabled: true,
         stream: {
           deliveryMode: "live",
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
         },
       },
     });
@@ -2086,3 +2482,4 @@ describe("tryDispatchAcpReply", () => {
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

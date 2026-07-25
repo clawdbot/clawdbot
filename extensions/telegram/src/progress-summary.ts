@@ -11,7 +11,7 @@
 // prefix: Discord wraps the line in its `-#` small-text syntax, which Telegram
 // markdown has no analog for, so the Telegram line is emitted plain.
 
-export type TelegramProgressSummaryCounters = {
+type TelegramProgressSummaryCounters = {
   reasoningSteps: number;
   commentaryNotes: number;
   toolCalls: number;
@@ -27,7 +27,7 @@ export type TelegramProgressSummaryCounters = {
 // the next tool call, or the summary flush — because some models (e.g. deepseek)
 // do not emit a reliable thinking_end per burst, so counting on the end event
 // alone undercounts.
-export type TelegramProgressSummaryTracker = {
+type TelegramProgressSummaryTracker = {
   /** A reasoning delta arrived; opens (or keeps open) the current burst. */
   noteReasoningActivity(): void;
   /** Reasoning-end fired; close and count the current burst if one is open. */

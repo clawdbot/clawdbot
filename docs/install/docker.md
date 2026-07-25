@@ -10,6 +10,8 @@ Docker is **optional**. Use it for an isolated, throwaway gateway environment or
 
 The default sandbox backend uses Docker when `agents.defaults.sandbox` is enabled, but sandboxing is off by default and does not require the gateway itself to run in Docker. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
+Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+
 ## Prerequisites
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
@@ -41,7 +43,7 @@ The default sandbox backend uses Docker when `agents.defaults.sandbox` is enable
     ./scripts/docker/setup.sh
     ```
 
-    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Official tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`), and beta tags such as `2026.2.26-beta.1` (betas never move `latest`/`main`). The default `main`/`latest`/`<version>` image bundles the `codex` and `diagnostics-otel` plugins. A `-browser` variant (e.g. `latest-browser`) also ships with Chromium baked in, useful for the [sandboxed browser](/gateway/sandboxing#sandboxed-browser) tool without a first-run Playwright install.
+    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw` and avoid unofficial mirrors, which don't share OpenClaw's release timing or retention policy. Version-specific tags include releases such as `2026.2.26` and prereleases such as `2026.2.26-beta.1`. Stable releases move `latest` and `main`; trailing-month Gateway releases move only `extended-stable`. Variants include `slim`, `main-slim`, `extended-stable-slim`, `latest-browser`, `main-browser`, and `extended-stable-browser`. The default images bundle the `codex` and `diagnostics-otel` plugins. A `-browser` variant also ships with Chromium baked in, useful for the [sandboxed browser](/gateway/sandboxing#sandboxed-browser) tool without a first-run Playwright install.
 
   </Step>
 
@@ -103,7 +105,12 @@ The default sandbox backend uses Docker when `agents.defaults.sandbox` is enable
 ### Manual flow
 
 ```bash
-docker build -t openclaw:local -f Dockerfile .
+BUILD_GIT_COMMIT="$(git rev-parse HEAD)"
+BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+docker build \
+  --build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}" \
+  --build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}" \
+  -t openclaw:local -f Dockerfile .
 docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
   dist/index.js onboard --mode local --no-install-daemon
 docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
@@ -111,37 +118,64 @@ docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
 docker compose up -d openclaw-gateway
 ```
 
+The Docker context excludes `.git`. Pass the source identity as build arguments
+as shown above so the image's About screen reports the checked-out commit and
+one build timestamp. `scripts/docker/setup.sh` resolves and passes both values
+automatically.
+
 <Note>
 Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` or `OPENCLAW_HOME_VOLUME`, the setup script writes `docker-compose.extra.yml`; include it after any `docker-compose.override.yml` you maintain yourself, e.g. `-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.extra.yml`.
 </Note>
+
+### Upgrading container images
+
+When you replace the OpenClaw image but keep the same mounted state/config, the
+new gateway runs startup-safe upgrade migrations and plugin convergence before
+readiness. Routine image upgrades should not require a separate
+`openclaw doctor --fix` pass.
+
+If startup cannot complete those repairs safely, the gateway exits instead of
+reporting healthy. With a restart policy, Docker, Podman, or Kubernetes may show
+the gateway container restarting. Keep the mounted state volume, then run the
+same image once with `openclaw doctor --fix` as the container command, using the
+same state/config mounts the gateway uses:
+
+```bash
+docker run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor --fix
+podman run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor --fix
+```
+
+After doctor finishes, restart the gateway container with its default command.
+In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
+same PVC, then restart the Deployment or StatefulSet.
 
 ### Environment variables
 
 Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway container, by `docker-compose.yml` directly):
 
-| Variable                                        | Purpose                                                                                                 |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`                                | Use a remote image instead of building locally                                                          |
-| `OPENCLAW_IMAGE_APT_PACKAGES`                   | Install extra apt packages during build (space-separated). Legacy alias: `OPENCLAW_DOCKER_APT_PACKAGES` |
-| `OPENCLAW_IMAGE_PIP_PACKAGES`                   | Install extra Python packages during build (space-separated)                                            |
-| `OPENCLAW_EXTENSIONS`                           | Pre-install plugin dependencies at build time (comma- or space-separated ids)                           |
-| `OPENCLAW_DOCKER_BUILD_NODE_OPTIONS`            | Override the local source-build Node options (default `--max-old-space-size=8192`)                      |
-| `OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB` | Override the local source-build tsdown heap in MB                                                       |
-| `OPENCLAW_DOCKER_BUILD_SKIP_DTS`                | Skip declaration output during runtime-only local image builds (default `1`)                            |
-| `OPENCLAW_INSTALL_BROWSER`                      | Bake Chromium + Xvfb into the image at build time                                                       |
-| `OPENCLAW_EXTRA_MOUNTS`                         | Extra host bind mounts (comma-separated `source:target[:opts]`)                                         |
-| `OPENCLAW_HOME_VOLUME`                          | Persist `/home/node` in a named Docker volume                                                           |
-| `OPENCLAW_SANDBOX`                              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                  |
-| `OPENCLAW_SKIP_ONBOARDING`                      | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                         |
-| `OPENCLAW_DOCKER_SOCKET`                        | Override the Docker socket path                                                                         |
-| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](#bonjour--mdns)              |
-| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                       |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                            |
-| `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                             |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | OTLP protocol override. Only `http/protobuf` is supported today                                         |
-| `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                           |
-| `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                 |
-| `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                          |
+| Variable                                        | Purpose                                                                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`                                | Use a remote image instead of building locally                                                                    |
+| `OPENCLAW_IMAGE_APT_PACKAGES`                   | Install extra apt packages during build (space-separated). Legacy alias: `OPENCLAW_DOCKER_APT_PACKAGES`           |
+| `OPENCLAW_IMAGE_PIP_PACKAGES`                   | Install extra Python packages during build (space-separated)                                                      |
+| `OPENCLAW_EXTENSIONS`                           | Compile/package supported selected plugins and install their runtime dependencies (comma- or space-separated ids) |
+| `OPENCLAW_DOCKER_BUILD_NODE_OPTIONS`            | Override the local source-build Node options (default `--max-old-space-size=8192`)                                |
+| `OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB` | Override the local source-build tsdown heap in MB                                                                 |
+| `OPENCLAW_DOCKER_BUILD_SKIP_DTS`                | Skip declaration output during runtime-only local image builds (default `1`)                                      |
+| `OPENCLAW_INSTALL_BROWSER`                      | Bake Chromium + Xvfb into the image at build time                                                                 |
+| `OPENCLAW_EXTRA_MOUNTS`                         | Extra host bind mounts (comma-separated `source:target[:opts]`)                                                   |
+| `OPENCLAW_HOME_VOLUME`                          | Persist `/home/node` in a named Docker volume                                                                     |
+| `OPENCLAW_SANDBOX`                              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                            |
+| `OPENCLAW_SKIP_ONBOARDING`                      | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                                   |
+| `OPENCLAW_DOCKER_SOCKET`                        | Override the Docker socket path                                                                                   |
+| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](#bonjour--mdns)                        |
+| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                                 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                                      |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                                       |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | OTLP protocol override. Only `http/protobuf` is supported today                                                   |
+| `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                                     |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                           |
+| `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                                    |
 
 The official image ships no Homebrew. During onboarding, OpenClaw hides brew-only skill dependency installers in a Linux container without `brew`; provide those dependencies through a custom image or install manually. Use `OPENCLAW_IMAGE_APT_PACKAGES` for Debian-packaged dependencies and `OPENCLAW_IMAGE_PIP_PACKAGES` for Python dependencies (runs `python3 -m pip install --break-system-packages` at build time, so pin versions and use only indexes you trust).
 
@@ -150,6 +184,70 @@ If Docker reports `ResourceExhausted`, `cannot allocate memory`, or aborts durin
 ```bash
 OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096
 ```
+
+### Source-built images with selected plugins
+
+`OPENCLAW_EXTENSIONS` selects plugin manifest ids from the source checkout;
+existing source-directory names are also accepted when they differ. The Docker
+build resolves the selection to source directories once, installs production
+dependencies, and, when a selected plugin is published separately with
+`openclaw.build.bundledDist: false`, compiles its runtime into the root bundled
+dist. This Docker-only packaging does not change the plugin's npm or ClawHub
+artifact contract. Unknown, invalid, or ambiguous ids fail the image build.
+Known dependency/source-only ids keep their existing source and dependency
+staging without gaining a compiled root dist entry. A selected plugin with
+unified build entries must compile successfully; unselected external plugin
+source and runtime output are pruned.
+
+For example, these commands build separate, multi-architecture standalone
+FakeCo gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
+already part of the root OpenClaw runtime, so the ClickClack image selects only
+`clickclack`. The explicit empty browser argument keeps the default image free
+of Chromium:
+
+```bash
+SOURCE_SHA="$(git rev-parse HEAD)"
+BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+REGISTRY="registry.example.com/fakeco"
+
+build_gateway_image() {
+  gateway="$1"
+  selected_plugin="$2"
+  docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    --build-arg "GIT_COMMIT=${SOURCE_SHA}" \
+    --build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}" \
+    --build-arg "OPENCLAW_EXTENSIONS=${selected_plugin}" \
+    --build-arg OPENCLAW_INSTALL_BROWSER= \
+    --provenance=mode=max \
+    --sbom=true \
+    --tag "${REGISTRY}/openclaw-${gateway}:${SOURCE_SHA}" \
+    --push \
+    .
+}
+
+build_gateway_image clickclack clickclack
+build_gateway_image slack slack
+build_gateway_image teams msteams
+```
+
+Use `--platform linux/arm64 --load` or `--platform linux/amd64 --load` for a
+single native local build. Multi-platform output and attached SBOM/provenance
+require a registry or another Buildx output that preserves attestations. After
+pushing, inspect the manifest and deploy the immutable digest rather than the
+mutable source-SHA tag:
+
+```bash
+docker buildx imagetools inspect \
+  "${REGISTRY}/openclaw-clickclack:${SOURCE_SHA}"
+# Deploy: registry.example.com/fakeco/openclaw-clickclack@sha256:<manifest-digest>
+```
+
+These images are for standalone OCI-based gateways and generic Docker users.
+Crabhelm-managed gateways do not consume them: that delivery path builds a
+separate x86_64 appliance archive containing an OpenClaw npm tarball and pins
+the Node, archive, and manifest digests. Build that appliance independently
+from the same landed OpenClaw source.
 
 To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id.
 
@@ -250,14 +348,9 @@ docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
   'curl -fsSL https://claude.ai/install.sh | bash'
 ```
 
-The native installer writes `claude` to `/home/node/.local/bin/claude`. Point OpenClaw at that path:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
-  openclaw-cli config set \
-  agents.defaults.cliBackends.claude-cli.command \
-  /home/node/.local/bin/claude
-```
+The native installer writes `claude` to `/home/node/.local/bin/claude`. The
+OpenClaw image includes `/home/node/.local/bin` on `PATH`, so the bundled
+Anthropic plugin resolves it without an adapter config override.
 
 Log in and verify from the same persisted home:
 
@@ -311,7 +404,7 @@ Installed downloadable plugins store package state under the mounted OpenClaw ho
 
 For full VM persistence details, see [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** `media/`, session JSONL files, the shared SQLite state database, installed plugin package roots, and rolling file logs under `/tmp/openclaw/`.
+**Disk growth hotspots:** `media/`, per-agent SQLite databases, legacy session JSONL transcripts, the shared SQLite state database, installed plugin package roots, and rolling file logs under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)
 

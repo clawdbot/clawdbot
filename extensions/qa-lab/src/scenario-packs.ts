@@ -1,14 +1,14 @@
 // Qa Lab plugin module implements scenario packs behavior.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type QaScenarioPackDefinition = {
+type QaScenarioPackDefinition = {
   id: string;
   title: string;
   description: string;
   scenarioIds: readonly string[];
 };
 
-export const QA_PERSONAL_AGENT_SCENARIO_IDS = [
+const QA_PERSONAL_AGENT_SCENARIO_IDS = [
   "personal-reminder-roundtrip",
   "personal-channel-thread-reply",
   "personal-memory-preference-recall",
@@ -21,10 +21,7 @@ export const QA_PERSONAL_AGENT_SCENARIO_IDS = [
   "personal-failure-recovery",
 ] as const;
 
-export const QA_OBSERVABILITY_SCENARIO_IDS = [
-  "otel-trace-smoke",
-  "docker-prometheus-smoke",
-] as const;
+const QA_OBSERVABILITY_SCENARIO_IDS = ["otel-trace-smoke", "docker-prometheus-smoke"] as const;
 
 export const QA_SCENARIO_PACKS = [
   {

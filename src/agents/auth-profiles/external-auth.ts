@@ -28,7 +28,7 @@ type ExternalCliOverlayOptions = {
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
 
 /** Test-only resolver injection for provider external auth profiles. */
-export const testing = {
+const testing = {
   resetResolveExternalAuthProfilesForTest(): void {
     resolveExternalAuthProfilesForRuntime = undefined;
   },
@@ -36,6 +36,10 @@ export const testing = {
     resolveExternalAuthProfilesForRuntime = resolver;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.externalAuthTestApi")] =
+    testing;
+}
 
 function normalizeExternalAuthProfile(
   profile: ProviderExternalAuthProfile,
@@ -178,5 +182,3 @@ export function syncPersistedExternalCliAuthProfiles(
   }
   return next ?? store;
 }
-
-export { testing as __testing };

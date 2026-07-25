@@ -1,0 +1,77 @@
+title: WhatsApp tool-only usage footer
+
+scenario:
+  id: whatsapp-tool-only-usage-footer
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - observability.model-usage
+    secondary:
+      - channels.channel-native-commands
+  objective: Verify WhatsApp usage mode decorates a message-tool-only visible reply.
+  successCriteria:
+    - The usage command enables token footer mode.
+    - The next exact-marker reply includes the marker and visible Usage footer.
+  codeRefs:
+    - src/auto-reply/reply/commands-session.ts
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+  execution:
+    profiles: { "whatsapp:mock-default": 37 }
+    kind: flow
+    channel: whatsapp
+    config:
+      requiredProviderMode: mock-openai
+      marker: WHATSAPP-QA-USAGE-FOOTER-OK
+    summary: Enable token usage mode, then verify the next WhatsApp reply footer.
+
+flow:
+  steps:
+    - name: next visible reply includes usage footer
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /usage tokens
+        - waitForOutbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            textIncludes: "Usage footer: tokens"
+            timeoutMs: 60000
+        - try:
+            actions:
+              - set: startIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - sendInbound:
+                  conversation: { id: whatsapp-command-dm, kind: direct }
+                  senderId: qa-command-operator
+                  senderName: QA Command Operator
+                  text:
+                    expr: "`Reply with only this exact marker after usage footer setup: ${config.marker}`"
+              - waitForOutbound:
+                  conversation: { id: whatsapp-command-dm, kind: direct }
+                  sinceIndex: { ref: startIndex }
+                  textIncludes: { ref: config.marker }
+                  timeoutMs: 90000
+              - call: sleep
+                args: [1000]
+              - set: joinedReply
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).map((message) => message.text).join('\\n')"
+              - assert:
+                  expr: "joinedReply.includes(config.marker) && joinedReply.includes('Usage:')"
+                  message:
+                    expr: "`usage footer reply missing marker or footer: ${joinedReply}`"
+            finally:
+              - sendInbound:
+                  conversation: { id: whatsapp-command-dm, kind: direct }
+                  senderId: qa-command-operator
+                  senderName: QA Command Operator
+                  text: /usage off
+              - waitForOutbound:
+                  conversation: { id: whatsapp-command-dm, kind: direct }
+                  textIncludes: "Usage footer: off"
+                  timeoutMs: 60000
+      detailsExpr: joinedReply

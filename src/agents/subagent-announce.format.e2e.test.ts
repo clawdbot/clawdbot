@@ -14,6 +14,7 @@ import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -23,9 +24,9 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
-import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -62,7 +63,13 @@ type MockSubagentRun = {
     error?: string;
   };
 };
-type SessionEntryFixture = Omit<SessionEntry, "updatedAt"> & { updatedAt?: number };
+type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
+  updatedAt?: number;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
 type SessionStoreFixture = Record<string, SessionEntryFixture | undefined>;
 
 function visibleAgentResponse(runId = "run-main") {
@@ -124,7 +131,6 @@ function expectAgentCallFields(
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
-const loadSessionStoreSpy = vi.spyOn(configSessions, "loadSessionStore");
 const resolveAgentIdFromSessionKeySpy = vi.spyOn(configSessions, "resolveAgentIdFromSessionKey");
 const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
@@ -155,7 +161,7 @@ const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn<
   gatewayHealth: "live",
 }));
 const waitForEmbeddedAgentRunEndMock = vi.fn<typeof embeddedRuns.waitForEmbeddedAgentRunEnd>(
-  async (_sessionId: string, _timeoutMs?: number) => true,
+  async (_sessionId: string, _timeoutMs?: number | null) => true,
 );
 const embeddedRunMock = {
   isEmbeddedAgentRunActive: embeddedAgentRunActiveMock,
@@ -245,7 +251,18 @@ const announceFormatChannelPlugins = [
   },
   {
     pluginId: "matrix",
-    plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+    plugin: {
+      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      messaging: {
+        resolveDeliveryTarget: (params: {
+          conversationId: string;
+          parentConversationId?: string;
+        }) => ({
+          to: `room:${params.parentConversationId ?? params.conversationId}`,
+          ...(params.parentConversationId ? { threadId: params.conversationId } : {}),
+        }),
+      },
+    },
     source: "test",
   },
   {
@@ -282,18 +299,15 @@ function setMessageToolGroupReplyConfig(): void {
   });
 }
 
-function toSessionEntry(
-  sessionKey: string,
-  entry?: Partial<SessionEntry>,
-): SessionEntry | undefined {
+function toSessionEntry(sessionKey: string, entry?: SessionEntryFixture): SessionEntry | undefined {
   if (!entry) {
     return undefined;
   }
-  return {
+  return normalizeLegacySessionEntryDelivery({
+    ...entry,
     sessionId: entry.sessionId ?? sessionKey,
     updatedAt: entry.updatedAt ?? Date.now(),
-    ...entry,
-  };
+  } as SessionEntry);
 }
 
 function loadSessionStoreFixture(): Record<string, SessionEntry> {
@@ -388,6 +402,7 @@ describe("subagent announce formatting", () => {
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
+      loadSessionEntry: (scope) => loadSessionStoreFixture()[scope.sessionKey],
       getRequesterSessionActivity: (requesterSessionKey: string) => {
         const entry = loadSessionStoreFixture()[requesterSessionKey];
         const sessionId = entry?.sessionId;
@@ -414,7 +429,6 @@ describe("subagent announce formatting", () => {
       resolveAgentIdFromSessionKey: () => "main",
       resolveStorePath: () => "/tmp/sessions.json",
     });
-    loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeySpy.mockReset().mockImplementation(() => "agent:main:main");
@@ -3648,3 +3662,4 @@ describe("subagent announce formatting", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,7 +11,7 @@ import {
 } from "./client.js";
 import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
-export type MattermostDirectoryParams = {
+type MattermostDirectoryParams = {
   cfg: OpenClawConfig;
   accountId?: string | null;
   query?: string | null;
@@ -134,6 +134,9 @@ export async function listMattermostDirectoryPeers(
   // All bots see the same user list, so one client suffices (unlike channels
   // where private channel membership varies per bot).
   const client = clients[0];
+  if (!client) {
+    return [];
+  }
   try {
     const me = await fetchMattermostMe(client);
     const teams = await client.request<{ id: string }[]>("/users/me/teams");
@@ -141,7 +144,11 @@ export async function listMattermostDirectoryPeers(
       return [];
     }
     // Uses first team — multi-team setups may need iteration in the future
-    const teamId = teams[0].id;
+    const team = teams[0];
+    if (!team) {
+      return [];
+    }
+    const teamId = team.id;
     const q = normalizeLowercaseStringOrEmpty(params.query);
 
     let users: MattermostUser[];

@@ -76,6 +76,7 @@ export function getCliSessionBinding(
     return {
       sessionId: bindingSessionId,
       ...(fromBindings?.forceReuse === true ? { forceReuse: true } : {}),
+      ...(fromBindings?.forkNextResume === true ? { forkNextResume: true } : {}),
       authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
       authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
       authEpochVersion: fromBindings?.authEpochVersion,

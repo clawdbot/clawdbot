@@ -1,5 +1,6 @@
 // Persistent cron session tests cover lifecycle admission and mutation races.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
@@ -14,6 +15,7 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
+  patchSessionEntryMock,
   preflightCronModelProviderMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
@@ -21,6 +23,7 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const inMemoryStorePath = "/tmp/store.json";
 
 function createDeferred() {
   let resolve!: () => void;
@@ -35,7 +38,10 @@ function makePersistentCronParams(sessionKey: string) {
     agentId: "main",
     sessionKey,
     job: makeIsolatedAgentJobFixture({
-      sessionTarget: "current",
+      // Bind the run to the persistent session key so the run operates on it
+      // directly; `current`/`isolated` targets derive a detached `cron:<id>`
+      // run session instead, which the lifecycle claim assertions do not target.
+      sessionTarget: `session:${sessionKey}`,
       delivery: { mode: "none" },
     }),
   });
@@ -52,7 +58,8 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const initialSessionEntry = makeCronSessionEntry({ sessionId: "session-before-setup" });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
-        storePath: "/tmp/cron-lifecycle-rotation.json",
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
         sessionEntry: { ...initialSessionEntry },
@@ -86,20 +93,22 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       sessionId: "same-session",
       updatedAt: 1,
     });
+    const currentSessionEntry = {
+      ...initialSessionEntry,
+      label: "patched during setup",
+      pinnedAt: undefined,
+      updatedAt: 2,
+    };
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
-        storePath: "/tmp/cron-lifecycle-revision.json",
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...currentSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
         sessionEntry: { ...initialSessionEntry },
       }),
     );
-    loadSessionEntryMock.mockReturnValue({
-      ...initialSessionEntry,
-      label: "patched during setup",
-      pinnedAt: undefined,
-      updatedAt: 2,
-    });
+    loadSessionEntryMock.mockReturnValue(currentSessionEntry);
     const releasePreflight = createDeferred();
     preflightCronModelProviderMock.mockImplementationOnce(async () => {
       await releasePreflight.promise;
@@ -117,11 +126,12 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it("interrupts persistent cron work and waits for its lifecycle lease to release", async () => {
     const sessionKey = "agent:main:telegram:direct:42";
     const sessionId = "shared-session";
-    const storePath = "/tmp/cron-lifecycle-interrupt.json";
+    const storePath = inMemoryStorePath;
     const initialSessionEntry = makeCronSessionEntry({ sessionId });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
         sessionEntry: { ...initialSessionEntry },
@@ -181,7 +191,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it("releases an isolated run lease before delete-after-run cleanup", async () => {
     const sessionKey = "agent:main:cron:test-job";
     const sessionId = "isolated-session";
-    const storePath = "/tmp/cron-lifecycle-self-delete.json";
+    const storePath = inMemoryStorePath;
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
@@ -220,7 +230,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it("keeps a non-deleting isolated run admitted through delivery", async () => {
     const sessionKey = "agent:main:cron:test-job";
     const sessionId = "isolated-session";
-    const storePath = "/tmp/cron-lifecycle-isolated-delivery.json";
+    const storePath = inMemoryStorePath;
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
@@ -261,19 +271,88 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
   });
 
+  it("marks a final lifecycle claim conflict as post-execution (#108428)", async () => {
+    const sessionKey = "agent:main:main";
+    const initialSessionEntry = makeCronSessionEntry({ sessionId: "persistent-session" });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
+        isNewSession: false,
+        sessionEntry: { ...initialSessionEntry },
+      }),
+    );
+    loadSessionEntryMock.mockReturnValue({ ...initialSessionEntry });
+
+    let agentExecutionStarted = false;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (runParams: { onExecutionStarted?: () => void }) => {
+        runParams.onExecutionStarted?.();
+        agentExecutionStarted = true;
+        return {
+          payloads: [{ text: "completed" }],
+          meta: { agentMeta: {} },
+        };
+      },
+    );
+
+    const committedRows = new Map<string, SessionEntry>([
+      [`${inMemoryStorePath}\0${sessionKey}`, structuredClone(initialSessionEntry) as SessionEntry],
+    ]);
+    patchSessionEntryMock.mockImplementation(
+      async (
+        scope: { storePath?: string; sessionKey: string },
+        update: (
+          entry: SessionEntry,
+          context: { existingEntry: SessionEntry | undefined },
+        ) => SessionEntry | null,
+        options: { fallbackEntry?: SessionEntry } = {},
+      ) => {
+        const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
+        const current = committedRows.get(key);
+        const writeBase = current ?? options.fallbackEntry;
+        if (!writeBase) {
+          return null;
+        }
+        const existingEntry =
+          agentExecutionStarted && scope.sessionKey === sessionKey
+            ? { ...writeBase, lifecycleRevision: "replacement-revision" }
+            : current;
+        const committed = update(structuredClone(writeBase), {
+          existingEntry: existingEntry ? structuredClone(existingEntry) : undefined,
+        });
+        if (committed) {
+          committedRows.set(key, structuredClone(committed));
+        }
+        return committed;
+      },
+    );
+
+    await expect(
+      runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: `CronSessionLifecycleClaimError: Session "${sessionKey}" changed while starting work. Retry.`,
+      executionStarted: true,
+    });
+  });
+
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {
     const sessionKey = "agent:main:cron:cleanup";
     const sessionId = "custom-cron-session";
-    const storePath = "/tmp/cron-lifecycle-custom-self-delete.json";
+    const storePath = inMemoryStorePath;
+    const initialSessionEntry = makeCronSessionEntry({ sessionId });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
-        initialSessionEntry: makeCronSessionEntry({ sessionId }),
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
         isNewSession: false,
-        sessionEntry: makeCronSessionEntry({ sessionId }),
+        sessionEntry: { ...initialSessionEntry },
       }),
     );
-    loadSessionEntryMock.mockReturnValue(makeCronSessionEntry({ sessionId }));
+    loadSessionEntryMock.mockReturnValue({ ...initialSessionEntry });
     let admissionActiveDuringDelete = true;
     callGatewayMock.mockImplementationOnce(async () => {
       admissionActiveDuringDelete = isSessionWorkAdmissionActive(storePath, [

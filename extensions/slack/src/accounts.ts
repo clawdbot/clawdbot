@@ -10,8 +10,6 @@ import {
 import {
   mapAllowFromEntries,
   normalizeChannelDmPolicy,
-  resolveChannelDmAllowFrom,
-  resolveChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -27,6 +25,7 @@ export type SlackTokenSource = "env" | "config" | "none";
 export type ResolvedSlackAccount = {
   accountId: string;
   enabled: boolean;
+  identity: "bot" | "user";
   name?: string;
   botToken?: string;
   appToken?: string;
@@ -42,9 +41,48 @@ export type SlackConfigAccessorAccount = {
   defaultTo: string | undefined;
 };
 
+export function resolveSlackOperationToken(
+  account: ResolvedSlackAccount,
+  operation: "read" | "write",
+): string | undefined {
+  if (account.identity === "user") {
+    // User identity acts as the authorizing human through the xoxp user token;
+    // the companion Slack app carries events through the selected transport.
+    return normalizeOptionalString(account.userToken);
+  }
+  const userToken = normalizeOptionalString(account.userToken);
+  const botToken = normalizeOptionalString(account.botToken);
+  if (operation === "read") {
+    return userToken ?? botToken;
+  }
+  return account.config.userTokenReadOnly === false ? (botToken ?? userToken) : botToken;
+}
+
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
+    if (slack?.postAs === "user") {
+      const hasUserToken =
+        hasConfiguredAccountValue(slack.userToken) ||
+        hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
+      if (!hasUserToken) {
+        return false;
+      }
+      if (slack.mode === "http") {
+        return hasConfiguredAccountValue(slack.signingSecret);
+      }
+      if (slack.mode === "relay") {
+        return (
+          hasConfiguredAccountValue(slack.relay?.url) &&
+          hasConfiguredAccountValue(slack.relay?.authToken) &&
+          hasConfiguredAccountValue(slack.relay?.gatewayId)
+        );
+      }
+      return (
+        hasConfiguredAccountValue(slack.appToken) ||
+        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
+      );
+    }
     const hasBotToken =
       hasConfiguredAccountValue(slack?.botToken) ||
       hasConfiguredAccountValue(process.env.SLACK_BOT_TOKEN);
@@ -162,10 +200,7 @@ export function resolveSlackAccountAllowFrom(params: {
   );
   const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
-  const allowFrom = resolveChannelDmAllowFrom({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-  });
+  const allowFrom = accountConfig?.allowFrom ?? rootConfig?.allowFrom;
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
@@ -192,12 +227,7 @@ export function resolveSlackAccountDmPolicy(params: {
   );
   const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
-  const policy = resolveChannelDmPolicy({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-    defaultPolicy: "pairing",
-  });
-  return normalizeChannelDmPolicy(policy);
+  return normalizeChannelDmPolicy(accountConfig?.dmPolicy ?? rootConfig?.dmPolicy ?? "pairing");
 }
 
 export function resolveSlackAccount(params: {
@@ -209,6 +239,7 @@ export function resolveSlackAccount(params: {
   );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
+  const identity = merged.postAs ?? "bot";
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const mode = merged.mode ?? "socket";
@@ -241,6 +272,7 @@ export function resolveSlackAccount(params: {
   return {
     accountId,
     enabled,
+    identity,
     name: normalizeOptionalString(merged.name),
     botToken,
     appToken,

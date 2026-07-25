@@ -155,7 +155,9 @@ struct RemoteGatewayProbeSuccess: Equatable {
 enum RemoteGatewayProbe {
     @MainActor
     static func run() async -> RemoteGatewayProbeResult {
-        AppStateStore.shared.syncGatewayConfigNow()
+        guard AppStateStore.shared.syncGatewayConfigNow() else {
+            return .failed("Save valid remote gateway settings before checking the connection")
+        }
         let settings = CommandResolver.connectionSettings()
         let transport = AppStateStore.shared.remoteTransport
 
@@ -186,7 +188,7 @@ enum RemoteGatewayProbe {
             let sshResult = await ShellExecutor.run(
                 command: sshCommand,
                 cwd: nil,
-                env: nil,
+                env: CommandResolver.sshEnvironment(),
                 timeout: 8)
             guard sshResult.ok else {
                 return .failed(self.formatSSHFailure(sshResult, target: settings.target))

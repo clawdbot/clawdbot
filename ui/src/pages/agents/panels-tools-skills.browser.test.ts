@@ -1,7 +1,8 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderAgentTools } from "./panels-tools-skills.ts";
+import type { SkillStatusEntry } from "../../api/types.ts";
+import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
@@ -121,10 +122,15 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(
-      Array.from(container.querySelectorAll(".agent-tools-pane > .label")).map((label) =>
-        label.textContent?.trim(),
+      Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
+        heading.textContent?.trim(),
       ),
-    ).toEqual(["Available Right Now", "Quick Presets"]);
+    ).toEqual(["Tool Access", "Available Right Now", "Tool Catalog"]);
+    expect(
+      Array.from(container.querySelectorAll(".settings-row__title")).some(
+        (title) => title.textContent?.trim() === "Quick Presets",
+      ),
+    ).toBe(true);
     const runtimeChips = Array.from(container.querySelectorAll(".agent-tools-runtime-chip")).map(
       (chip) => ({
         label: chip.querySelector(".mono")?.textContent?.trim(),
@@ -136,16 +142,16 @@ describe("agents tools panel (browser)", () => {
       { label: "Probe Tool", meta: "MCP" },
     ]);
     expect(
-      Array.from(container.querySelectorAll(".agent-tools-group__title > .agent-pill")).map(
-        (pill) => pill.textContent?.trim(),
-      ),
+      Array.from(
+        container.querySelectorAll(".agent-tools-group__title > .settings-row__value"),
+      ).map((pill) => pill.textContent?.trim()),
     ).toEqual(["Plugin: voice-call"]);
     expect(
       Array.from(container.querySelectorAll(".agent-tool-card")).map((card) => ({
         title: card.querySelector(".agent-tool-title")?.textContent?.trim(),
-        badges: Array.from(card.querySelectorAll(".agent-tool-summary__badges .agent-pill")).map(
-          (pill) => pill.textContent?.trim(),
-        ),
+        badges: Array.from(
+          card.querySelectorAll(".agent-tool-summary__badges .settings-row__value"),
+        ).map((pill) => pill.textContent?.trim()),
       })),
     ).toEqual([
       { title: "tts", badges: ["Built-In"] },
@@ -285,7 +291,7 @@ describe("agents tools panel (browser)", () => {
 
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     const summary = container.querySelector<HTMLElement>(".agent-tool-summary");
-    const toggle = container.querySelector<HTMLInputElement>(".agent-tool-toggle input");
+    const toggle = container.querySelector(".agent-tool-toggle wa-switch");
 
     expect(tool?.open).toBe(false);
     expect(toggle?.closest(".agent-tool-summary")).toBe(summary);
@@ -335,7 +341,7 @@ describe("agents tools panel (browser)", () => {
       { label: "Access", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
-      { label: "Current Session", value: "Not available in this chat session right now." },
+      { label: "Current Thread", value: "Not available in this chat thread right now." },
     ]);
   });
 
@@ -420,5 +426,73 @@ describe("agents tools panel (browser)", () => {
     expect(tool.open).toBe(true);
 
     container.remove();
+  });
+});
+
+describe("agents skills panel (browser)", () => {
+  it("explains an unsatisfied one-of binary requirement", async () => {
+    const container = document.createElement("div");
+    const skill: SkillStatusEntry = {
+      name: "Coding Agent",
+      description: "Delegate coding work to an available coding CLI.",
+      source: "openclaw-bundled",
+      bundled: true,
+      filePath: "/tmp/skills/coding-agent/SKILL.md",
+      baseDir: "/tmp/skills/coding-agent",
+      skillKey: "coding-agent",
+      always: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      blockedByAgentFilter: false,
+      eligible: false,
+      requirements: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: ["claude", "codex", "opencode"],
+        env: [],
+        config: [],
+        os: [],
+      },
+      configChecks: [],
+      install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
+    };
+
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        report: {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [skill],
+        },
+        loading: false,
+        error: null,
+        activeAgentId: "main",
+        configForm: { agents: { list: [{ id: "main" }] } },
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".agent-skill-row")?.textContent).toContain(
+      "bin:any of (claude, codex, opencode)",
+    );
   });
 });

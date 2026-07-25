@@ -2,7 +2,7 @@
  * Gateway startup web fetch bind tests.
  */
 import http from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
 import { readClientResponseBody } from "./test-http-response.js";
@@ -40,7 +40,7 @@ vi.mock("../secrets/runtime-web-tools-public-artifacts.runtime.js", async () => 
   };
 });
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
 
 afterEach(() => {
   webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
@@ -71,53 +71,58 @@ async function writeConfig(config: OpenClawConfig): Promise<void> {
 }
 
 describe("gateway startup web fetch config", () => {
-  it("binds HTTP with credential-free tools.web.fetch config without fetch provider discovery", async () => {
-    const previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+  let port: number;
+  let previousMinimal: string | undefined;
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+
+  beforeAll(async () => {
+    previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-    try {
-      await writeConfig({
-        gateway: {
-          mode: "local",
-          bind: "loopback",
-          auth: { mode: "none" },
-        },
-        plugins: {
-          enabled: true,
-          allow: [],
-          entries: {},
-        },
-        tools: {
-          web: {
-            fetch: {
-              enabled: true,
-              maxChars: 200_000,
-              maxCharsCap: 2_000_000,
-            },
+    await writeConfig({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "none" },
+      },
+      plugins: {
+        enabled: true,
+        allow: [],
+        entries: {},
+      },
+      tools: {
+        web: {
+          fetch: {
+            enabled: true,
+            maxChars: 200_000,
+            maxCharsCap: 2_000_000,
           },
         },
-      } as OpenClawConfig);
+      },
+    } as OpenClawConfig);
 
-      const port = await getFreePort();
-      server = await startGatewayServer(port, {
-        auth: { mode: "none" },
-      });
+    port = await getFreePort();
+    server = await startGatewayServer(port, {
+      auth: { mode: "none" },
+    });
+  });
 
-      const response = await requestHealthz(port);
-      expect(response.status).toBe(200);
-      expect(
-        webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock,
-      ).not.toHaveBeenCalled();
-      expect(webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
-    } finally {
-      if (server) {
-        await server.close();
-      }
-      if (previousMinimal === undefined) {
-        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-      } else {
-        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimal;
-      }
+  afterAll(async () => {
+    if (server) {
+      await server.close();
     }
+    if (previousMinimal === undefined) {
+      delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    } else {
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimal;
+    }
+  });
+
+  it("binds HTTP with credential-free tools.web.fetch config without fetch provider discovery", async () => {
+    const response = await requestHealthz(port);
+    expect(response.status).toBe(200);
+    expect(
+      webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock,
+    ).not.toHaveBeenCalled();
+    expect(webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 });

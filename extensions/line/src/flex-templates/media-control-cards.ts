@@ -511,8 +511,7 @@ export function createDeviceControlCard(params: {
     for (let i = 0; i < limitedControls.length; i += 2) {
       const rowButtons: FlexComponent[] = [];
 
-      for (let j = i; j < Math.min(i + 2, limitedControls.length); j++) {
-        const ctrl = limitedControls[j];
+      for (const [offset, ctrl] of limitedControls.slice(i, i + 2).entries()) {
         const buttonLabel = ctrl.icon ? `${ctrl.icon} ${ctrl.label}` : ctrl.label;
 
         rowButtons.push({
@@ -525,7 +524,7 @@ export function createDeviceControlCard(params: {
           style: ctrl.style ?? "secondary",
           flex: 1,
           height: "sm",
-          margin: j > i ? "md" : undefined,
+          margin: offset > 0 ? "md" : undefined,
         } as FlexButton);
       }
 

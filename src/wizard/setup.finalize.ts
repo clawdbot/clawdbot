@@ -20,6 +20,7 @@ import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
   detectBrowserOpenSupport,
+  buildOnboardingControlUiUrl,
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
@@ -188,14 +189,22 @@ const loadOnboardSearchModule = createLazyRuntimeModule(
   () => import("../commands/onboard-search.js"),
 );
 
-export async function finalizeSetupWizard(
-  options: FinalizeOnboardingOptions,
-): Promise<{ launchedTui: boolean }> {
-  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
-  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
-  let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
-  let resolvedGatewayPassword = "";
-  let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
+/**
+ * Ensure the gateway service matches the onboarding decision: prompt/decide
+ * whether to install the daemon, then install/restart/reinstall it. Shared by
+ * the classic wizard finalize and the bootstrap onboarding flow.
+ */
+export async function ensureGatewayServiceForOnboarding(params: {
+  flow: WizardFlow;
+  opts: Pick<OnboardOptions, "installDaemon" | "daemonRuntime">;
+  nextConfig: OpenClawConfig;
+  settings: Pick<GatewayWizardSettings, "port">;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  /** Pre-answer the "service already installed" prompt (conversational flows). */
+  loadedAction?: "restart";
+}): Promise<{ installDaemon: boolean; containerWithoutUserSystemd: boolean }> {
+  const { flow, opts, nextConfig, settings, prompter, runtime } = params;
 
   const withWizardProgress = async <T>(
     label: string,
@@ -285,14 +294,16 @@ export async function finalizeSetupWizard(
     const loaded = await service.isLoaded({ env: process.env });
     let restartWasScheduled = false;
     if (loaded) {
-      const action = await prompter.select({
-        message: t("wizard.finalize.alreadyInstalled"),
-        options: [
-          { value: "restart", label: t("wizard.finalize.restart") },
-          { value: "reinstall", label: t("wizard.finalize.reinstall") },
-          { value: "skip", label: t("common.skip") },
-        ],
-      });
+      const action =
+        params.loadedAction ??
+        (await prompter.select({
+          message: t("wizard.finalize.alreadyInstalled"),
+          options: [
+            { value: "restart", label: t("wizard.finalize.restart") },
+            { value: "reinstall", label: t("wizard.finalize.reinstall") },
+            { value: "skip", label: t("common.skip") },
+          ],
+        }));
       if (action === "restart") {
         let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
         await withWizardProgress(
@@ -329,6 +340,15 @@ export async function finalizeSetupWizard(
     ) {
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       let installError: string | null = null;
+      const installWarnings: Array<{ message: string; title?: string }> = [];
+      const flushInstallWarnings = async () => {
+        let warning: (typeof installWarnings)[number] | undefined;
+        // Remove before awaiting so a rejected note is not replayed when the
+        // outer catch drains warnings that remain in the planner's queue.
+        while ((warning = installWarnings.shift()) !== undefined) {
+          await prompter.note(warning.message, warning.title);
+        }
+      };
       try {
         progress.update(t("wizard.finalize.gatewayServicePreparing"));
         const tokenResolution = await resolveGatewayInstallToken({
@@ -351,10 +371,11 @@ export async function finalizeSetupWizard(
               port: settings.port,
               runtime: daemonRuntime,
               warn: (message, title) => {
-                void prompter.note(message, title);
+                installWarnings.push({ message, title });
               },
               config: nextConfig,
             });
+          await flushInstallWarnings();
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -367,6 +388,7 @@ export async function finalizeSetupWizard(
           });
         }
       } catch (err) {
+        await flushInstallWarnings();
         installError = formatErrorMessage(err);
       } finally {
         progress.stop(
@@ -384,6 +406,27 @@ export async function finalizeSetupWizard(
       }
     }
   }
+
+  return { installDaemon, containerWithoutUserSystemd };
+}
+
+export async function finalizeSetupWizard(
+  options: FinalizeOnboardingOptions,
+): Promise<{ launchedTui: boolean }> {
+  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
+  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
+  let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
+  let resolvedGatewayPassword = "";
+  let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
+
+  const { installDaemon, containerWithoutUserSystemd } = await ensureGatewayServiceForOnboarding({
+    flow,
+    opts,
+    nextConfig,
+    settings,
+    prompter,
+    runtime,
+  });
 
   if (settings.authMode === "password") {
     try {
@@ -538,10 +581,12 @@ export async function finalizeSetupWizard(
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const authedUrl =
-      settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? `${displayLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-        : displayLinks.httpUrl;
+    const authedUrl = buildOnboardingControlUiUrl({
+      httpUrl: displayLinks.httpUrl,
+      authMode: settings.authMode,
+      token: settings.gatewayToken,
+      suppressTokenOutput: suppressGatewayTokenOutput,
+    });
     if (opts.skipHealth || !gatewayProbe.ok) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
@@ -565,7 +610,31 @@ export async function finalizeSetupWizard(
       .access(bootstrapPath)
       .then(() => true)
       .catch(() => false);
-    const shouldSeedBootstrapHatch = hasBootstrap && options.hadExistingConfig !== true;
+    const agentDir = resolveDefaultAgentDir(nextConfig);
+    // Seed only when the selected route is proven ready. Unknown or incompatible
+    // route facts must not turn the onboarding greeting into a guaranteed failure.
+    const [
+      { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
+      { loadPreparedModelCatalogSnapshot },
+    ] = await Promise.all([
+      import("../commands/auth-choice.js"),
+      import("../agents/prepared-model-catalog.js"),
+    ]);
+    const modelCatalog = await loadPreparedModelCatalogSnapshot({
+      config: nextConfig,
+      readOnly: true,
+    });
+    const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
+      routeVariants: modelCatalog.routeVariants,
+    });
+    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
+      agentDir,
+      ...(modelCatalogFacts.observedRoutes
+        ? { observedRoutes: modelCatalogFacts.observedRoutes }
+        : {}),
+    });
+    const shouldSeedBootstrapHatch =
+      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
 
     await prompter.note(
       [
@@ -593,10 +662,21 @@ export async function finalizeSetupWizard(
         await prompter.note(
           [
             t("wizard.finalize.workspaceReady"),
-            t("wizard.finalize.firstTerminalChat"),
+            ...(shouldSeedBootstrapHatch ? [t("wizard.finalize.firstTerminalChat")] : []),
             t("wizard.finalize.editBootstrap"),
           ].join("\n"),
           t("wizard.finalize.hatchYourAgent"),
+        );
+      }
+      if (modelAuthStatus.status === "missing") {
+        await prompter.note(
+          [
+            t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),
+            t("wizard.finalize.noModelAuthNext", {
+              command: formatCliCommand("openclaw configure --section model"),
+            }),
+          ].join("\n"),
+          t("wizard.finalize.noModelAuthTitle"),
         );
       }
 
@@ -661,7 +741,6 @@ export async function finalizeSetupWizard(
       const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
       const envAvailable = entry ? hasKeyInEnv(entry) : false;
       const hasKey = keyConfigured || envAvailable;
-      const agentDir = resolveDefaultAgentDir(nextConfig);
       const authProviderId = entry?.authProviderId?.trim();
       const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
       const providerAuthProfileAvailable = authProviderId
@@ -848,3 +927,4 @@ export async function finalizeSetupWizard(
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

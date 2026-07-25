@@ -7,9 +7,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
+  "browser",
+  "cron",
+  "image_generate",
+  "message",
+  "music_generate",
+  "pdf",
+  "tts",
+  "video_generate",
+]);
+const LOCAL_MODEL_LEAN_DIRECT_TOOL_NAMES = new Set(["exec"]);
 const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
   enabled: true,
   mode: "tools",
@@ -17,15 +28,14 @@ const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
   maxSearchLimit: 10,
 } as const;
 
-function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
+function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>) {
   if (!names) {
-    return new Set();
+    return [];
   }
-  return new Set(
-    expandToolGroups([...names])
-      .map(normalizeToolName)
-      .filter((name) => name && name !== "*"),
-  );
+  return compileGlobPatterns({
+    raw: expandToolGroups([...names]).filter((name) => normalizeToolName(name) !== "*"),
+    normalize: normalizeToolName,
+  });
 }
 
 /** Resolves tool names that must survive local-model lean filtering. */
@@ -92,10 +102,16 @@ export function filterLocalModelLeanTools(params: {
   return params.tools.filter((tool) => {
     const normalizedName = normalizeToolName(tool.name);
     return (
-      preservedToolNames.has(normalizedName) ||
+      matchesAnyGlobPattern(normalizedName, preservedToolNames) ||
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
     );
   });
+}
+
+// Lean mode targets coding-tuned local models; keep their familiar shell
+// primitive visible instead of requiring a catalog search to rediscover it.
+export function shouldCatalogToolForLocalModelLean(tool: AnyAgentTool): boolean {
+  return !LOCAL_MODEL_LEAN_DIRECT_TOOL_NAMES.has(normalizeToolName(tool.name));
 }
 
 export function applyLocalModelLeanToolSearchDefaults(params: {

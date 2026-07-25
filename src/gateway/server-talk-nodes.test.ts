@@ -7,7 +7,7 @@ import { hasConnectedTalkNode } from "./server-talk-nodes.js";
 
 function registryWith(nodes: Array<Partial<NodeSession>>): NodeRegistry {
   return {
-    listConnected: () =>
+    listCurrentConnected: async () =>
       nodes.map((node, index) => ({
         nodeId: `node-${index}`,
         connId: `conn-${index}`,
@@ -22,16 +22,18 @@ function registryWith(nodes: Array<Partial<NodeSession>>): NodeRegistry {
 }
 
 describe("hasConnectedTalkNode", () => {
-  it("uses explicit talk capability instead of platform names", () => {
-    expect(
+  it("uses explicit talk capability instead of platform names", async () => {
+    await expect(
       hasConnectedTalkNode(registryWith([{ platform: "android", caps: ["device"], commands: [] }])),
-    ).toBe(false);
-    expect(hasConnectedTalkNode(registryWith([{ platform: "linux", caps: ["talk"] }]))).toBe(true);
+    ).resolves.toBe(false);
+    await expect(
+      hasConnectedTalkNode(registryWith([{ platform: "linux", caps: ["talk"] }])),
+    ).resolves.toBe(true);
   });
 
-  it("accepts nodes that declare talk command support", () => {
-    expect(
+  it("accepts nodes that declare talk command support", async () => {
+    await expect(
       hasConnectedTalkNode(registryWith([{ platform: "custom", commands: ["talk.ptt.start"] }])),
-    ).toBe(true);
+    ).resolves.toBe(true);
   });
 });

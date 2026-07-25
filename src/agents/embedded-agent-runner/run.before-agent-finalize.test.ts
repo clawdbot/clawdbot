@@ -7,8 +7,13 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+const REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -50,10 +55,12 @@ function attemptCall(index: number): {
 describe("runEmbeddedAgent before_agent_finalize", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useOpenAIPlatformAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_finalize",
     );
@@ -127,12 +134,52 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("replaces an incomplete-turn continuation with a finalize revision", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "end_turn",
+            provider: "openai",
+            model: "gpt-5.5",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({ id: "rs_before_finalize", type: "reasoning" }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      )
+      .mockResolvedValueOnce(
+        finalAnswerAttempt("Visible draft.", {
+          beforeAgentFinalizeRevisionReason: "Tighten the recovered answer.",
+        }),
+      )
+      .mockResolvedValueOnce(finalAnswerAttempt("Revised recovered answer."));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-before-finalize-after-incomplete-turn",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(attemptCall(1).prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(attemptCall(2).prompt).toContain("Tighten the recovered answer.");
+    expect(attemptCall(2).prompt).not.toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
   it("does not retry finalize revisions after a timed-out attempt", async () => {
     // A timed-out attempt may have partial assistant text, but asking for a
     // finalize revision would replay an invalid or blocked provider turn.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       finalAnswerAttempt("Late answer.", {
-        timedOut: true,
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
         beforeAgentFinalizeRevisionReason: "Revise the late answer.",
         promptTimeoutOutcome: {
           message: "Request timed out.",

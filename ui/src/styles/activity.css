@@ -1,114 +1,82 @@
-.activity-page {
-  display: grid;
-  grid-template-rows: auto minmax(260px, 1fr);
-  align-content: start;
-  gap: 16px;
-  min-height: min(680px, calc(100vh - 180px));
-}
+/* Activity page: live tool-activity feed. Filter chrome uses the settings
+   design language; only the stream (entries, previews) keeps bespoke styles
+   as the in-group escape hatch. */
 
-.activity-toolbar {
+/* Fill-height chain: the section, group, and stream absorb the remaining
+   viewport height inside .settings-workspace--fill-height (settings.css). */
+.settings-workspace--fill-height .activity-page {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  align-items: end;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding-bottom: 2px;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
-.activity-toolbar__count {
-  flex: 0 0 auto;
-  align-self: center;
-  margin-left: auto;
+.settings-workspace--fill-height .activity-group {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height .activity-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.activity-count {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.activity-field {
-  display: grid;
-  gap: 5px;
-  min-width: 170px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 500;
-}
-
-.activity-field--search {
-  flex: 1 1 260px;
-}
-
-.activity-field input,
-.activity-field select {
-  min-height: 36px;
-}
-
-.activity-status-filters,
-.activity-actions {
+.activity-status-filters {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
-.activity-status-filter,
-.activity-autofollow {
+.activity-status-filter {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0 10px;
+  gap: var(--space-1);
   color: var(--text);
-  background: var(--secondary);
   font-size: var(--control-ui-text-sm);
-  line-height: 1;
+  cursor: pointer;
+}
+
+.activity-status-filter input {
+  margin: 0;
 }
 
 .activity-status-filter:focus-within,
-.activity-autofollow:focus-within,
 .activity-entry__summary:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
-.activity-status-filter input,
-.activity-autofollow input {
-  margin: 0;
-}
-
-.activity-status-filter--running:has(input:checked) {
-  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
-  background: var(--warn-subtle);
-}
-
-.activity-status-filter--done:has(input:checked) {
-  border-color: color-mix(in srgb, var(--ok) 42%, var(--border));
-  background: var(--ok-subtle);
-}
-
-.activity-status-filter--error:has(input:checked) {
-  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
-  background: var(--danger-subtle);
-}
+/* ── Stream (escape hatch inside the settings group) ── */
 
 .activity-stream {
   min-height: 260px;
   max-height: calc(100vh - 310px);
   overflow: auto;
-  border-block: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel) 82%, var(--card));
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .activity-empty {
   display: grid;
   place-items: center;
   min-height: 220px;
-  padding: 24px;
+  padding: var(--space-5);
   color: var(--muted);
   text-align: center;
 }
 
 .activity-entry {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .activity-entry:last-child {
@@ -122,10 +90,9 @@
 .activity-entry__summary {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
-  gap: 10px;
+  gap: var(--space-2);
   align-items: center;
-  padding: 12px 14px;
-  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
   list-style: none;
 }
 
@@ -170,7 +137,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .activity-entry__tool,
@@ -192,49 +159,15 @@
   white-space: nowrap;
 }
 
-.activity-status {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 0 8px;
-  font-size: 12px; /* was 11px */
-  font-weight: 650;
-  text-transform: uppercase;
-}
-
-.activity-status--running {
-  border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
-  color: var(--warn);
-}
-
-.activity-status--done {
-  border-color: color-mix(in srgb, var(--ok) 42%, var(--border));
-  color: var(--ok);
-}
-
-.activity-status--error {
-  border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
-  color: var(--danger);
-}
-
 .activity-entry__body {
   display: grid;
-  gap: 10px;
-  padding: 0 14px 14px 42px;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-4) 42px;
 }
 
 .activity-entry__facts {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-}
-
-.activity-entry__facts span {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 4px 7px;
-  background: var(--secondary);
 }
 
 .activity-entry__preview {
@@ -243,7 +176,7 @@
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 10px;
+  padding: var(--space-2);
   color: var(--text);
   background: var(--bg);
   font-family: var(--mono);
@@ -259,23 +192,13 @@
 }
 
 @media (max-width: 720px) {
-  .activity-page {
-    min-height: calc(100vh - 150px);
-  }
-
-  .activity-toolbar__count,
   .activity-entry__meta {
     white-space: normal;
   }
 
-  .activity-toolbar__count {
-    flex-basis: 100%;
-    margin-left: 0;
-  }
-
   .activity-entry__summary {
     grid-template-columns: 18px minmax(0, 1fr);
-    gap: 8px;
+    gap: var(--space-2);
   }
 
   .activity-entry__meta {

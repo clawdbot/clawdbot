@@ -62,8 +62,9 @@ enum ExecSystemRunCommandValidator {
 
         if let raw = normalizedRaw {
             let matchesCanonical = raw == canonicalDisplay
+            let matchesLegacyCanonical = raw == ExecCommandFormatter.legacyDisplayString(for: command)
             let matchesLegacyShellText = legacyShellDisplay == raw
-            if !matchesCanonical, !matchesLegacyShellText {
+            if !matchesCanonical, !matchesLegacyCanonical, !matchesLegacyShellText {
                 return .invalid(message: "INVALID_REQUEST: rawCommand does not match command")
             }
         }

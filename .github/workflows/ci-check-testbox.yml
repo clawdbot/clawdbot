@@ -32,10 +32,13 @@ jobs:
     permissions:
       contents: read
     name: "check"
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    # Pull requests only validate the hydration steps; real Testbox leases arrive via dispatch.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '120') }}
     steps:
+      # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate our setup steps only.
       - name: Begin Testbox
+        if: github.event_name == 'workflow_dispatch'
         uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043
         with:
           testbox_id: ${{ inputs.testbox_id }}
@@ -94,6 +97,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          install-trufflehog: "true"
       - name: Prepare Testbox shell
         shell: bash
         run: |
@@ -177,6 +181,6 @@ jobs:
 
       - name: Run Testbox
         uses: useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

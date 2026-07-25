@@ -1,8 +1,36 @@
-// E2E bounded response text tests cover shared E2E HTTP body limits.
+// E2E bounded response tests cover shared HTTP body limits.
 import { describe, expect, it } from "vitest";
-import { readBoundedResponseText } from "../../scripts/e2e/lib/bounded-response-text.mjs";
+import {
+  readBoundedResponseBytes,
+  readBoundedResponseText,
+} from "../../scripts/e2e/lib/bounded-response-text.mjs";
 
 describe("scripts/e2e/lib/bounded-response-text.mjs", () => {
+  it("preserves binary response bytes", async () => {
+    const body = Buffer.from([0x00, 0xff, 0x80, 0x7f]);
+
+    await expect(
+      readBoundedResponseBytes(new Response(body), "fixture", body.length),
+    ).resolves.toEqual(body);
+  });
+
+  it("decodes multibyte text split across chunks", async () => {
+    const encoded = new TextEncoder().encode("a😀b");
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoded.subarray(0, 3));
+          controller.enqueue(encoded.subarray(3));
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(readBoundedResponseText(response, "fixture", encoded.length)).resolves.toBe(
+      "a😀b",
+    );
+  });
+
   it("cancels pending response body reads when the timeout wins", async () => {
     let canceled = false;
     const response = {

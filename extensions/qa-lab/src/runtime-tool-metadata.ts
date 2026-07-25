@@ -4,7 +4,7 @@ import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { QaRuntimeParityTier, QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export type QaRuntimeToolBucket =
   | "codex-native-workspace"
@@ -37,19 +37,19 @@ export type QaRuntimeToolCoverageMetadata = {
   action?: string;
 };
 
-export const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
+const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
   "codex-native-workspace",
   "openclaw-dynamic-integration",
   "optional-profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
+const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
   "codex-native-workspace",
   "openclaw-dynamic",
   "profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
+const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
   "codex-native-workspace",
   "openclaw-dynamic-direct",
   "openclaw-dynamic-searchable",
@@ -87,10 +87,7 @@ export function readRuntimeToolCoverageConfig(
   return isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
 }
 
-function inferRuntimeToolBucket(params: {
-  config?: Record<string, unknown>;
-  runtimeParityTier?: QaRuntimeParityTier;
-}): QaRuntimeToolBucket {
+function inferRuntimeToolBucket(params: { config?: Record<string, unknown> }): QaRuntimeToolBucket {
   const toolCoverage = readRuntimeToolCoverageConfig(params.config);
   const explicit = readString(toolCoverage?.bucket);
   if (explicit) {
@@ -103,7 +100,7 @@ function inferRuntimeToolBucket(params: {
     }
     return explicit;
   }
-  if (params.runtimeParityTier === "optional" || params.config?.expectedAvailable === false) {
+  if (params.config?.expectedAvailable === false) {
     return "optional-profile-or-plugin";
   }
   return "openclaw-dynamic-integration";
@@ -111,7 +108,6 @@ function inferRuntimeToolBucket(params: {
 
 export function readRuntimeToolCoverageMetadata(params: {
   config?: Record<string, unknown>;
-  runtimeParityTier?: QaRuntimeParityTier;
 }): QaRuntimeToolCoverageMetadata {
   const toolCoverage = readRuntimeToolCoverageConfig(params.config);
   const bucket = inferRuntimeToolBucket(params);
@@ -163,6 +159,5 @@ export function readScenarioRuntimeToolCoverageMetadata(
 ): QaRuntimeToolCoverageMetadata {
   return readRuntimeToolCoverageMetadata({
     config: scenario.execution.config,
-    runtimeParityTier: scenario.runtimeParityTier,
   });
 }

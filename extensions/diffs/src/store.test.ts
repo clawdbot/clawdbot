@@ -2,11 +2,13 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffStoreHarness, ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
+import type { DiffArtifactBlobMetadata } from "./types.js";
 
 beforeAll(async () => {
   await ensureCuratedViewerRuntimeForTests();
@@ -15,12 +17,16 @@ beforeAll(async () => {
 describe("DiffArtifactStore", () => {
   let rootDir: string;
   let store: DiffArtifactStore;
+  let blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+  let reopenStore: Awaited<ReturnType<typeof createDiffStoreHarness>>["reopen"];
   let cleanupRootDir: () => Promise<void>;
 
   beforeEach(async () => {
     ({
       rootDir,
       store,
+      blobStore,
+      reopen: reopenStore,
       cleanup: cleanupRootDir,
     } = await createDiffStoreHarness("openclaw-diffs-store-"));
   });
@@ -30,9 +36,10 @@ describe("DiffArtifactStore", () => {
     await cleanupRootDir();
   });
 
-  it("creates and retrieves an artifact", async () => {
+  it("stores compressed viewer bytes and retrieves them with one authorized lookup", async () => {
+    const lookup = vi.spyOn(blobStore, "lookup");
     const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
+      html: "<html>demo é 🦀</html>",
       title: "Demo",
       inputKind: "before_after",
       fileCount: 1,
@@ -43,16 +50,29 @@ describe("DiffArtifactStore", () => {
         agentAccountId: "default",
       },
     });
+    const stored = await blobStore.lookup(artifact.id);
+    expect(stored?.metadata).toMatchObject({
+      version: 1,
+      kind: "viewer",
+      encoding: "gzip",
+      decodedBytes: Buffer.byteLength("<html>demo é 🦀</html>"),
+    });
+    expect(JSON.stringify(stored?.metadata)).not.toContain(artifact.token);
+    await expect(fs.stat(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
 
-    const loaded = await store.getArtifact(artifact.id, artifact.token);
-    expect(loaded?.id).toBe(artifact.id);
-    expect(loaded?.context).toEqual({
+    lookup.mockClear();
+    const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
+    expect(loaded?.artifact.id).toBe(artifact.id);
+    expect(loaded?.artifact.context).toEqual({
       agentId: "main",
       sessionId: "session-123",
       messageChannel: "discord",
       agentAccountId: "default",
     });
-    expect(await store.readHtml(artifact.id)).toBe("<html>demo</html>");
+    expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>demo é 🦀</html>");
+    expect(lookup).toHaveBeenCalledTimes(1);
+    await expect(store.readAuthorizedViewer(artifact.id, "0".repeat(48))).resolves.toBeNull();
+    await expect(store.readAuthorizedViewer(artifact.id, "short")).resolves.toBeNull();
   });
 
   it("caps artifact expiry instead of throwing near the Date boundary", async () => {
@@ -70,6 +90,23 @@ describe("DiffArtifactStore", () => {
     expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
   });
 
+  it("serves viewer artifacts after reopening the shared SQLite store", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>persisted</html>",
+      title: "Persisted",
+      inputKind: "patch",
+      fileCount: 1,
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    ({ store, blobStore } = reopenStore());
+
+    const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
+    expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>persisted</html>");
+  });
+
   it("expires artifacts after the ttl", async () => {
     vi.useFakeTimers();
     const now = new Date("2026-02-27T16:00:00Z");
@@ -84,54 +121,12 @@ describe("DiffArtifactStore", () => {
     });
 
     vi.setSystemTime(new Date(now.getTime() + 2_000));
-    const loaded = await store.getArtifact(artifact.id, artifact.token);
+    const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
     expect(loaded).toBeNull();
+    await expect(blobStore.deleteExpired()).resolves.toEqual([]);
   });
 
-  it("updates the stored file path", async () => {
-    const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
-      title: "Demo",
-      inputKind: "before_after",
-      fileCount: 1,
-    });
-
-    const filePath = store.allocateFilePath(artifact.id);
-    const updated = await store.updateFilePath(artifact.id, filePath);
-    expect(updated.filePath).toBe(filePath);
-    expect(updated.imagePath).toBe(filePath);
-  });
-
-  it("rejects file paths that escape the store root", async () => {
-    const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
-      title: "Demo",
-      inputKind: "before_after",
-      fileCount: 1,
-    });
-
-    await expect(store.updateFilePath(artifact.id, "../outside.png")).rejects.toThrow(
-      "escapes store root",
-    );
-  });
-
-  it("rejects tampered html metadata paths outside the store root", async () => {
-    const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
-      title: "Demo",
-      inputKind: "before_after",
-      fileCount: 1,
-    });
-    const metaPath = path.join(rootDir, artifact.id, "meta.json");
-    const rawMeta = await fs.readFile(metaPath, "utf8");
-    const meta = JSON.parse(rawMeta) as { htmlPath: string };
-    meta.htmlPath = "../outside.html";
-    await fs.writeFile(metaPath, JSON.stringify(meta), "utf8");
-
-    await expect(store.readHtml(artifact.id)).rejects.toThrow("escapes store root");
-  });
-
-  it("creates standalone file artifacts with managed metadata", async () => {
+  it("creates standalone file artifacts with SQLite metadata and derived temp paths", async () => {
     const standalone = await store.createStandaloneFileArtifact({
       context: {
         agentId: "main",
@@ -145,6 +140,12 @@ describe("DiffArtifactStore", () => {
       agentId: "main",
       sessionId: "session-123",
     });
+    await expect(blobStore.lookup(standalone.id)).resolves.toMatchObject({
+      key: standalone.id,
+      sizeBytes: 0,
+      metadata: { version: 1, kind: "rendered_file", format: "png" },
+    });
+    await store.completeFileArtifact(standalone.id);
   });
 
   it("caps standalone file expiry instead of throwing near the Date boundary", async () => {
@@ -166,6 +167,7 @@ describe("DiffArtifactStore", () => {
       ttlMs: 1_000,
     });
     await fs.writeFile(standalone.filePath, Buffer.from("png"));
+    await store.completeFileArtifact(standalone.id);
 
     vi.setSystemTime(new Date(now.getTime() + 2_000));
     await store.cleanupExpired();
@@ -178,36 +180,95 @@ describe("DiffArtifactStore", () => {
     expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 
-  it("supports image path aliases for backward compatibility", async () => {
-    const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
-      title: "Demo",
-      inputKind: "before_after",
-      fileCount: 1,
-    });
-
-    const imagePath = store.allocateImagePath(artifact.id, "pdf");
-    expect(imagePath).toMatch(/preview\.pdf$/);
-    const standalone = await store.createStandaloneFileArtifact();
-    expect(standalone.filePath).toMatch(/preview\.png$/);
-
-    const updated = await store.updateImagePath(artifact.id, imagePath);
-    expect(updated.filePath).toBe(imagePath);
-    expect(updated.imagePath).toBe(imagePath);
+  it("allocates PDF file paths when format is pdf", async () => {
+    const standalonePdf = await store.createStandaloneFileArtifact({ format: "pdf" });
+    expect(standalonePdf.filePath).toMatch(/preview\.pdf$/);
+    await store.completeFileArtifact(standalonePdf.id);
   });
 
-  it("allocates PDF file paths when format is pdf", async () => {
-    const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
-      title: "Demo",
+  it("drops an artifact row and temp directory after render failure", async () => {
+    const standalone = await store.createStandaloneFileArtifact();
+    await fs.writeFile(standalone.filePath, "partial");
+
+    await store.deleteFileArtifact(standalone.id);
+
+    await expect(blobStore.lookup(standalone.id)).resolves.toBeUndefined();
+    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("removes only expired file rows and leaves live materializations", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-27T16:00:00Z"));
+    const expired = await store.createStandaloneFileArtifact({ ttlMs: 1_000 });
+    const live = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
+    await fs.writeFile(expired.filePath, "expired");
+    await fs.writeFile(live.filePath, "live");
+    await store.completeFileArtifact(expired.id);
+    await store.completeFileArtifact(live.id);
+
+    vi.setSystemTime(new Date("2026-02-27T16:00:02Z"));
+    await store.cleanupExpired();
+
+    await expect(fs.stat(path.dirname(expired.filePath))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(live.filePath)).resolves.toMatchObject({ size: 4 });
+  });
+
+  it("keeps expired file metadata claimable across later blob writes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-27T16:00:00Z"));
+    const expired = await store.createStandaloneFileArtifact({ ttlMs: 1_000 });
+    await fs.writeFile(expired.filePath, "expired");
+    await store.completeFileArtifact(expired.id);
+
+    vi.setSystemTime(new Date("2026-02-27T16:00:02Z"));
+    await blobStore.register(
+      "later-write",
+      new Uint8Array(),
+      { version: 1, kind: "rendered_file", format: "png" },
+      { ttlMs: 60_000 },
+    );
+    await store.cleanupExpired();
+
+    await expect(fs.stat(path.dirname(expired.filePath))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("cleans expired rows and retries a quota-limited registration", async () => {
+    const registerIfAbsent = blobStore.registerIfAbsent.bind(blobStore);
+    const registerSpy = vi
+      .spyOn(blobStore, "registerIfAbsent")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("physical quota reached"), {
+          code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
+        }),
+      )
+      .mockImplementation(registerIfAbsent);
+    const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
+
+    await store.createArtifact({
+      html: "<html>retry</html>",
+      title: "Retry",
       inputKind: "before_after",
       fileCount: 1,
     });
 
-    const artifactPdf = store.allocateFilePath(artifact.id, "pdf");
-    const standalonePdf = await store.createStandaloneFileArtifact({ format: "pdf" });
-    expect(artifactPdf).toMatch(/preview\.pdf$/);
-    expect(standalonePdf.filePath).toMatch(/preview\.pdf$/);
+    expect(registerSpy).toHaveBeenCalledTimes(2);
+    expect(cleanupSpy).toHaveBeenCalled();
+  });
+
+  it("removes only old rowless temp directories without reading legacy metadata", async () => {
+    const oldDir = path.join(rootDir, "a".repeat(20));
+    const recentDir = path.join(rootDir, "b".repeat(20));
+    await fs.mkdir(oldDir, { recursive: true });
+    await fs.mkdir(recentDir, { recursive: true });
+    const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+    await fs.utimes(oldDir, oldTime, oldTime);
+
+    await store.cleanupExpired();
+
+    await expect(fs.stat(oldDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(recentDir)).resolves.toMatchObject({});
   });
 
   it("throttles cleanup sweeps across repeated artifact creation", async () => {
@@ -216,6 +277,7 @@ describe("DiffArtifactStore", () => {
     vi.setSystemTime(now);
     store = new DiffArtifactStore({
       rootDir,
+      blobStore,
       cleanupIntervalMs: 60_000,
     });
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
@@ -278,8 +340,11 @@ describe("createDiffsHttpHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(res.body).toBe("<html>viewer</html>");
+    expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
+      "<html>viewer</html>",
+    );
     expect(res.getHeader("content-security-policy")).toContain("default-src 'none'");
+    expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
   it("rejects invalid tokens", async () => {
@@ -321,6 +386,7 @@ describe("createDiffsHttpHandler", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("./viewer-runtime.js?v=");
+    expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
   it("serves the shared viewer runtime asset", async () => {
@@ -337,6 +403,7 @@ describe("createDiffsHttpHandler", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("openclawDiffsReady");
+    expect(res.getHeader("cache-control")).toBe("public, max-age=31536000, immutable");
   });
 
   it.each([
@@ -413,7 +480,9 @@ describe("createDiffsHttpHandler", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(expectedStatusCode);
       if (expectedStatusCode === 200) {
-        expect(res.body).toBe("<html>viewer</html>");
+        expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
+          "<html>viewer</html>",
+        );
       }
     },
   );

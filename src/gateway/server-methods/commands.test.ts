@@ -1,6 +1,8 @@
 /**
  * Tests for command gateway methods and command registry responses.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.types.js";
 
@@ -227,7 +229,10 @@ function callHandler(params: Record<string, unknown> = {}) {
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
     result = { ok, payload, error };
   };
-  void commandsHandlers["commands.list"]({
+  void expectDefined(
+    commandsHandlers["commands.list"],
+    'commandsHandlers["commands.list"] test invariant',
+  )({
     params,
     respond,
     req: {} as never,
@@ -330,7 +335,7 @@ describe("commands.list handler", () => {
     expect(model.acceptsArgs).toBe(true);
     const args = model.args ?? [];
     expect(args).toHaveLength(1);
-    expect(args[0].choices).toEqual([
+    expect(expectDefined(args[0], "args[0] test invariant").choices).toEqual([
       { value: "gpt-5.4", label: "GPT-5.4" },
       { value: "sonnet-4.6", label: "sonnet-4.6" },
     ]);
@@ -356,8 +361,8 @@ describe("commands.list handler", () => {
     try {
       const debug = requireCommand(listCommands(), "debug_prompt");
       const args = debug.args as Array<Record<string, unknown>>;
-      expect(args[0].dynamic).toBe(true);
-      expect(args[0].choices).toBeUndefined();
+      expect(expectDefined(args[0], "args[0] test invariant").dynamic).toBe(true);
+      expect(expectDefined(args[0], "args[0] test invariant").choices).toBeUndefined();
     } finally {
       debugCmd.acceptsArgs = saved;
     }
@@ -517,7 +522,8 @@ describe("commands.list handler", () => {
     const originalCommands = [...mockChatCommands];
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
-    const longDescription = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH + 50);
+    const descriptionPrefix = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1);
+    const longDescription = `${descriptionPrefix}😀tail`;
     const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
       name: `${longToken}-${argIndex}`,
       description: longDescription,
@@ -549,14 +555,18 @@ describe("commands.list handler", () => {
 
       const commands = listCommands();
       expect(commands).toHaveLength(COMMAND_LIST_MAX_ITEMS);
-      const first = commands[0];
+      const first = expectDefined(commands[0], "commands[0] test invariant");
       expect(first.name.length).toBeLessThanOrEqual(COMMAND_NAME_MAX_LENGTH);
       expect((first.description as string).length).toBeLessThanOrEqual(
         COMMAND_DESCRIPTION_MAX_LENGTH,
       );
+      expect(first.description).toBe(descriptionPrefix);
       expect((first.textAliases as unknown[]).length).toBeLessThanOrEqual(COMMAND_ALIAS_MAX_ITEMS);
       expect(first.args as unknown[]).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
-      const firstArg = (first.args as Array<Record<string, unknown>>)[0];
+      const firstArg = expectDefined(
+        (first.args as Array<Record<string, unknown>>)[0],
+        "(first.args as Array<Record<string, unknown>>)[0] test invariant",
+      );
       expect(firstArg.choices as unknown[]).toHaveLength(COMMAND_ARG_CHOICES_MAX_ITEMS);
     } finally {
       mockChatCommands.length = 0;

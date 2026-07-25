@@ -114,7 +114,7 @@ export class OpenClawChannelBridge {
       { GatewayClient: GatewayClientCtor },
       { startGatewayClientWhenEventLoopReady },
       { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
-      { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
+      { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
       import("../gateway/client.js"),
@@ -145,10 +145,11 @@ export class OpenClawChannelBridge {
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
-        void this.handleGatewayEvent(event);
+        void this.dispatchGatewayEvent(event);
       },
       onHelloOk: () => {
         this.retryingInitialConnect = false;
@@ -521,6 +522,21 @@ export class OpenClawChannelBridge {
     }
   }
 
+  private async dispatchGatewayEvent(event: EventFrame): Promise<void> {
+    try {
+      await this.handleGatewayEvent(event);
+    } catch (error) {
+      // Always surface a single low-noise record so swallowed gateway event
+      // failures remain observable; the spammy error detail stays behind --verbose.
+      process.stderr.write(`openclaw mcp: gateway event ${event.event} failed\n`);
+      if (this.verbose) {
+        process.stderr.write(
+          `openclaw mcp: gateway event ${event.event} error: ${String(error)}\n`,
+        );
+      }
+    }
+  }
+
   private async handleGatewayEvent(event: EventFrame): Promise<void> {
     switch (event.event) {
       case "session.message":
@@ -648,8 +664,7 @@ export class OpenClawChannelBridge {
   }
 }
 
-/** Decide whether startup should wait for a retryable Gateway connect failure to recover. */
-export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
+function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
   if (
     error.name === "GatewayClientRequestError" &&
     "retryable" in error &&

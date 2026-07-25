@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Fetches Gemini provider usage windows.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -6,16 +8,12 @@ import {
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
 } from "./provider-usage.types.js";
-
-type GeminiUsageResponse = {
-  buckets?: Array<{ modelId?: string; remainingFraction?: number }>;
-};
 
 export async function fetchGeminiUsage(
   token: string,
@@ -49,14 +47,18 @@ export async function fetchGeminiUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as GeminiUsageResponse;
-  const quotas: Record<string, number> = {};
-
-  for (const bucket of data.buckets || []) {
-    const model = bucket.modelId || "unknown";
-    const frac = bucket.remainingFraction ?? 1;
-    if (!quotas[model] || frac < quotas[model]) {
-      quotas[model] = frac;
+  const buckets =
+    isRecord(parsed.data) && Array.isArray(parsed.data.buckets) ? parsed.data.buckets : [];
+  const quotas = new Map<string, number>();
+  for (const bucket of buckets) {
+    if (!isRecord(bucket)) {
+      continue;
+    }
+    const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
+    const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
+    const current = quotas.get(model);
+    if (current === undefined || frac < current) {
+      quotas.set(model, frac);
     }
   }
 
@@ -66,7 +68,7 @@ export async function fetchGeminiUsage(
   let hasPro = false;
   let hasFlash = false;
 
-  for (const [model, frac] of Object.entries(quotas)) {
+  for (const [model, frac] of quotas) {
     const lower = normalizeLowercaseStringOrEmpty(model);
     if (lower.includes("pro")) {
       hasPro = true;
@@ -95,5 +97,9 @@ export async function fetchGeminiUsage(
     });
   }
 
-  return { provider, displayName: PROVIDER_LABELS[provider], windows };
+  return {
+    provider,
+    displayName: expectDefined(providerUsageLabel(provider), "gemini provider usage label"),
+    windows,
+  };
 }

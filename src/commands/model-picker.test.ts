@@ -1,9 +1,11 @@
 // Model picker tests cover catalog rows, provider metadata, backend defaults, and prompt choices.
+import path from "node:path";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { stampConfigWriteMetadata } from "../config/io.meta.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import {
   applyModelAllowlist,
@@ -14,8 +16,14 @@ import {
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog,
+const modelCatalogRouteVariants = vi.hoisted(() => ({
+  value: undefined as readonly ModelCatalogEntry[] | undefined,
+}));
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await loadModelCatalog(...args);
+    return { entries, routeVariants: modelCatalogRouteVariants.value ?? entries };
+  },
 }));
 
 const loadStaticManifestCatalogRowsForList = vi.hoisted(() =>
@@ -120,17 +128,66 @@ vi.mock("../agents/model-auth.js", () => ({
   hasRuntimeAvailableProviderAuth,
 }));
 
+const providerAuthRoute = vi.hoisted(() => ({
+  value: undefined as
+    | {
+        api: "openai-responses" | "openai-chatgpt-responses";
+        baseUrl: string;
+        authRequirement: "api-key" | "subscription";
+        requestTransportOverrides: "none" | "present";
+      }
+    | undefined,
+}));
+const providerAuthEvaluations = vi.hoisted(
+  () =>
+    new Map<
+      string,
+      {
+        availability: boolean | undefined;
+        routeResolution: null;
+        selectedAuthMode?: string;
+        evidence?: "aws-sdk" | "provider-config";
+      }
+    >(),
+);
 const createProviderAuthChecker = vi.hoisted(() =>
-  vi.fn(
-    (params: { cfg?: OpenClawConfig; workspaceDir?: string; env?: NodeJS.ProcessEnv }) =>
-      async (provider: string) =>
-        hasRuntimeAvailableProviderAuth({
-          provider,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        }),
-  ),
+  vi.fn((params: { cfg?: OpenClawConfig; workspaceDir?: string; env?: NodeJS.ProcessEnv }) => {
+    const checker = vi.fn(
+      async (provider: string, ref?: { api?: string | null; baseUrl?: unknown }) => {
+        const prepared = providerAuthEvaluations.get(provider);
+        if (prepared) {
+          return prepared.availability === true;
+        }
+        return (
+          hasRuntimeAvailableProviderAuth({
+            provider,
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+          }) &&
+          !(ref?.api === "openai-chatgpt-responses" && ref.baseUrl === "https://api.openai.com/v1")
+        );
+      },
+    );
+    const evaluateModelAuth = vi.fn(
+      async (provider: string, ref?: { api?: string | null; baseUrl?: unknown }) => {
+        const prepared = providerAuthEvaluations.get(provider);
+        if (prepared) {
+          return prepared;
+        }
+        const availability = await checker(provider, ref);
+        const selectedRoute = providerAuthRoute.value;
+        return {
+          availability,
+          routeResolution: selectedRoute
+            ? { kind: "routes" as const, routes: [selectedRoute] as const }
+            : null,
+          ...(selectedRoute ? { selectedRoute } : {}),
+        };
+      },
+    );
+    return Object.assign(checker, { evaluateModelAuth });
+  }),
 );
 vi.mock("../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker,
@@ -285,7 +342,12 @@ function providerCallProviders() {
 
 beforeEach(() => {
   delete process.env.OPENCLAW_LOCALE;
+  // Route hints exercise source policy even when a prior local build left stale dist artifacts.
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
   vi.clearAllMocks();
+  modelCatalogRouteVariants.value = undefined;
+  providerAuthRoute.value = undefined;
+  providerAuthEvaluations.clear();
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [
       {
@@ -348,6 +410,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
+  vi.unstubAllEnvs();
 });
 
 describe("promptDefaultModel", () => {
@@ -357,6 +420,8 @@ describe("promptDefaultModel", () => {
         provider: "openai",
         id: "gpt-5.5",
         name: "GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
       },
     ]);
 
@@ -374,6 +439,117 @@ describe("promptDefaultModel", () => {
     const options = pickerOptions(select as MockCallSource);
     const canonical = requireOption(options, "openai/gpt-5.5");
     expect(canonical.hint).toContain("Codex runtime route");
+    expect(canonical.hint).not.toContain("OpenClaw runtime route");
+  });
+
+  it.each([
+    ["default request params", { params: { temperature: 0.2 } }],
+    [
+      "model request params",
+      { models: { "openai/gpt-5.5": { params: { text_verbosity: "low" } } } },
+    ],
+  ] as const)(
+    "labels official OpenAI with %s as an OpenClaw runtime route",
+    async (_label, defaults) => {
+      loadModelCatalog.mockResolvedValue([
+        {
+          provider: "openai",
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        },
+      ]);
+      const select = vi.fn(async (params) => params.initialValue as never);
+
+      await promptDefaultModel({
+        config: { agents: { defaults } } as OpenClawConfig,
+        prompter: makePrompter({ select }),
+        allowKeep: false,
+        includeManual: false,
+        ignoreAllowlist: true,
+      });
+
+      const option = requireOption(pickerOptions(select as MockCallSource), "openai/gpt-5.5");
+      expect(option.hint).toContain("OpenClaw runtime route");
+      expect(option.hint).not.toContain("Codex runtime route");
+    },
+  );
+
+  it.each([
+    ["custom endpoint", "openai-responses", "https://example.test/v1"],
+    ["authored Completions", "openai-completions", "https://api.openai.com/v1"],
+  ] as const)("labels an OpenAI %s as an OpenClaw runtime route", async (_label, api, baseUrl) => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", api, baseUrl },
+    ]);
+    const config = {
+      agents: { defaults: {} },
+      models: {
+        providers: {
+          openai: { api, baseUrl, models: [configuredTextModel("gpt-5.5", "GPT-5.5")] },
+        },
+      },
+    } as OpenClawConfig;
+    const select = vi.fn(async (params) => params.initialValue as never);
+
+    await promptDefaultModel({
+      config,
+      prompter: makePrompter({ select }),
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const option = requireOption(pickerOptions(select as MockCallSource), "openai/gpt-5.5");
+    expect(option.hint).toContain("OpenClaw runtime route");
+    expect(option.hint).not.toContain("Codex runtime route");
+  });
+
+  it("uses selected ChatGPT capabilities regardless of physical row order", async () => {
+    providerAuthRoute.value = {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authRequirement: "subscription",
+      requestTransportOverrides: "none",
+    };
+    const platform: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "Platform GPT-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      reasoning: true,
+      input: ["text", "image"],
+    };
+    const chatGPT: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "ChatGPT GPT-5.5",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      contextWindow: 400_000,
+      reasoning: false,
+      input: ["text"],
+    };
+    loadModelCatalog.mockResolvedValue([platform]);
+    modelCatalogRouteVariants.value = [platform, chatGPT];
+    const select = vi.fn(async (params) => params.initialValue as never);
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter: makePrompter({ select }),
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const option = requireOption(pickerOptions(select as MockCallSource), "openai/gpt-5.5");
+    expect(option.hint).toContain("ChatGPT GPT-5.5");
+    expect(option.hint).toContain("ctx 400k");
+    expect(option.hint).not.toContain("reasoning");
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual(["openai/gpt-5.5"]);
   });
 
   it("hides unauthenticated catalog entries from default model choices", async () => {
@@ -398,6 +574,40 @@ describe("promptDefaultModel", () => {
     expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
   });
 
+  it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.initialValue as never);
+
+    await promptDefaultModel({
+      config: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      },
+      prompter: makePrompter({ select }),
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    const checker = createProviderAuthChecker.mock.results.at(-1)?.value;
+    expect(checker).toHaveBeenCalledWith("openai", {
+      modelId: "gpt-5.5",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
   it("keeps implicit Bedrock AWS SDK models visible without API-key auth", async () => {
     resolveEnvApiKey.mockReturnValue(null);
     loadModelCatalog.mockResolvedValue([
@@ -418,6 +628,60 @@ describe("promptDefaultModel", () => {
 
     const values = optionValues(pickerOptions(select as MockCallSource));
     expect(values).toEqual(["amazon-bedrock/us.anthropic.claude-sonnet-4-5"]);
+  });
+
+  it("shows AWS SDK models but hides unresolved non-OpenAI SecretRefs", async () => {
+    providerAuthEvaluations.set("amazon-bedrock", {
+      availability: true,
+      routeResolution: null,
+      selectedAuthMode: "aws-sdk",
+      evidence: "aws-sdk",
+    });
+    providerAuthEvaluations.set("anthropic", {
+      availability: undefined,
+      routeResolution: null,
+      selectedAuthMode: "api-key",
+      evidence: "provider-config",
+    });
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-5",
+        name: "Bedrock Claude",
+        api: "bedrock-converse-stream",
+      },
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Anthropic Claude",
+        api: "anthropic-messages",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.initialValue as never);
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter: makePrompter({ select }),
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "amazon-bedrock/us.anthropic.claude-sonnet-4-5",
+    ]);
+    const authChecker = createProviderAuthChecker.mock.results.at(-1)?.value;
+    if (!authChecker) {
+      throw new Error("expected provider auth checker");
+    }
+    expect(authChecker.evaluateModelAuth).toHaveBeenCalledWith("amazon-bedrock", {
+      modelId: "us.anthropic.claude-sonnet-4-5",
+      observedRoutes: [{ api: "bedrock-converse-stream", baseUrl: undefined }],
+    });
+    expect(authChecker.evaluateModelAuth).toHaveBeenCalledWith("anthropic", {
+      modelId: "claude-sonnet-4-6",
+      observedRoutes: [{ api: "anthropic-messages", baseUrl: undefined }],
+    });
   });
 
   it("hides legacy runtime providers from default model choices", async () => {
@@ -1401,6 +1665,83 @@ describe("promptModelAllowlist", () => {
     ]);
   });
 
+  it("preserves static OpenAI route facts for future model auth checks", async () => {
+    loadStaticManifestCatalogRowsForList.mockReturnValue([
+      {
+        provider: "openai",
+        id: "gpt-future",
+        name: "GPT Future",
+        ref: "openai/gpt-future",
+        mergeKey: "openai:gpt-future",
+        source: "manifest",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text"],
+        reasoning: true,
+        status: "available",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    await promptModelAllowlist({
+      config: { agents: { defaults: {} } },
+      prompter: makePrompter({ multiselect }),
+      preferredProvider: "openai",
+    });
+
+    const checker = createProviderAuthChecker.mock.results.at(-1)?.value;
+    expect(checker).toHaveBeenCalledWith("openai", {
+      modelId: "gpt-future",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
+      "openai/gpt-future",
+    ]);
+  });
+
+  it("uses the selected route for allowlist capability hints", async () => {
+    providerAuthRoute.value = {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authRequirement: "subscription",
+      requestTransportOverrides: "none",
+    };
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "Platform GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 1_000_000,
+        reasoning: true,
+        input: ["text", "image"],
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "ChatGPT GPT-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        contextWindow: 400_000,
+        reasoning: false,
+        input: ["text"],
+      },
+    ]);
+    const multiselect = createSelectAllMultiselect();
+
+    await promptModelAllowlist({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter: makePrompter({ multiselect }),
+    });
+
+    const option = requireOption(pickerOptions(multiselect as MockCallSource), "openai/gpt-5.5");
+    expect(option.hint).toContain("ChatGPT GPT-5.5");
+    expect(option.hint).toContain("ctx 400k");
+    expect(option.hint).not.toContain("reasoning");
+  });
+
   it("uses configured provider models for allowlist picker without loading the full catalog in replace mode", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -1526,8 +1867,13 @@ describe("promptModelAllowlist", () => {
     });
     expect(next.agents?.defaults?.models).toEqual({
       [activeModel]: { alias: "llama" },
+      [staleModel]: { alias: "elephant" },
       "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "anthropic/claude-sonnet-4-6",
+      activeModel,
+    ]);
   });
 
   it("shows configured preferred provider models when the catalog has no entries", async () => {
@@ -2150,8 +2496,9 @@ describe("runtime model picker visibility", () => {
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
       "google/gemini-3.1-pro-preview",
+      "openai/gpt-5.6-sol",
     ]);
-    expect(call.initialValues).toEqual(["openai/gpt-5.5"]);
+    expect(call.initialValues).toEqual(["openai/gpt-5.5", "openai/gpt-5.6-sol"]);
   });
 });
 
@@ -2203,7 +2550,9 @@ describe("applyModelAllowlist", () => {
     const next = applyModelAllowlist(config, ["openai/gpt-5.5"]);
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "gpt" },
+      "anthropic/claude-opus-4-6": { alias: "opus" },
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
   });
 
   it("normalizes retired Google Gemini refs before writing selected models", () => {
@@ -2227,6 +2576,11 @@ describe("applyModelAllowlist", () => {
       "google-gemini-cli/gemini-3.1-pro-preview": {},
       "openrouter/google/gemini-3.1-pro-preview": {},
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "google/gemini-3.1-pro-preview",
+      "google-gemini-cli/gemini-3.1-pro-preview",
+      "openrouter/google/gemini-3.1-pro-preview",
+    ]);
   });
 
   it("keeps non-Google provider Gemini-looking refs unchanged while writing selected models", () => {
@@ -2237,6 +2591,10 @@ describe("applyModelAllowlist", () => {
       "litellm/gemini-3-flash": {},
       "litellm/gemini-3.1-pro": {},
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "litellm/gemini-3-flash",
+      "litellm/gemini-3.1-pro",
+    ]);
   });
 
   it("preserves entries outside scoped allowlist updates", () => {
@@ -2248,6 +2606,7 @@ describe("applyModelAllowlist", () => {
             "anthropic/claude-opus-4-6": { alias: "opus" },
             "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
           },
+          modelPolicy: { allow: ["openai/*", "anthropic/*", "sonnet"] },
         },
       },
     } as OpenClawConfig;
@@ -2257,11 +2616,40 @@ describe("applyModelAllowlist", () => {
     });
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "gpt" },
+      "anthropic/claude-opus-4-6": { alias: "opus" },
       "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
     });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/*",
+      "anthropic/claude-sonnet-4-6",
+    ]);
   });
 
-  it("clears the allowlist when no models remain", () => {
+  it("seeds provider-scoped configure edits from the effective legacy allowlist", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { alias: "gpt" },
+            "anthropic/claude-opus-4-6": { alias: "opus" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const applied = applyModelAllowlist(config, ["openai/gpt-5.6-sol"], {
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.6-sol"],
+    });
+    const next = stampConfigWriteMetadata(applied, undefined, undefined, config);
+
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "anthropic/claude-opus-4-6",
+      "openai/gpt-5.6-sol",
+    ]);
+    expect(next.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+  });
+
+  it("clears an effective legacy restriction and preserves model metadata", () => {
     const config = {
       agents: {
         defaults: {
@@ -2272,8 +2660,13 @@ describe("applyModelAllowlist", () => {
       },
     } as OpenClawConfig;
 
-    const next = applyModelAllowlist(config, []);
-    expect(next.agents?.defaults?.models).toBeUndefined();
+    const applied = applyModelAllowlist(config, []);
+    const next = stampConfigWriteMetadata(applied, undefined, undefined, config);
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "gpt" },
+    });
+    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([]);
+    expect(next.meta?.migrations?.modelPolicyAllowlist).toBe(true);
   });
 });
 
@@ -2305,7 +2698,7 @@ describe("applyModelFallbacksFromSelection", () => {
     } as OpenClawConfig;
 
     const next = applyModelFallbacksFromSelection(config, [
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-sol",
       "anthropic/claude-sonnet-4-6",
     ]);
     expect(next.agents?.defaults?.model).toEqual({
@@ -2555,3 +2948,4 @@ describe("applyModelFallbacksFromSelection", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

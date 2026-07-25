@@ -63,17 +63,58 @@ different error visible from a layer further down.
 ### Layer 1: verify Chrome is serving CDP on Windows
 
 ```powershell
-chrome.exe --remote-debugging-port=9222
+chrome.exe --remote-debugging-port=9222 --user-data-dir="$env:LOCALAPPDATA\OpenClaw\ChromeCDP"
 ```
+
+Chrome 136 and later ignore remote-debugging command-line switches for the
+default Chrome data directory. Use a separate, non-default data directory as
+shown above. See Chrome's
+[remote-debugging security change](https://developer.chrome.com/blog/remote-debugging-port).
+This does not make the normal signed-in Chrome profile remotely controllable.
 
 From Windows, verify Chrome itself first:
 
 ```powershell
-curl http://127.0.0.1:9222/json/version
-curl http://127.0.0.1:9222/json/list
+curl.exe http://127.0.0.1:9222/json/version
+curl.exe http://127.0.0.1:9222/json/list
 ```
 
-If this fails on Windows, OpenClaw is not the problem yet.
+If this fails, diagnose the Windows listeners below. OpenClaw is not the
+problem yet.
+
+#### Diagnose IPv4 and IPv6 before changing portproxy
+
+Chromium tries to bind remote debugging to `127.0.0.1` first and falls back to
+`[::1]` only if the IPv4 bind fails. A persistent `v4tov4` rule listening on
+`127.0.0.1:9222` can occupy that endpoint before Chrome starts. Chrome then
+falls back to `[::1]:9222`, while the old rule forwards IPv4 traffic back to
+its own listener and returns an empty reply.
+
+Check the actual listeners and proxy rules from Windows instead of inferring
+them from the Chrome version:
+
+```powershell
+netstat -ano | findstr :9222
+netsh interface portproxy show all
+curl.exe http://127.0.0.1:9222/json/version
+curl.exe http://[::1]:9222/json/version
+```
+
+Use `tasklist /fi "PID eq <PID>"` for each PID from `netstat`.
+
+- If `chrome.exe` answers on `127.0.0.1`, remove any portproxy rule that also
+  listens on `127.0.0.1:9222`. Forward only the WSL2-reachable Windows adapter
+  address to `127.0.0.1`.
+- If `chrome.exe` answers only on `[::1]`, point the WSL2-reachable listener at
+  `::1` with `v4tov6` instead of forwarding to an unused IPv4 address:
+
+  ```powershell
+  netsh interface portproxy add v4tov6 listenaddress=WINDOWS_HOST_OR_IP listenport=9222 connectaddress=::1 connectport=9222
+  ```
+
+Bind the listener to the adapter address WSL2 needs. Do not expose the CDP
+port on `0.0.0.0`, a LAN address, or a tailnet address: CDP grants control of
+the browser session.
 
 ### Layer 2: verify WSL2 can reach that Windows endpoint
 
@@ -158,14 +199,17 @@ Good result:
 | `token_missing`                                                                         | auth configuration problem                                                                                                                                                        |
 | `pairing required`                                                                      | device approval problem                                                                                                                                                           |
 | `Remote CDP for profile "remote" is not reachable`                                      | WSL2 cannot reach the configured `cdpUrl`                                                                                                                                         |
+| empty CDP reply / `other side closed` through a portproxy                               | Windows listener mismatch or a self-loop; inspect both loopback families and `netsh interface portproxy show all`                                                                 |
 | `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable` | the HTTP endpoint answered, but the DevTools WebSocket could not be opened                                                                                                        |
 | stale viewport / dark-mode / locale / offline overrides after a remote session          | run `openclaw browser --browser-profile remote stop` to close the session and release the cached Playwright/CDP connection without restarting the Gateway or the external browser |
-| timeout around `remoteCdpTimeoutMs` (default 1500ms)                                    | usually still CDP reachability, or a slow/unreachable remote endpoint                                                                                                             |
+| timeout during CDP reachability                                                         | usually still CDP reachability, or a slow/unreachable remote endpoint                                                                                                             |
+| `Playwright page enumeration timed out after 3000ms`                                    | the remote CDP connected, but its persistent tab read stalled                                                                                                                     |
 | `No Chrome tabs found for profile="user"`                                               | local Chrome MCP profile selected where no host-local tabs are available                                                                                                          |
 
 ## Fast triage checklist
 
-1. Windows: does `curl http://127.0.0.1:9222/json/version` work?
+1. Windows: which of `127.0.0.1` or `[::1]` answers on `/json/version`, and
+   does that listener belong to `chrome.exe`?
 2. WSL2: does `curl http://WINDOWS_HOST_OR_IP:9222/json/version` work?
 3. OpenClaw config: does `browser.profiles.<name>.cdpUrl` use that exact
    WSL2-reachable address?

@@ -16,7 +16,7 @@ Adds Qianfan model provider support to OpenClaw.
 
 ## Surface
 
-providers: qianfan
+providers: `qianfan`
 
 ## Related docs
 

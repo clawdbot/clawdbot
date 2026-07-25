@@ -5,11 +5,47 @@ import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import {
+  buildMutableAllowEntryDetector,
+  collectStandardAllowlistLists,
   coerceNativeSetting,
   createDangerousNameMatchingMutableAllowlistWarningCollector,
   createRestrictSendersChannelSecurity,
   normalizeAllowFromList,
 } from "./channel-policy.js";
+
+describe("mutable allowlist table helpers", () => {
+  it("collects standard account, DM, and nested group lists in stable order", () => {
+    expect(
+      collectStandardAllowlistLists(
+        {
+          prefix: "channels.demo",
+          account: {
+            allowFrom: ["user"],
+            groupAllowFrom: ["group-user"],
+            dm: { allowFrom: ["dm-user"] },
+            rooms: { general: { users: ["room-user"] } },
+          },
+        },
+        { includeDm: true, includeGroups: true, groupsKey: "rooms", groupField: "users" },
+      ),
+    ).toEqual([
+      { pathLabel: "channels.demo.allowFrom", list: ["user"] },
+      { pathLabel: "channels.demo.groupAllowFrom", list: ["group-user"] },
+      { pathLabel: "channels.demo.dm.allowFrom", list: ["dm-user"] },
+      { pathLabel: "channels.demo.rooms.general.users", list: ["room-user"] },
+    ]);
+  });
+
+  it("builds a detector from prefixes and a stable-id pattern", () => {
+    const detector = buildMutableAllowEntryDetector({
+      prefixes: ["", "demo:", "user:"],
+      stableIdPattern: /^U\d+$/,
+    });
+    expect(detector("demo:user:U123")).toBe(false);
+    expect(detector("demo:alice")).toBe(true);
+    expect(detector("*")).toBe(false);
+  });
+});
 
 describe("createRestrictSendersChannelSecurity", () => {
   it("builds dm policy resolution and open-group warnings from one descriptor", () => {

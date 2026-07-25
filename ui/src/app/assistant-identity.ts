@@ -5,7 +5,7 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 
-export type LocalAssistantIdentity = { avatar: string | null; agentId?: string | null };
+type LocalAssistantIdentity = { avatar: string | null; agentId?: string | null };
 
 type PersistedLocalAssistantIdentities = {
   avatars?: Record<string, unknown>;
@@ -63,33 +63,9 @@ export function loadLocalAssistantIdentity(opts?: {
       avatars[agentId] = legacyAvatar;
       persistLocalAssistantAvatarMap(storage, avatars);
     }
-    return { avatar: Object.hasOwn(avatars, agentId) ? avatars[agentId] : null, agentId };
+    return { avatar: Object.hasOwn(avatars, agentId) ? (avatars[agentId] ?? null) : null, agentId };
   } catch {
     return { avatar: null };
-  }
-}
-
-export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
-  const agentId = normalizeOptionalString(next.agentId);
-  if (!agentId) {
-    return;
-  }
-  const storage = getSafeLocalStorage();
-  try {
-    const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
-    const avatars = raw
-      ? parseLocalAssistantAvatarMap(raw).avatars
-      : (Object.create(null) as Record<string, string>);
-    const avatar = normalizeOptionalString(next.avatar);
-    if (avatar) {
-      avatars[agentId] = avatar;
-    } else {
-      delete avatars[agentId];
-    }
-    persistLocalAssistantAvatarMap(storage, avatars);
-  } catch {
-    // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory identity updates from being applied
   }
 }
 

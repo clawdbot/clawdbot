@@ -1,7 +1,7 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../api/types.ts";
 
-export type GatewayDiagnosticsSnapshot = {
+type GatewayDiagnosticsSnapshot = {
   status: StatusSummary;
   health: HealthSnapshot;
   models: unknown[];

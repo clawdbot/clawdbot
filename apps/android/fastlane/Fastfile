@@ -2,7 +2,7 @@ require "fileutils"
 require "json"
 require "open3"
 require "shellwords"
-require "supply/client"
+require "supply"
 
 default_platform(:android)
 
@@ -63,6 +63,10 @@ end
 def play_track
   raw = ENV["GOOGLE_PLAY_TRACK"].to_s.strip
   raw.empty? ? DEFAULT_PLAY_TRACK : raw
+end
+
+def wear_play_track
+  "wear:#{play_track}"
 end
 
 def play_release_status
@@ -161,33 +165,185 @@ def android_changelog_path(version_code)
   File.join(ANDROID_FASTLANE_ROOT, "metadata", "android", "en-US", "changelogs", "#{version_code}.txt")
 end
 
+def wear_version_code(phone_version_code)
+  build_number = phone_version_code % 100
+  UI.user_error!("Android phone versionCode build number must be 01 through 49.") unless (1..49).cover?(build_number)
+  phone_version_code + 50
+end
+
 def sync_android_changelog!(version_code)
   validate_android_release_notes!
 
   changelog_path = android_changelog_path(version_code)
   FileUtils.mkdir_p(File.dirname(changelog_path))
   File.write(changelog_path, File.read(android_release_notes_path))
-  changelog_path
+  wear_changelog_path = android_changelog_path(wear_version_code(version_code))
+  File.write(wear_changelog_path, File.read(android_release_notes_path))
+  [changelog_path, wear_changelog_path]
+end
+
+def play_metadata_languages
+  Dir.children(play_metadata_path)
+    .select { |language| File.directory?(File.join(play_metadata_path, language)) }
+    .reject { |language| language.start_with?(".") }
+    .sort
+end
+
+def play_release_notes(version_code)
+  play_metadata_languages.filter_map do |language|
+    changelog_path = File.join(play_metadata_path, language, "changelogs", "#{version_code}.txt")
+    fallback_path = File.join(play_metadata_path, language, "changelogs", "default.txt")
+    source_path = File.exist?(changelog_path) ? changelog_path : fallback_path
+    next unless File.exist?(source_path)
+
+    AndroidPublisher::LocalizedText.new(language: language, text: File.read(source_path, encoding: "UTF-8"))
+  end
+end
+
+def update_play_track!(client, track_name:, version_code:, version_name:)
+  release = AndroidPublisher::TrackRelease.new(
+    name: version_name,
+    status: play_release_status,
+    version_codes: [version_code],
+    release_notes: play_release_notes(version_code)
+  )
+  track = client.tracks(track_name).first || AndroidPublisher::Track.new(track: track_name)
+  # Google preserves older releases when the edit replaces this list with the newest release.
+  track.releases = [release]
+  # Supply::Client owns the active edit; its public API takes (track_name, track_object).
+  client.update_track(track_name, track)
+end
+
+def upload_play_listing_assets!(client, upload_metadata:, upload_images:, upload_screenshots:)
+  play_metadata_languages.each do |language|
+    language_path = File.join(play_metadata_path, language)
+    if upload_metadata
+      metadata_fields = Supply::AVAILABLE_METADATA_FIELDS.select { |field| File.exist?(File.join(language_path, "#{field}.txt")) }
+      unless metadata_fields.empty?
+        # This returns Supply::Listing, whose save writes through the same active edit.
+        listing = client.listing_for_language(language)
+        metadata_fields.each do |field|
+          listing.public_send("#{field}=", File.read(File.join(language_path, "#{field}.txt"), encoding: "UTF-8"))
+        end
+        listing.save
+      end
+    end
+
+    if upload_images
+      Supply::IMAGES_TYPES.each do |image_type|
+        path = Dir.glob(File.join(language_path, "images", "#{image_type}.{png,jpg,jpeg}"), File::FNM_CASEFOLD).sort.last
+        client.upload_image(image_path: path, image_type: image_type, language: language) if path
+      end
+    end
+
+    next unless upload_screenshots
+
+    Supply::SCREENSHOT_TYPES.each do |screenshot_type|
+      paths = Dir.glob(File.join(language_path, "images", screenshot_type, "*.{png,jpg,jpeg}"), File::FNM_CASEFOLD).sort
+      next if paths.empty?
+
+      client.clear_screenshots(image_type: screenshot_type, language: language)
+      paths.each { |path| client.upload_image(image_path: path, image_type: screenshot_type, language: language) }
+    end
+  end
+end
+
+def fastlane_boolean_env(name, default:)
+  value = ENV[name]
+  return default if value.nil?
+
+  normalized = value.downcase
+  return true if ["1", "yes", "true", "on"].include?(normalized)
+  return false if ["0", "no", "false", "off"].include?(normalized)
+
+  UI.user_error!("#{name} must be true/false, yes/no, on/off, or 1/0.")
+end
+
+def upload_play_builds_atomically!(phone_artifact_path:, wear_artifact_path:, version_metadata:, upload_metadata:, upload_images:, upload_screenshots:)
+  previous_supply_config = Supply.config
+  client = nil
+  begin
+    Supply.config = {
+      ack_bundle_installation_warning: fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false),
+      changes_not_sent_for_review: fastlane_boolean_env("SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW", default: false),
+      rescue_changes_not_sent_for_review: fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)
+    }
+    client = Supply::Client.make_from_config(params: play_auth_options.merge(timeout: (ENV["SUPPLY_TIMEOUT"] || "300").to_i))
+    client.begin_edit(package_name: play_package_name)
+
+    phone_version_code = client.upload_bundle(phone_artifact_path)
+    wear_version_code_value = client.upload_bundle(wear_artifact_path)
+    expected_phone_version_code = version_metadata.fetch(:version_code)
+    expected_wear_version_code = wear_version_code(expected_phone_version_code)
+    UI.user_error!("Uploaded phone AAB versionCode #{phone_version_code}, expected #{expected_phone_version_code}.") unless phone_version_code.to_i == expected_phone_version_code
+    UI.user_error!("Uploaded Wear AAB versionCode #{wear_version_code_value}, expected #{expected_wear_version_code}.") unless wear_version_code_value.to_i == expected_wear_version_code
+
+    update_play_track!(
+      client,
+      track_name: play_track,
+      version_code: phone_version_code,
+      version_name: version_metadata.fetch(:version)
+    )
+    update_play_track!(
+      client,
+      track_name: wear_play_track,
+      version_code: wear_version_code_value,
+      version_name: version_metadata.fetch(:version)
+    )
+    upload_play_listing_assets!(
+      client,
+      upload_metadata: upload_metadata,
+      upload_images: upload_images,
+      upload_screenshots: upload_screenshots
+    )
+
+    if play_validate_only?
+      client.validate_current_edit!
+      UI.success("Successfully validated the atomic phone and Wear upload.")
+    else
+      client.commit_current_edit!
+      UI.success("Successfully committed the atomic phone and Wear upload.")
+    end
+  ensure
+    if client&.current_edit
+      begin
+        client.abort_current_edit
+      rescue => error
+        UI.important("Could not abort Google Play edit after failure: #{error.message}")
+      end
+    end
+    Supply.config = previous_supply_config
+  end
 end
 
 def play_metadata_path
   File.join(ANDROID_FASTLANE_ROOT, "metadata", "android")
 end
 
-def play_screenshot_paths
-  Dir[File.join(play_metadata_path, "**", "images", "**", "*.png")]
+def play_screenshot_paths_for_type(screenshot_type)
+  Dir[File.join(play_metadata_path, "**", "images", screenshot_type, "*.{png,jpg,jpeg}")]
 end
 
 def validate_android_screenshots!
   return unless play_screenshot_upload_requested?
 
-  if play_screenshot_paths.empty?
-    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no PNG screenshots were found under apps/android/fastlane/metadata/android/*/images.")
+  required_types = %w(phoneScreenshots wearScreenshots)
+  missing_types = required_types.select { |screenshot_type| play_screenshot_paths_for_type(screenshot_type).empty? }
+  unless missing_types.empty?
+    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no screenshots were found for: #{missing_types.join(', ')}.")
   end
 end
 
 def release_artifact_path(version)
   File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-play-release.aab")
+end
+
+def wear_release_artifact_path(version)
+  File.join(android_root, "build", "release-artifacts", "openclaw-#{version}-wear-release.aab")
+end
+
+def play_release_artifact_paths(version)
+  [release_artifact_path(version), wear_release_artifact_path(version)]
 end
 
 def build_release_artifacts!
@@ -291,7 +447,7 @@ end
 
 def validate_android_release_signing!
   Dir.chdir(android_root) do
-    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", "--dry-run"]))
+    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", ":wear:bundleRelease", "--dry-run"]))
   end
 end
 
@@ -299,10 +455,12 @@ def print_android_release_plan!(version_metadata)
   UI.message("Android Play release plan:")
   UI.message("  package: #{play_package_name}")
   UI.message("  track: #{play_track}")
+  UI.message("  Wear track: #{wear_play_track}")
   UI.message("  release_status: #{play_release_status}")
   UI.message("  validate_only: #{play_validate_only?}")
   UI.message("  versionName: #{version_metadata.fetch(:version)}")
-  UI.message("  versionCode: #{version_metadata.fetch(:version_code)}")
+  UI.message("  phone versionCode: #{version_metadata.fetch(:version_code)}")
+  UI.message("  Wear versionCode: #{wear_version_code(version_metadata.fetch(:version_code))}")
 end
 
 def validate_android_release_preflight!(version_metadata)
@@ -344,22 +502,20 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
   ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1" if upload_screenshots
   validate_android_screenshots!
   sync_android_changelog!(version_metadata.fetch(:version_code))
-  artifact_path = release_artifact_path(version_metadata.fetch(:version))
-  UI.user_error!("Missing Play release artifact at #{artifact_path}. Run pnpm android:release:archive first.") unless File.exist?(artifact_path)
+  artifact_paths = play_release_artifact_paths(version_metadata.fetch(:version))
+  missing_artifacts = artifact_paths.reject { |path| File.exist?(path) }
+  unless missing_artifacts.empty?
+    UI.user_error!("Missing Play release artifacts at #{missing_artifacts.join(', ')}. Run pnpm android:release:archive first.")
+  end
 
-  upload_to_play_store(
-    **play_auth_options,
-    package_name: play_package_name,
-    aab: artifact_path,
-    track: play_track,
-    release_status: play_release_status,
-    metadata_path: play_metadata_path,
-    skip_upload_apk: true,
-    skip_upload_metadata: !upload_metadata,
-    skip_upload_changelogs: false,
-    skip_upload_images: !upload_images,
-    skip_upload_screenshots: !upload_screenshots,
-    validate_only: play_validate_only?
+  phone_artifact_path, wear_artifact_path = artifact_paths
+  upload_play_builds_atomically!(
+    phone_artifact_path: phone_artifact_path,
+    wear_artifact_path: wear_artifact_path,
+    version_metadata: version_metadata,
+    upload_metadata: upload_metadata,
+    upload_images: upload_images,
+    upload_screenshots: upload_screenshots
   )
 
   unless play_validate_only?

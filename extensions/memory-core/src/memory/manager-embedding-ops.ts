@@ -1,9 +1,11 @@
 // Memory Core plugin module implements manager embedding ops behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
+  isEmbeddingBatchUnavailableError,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -90,6 +92,12 @@ type PreparedMemoryIndexEntry = {
   structuredInputBytes?: number;
 };
 
+// Retry attempts are host control state. Provider-thrown values stay opaque so
+// they cannot override the counter or break accounting when they are immutable.
+type MemoryBatchRetryResult<T> =
+  | { kind: "success"; value: T }
+  | { kind: "failure"; error: unknown; attempts: 1 | 2 };
+
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const item of items) {
@@ -112,7 +120,7 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
   );
 }
 
-export function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
+function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
   const limit = Math.max(1, Math.floor(maxRequests));
   const batches: T[][] = [];
   for (let start = 0; start < chunks.length; start += limit) {
@@ -121,7 +129,7 @@ export function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: numb
   return batches;
 }
 
-export function resolveEmbeddingTimeoutMs(params: {
+function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
   providerId?: string;
   providerRuntime?: Pick<
@@ -153,7 +161,7 @@ export function resolveEmbeddingTimeoutMs(params: {
     : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
 }
 
-export function resolveMemoryIndexConcurrency(params: {
+function resolveMemoryIndexConcurrency(params: {
   batch: { enabled: boolean; concurrency: number };
   configuredNonBatchConcurrency?: number;
   providerId?: string;
@@ -168,7 +176,7 @@ export function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
-export async function runEmbeddingOperationWithTimeout<T>(params: {
+async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
   /** Caller-owned cancellation, merged with the per-call watchdog abort. */
@@ -298,7 +306,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected computeProviderKey(): string {
-    return this.resolveProviderIndexIdentities()[0].providerKey;
+    return expectDefined(
+      this.resolveProviderIndexIdentities().at(0),
+      "primary memory provider identity",
+    ).providerKey;
   }
 
   protected resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[] {
@@ -408,11 +419,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             items: batchTexts.length,
             timeoutMs,
           });
-          return await runEmbeddingOperationWithTimeout({
+          const result = await runEmbeddingOperationWithTimeout({
             timeoutMs,
             message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
             run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
           });
+          log.debug("memory embeddings: batch completed", {
+            provider: provider.id,
+            items: batchTexts.length,
+          });
+          return result;
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,
@@ -428,6 +444,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
       });
     } catch (err) {
+      log.debug("memory embeddings: batch failed", {
+        provider: provider.id,
+        error: formatErrorMessage(err),
+      });
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
         operation: "batch",
@@ -599,7 +619,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   private async recordBatchFailure(params: {
     provider: string;
     message: string;
-    attempts?: number;
+    attempts: 1 | 2;
     forceDisable?: boolean;
   }): Promise<{ disabled: boolean; count: number }> {
     return await this.withBatchFailureLock(async () => {
@@ -623,28 +643,23 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  private isBatchTimeoutError(message: string): boolean {
-    return /timed out|timeout/i.test(message);
-  }
-
   private async runBatchWithTimeoutRetry<T>(params: {
     provider: string;
     run: () => Promise<T>;
-  }): Promise<T> {
+  }): Promise<MemoryBatchRetryResult<T>> {
     try {
-      return await params.run();
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      if (this.isBatchTimeoutError(message)) {
-        log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-        try {
-          return await params.run();
-        } catch (retryErr) {
-          (retryErr as { batchAttempts?: number }).batchAttempts = 2;
-          throw retryErr;
-        }
+      return { kind: "success", value: await params.run() };
+    } catch (error) {
+      if (!/timed out|timeout/i.test(formatErrorMessage(error))) {
+        return { kind: "failure", error, attempts: 1 };
       }
-      throw err;
+    }
+
+    log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
+    try {
+      return { kind: "success", value: await params.run() };
+    } catch (error) {
+      return { kind: "failure", error, attempts: 2 };
     }
   }
 
@@ -656,29 +671,28 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!this.batch.enabled) {
       return await params.fallback();
     }
-    try {
-      const result = await this.runBatchWithTimeoutRetry({
-        provider: params.provider,
-        run: params.run,
-      });
+    const result = await this.runBatchWithTimeoutRetry({
+      provider: params.provider,
+      run: params.run,
+    });
+    if (result.kind === "success") {
       await this.resetBatchFailureCount();
-      return result;
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      const attempts = (err as { batchAttempts?: number }).batchAttempts ?? 1;
-      const forceDisable = /asyncBatchEmbedContent not available/i.test(message);
-      const failure = await this.recordBatchFailure({
-        provider: params.provider,
-        message,
-        attempts,
-        forceDisable,
-      });
-      const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
-      log.warn(
-        `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
-      );
-      return await params.fallback();
+      return result.value;
     }
+
+    const message = formatErrorMessage(result.error);
+    const forceDisable = isEmbeddingBatchUnavailableError(result.error);
+    const failure = await this.recordBatchFailure({
+      provider: params.provider,
+      message,
+      attempts: result.attempts,
+      forceDisable,
+    });
+    const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
+    log.warn(
+      `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+    );
+    return await params.fallback();
   }
 
   protected getIndexConcurrency(): number {
@@ -690,15 +704,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {
-    if (this.vector.enabled) {
-      try {
-        this.db
-          .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
-          )
-          .run(pathname, source);
-      } catch {}
-    }
+    this.deleteVectorRowsForSource(pathname, source);
     if (this.fts.enabled && this.fts.available) {
       try {
         deleteMemoryFtsRows({
@@ -747,10 +753,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     vectorReady: boolean,
   ): void {
     const now = Date.now();
+    const needsVectorRebuild = !vectorReady && embeddings.some((embedding) => embedding.length > 0);
     runSqliteImmediateTransactionSync(this.db, () => {
       this.clearIndexedFileData(entry.path, source);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
+      for (const [i, chunk] of chunks.entries()) {
         const embedding = embeddings[i] ?? [];
         const id = hashText(
           `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
@@ -796,6 +802,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }
       }
       this.upsertFileRecord(entry, source);
+      if (needsVectorRebuild) {
+        this.markVectorRebuildRequired();
+      }
     });
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
       vectorEnabled: this.vector.enabled,
@@ -1025,3 +1034,4 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

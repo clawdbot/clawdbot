@@ -1,6 +1,6 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -22,14 +22,6 @@ class GatewayNodeApprovalStateTest {
   }
 
   @Test
-  fun nodePairingEventsInvalidateNodeDeviceState() {
-    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.requested"))
-    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.resolved"))
-    assertFalse(gatewayEventInvalidatesNodesDevices("device.pair.resolved"))
-    assertFalse(gatewayEventInvalidatesNodesDevices("exec.approval.resolved"))
-  }
-
-  @Test
   fun nodePairingFailuresRefreshNodeDeviceState() {
     assertTrue(
       nodeConnectFailureNeedsApprovalRefresh(
@@ -37,7 +29,7 @@ class GatewayNodeApprovalStateTest {
           code = "NOT_PAIRED",
           message = "pairing required",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = "PAIRING_REQUIRED",
               canRetryWithDeviceToken = false,
               recommendedNextStep = "wait_then_retry",
@@ -53,7 +45,7 @@ class GatewayNodeApprovalStateTest {
           code = "UNAUTHORIZED",
           message = "token mismatch",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = "AUTH_TOKEN_MISMATCH",
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -188,7 +180,7 @@ class GatewayNodeApprovalStateTest {
 
   @Test
   fun ignoresStaleNodeApprovalRefreshResults() {
-    val guard = GatewayNodeApprovalRefreshGuard()
+    val guard = LatestGatewayRefreshGuard()
     var approvalState = GatewayNodeApprovalState.Loading
     val staleRefresh = guard.begin()
     val currentRefresh = guard.begin()

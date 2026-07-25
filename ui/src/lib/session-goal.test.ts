@@ -1,7 +1,12 @@
 // Control UI tests cover session goal behavior.
 import { describe, expect, it } from "vitest";
 import type { SessionGoal } from "../api/types.ts";
-import { formatGoalDetail, formatGoalSummary, formatGoalTokenCount } from "./session-goal.ts";
+import {
+  formatGoalDetail,
+  formatGoalElapsed,
+  formatGoalSummary,
+  goalElapsedMs,
+} from "./session-goal.ts";
 
 function buildGoal(overrides: Partial<SessionGoal> = {}): SessionGoal {
   return {
@@ -20,14 +25,6 @@ function buildGoal(overrides: Partial<SessionGoal> = {}): SessionGoal {
 }
 
 describe("session goal formatting", () => {
-  it("formats compact token counts for goal usage", () => {
-    expect(formatGoalTokenCount(999)).toBe("999");
-    expect(formatGoalTokenCount(1_240)).toBe("1.2k");
-    expect(formatGoalTokenCount(12_400)).toBe("12k");
-    expect(formatGoalTokenCount(999_999)).toBe("1m");
-    expect(formatGoalTokenCount(1_240_000)).toBe("1.2m");
-  });
-
   it("summarizes goal status and objective details", () => {
     const goal = buildGoal({ lastStatusNote: "Waiting for CI" });
 
@@ -41,5 +38,33 @@ describe("session goal formatting", () => {
     expect(formatGoalSummary(buildGoal({ status: "complete", tokenBudget: undefined }))).toBe(
       "Goal achieved (12k used)",
     );
+  });
+
+  it("tracks elapsed time live for active goals and freezes it on status stops", () => {
+    const active = buildGoal({ createdAt: 1_000 });
+    expect(goalElapsedMs(active, 16_000)).toBe(15_000);
+
+    const paused = buildGoal({ status: "paused", createdAt: 1_000, pausedAt: 61_000 });
+    expect(goalElapsedMs(paused, 999_000)).toBe(60_000);
+
+    const complete = buildGoal({ status: "complete", createdAt: 1_000, completedAt: 121_000 });
+    expect(goalElapsedMs(complete, 999_000)).toBe(120_000);
+
+    const blockedWithoutTimestamp = buildGoal({
+      status: "blocked",
+      createdAt: 1_000,
+      updatedAt: 31_000,
+    });
+    expect(goalElapsedMs(blockedWithoutTimestamp, 999_000)).toBe(30_000);
+  });
+
+  it("formats elapsed durations compactly", () => {
+    expect(formatGoalElapsed(0)).toBe("0s");
+    expect(formatGoalElapsed(15_000)).toBe("15s");
+    expect(formatGoalElapsed(59_999)).toBe("59s");
+    expect(formatGoalElapsed(60_000)).toBe("1m");
+    expect(formatGoalElapsed(3_540_000)).toBe("59m");
+    expect(formatGoalElapsed(3_600_000)).toBe("1h");
+    expect(formatGoalElapsed(3_900_000)).toBe("1h 5m");
   });
 });

@@ -2,15 +2,42 @@
 // metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { createUsageAccumulator } from "../usage-accumulator.js";
+import type { NormalizedUsage } from "../../usage.js";
+import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
+  buildUsageAgentMetaFields,
   buildErrorAgentMeta,
+  resolveEmbeddedAttemptBasePrompt,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveLatestCallUsage,
   resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
+
+describe("resolveEmbeddedAttemptBasePrompt", () => {
+  const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
+
+  it("preserves prompts verbatim for native model-owned harnesses", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        nativeModelOwned: true,
+        provider: "anthropic",
+        prompt: refusalTrigger,
+      }),
+    ).toBe(refusalTrigger);
+  });
+
+  it("keeps the outer Anthropic transport scrub for ordinary runs", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        nativeModelOwned: false,
+        provider: "anthropic",
+        prompt: refusalTrigger,
+      }),
+    ).not.toContain(refusalTrigger);
+  });
+});
 
 function makeAssistantMessage(
   content: AssistantMessage["content"],
@@ -188,6 +215,85 @@ describe("resolveLatestCallUsage", () => {
       currentAttempt: latest,
       latest,
     });
+  });
+});
+
+describe("buildUsageAgentMetaFields", () => {
+  it("keeps aggregate billing buckets out of the latest context snapshot", () => {
+    const usageAccumulator = createUsageAccumulator();
+    const latestCallUsage = {
+      input: 12,
+      output: 15_104,
+      cacheRead: 819_661,
+      cacheWrite: 93_130,
+      contextUsage: {
+        state: "available",
+        promptTokens: 148_874,
+        totalTokens: 163_978,
+      },
+      total: 927_907,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      lastAssistantUsage: undefined,
+      lastRunPromptUsage: latestCallUsage,
+      lastTurnTotal: latestCallUsage.total,
+    });
+
+    expect(fields.usage).toMatchObject({
+      input: 12,
+      output: 15_104,
+      cacheRead: 819_661,
+      cacheWrite: 93_130,
+      total: 927_907,
+    });
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
+    expect(fields.promptTokens).toBe(148_874);
+  });
+
+  it("does not derive a prompt override from unavailable context usage", () => {
+    const usageAccumulator = createUsageAccumulator();
+    const latestCallUsage = {
+      input: 12,
+      output: 15_104,
+      cacheRead: 819_661,
+      cacheWrite: 93_130,
+      contextUsage: { state: "unavailable" },
+      total: 927_907,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      lastAssistantUsage: latestCallUsage,
+      lastRunPromptUsage: latestCallUsage,
+      lastTurnTotal: latestCallUsage.total,
+    });
+
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
+  it("does not label aggregate attempt usage as last-call usage", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 497_720,
+      output: 7_485,
+      cacheRead: 1_323_520,
+      total: 1_828_725,
+    });
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      lastAssistantUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      lastRunPromptUsage: undefined,
+    });
+
+    expect(fields.usage?.input).toBe(497_720);
+    expect(fields.lastCallUsage).toBeUndefined();
+    expect(fields.promptTokens).toBeUndefined();
   });
 });
 

@@ -1,0 +1,63 @@
+title: Matrix thread reply override
+
+scenario:
+  id: thread-reply-override
+  surface: channels
+  coverage:
+    primary:
+      - channels.native-threads
+  objective: Verify Matrix threadReplies=always converts a top-level inbound message into a native threaded reply.
+  successCriteria:
+    - A top-level Matrix inbound message receives the requested marker.
+    - The outbound message carries the triggering inbound message as its normalized thread id.
+  docsRefs:
+    - docs/channels/matrix.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/matrix/src/matrix/monitor/threads.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    profiles: { "matrix:adapter": 10, "matrix:all": 6, "matrix:transport": 5 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    summary: Require the canonical Matrix adapter to surface the native m.thread relation through threadId.
+    config:
+      conversationId: main
+      marker: QA-MATRIX-THREAD-OVERRIDE-OK
+      matrixConfigOverrides:
+        threadReplies: always
+
+flow:
+  steps:
+    - name: exposes the native thread override relation
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: channel
+            senderId: "@driver:matrix.test"
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Reply exactly: ${config.marker}`"
+          saveAs: inbound
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: channel
+            textIncludes:
+              ref: config.marker
+            threadId:
+              expr: inbound.id
+            timeoutMs:
+              ref: scenario.execution.timeoutMs
+          saveAs: outbound
+        - assert:
+            expr: outbound.threadId === inbound.id
+            message:
+              expr: "`expected native Matrix thread relation to ${inbound.id}, got ${outbound.threadId ?? '<none>'}`"
+      detailsExpr: "`${outbound.threadId}: ${outbound.text}`"

@@ -1,7 +1,9 @@
 // Test project script tests cover fixture project discovery and validation.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const {
@@ -15,97 +17,7 @@ const {
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
-} = (await import("../../scripts/test-projects.test-support.mjs")) as unknown as {
-  applyParallelVitestCachePaths: (
-    specs: Array<{
-      config: string;
-      env: NodeJS.ProcessEnv;
-    }>,
-    params?: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-    },
-  ) => Array<{
-    config: string;
-    env: NodeJS.ProcessEnv;
-  }>;
-  buildFullSuiteVitestRunPlans: (
-    args: string[],
-    cwd?: string,
-  ) => Array<{
-    config: string;
-    forwardedArgs: string[];
-    includePatterns: string[] | null;
-    watchMode: boolean;
-  }>;
-  buildVitestArgs: (args: string[], cwd?: string) => string[];
-  buildVitestRunPlans: (
-    args: string[],
-    cwd?: string,
-    listChangedPaths?: (baseRef: string, cwd: string) => string[],
-  ) => Array<{
-    config: string;
-    forwardedArgs: string[];
-    includePatterns: string[] | null;
-    watchMode: boolean;
-  }>;
-  createVitestRunSpecs: (
-    args: string[],
-    params?: {
-      baseEnv?: NodeJS.ProcessEnv;
-      cwd?: string;
-      tempDir?: string;
-    },
-  ) => Array<{
-    config: string;
-    env: NodeJS.ProcessEnv;
-    includeFilePath: string | null;
-    includePatterns: string[] | null;
-    pnpmArgs: string[];
-    watchMode: boolean;
-  }>;
-  findUnmatchedExplicitTestTargets: (
-    args: string[],
-    cwd?: string,
-  ) => Array<{
-    target: string;
-    reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
-    includePattern?: string;
-  }>;
-  parseTestProjectsArgs: (
-    args: string[],
-    cwd?: string,
-  ) => {
-    forwardedArgs: string[];
-    targetArgs: string[];
-    watchMode: boolean;
-  };
-  resolveChangedTargetArgs: (
-    args: string[],
-    cwd?: string,
-    listChangedPaths?: (baseRef: string, cwd: string) => string[],
-    options?: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-      broad?: boolean;
-    },
-  ) => string[] | null;
-  resolveChangedTestTargetPlan: (
-    changedPaths: string[],
-  ) =>
-    | { mode: "none"; targets: string[] }
-    | { mode: "targets"; targets: string[] }
-    | { mode: "broad"; targets: string[] };
-  resolveParallelFullSuiteConcurrency: (
-    specCount: number,
-    env?: NodeJS.ProcessEnv,
-    hostInfo?: {
-      cpuCount?: number;
-      loadAverage1m?: number;
-      totalMemoryBytes?: number;
-    },
-  ) => number;
-};
+} = await import("../../scripts/test-projects.test-support.mjs");
 
 const runVitestModulePath = "../../scripts/run-vitest.mjs";
 const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
@@ -177,6 +89,46 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.bundled.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugins/loader.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("keeps split test entries in their owner configs", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream.base.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/openai-transport-stream.base.test.ts"],
+        watchMode: false,
+      },
+    ]);
+    expect(buildVitestRunPlans(["src/auto-reply/reply/dispatch-from-config.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/reply/dispatch-from-config.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("expands a test filename prefix into standalone sibling suites", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream"])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/agents/openai-transport-stream.base.test.ts",
+          "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
+          "src/agents/openai-transport-stream.incomplete-output.test.ts",
+          "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
+          "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
+          "src/agents/openai-transport-stream.replay-and-tools.test.ts",
+          "src/agents/openai-transport-stream.replay-sanitization.test.ts",
+          "src/agents/openai-transport-stream.streaming.test.ts",
+          "src/agents/openai-transport-stream.usage-and-calls.test.ts",
+        ],
         watchMode: false,
       },
     ]);
@@ -273,11 +225,11 @@ describe("test-projects args", () => {
   });
 
   it("routes plugin-sdk targets to the plugin-sdk config", () => {
-    expect(buildVitestRunPlans(["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/plugin-sdk/migration-runtime.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.plugin-sdk.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"],
+        includePatterns: ["src/plugin-sdk/migration-runtime.test.ts"],
         watchMode: false,
       },
     ]);
@@ -582,7 +534,7 @@ describe("test-projects args", () => {
     ).toBe(3);
   });
 
-  it("uses a bounded local default for full-suite project parallelism", () => {
+  it("uses the global host worker budget for full-suite project parallelism", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
         58,
@@ -595,7 +547,7 @@ describe("test-projects args", () => {
           totalMemoryBytes: 16 * 1024 ** 3,
         },
       ),
-    ).toBe(4);
+    ).toBe(2);
   });
 
   it("gives parallel Vitest shards separate filesystem module caches", () => {
@@ -626,22 +578,25 @@ describe("test-projects args", () => {
     );
   });
 
-  it("preserves explicit Vitest filesystem module cache paths", () => {
-    const specs = [
+  it("splits an explicit Vitest filesystem module cache root", () => {
+    const [spec] = applyParallelVitestCachePaths(
+      [
+        {
+          config: "test/vitest/vitest.gateway.config.ts",
+          env: {},
+        },
+      ],
       {
-        config: "test/vitest/vitest.gateway.config.ts",
-        env: {},
-      },
-    ];
-
-    expect(
-      applyParallelVitestCachePaths(specs, {
         cwd: "/repo",
         env: {
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache",
         },
-      }),
-    ).toBe(specs);
+      },
+    );
+
+    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/tmp/cache/0-test-vitest-vitest.gateway.config.ts",
+    );
   });
 
   it("routes cli targets to the cli config", () => {
@@ -702,6 +657,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "extensions/memory-core/src/memory/index.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
+          "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
           "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
         ],
@@ -854,164 +810,70 @@ describe("test-projects args", () => {
   });
 
   it("routes top-level test helpers to importing repo tests", () => {
-    expect(buildVitestRunPlans(["test/helpers/temp-dir.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "src/agents/command/attempt-execution.shared.test.ts",
-          "src/auto-reply/reply/session-entry-persistence.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/install-sh-version.test.ts",
-          "src/proxy-capture/store.sqlite.test.ts",
-          "test/scripts/android-version.test.ts",
-          "test/scripts/resolve-openclaw-ref.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/entry.compile-cache.test.ts"],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.unit.config.ts",
-        forwardedArgs: [
-          "src/state/openclaw-agent-db.test.ts",
-          "src/state/openclaw-state-db.test.ts",
-          "src/state/sqlite-query-plan.test.ts",
-          "src/transcripts/store.test.ts",
-        ],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.tooling.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "src/scripts/docs-link-audit.test.ts",
-          "src/scripts/sync-plugin-versions.test.ts",
-          "test/helpers/temp-dir.test.ts",
-          "test/scripts/android-pin-version.test.ts",
-          "test/scripts/bench-cli-startup.test.ts",
-          "test/scripts/check-package-dist-imports.test.ts",
-          "test/scripts/check-workflows.test.ts",
-          "test/scripts/ci-hydrate-testbox-env.test.ts",
-          "test/scripts/clawhub-fixture-server.test.ts",
-          "test/scripts/codex-install-assertions.test.ts",
-          "test/scripts/config-reload-mutate-metadata.test.ts",
-          "test/scripts/control-ui-i18n.test.ts",
-          "test/scripts/docs-list.test.ts",
-          "test/scripts/doctor-install-switch-wrapper.test.ts",
-          "test/scripts/e2e-text-file-utils.test.ts",
-          "test/scripts/fixture-common.test.ts",
-          "test/scripts/fixture-plugin-commands.test.ts",
-          "test/scripts/incremental-line-reader.test.ts",
-          "test/scripts/ios-configure-signing.test.ts",
-          "test/scripts/ios-team-id.test.ts",
-          "test/scripts/ios-version.test.ts",
-          "test/scripts/kitchen-sink-rpc-walk.test.ts",
-          "test/scripts/native-app-i18n.test.ts",
-          "test/scripts/onboard-config-fixtures.test.ts",
-          "test/scripts/parallels-lib-helpers.test.ts",
-          "test/scripts/parallels-package-log-progress-extract.test.ts",
-          "test/scripts/parallels-smoke-model.test.ts",
-          "test/scripts/plugin-package-dependencies.test.ts",
-          "test/scripts/plugins-assertions.test.ts",
-          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
-          "test/scripts/proxy-install-ca.test.ts",
-          "test/scripts/release-preflight.test.ts",
-          "test/scripts/render-maturity-docs.test.ts",
-          "test/scripts/report-test-temp-creations.test.ts",
-          "test/scripts/runtime-postbuild-stamp.test.ts",
-          "test/scripts/test-install-sh-docker.test.ts",
-          "test/scripts/test-projects.test.ts",
-          "test/test-env.test.ts",
-          "test/vitest-scoped-config.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.gateway.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "src/gateway/hooks-mapping.test.ts",
-          "src/gateway/server-methods/chat.abort-persistence.test.ts",
-          "src/gateway/server.agent.gateway-server-agent-b.test.ts",
-          "src/gateway/server.chat.gateway-server-chat-b.test.ts",
-          "src/gateway/server.sessions.permissions-hooks.test.ts",
-          "src/gateway/terminal/launch.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.runtime-config.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/config/sessions/entry-freshness.test.ts"],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.cron.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "src/cron/isolated-agent/run-session-state.test.ts",
-          "src/cron/run-log.error-reason.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.commands.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "src/commands/doctor-completion.test.ts",
-          "src/commands/status.scan.shared.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.auto-reply.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
-          "src/auto-reply/reply/get-reply.auto-fallback.test.ts",
-          "src/auto-reply/reply/reply-turn-admission.test.ts",
-          "src/auto-reply/reply/session-updates.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.agents.config.ts",
-        forwardedArgs: [],
-        includePatterns: [
-          "src/agents/agent-bundle-mcp-runtime.test.ts",
-          "src/agents/agent-tools-agent-config.exec.test.ts",
-          "src/agents/bash-tools.exec-foreground-failures.test.ts",
-          "src/agents/cli-runner.reliability.test.ts",
-          "src/agents/models-config.file-mode.test.ts",
-          "src/agents/sandbox/ssh.test.ts",
-          "src/agents/sessions/tools/find.fd.test.ts",
-          "src/agents/sessions/tools/read.test.ts",
-        ],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.plugins.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugins/git-install.test.ts"],
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.e2e.config.ts",
-        forwardedArgs: [
-          "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts",
-          "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
-          "test/openclaw-launcher.e2e.test.ts",
-        ],
-        includePatterns: null,
-        watchMode: false,
-      },
-    ]);
+    // The importer inventory of test/helpers/temp-dir.ts churns with every new
+    // test using the helper; frozen full lists broke main on unrelated test
+    // additions. Assert the routing structure instead of the inventory.
+    const plans = buildVitestRunPlans(["test/helpers/temp-dir.ts"]);
+    const planFiles = plans.map((plan) => plan.includePatterns ?? plan.forwardedArgs);
+    const expandedFiles = planFiles.flat();
+
+    // Helper targets expand to importing test files; the helper itself never
+    // reaches Vitest as a raw target.
+    expect(expandedFiles).toContain("test/helpers/temp-dir.test.ts");
+    expect(expandedFiles).not.toContain("test/helpers/temp-dir.ts");
+    expect(expandedFiles.filter((file) => !file.endsWith(".test.ts"))).toEqual([]);
+
+    // Lower bound derived from the repo itself: every tracked test file that
+    // directly imports the helper must be picked up by the expansion scan, so
+    // dropped importers still fail without freezing the full inventory.
+    const scanRoots = ["src", "test", "ui", "extensions", "packages"];
+    const grep = spawnSync(
+      "git",
+      ["grep", "-l", "--fixed-strings", "helpers/temp-dir", "--", ...scanRoots],
+      { encoding: "utf8" },
+    );
+    expect(grep.status).toBe(0);
+    const directImporterTests = grep.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
+      .filter((file) => {
+        const source = fs.readFileSync(file, "utf8");
+        return [...source.matchAll(/from\s+["'](\.[^"']+)["']/gu)].some((match) => {
+          const importerDir = path.posix.dirname(file);
+          const resolved = path.posix.normalize(
+            path.posix.join(importerDir, expectDefined(match[1], "match[1] test invariant")),
+          );
+          return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
+        });
+      });
+    expect(directImporterTests.length).toBeGreaterThan(0);
+    expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);
+
+    // Importers partition across configs: each file lands in exactly one plan,
+    // in deterministic sorted order.
+    expect(plans.length).toBeGreaterThan(1);
+    expect(new Set(expandedFiles).size).toBe(expandedFiles.length);
+    for (const files of planFiles) {
+      expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)));
+    }
+
+    // Each importer must route to the same config and include-vs-forwarded
+    // shape as targeting it directly, so this test fails on real routing
+    // regressions but not on new importers of the helper.
+    for (const plan of plans) {
+      expect(plan.watchMode).toBe(false);
+      for (const file of plan.includePatterns ?? plan.forwardedArgs) {
+        expect(buildVitestRunPlans([file])).toEqual([
+          {
+            config: plan.config,
+            forwardedArgs: plan.includePatterns ? [] : [file],
+            includePatterns: plan.includePatterns ? [file] : null,
+            watchMode: false,
+          },
+        ]);
+      }
+    }
   });
 
   it("routes e2e targets straight to the e2e config", () => {
@@ -1404,3 +1266,4 @@ describe("test-projects args", () => {
     ).toThrow("watch mode with mixed test suites is not supported");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

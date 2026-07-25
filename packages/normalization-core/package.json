@@ -14,6 +14,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./agent-id": {
+      "types": "./dist/agent-id.d.mts",
+      "import": "./dist/agent-id.mjs",
+      "default": "./dist/agent-id.mjs"
+    },
     "./boolean-coercion": {
       "types": "./dist/boolean-coercion.d.mts",
       "import": "./dist/boolean-coercion.mjs",
@@ -24,15 +29,30 @@
       "import": "./dist/error-coercion.mjs",
       "default": "./dist/error-coercion.mjs"
     },
+    "./expect": {
+      "types": "./dist/expect.d.mts",
+      "import": "./dist/expect.mjs",
+      "default": "./dist/expect.mjs"
+    },
     "./number-coercion": {
       "types": "./dist/number-coercion.d.mts",
       "import": "./dist/number-coercion.mjs",
       "default": "./dist/number-coercion.mjs"
     },
+    "./phone-presentation": {
+      "types": "./dist/phone-presentation.d.mts",
+      "import": "./dist/phone-presentation.mjs",
+      "default": "./dist/phone-presentation.mjs"
+    },
     "./record-coerce": {
       "types": "./dist/record-coerce.d.mts",
       "import": "./dist/record-coerce.mjs",
       "default": "./dist/record-coerce.mjs"
+    },
+    "./result": {
+      "types": "./dist/result.d.mts",
+      "import": "./dist/result.mjs",
+      "default": "./dist/result.mjs"
     },
     "./string-coerce": {
       "types": "./dist/string-coerce.d.mts",
@@ -51,6 +71,9 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/boolean-coercion.ts src/error-coercion.ts src/number-coercion.ts src/record-coerce.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "libphonenumber-js": "1.13.9"
   }
 }

@@ -1,7 +1,6 @@
 /** Converts ACP prompt and tool-event shapes into Gateway-friendly text, files, and metadata. */
 import type {
   ContentBlock,
-  ImageContent,
   ToolCallContent,
   ToolCallLocation,
   ToolKind,
@@ -14,6 +13,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 type GatewayAttachment = {
   type: string;
@@ -253,11 +253,8 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
     let blockText: string | undefined;
     if (block.type === "text") {
       blockText = block.text;
-    } else if (block.type === "resource") {
-      const resource = block.resource as { text?: string } | undefined;
-      if (resource?.text) {
-        blockText = resource.text;
-      }
+    } else if (block.type === "resource" && "text" in block.resource && block.resource.text) {
+      blockText = block.resource.text;
     } else if (block.type === "resource_link") {
       const title = block.title ? ` (${escapeResourceTitle(block.title)})` : "";
       const uri = block.uri ? escapeInlineControlChars(block.uri) : "";
@@ -285,14 +282,13 @@ export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAtt
     if (block.type !== "image") {
       continue;
     }
-    const image = block as ImageContent;
-    if (!image.data || !image.mimeType) {
+    if (!block.data || !block.mimeType) {
       continue;
     }
     attachments.push({
       type: "image",
-      mimeType: image.mimeType,
-      content: image.data,
+      mimeType: block.mimeType,
+      content: block.data,
     });
   }
   return attachments;
@@ -309,7 +305,7 @@ export function formatToolTitle(
   }
   const parts = Object.entries(args).map(([key, value]) => {
     const raw = typeof value === "string" ? value : JSON.stringify(value);
-    const safe = raw.length > 100 ? `${raw.slice(0, 100)}...` : raw;
+    const safe = raw.length > 100 ? `${truncateUtf16Safe(raw, 100)}...` : raw;
     return `${key}: ${safe}`;
   });
   // Sanitize at the source so session updates and permission requests never

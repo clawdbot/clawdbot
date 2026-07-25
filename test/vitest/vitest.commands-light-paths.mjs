@@ -8,6 +8,10 @@ const commandsLightEntries = [
     source: "src/commands/dashboard.links.ts",
     test: "src/commands/dashboard.links.test.ts",
   },
+  {
+    source: "src/commands/dashboard.ts",
+    test: "src/commands/dashboard.test.ts",
+  },
   { test: "src/commands/daemon-install-helpers.test.ts" },
   { source: "src/commands/doctor-browser.ts", test: "src/commands/doctor-browser.test.ts" },
   {

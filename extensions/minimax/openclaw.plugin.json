@@ -7,6 +7,18 @@
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "modelCatalog": {
+    "discovery": {
+      "minimax": "runtime",
+      "minimax-portal": "runtime"
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "minimax-native",
+      "hosts": ["api.minimax.io", "api.minimaxi.com"]
+    }
+  ],
   "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
   "nonSecretAuthMarkers": ["minimax-oauth"],
@@ -31,6 +43,7 @@
       "provider": "minimax-portal",
       "method": "oauth",
       "choiceId": "minimax-global-oauth",
+      "appGuidedAuth": "device-code",
       "choiceLabel": "MiniMax OAuth (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
@@ -41,6 +54,7 @@
       "provider": "minimax",
       "method": "api-global",
       "choiceId": "minimax-global-api",
+      "appGuidedSecret": true,
       "deprecatedChoiceIds": ["minimax", "minimax-api", "minimax-cloud", "minimax-api-lightning"],
       "choiceLabel": "MiniMax API key (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
@@ -56,6 +70,7 @@
       "provider": "minimax-portal",
       "method": "oauth-cn",
       "choiceId": "minimax-cn-oauth",
+      "appGuidedAuth": "device-code",
       "choiceLabel": "MiniMax OAuth (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",
@@ -66,6 +81,7 @@
       "provider": "minimax",
       "method": "api-cn",
       "choiceId": "minimax-cn-api",
+      "appGuidedSecret": true,
       "deprecatedChoiceIds": ["minimax-api-key-cn"],
       "choiceLabel": "MiniMax API key (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
@@ -84,10 +100,8 @@
     "imageGenerationProviders": ["minimax", "minimax-portal"],
     "musicGenerationProviders": ["minimax", "minimax-portal"],
     "videoGenerationProviders": ["minimax", "minimax-portal"],
-    "webSearchProviders": ["minimax"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+    "webSearchProviders": ["minimax"],
+    "usageProviders": ["minimax"]
   },
   "mediaUnderstandingProviderMetadata": {
     "minimax": {

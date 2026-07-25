@@ -1,6 +1,6 @@
 // Model Catalog Core tests cover model catalog normalize behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeModelCatalog, normalizeModelCatalogRows } from "./index.js";
+import { normalizeModelCatalog, normalizeModelCatalogProviderRows } from "./index.js";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 
 describe("model catalog normalization", () => {
@@ -14,6 +14,7 @@ describe("model catalog normalization", () => {
             headers: {
               "x-provider": "openai",
             },
+            defaultUtilityModel: " gpt-5.6-luna ",
             models: [
               {
                 id: "gpt-5.4",
@@ -56,26 +57,31 @@ describe("model catalog normalization", () => {
                 compat: {
                   supportsTools: true,
                   openRouterRouting: {
-                    only: ["anthropic", 1],
+                    only: [" anthropic ", "", 1],
                     allow_fallbacks: false,
                     require_parameters: "no",
                   },
-                  vercelGatewayRouting: { order: ["anthropic", 1], only: "openai" },
+                  vercelGatewayRouting: {
+                    order: [" anthropic ", "", 1],
+                    only: "openai",
+                  },
                   zaiToolStream: true,
                   cacheControlFormat: "anthropic",
                   sendSessionAffinityHeaders: true,
                   sendSessionIdHeader: false,
                   supportsEagerToolInputStreaming: false,
                   supportsLongCacheRetention: true,
+                  supportsJsonSchemaResponseFormat: true,
+                  requiresReasoningContentOnAssistantMessages: true,
                   supportsStore: "yes",
                   thinkingFormat: "together",
                   unknownFlag: true,
                 },
                 status: "preview",
                 statusReason: "rolling out",
-                replaces: ["gpt-5.3"],
+                replaces: [" gpt-5.3 ", ""],
                 replacedBy: "gpt-5.5",
-                tags: ["default"],
+                tags: [" default ", ""],
               },
               {
                 id: "",
@@ -124,6 +130,7 @@ describe("model catalog normalization", () => {
           headers: {
             "x-provider": "openai",
           },
+          defaultUtilityModel: "gpt-5.6-luna",
           models: [
             {
               id: "gpt-5.4",
@@ -163,6 +170,8 @@ describe("model catalog normalization", () => {
                 sendSessionIdHeader: false,
                 supportsEagerToolInputStreaming: false,
                 supportsLongCacheRetention: true,
+                supportsJsonSchemaResponseFormat: true,
+                requiresReasoningContentOnAssistantMessages: true,
                 thinkingFormat: "together",
               },
               status: "preview",
@@ -199,26 +208,25 @@ describe("model catalog normalization", () => {
   });
 
   it("builds normalized rows with provider defaults and stable refs", () => {
-    const rows = normalizeModelCatalogRows({
-      source: "manifest",
-      providers: {
-        OpenAI: {
-          baseUrl: "https://api.openai.com/v1",
-          api: "openai-responses",
-          headers: {
-            "x-provider": "openai",
-          },
-          models: [
-            {
-              id: "GPT-5.4",
-              headers: {
-                "x-model": "gpt-5.4",
-              },
-              input: ["image"],
-            },
-          ],
+    const rows = normalizeModelCatalogProviderRows({
+      provider: "OpenAI",
+      providerCatalog: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-responses",
+        headers: {
+          "x-provider": "openai",
         },
+        models: [
+          {
+            id: "GPT-5.4",
+            headers: {
+              "x-model": "gpt-5.4",
+            },
+            input: ["image"],
+          },
+        ],
       },
+      source: "manifest",
     });
 
     expect(rows).toEqual([

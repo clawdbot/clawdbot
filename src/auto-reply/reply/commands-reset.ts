@@ -18,6 +18,9 @@ type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
+  mutableCtx.commandText = resetTail;
+  mutableCtx.agentText = resetTail;
+  mutableCtx.rawText = resetTail;
   mutableCtx.Body = resetTail;
   mutableCtx.RawBody = resetTail;
   mutableCtx.CommandBody = resetTail;
@@ -107,6 +110,7 @@ export async function maybeHandleResetCommand(
       cfg: params.cfg,
       command: params.command,
       sessionKey: params.sessionKey,
+      storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
       workspaceDir: params.workspaceDir,
@@ -180,6 +184,7 @@ export async function maybeHandleResetCommand(
     cfg: params.cfg,
     command: params.command,
     sessionKey: params.sessionKey,
+    storePath: params.storePath,
     sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,

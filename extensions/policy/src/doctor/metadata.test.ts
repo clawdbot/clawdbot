@@ -1,11 +1,11 @@
 // Policy doctor metadata tests cover rule metadata.
 import { describe, expect, it } from "vitest";
-import {
-  POLICY_FIX_METADATA,
-  POLICY_FIX_METADATA_BY_CHECK_ID,
-  type PolicyFixMetadata,
-} from "./fix-metadata.js";
-import { POLICY_CHECK_IDS, POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
+import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
+
+const POLICY_FIX_METADATA = [...POLICY_FIX_METADATA_BY_CHECK_ID.values()];
+type PolicyFixMetadata = (typeof POLICY_FIX_METADATA)[number];
 
 describe("policy doctor metadata", () => {
   it("describes strictness for agent-scoped policy fields", () => {
@@ -173,6 +173,12 @@ describe("policy doctor metadata", () => {
     );
   });
 
+  it("points required-deny repair metadata at OpenClaw deny config paths", () => {
+    expect(
+      POLICY_FIX_METADATA_BY_CHECK_ID.get(CHECK_IDS.policyToolsRequiredDenyMissing)?.configTargets,
+    ).toEqual(["tools.deny", "agents.list[].tools.deny"]);
+  });
+
   it("keeps policy fix class assignments explicit", () => {
     const grouped = new Map<PolicyFixMetadata["fixClass"], PolicyFixMetadata[]>();
     for (const rule of POLICY_FIX_METADATA) {
@@ -213,6 +219,7 @@ describe("policy doctor metadata", () => {
         "policy/data-handling-redaction-disabled",
         "policy/data-handling-telemetry-content-capture",
         "policy/gateway-control-ui-insecure",
+        "policy/gateway-http-endpoint-enabled",
         "policy/gateway-remote-enabled",
         "policy/ingress-group-mention-required",
         "policy/ingress-open-groups-denied",
@@ -247,7 +254,6 @@ describe("policy doctor metadata", () => {
         "policy/data-handling-session-retention-not-enforced",
         "policy/data-handling-session-transcript-memory-enabled",
         "policy/exec-approvals-auto-allow-skills-enabled",
-        "policy/gateway-http-endpoint-enabled",
         "policy/gateway-node-command-denied",
         "policy/gateway-non-loopback-bind",
         "policy/gateway-rate-limit-missing",
@@ -259,6 +265,10 @@ describe("policy doctor metadata", () => {
         "policy/models-denied-provider",
         "policy/models-unapproved-provider",
         "policy/network-private-access-enabled",
+        "policy/routing-agent-mismatch",
+        "policy/routing-binding-channel-unconfigured",
+        "policy/routing-bindings-required",
+        "policy/routing-match-kind-mismatch",
         "policy/sandbox-backend-unapproved",
         "policy/sandbox-container-host-network-denied",
         "policy/sandbox-container-mount-mode-required",

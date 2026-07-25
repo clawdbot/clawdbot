@@ -2,9 +2,14 @@ import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { buildCohereModelDefinition, COHERE_BASE_URL, COHERE_MODEL_CATALOG } from "./models.js";
+import {
+  buildCohereModelDefinition,
+  COHERE_BASE_URL,
+  COHERE_COMMAND_A_PLUS_MODEL_ID,
+  COHERE_MODEL_CATALOG,
+} from "./models.js";
 
-export const COHERE_DEFAULT_MODEL_ID = "command-a-03-2025";
+const COHERE_DEFAULT_MODEL_ID = COHERE_COMMAND_A_PLUS_MODEL_ID;
 export const COHERE_DEFAULT_MODEL_REF = `cohere/${COHERE_DEFAULT_MODEL_ID}`;
 
 const coherePresetAppliers = createModelCatalogPresetAppliers({
@@ -14,7 +19,7 @@ const coherePresetAppliers = createModelCatalogPresetAppliers({
     api: "openai-completions",
     baseUrl: COHERE_BASE_URL,
     catalogModels: COHERE_MODEL_CATALOG.map(buildCohereModelDefinition),
-    aliases: [{ modelRef: COHERE_DEFAULT_MODEL_REF, alias: "Cohere Command A" }],
+    aliases: [{ modelRef: COHERE_DEFAULT_MODEL_REF, alias: "Cohere Command A+" }],
   }),
 });
 

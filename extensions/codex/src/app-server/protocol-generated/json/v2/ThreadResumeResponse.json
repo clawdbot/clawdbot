@@ -79,7 +79,6 @@
         {
           "enum": [
             "untrusted",
-            "on-failure",
             "on-request",
             "never"
           ],
@@ -229,6 +228,7 @@
         {
           "enum": [
             "contextWindowExceeded",
+            "sessionBudgetExceeded",
             "usageLimitExceeded",
             "serverOverloaded",
             "cyberPolicy",
@@ -459,6 +459,26 @@
           ],
           "title": "InputImageDynamicToolCallOutputContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "audioUrl": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputAudio"
+              ],
+              "title": "InputAudioDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "audioUrl",
+            "type"
+          ],
+          "title": "InputAudioDynamicToolCallOutputContentItem",
+          "type": "object"
         }
       ]
     },
@@ -541,6 +561,18 @@
     },
     "McpToolCallAppContext": {
       "properties": {
+        "actionName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "connectorId": {
           "type": "string"
         },
@@ -663,13 +695,29 @@
       ]
     },
     "MultiAgentMode": {
-      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
-      "enum": [
-        "none",
-        "explicitRequestOnly",
-        "proactive"
-      ],
-      "type": "string"
+      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomMultiAgentMode",
+          "type": "object"
+        },
+        {
+          "enum": [
+            "explicitRequestOnly",
+            "proactive"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "NetworkAccess": {
       "enum": [
@@ -1019,6 +1067,13 @@
             "null"
           ]
         },
+        "canAcceptDirectInput": {
+          "description": "Whether the app server accepts direct turn input for this loaded thread. `None` means the capability is unavailable, such as for an unloaded stored thread.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "cliVersion": {
           "description": "Version of the CLI that created the thread.",
           "type": "string"
@@ -1040,6 +1095,17 @@
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
         },
+        "extra": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadExtra"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional implementation-specific thread data."
+        },
         "forkedFromId": {
           "description": "Source thread id when this thread was created by forking another thread.",
           "type": [
@@ -1058,7 +1124,17 @@
           ],
           "description": "Optional Git metadata captured when the thread was created."
         },
+        "historyMode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadHistoryMode"
+            }
+          ],
+          "default": "legacy",
+          "description": "Persisted thread history contract selected when this thread was created."
+        },
         "id": {
+          "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
           "type": "string"
         },
         "modelProvider": {
@@ -1162,6 +1238,17 @@
       "enum": [
         "waitingOnApproval",
         "waitingOnUserInput"
+      ],
+      "type": "string"
+    },
+    "ThreadExtra": {
+      "description": "Extra app-server data for a thread.",
+      "type": "object"
+    },
+    "ThreadHistoryMode": {
+      "enum": [
+        "legacy",
+        "paginated"
       ],
       "type": "string"
     },
@@ -1729,6 +1816,15 @@
             "query": {
               "type": "string"
             },
+            "results": {
+              "default": null,
+              "description": "Structured search results returned out-of-band by standalone web search.\n\nThese stay as opaque JSON at the extension/app-server boundary so new result fields and result types can pass through without a Codex release.",
+              "items": true,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "webSearch"
@@ -1751,7 +1847,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "enum": [
@@ -1770,6 +1866,7 @@
           "type": "object"
         },
         {
+          "description": "Display item emitted by the interruptible `clock.sleep` tool.",
           "properties": {
             "durationMs": {
               "format": "uint64",
@@ -2017,6 +2114,7 @@
           "description": "Only populated when the Turn's status is failed."
         },
         "id": {
+          "description": "Identifier for this turn. Codex-generated turn IDs are UUIDv7.",
           "type": "string"
         },
         "items": {
@@ -2236,6 +2334,46 @@
         },
         {
           "properties": {
+            "type": {
+              "enum": [
+                "audio"
+              ],
+              "title": "AudioUserInputType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "AudioUserInput",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "localAudio"
+              ],
+              "title": "LocalAudioUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalAudioUserInput",
+          "type": "object"
+        },
+        {
+          "properties": {
             "name": {
               "type": "string"
             },
@@ -2433,6 +2571,14 @@
       },
       "type": "array"
     },
+    "itemsBackwardsCursor": {
+      "default": null,
+      "description": "Opaque head cursor for hydrating paginated items backwards.\n\nPass this as `cursor` to `thread/items/list` with `sortDirection: \"desc\"`. The first page includes the cursor's head item.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "type": "string"
     },
@@ -2482,6 +2628,14 @@
     },
     "thread": {
       "$ref": "#/definitions/Thread"
+    },
+    "turnsBackwardsCursor": {
+      "default": null,
+      "description": "Opaque head cursor for hydrating paginated turns backwards.\n\nPass this as `cursor` to `thread/turns/list` with `sortDirection: \"desc\"`. The first page includes the cursor's head turn.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

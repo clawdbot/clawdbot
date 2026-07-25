@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    // Plugin production indexed reads must account for missing entries.
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/extensions.tsbuildinfo"
@@ -15,6 +16,7 @@
     "**/*test-helpers.ts",
     "**/*test-harness.ts",
     "**/*test-support.ts",
+    "extensions/**/test/**",
     "extensions/**/src/test-support/**",
     "test/**"
   ]

@@ -1,7 +1,7 @@
 // Shared QA Lab fixture for dispatching existing Docker E2E lanes.
 import { spawnSync } from "node:child_process";
 
-export type QaDockerE2eLaneDefinition = {
+type QaDockerE2eLaneDefinition = {
   env?: (env: NodeJS.ProcessEnv) => Record<string, string>;
   script: string;
 };
@@ -18,7 +18,7 @@ type SpawnQaDockerE2eLane = (
   options: { env: NodeJS.ProcessEnv; stdio: "inherit" },
 ) => QaDockerE2eLaneRunResult;
 
-export const QA_DOCKER_E2E_LANES = {
+const QA_DOCKER_E2E_LANES = {
   "agent-bundle-mcp-tools": {
     script: "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
   },
@@ -28,8 +28,11 @@ export const QA_DOCKER_E2E_LANES = {
   "bundled-plugin-install-uninstall": {
     script: "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
   },
-  "crestodian-first-run": {
-    script: "scripts/e2e/crestodian-first-run-docker.sh",
+  "codex-on-demand": {
+    script: "scripts/e2e/codex-on-demand-docker.sh",
+  },
+  "system-agent-first-run": {
+    script: "scripts/e2e/system-agent-first-run-docker.sh",
   },
   "docker-build-image": {
     script: "scripts/e2e/build-image.sh",
@@ -87,14 +90,11 @@ export const QA_DOCKER_E2E_LANES = {
   },
 } satisfies Record<string, QaDockerE2eLaneDefinition>;
 
-export type QaDockerE2eLaneName = keyof typeof QA_DOCKER_E2E_LANES;
+type QaDockerE2eLaneName = keyof typeof QA_DOCKER_E2E_LANES;
 
-export type QaDockerE2eLaneArgs =
-  | { kind: "help" }
-  | { kind: "list" }
-  | { kind: "run"; laneName: string };
+type QaDockerE2eLaneArgs = { kind: "help" } | { kind: "list" } | { kind: "run"; laneName: string };
 
-export type ResolvedQaDockerE2eLane = {
+type ResolvedQaDockerE2eLane = {
   env: NodeJS.ProcessEnv;
   name: QaDockerE2eLaneName;
   script: string;
@@ -143,7 +143,7 @@ export function resolveQaDockerE2eLane(
   }
   const lane = QA_DOCKER_E2E_LANES[laneName];
   return {
-    env: { ...env, ...lane.env?.(env) },
+    env: { ...env, ...("env" in lane ? lane.env?.(env) : undefined) },
     name: laneName,
     script: lane.script,
   };

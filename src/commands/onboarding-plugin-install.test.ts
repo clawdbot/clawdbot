@@ -1,6 +1,7 @@
 // Onboarding plugin install tests cover install sources, trust checks, and install records.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
@@ -26,7 +27,7 @@ vi.mock("../cli/plugin-install-plan.js", () => ({
 const invalidatePluginRuntimeDiscoveryAfterConfigMutation = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
-vi.mock("../cli/plugins-registry-refresh.js", () => ({
+vi.mock("../plugins/registry-refresh.js", () => ({
   invalidatePluginRuntimeDiscoveryAfterConfigMutation,
 }));
 
@@ -117,6 +118,21 @@ vi.mock("../utils/with-timeout.js", () => ({
 }));
 
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
+import { testing } from "./onboarding-plugin-install.test-support.js";
+
+describe("plugin install error summaries", () => {
+  it("keeps bounded terminal text UTF-16 well-formed", () => {
+    expect(testing.summarizeInstallError(`${"x".repeat(178)}🚀tail`)).toBe(`${"x".repeat(178)}…`);
+  });
+
+  it("keeps copyable line breaks while bounding detailed installer output", () => {
+    expect(testing.formatInstallErrorDetail("first\nsecond\tvalue")).toBe("first\nsecond\\tvalue");
+    const detailed = testing.formatInstallErrorDetail(`start\n${"x".repeat(20_000)}`);
+    expect(detailed).toContain("start\n");
+    expect(detailed).toHaveLength(12_000);
+    expect(detailed.endsWith("… (installer output truncated)")).toBe(true);
+  });
+});
 
 function requireCapturedPrompt<T>(captured: T | undefined): T {
   if (!captured) {
@@ -346,7 +362,6 @@ describe("ensureOnboardingPluginInstalled", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -483,7 +498,6 @@ describe("ensureOnboardingPluginInstalled", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -624,7 +638,12 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(renderedWarning).toContain("Security scan: suspicious");
     expect(renderedWarning).toContain("\n│ Review before installing.");
     expect(renderedWarning).not.toContain("\\n│ Review before installing.");
-    expect(log.mock.invocationCallOrder[0]).toBeLessThan(text.mock.invocationCallOrder[0]);
+    expect(log.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        text.mock.invocationCallOrder[0],
+        "text.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
@@ -636,7 +655,6 @@ describe("ensureOnboardingPluginInstalled", () => {
             source: "exec",
             command: process.execPath,
             args: ["-e", "process.exit(1)"],
-            allowInsecurePath: true,
           },
         },
       },
@@ -731,6 +749,88 @@ describe("ensureOnboardingPluginInstalled", () => {
       expect.objectContaining({
         logger: expect.objectContaining({ warn: expect.any(Function) }),
       }),
+    );
+  });
+
+  it("installs trusted official plugins at the exact extended-stable core version", async () => {
+    installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "discord",
+      targetDir: "/tmp/discord",
+      version: VERSION,
+      npmResolution: {
+        name: "@openclaw/discord",
+        version: VERSION,
+        resolvedSpec: `@openclaw/discord@${VERSION}`,
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "extended-stable" } },
+      entry: {
+        pluginId: "discord",
+        label: "Discord",
+        install: { npmSpec: "@openclaw/discord" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
+      NpmSpecInstallCall,
+    ];
+    expect(npmCall.spec).toBe(`@openclaw/discord@${VERSION}`);
+    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+      OpenClawConfig,
+      PluginInstallRecord,
+    ];
+    expect(recordUpdate.spec).toBe("@openclaw/discord");
+    expect(resolveNpmInstallRecordSpec).toHaveBeenCalledWith(
+      expect.objectContaining({ pinResolvedRegistrySpec: false }),
+    );
+  });
+
+  it("preserves default intent for trusted official stable installs", async () => {
+    installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "discord",
+      targetDir: "/tmp/discord",
+      version: "2026.7.21",
+      npmResolution: {
+        name: "@openclaw/discord",
+        version: "2026.7.21",
+        resolvedSpec: "@openclaw/discord@2026.7.21",
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "stable" } },
+      entry: {
+        pluginId: "discord",
+        label: "Discord",
+        install: { npmSpec: "@openclaw/discord" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+      OpenClawConfig,
+      PluginInstallRecord,
+    ];
+    expect(recordUpdate.spec).toBe("@openclaw/discord");
+    expect(resolveNpmInstallRecordSpec).toHaveBeenCalledWith(
+      expect.objectContaining({ pinResolvedRegistrySpec: false }),
     );
   });
 
@@ -1011,6 +1111,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       installed: false,
       pluginId: "demo-plugin",
       status: "failed",
+      error: "ClawHub ClawPack artifact is unavailable.",
     });
   });
 
@@ -1054,7 +1155,43 @@ describe("ensureOnboardingPluginInstalled", () => {
       installed: false,
       pluginId: "demo-plugin",
       status: "failed",
+      error: "ClawHub ClawPack integrity mismatch.",
     });
+  });
+
+  it("returns bounded multiline ClawHub failure detail to non-interactive callers", async () => {
+    const runtimeError = vi.fn();
+    installPluginFromClawHub.mockResolvedValueOnce({
+      ok: false,
+      code: "archive_integrity_mismatch",
+      error: `first line\n${"x".repeat(20_000)}`,
+    });
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Plugin",
+        install: {
+          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
+          npmSpec: "@openclaw/demo-plugin@2026.5.2",
+          defaultChoice: "clawhub",
+        },
+      },
+      prompter: {
+        select: vi.fn(async () => "clawhub"),
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => {}),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: { error: runtimeError } as never,
+      promptInstall: false,
+    });
+
+    expect(result.error).toMatch(/^first line\n/);
+    expect(result.error?.endsWith("\n… (installer output truncated)")).toBe(true);
+    expect(result.error?.length).toBe(12_000);
+    expect(readFirstMockCall(runtimeError, "runtime.error")[0]).toHaveLength(203);
   });
 
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {
@@ -1707,3 +1844,4 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Line tests cover group keys plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -56,45 +57,62 @@ describe("account-scoped LINE groups", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveLineGroupsConfig(cfg, "work")).toEqual({
       "group:g1": { requireMention: false },
     });
-    expect(resolveExactLineGroupConfigKey({ cfg, accountId: "work", groupId: "g1" })).toBe(
-      "group:g1",
-    );
-    expect(resolveExactLineGroupConfigKey({ cfg, accountId: "default", groupId: "g1" })).toBe(
-      undefined,
-    );
+    expect(
+      resolveExactLineGroupConfigKey({
+        groups: resolveLineGroupsConfig(cfg, "work"),
+        groupId: "g1",
+      }),
+    ).toBe("group:g1");
+    expect(
+      resolveExactLineGroupConfigKey({
+        groups: resolveLineGroupsConfig(cfg, "default"),
+        groupId: "g1",
+      }),
+    ).toBe(undefined);
   });
 });
 
 describe("line group policy", () => {
-  it("matches raw and prefixed LINE group keys for requireMention", () => {
+  it("preserves candidate precedence and falls back to wildcard", () => {
     const cfg = {
       channels: {
         line: {
           groups: {
-            "room:r123": {
+            same: {
               requireMention: false,
             },
-            "group:g123": {
+            "group:same": {
+              requireMention: true,
+            },
+            "room:same": {
+              requireMention: true,
+            },
+            "group:typed": {
               requireMention: false,
+            },
+            "room:typed": {
+              requireMention: true,
             },
             "*": {
-              requireMention: true,
+              requireMention: false,
             },
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "r123" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "room:r123" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "g123" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "group:g123" })).toBe(false);
-    expect(resolveLineGroupRequireMention({ cfg, groupId: "other" })).toBe(true);
+    expect(resolveLineGroupRequireMention({ cfg, groupId: "same" })).toBe(false);
+    expect(resolveLineGroupRequireMention({ cfg, groupId: "room:same" })).toBe(false);
+    expect(resolveLineGroupRequireMention({ cfg, groupId: "group:same" })).toBe(false);
+    expect(resolveLineGroupRequireMention({ cfg, groupId: "typed" })).toBe(false);
+    expect(resolveLineGroupRequireMention({ cfg, groupId: "group:typed" })).toBe(false);
+    expect(resolveLineGroupRequireMention({ cfg, groupId: "room:typed" })).toBe(true);
+    expect(resolveLineGroupRequireMention({ cfg, groupId: "other" })).toBe(false);
   });
 
   it("uses account-scoped prefixed LINE group config for requireMention", () => {
@@ -117,7 +135,7 @@ describe("line group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveLineGroupRequireMention({ cfg, groupId: "g123", accountId: "work" })).toBe(false);
   });

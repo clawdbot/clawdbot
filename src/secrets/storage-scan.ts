@@ -38,6 +38,15 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   return out;
 }
 
+/** Lists global dotenv files that can supply secrets for the selected config and state roots. */
+export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: string }): string[] {
+  const candidates = [
+    path.join(params.stateDir, ".env"),
+    path.join(path.dirname(params.configPath), ".env"),
+  ];
+  return [...new Map(candidates.map((candidate) => [path.resolve(candidate), candidate])).values()];
+}
+
 function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (override) {
@@ -84,7 +93,7 @@ export function listAgentModelsJsonPaths(
 }
 
 /** Limits for safe opportunistic JSON reads during local storage scans. */
-export type ReadJsonObjectOptions = {
+type ReadJsonObjectOptions = {
   /** Reject files larger than this byte count before reading content. */
   maxBytes?: number;
   /** Reject directories, symlinks, and other non-regular paths before JSON parsing. */

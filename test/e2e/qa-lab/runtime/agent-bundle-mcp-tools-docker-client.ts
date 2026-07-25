@@ -10,6 +10,7 @@ import {
   disposeAllSessionMcpRuntimes,
   getOrCreateSessionMcpRuntime,
 } from "../../../../dist/agents/agent-bundle-mcp-runtime.js";
+import { resolveConversationCapabilityProfile } from "../../../../dist/agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
 import { splitSdkTools } from "../../../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
@@ -17,6 +18,7 @@ import { getPluginToolMeta } from "../../../../dist/plugins/tools.js";
 import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
 
 const require = createRequire(import.meta.url);
+const APP_URI = "ui://docker-probe/app";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -34,9 +36,27 @@ import { McpServer } from ${JSON.stringify(sdkMcpServerPath)};
 import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
 
 const server = new McpServer({ name: "agent-bundle-mcp-tools-probe", version: "1.0.0" });
-server.tool("docker_probe", "Docker OpenClaw MCP tool availability probe", async () => ({
+const probeTool = server.tool("docker_probe", "Docker OpenClaw MCP tool availability probe", async () => ({
   content: [{ type: "text", text: "agent-bundle-mcp-tools-ok" }],
 }));
+probeTool.update({ _meta: { ui: { resourceUri: ${JSON.stringify(APP_URI)} } } });
+const companionTool = server.tool("app_companion", "MCP App-only companion", async () => ({
+  content: [{ type: "text", text: "companion-called" }],
+}));
+companionTool.update({ _meta: { ui: { visibility: ["app"] } } });
+server.registerResource(
+  "docker_probe_app",
+  ${JSON.stringify(APP_URI)},
+  { mimeType: "text/html;profile=mcp-app" },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: "text/html;profile=mcp-app",
+      text: "<!doctype html><main>Docker MCP App</main>",
+      _meta: { ui: { csp: { connectDomains: ["https://api.example.com"] } } },
+    }],
+  }),
+);
 
 await server.connect(new StdioServerTransport());
 `,
@@ -53,9 +73,11 @@ function applyPolicy(params: {
     tools: applyFinalEffectiveToolPolicy({
       bundledTools: params.tools,
       config: params.config,
-      sessionKey: "agent:main:docker-agent-bundle-mcp",
-      agentId: "main",
-      senderIsOwner: true,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config: params.config,
+        sessionKey: "agent:main:docker-agent-bundle-mcp",
+        agentId: "main",
+      }),
       warn: (message) => {
         warnings.push(message);
       },
@@ -78,6 +100,7 @@ async function main() {
       profile: "coding",
     },
     mcp: {
+      apps: { enabled: true },
       servers: {
         dockerProbe: {
           command: "node",
@@ -103,6 +126,7 @@ async function main() {
       getPluginToolMeta(probeTool)?.pluginId === "bundle-mcp",
       "expected materialized MCP tool to be tagged as bundle-mcp",
     );
+    materialized.restrictAppTools?.([probeTool]);
 
     const result = await probeTool.execute("docker-mcp-probe", {}, undefined, undefined);
     assert(
@@ -111,6 +135,10 @@ async function main() {
       ),
       "expected materialized MCP tool execution result",
     );
+    const resultDetails = result.details as Record<string, unknown>;
+    const preview = resultDetails.mcpAppPreview as { mcpApp?: { viewId?: string } } | undefined;
+    const viewId = preview?.mcpApp?.viewId;
+    assert(viewId, "expected MCP App preview from real stdio server");
 
     const coding = applyPolicy({ tools: materialized.tools, config: cfg });
     assert(
@@ -193,6 +221,7 @@ async function main() {
             minimal: minimalCustom.map((tool) => tool.name),
             denied: deniedCustom.map((tool) => tool.name),
           },
+          mcpApp: { viewId, preview: true },
         },
         null,
         2,

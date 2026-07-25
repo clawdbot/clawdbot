@@ -1,7 +1,9 @@
 // Defines and sanitizes runtime diagnostic event payloads.
 import { randomUUID } from "node:crypto";
+import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
+import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -364,6 +366,29 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   reason: string;
 };
 
+/**
+ * Session-correlated embedded-runner execution milestone. Emitted for every
+ * phase transition so external status surfaces can render turn startup
+ * without a control-UI subscription. `phase` is the closed
+ * EmbeddedAgentExecutionPhase contract (type-only import keeps this module
+ * runtime-independent of the agents layer).
+ */
+type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
+  type: "run.execution_phase";
+  sessionKey?: string;
+  sessionId: string;
+  runId: string;
+  phase: EmbeddedAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  firstModelCallStarted?: boolean;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -443,16 +468,22 @@ export type DiagnosticToolParamsSummary =
   | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
 
 export type DiagnosticToolSource = "channel" | "core" | "mcp" | "plugin";
+export type DiagnosticToolTerminalReason = "failed" | "cancelled" | "timed_out";
 
 type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
   runId?: string;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
+  /** Authoritative lifecycle time from the tool runtime, when it exposes one. */
+  sourceTimestampMs?: number;
   toolName: string;
   toolSource?: DiagnosticToolSource;
   toolOwner?: string;
   toolCallId?: string;
   paramsSummary?: DiagnosticToolParamsSummary;
+  /** Deterministic mutation classification computed before tool execution. */
+  mutatingAction?: boolean;
 };
 
 export type DiagnosticToolExecutionStartedEvent = DiagnosticToolExecutionBaseEvent & {
@@ -469,6 +500,7 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   durationMs: number;
   errorCategory: string;
   errorCode?: string;
+  terminalReason?: DiagnosticToolTerminalReason;
 };
 
 export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
@@ -594,6 +626,8 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  /** Defaults to request for emitters created before turn-level CLI diagnostics. */
+  observationUnit?: "request" | "turn";
   contextTokenBudget?: number;
   contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
   contextWindowReferenceTokens?: number;
@@ -766,6 +800,7 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
+  | DiagnosticRunExecutionPhaseEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
@@ -803,6 +838,12 @@ export type DiagnosticEventInput = DiagnosticNonSecurityEventPayload extends inf
     : never
   : never;
 
+type TrustedToolExecutionEventInput = Extract<
+  DiagnosticEventInput,
+  { type: TrustedToolExecutionEvent["type"] }
+>;
+type TrustedSkillUsedEventInput = Extract<DiagnosticEventInput, { type: "skill.used" }>;
+
 type DiagnosticDispatchInput = DiagnosticEventInput | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
 
 export type DiagnosticEventMetadata = Readonly<{
@@ -823,8 +864,15 @@ export type DiagnosticToolCallContent = Readonly<{
   toolOutput?: unknown;
 }>;
 
+export type DiagnosticSkillUsagePrivateData = Readonly<{
+  skillFile: string;
+}>;
+
 export type DiagnosticEventPrivateData = Readonly<{
+  /** Raw failure text for trusted diagnostics exporters; never part of the public event payload. */
+  errorMessage?: string;
   modelContent?: DiagnosticModelCallContent;
+  skillUsage?: DiagnosticSkillUsagePrivateData;
   toolContent?: DiagnosticToolCallContent;
 }>;
 
@@ -839,10 +887,24 @@ type TrustedDiagnosticEventListener = (
   privateData: DiagnosticEventPrivateData,
 ) => void;
 
+export type TrustedToolExecutionEvent = Extract<
+  DiagnosticEventPayload,
+  {
+    type:
+      | "tool.execution.started"
+      | "tool.execution.completed"
+      | "tool.execution.error"
+      | "tool.execution.blocked";
+  }
+>;
+
+type TrustedToolExecutionEventListener = (event: TrustedToolExecutionEvent) => void;
+
 type QueuedDiagnosticEvent = {
   event: DiagnosticEventPayload;
   metadata: DiagnosticEventMetadata;
   privateData?: DiagnosticEventPrivateData;
+  trustedListenersOnly?: boolean;
 };
 
 type DiagnosticEventsGlobalState = {
@@ -851,6 +913,8 @@ type DiagnosticEventsGlobalState = {
   seq: number;
   listeners: Set<DiagnosticEventListener>;
   trustedListeners: Set<TrustedDiagnosticEventListener>;
+  toolExecutionListeners: Set<TrustedToolExecutionEventListener>;
+  toolExecutionSeq: number;
   dispatchDepth: number;
   asyncQueue: QueuedDiagnosticEvent[];
   asyncDrainScheduled: boolean;
@@ -880,6 +944,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.completed",
   "model.call.error",
   "run.progress",
+  "run.execution_phase",
   "harness.run.completed",
   "harness.run.error",
   "context.assembled",
@@ -898,6 +963,8 @@ function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
     seq: 0,
     listeners: new Set<DiagnosticEventListener>(),
     trustedListeners: new Set<TrustedDiagnosticEventListener>(),
+    toolExecutionListeners: new Set<TrustedToolExecutionEventListener>(),
+    toolExecutionSeq: 0,
     dispatchDepth: 0,
     asyncQueue: [],
     asyncDrainScheduled: false,
@@ -919,6 +986,8 @@ function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGloba
     typeof candidate.seq === "number" &&
     candidate.listeners instanceof Set &&
     (candidate.trustedListeners === undefined || candidate.trustedListeners instanceof Set) &&
+    (candidate.toolExecutionListeners === undefined ||
+      candidate.toolExecutionListeners instanceof Set) &&
     typeof candidate.dispatchDepth === "number" &&
     Array.isArray(candidate.asyncQueue) &&
     typeof candidate.asyncDrainScheduled === "boolean"
@@ -934,6 +1003,8 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
     existing.asyncDroppedUntrustedEvents ??= 0;
     existing.asyncDroppedPriorityEvents ??= 0;
     existing.trustedListeners ??= new Set<TrustedDiagnosticEventListener>();
+    existing.toolExecutionListeners ??= new Set<TrustedToolExecutionEventListener>();
+    existing.toolExecutionSeq ??= 0;
     return existing;
   }
   const state = createDiagnosticEventsState();
@@ -966,6 +1037,7 @@ function dispatchDiagnosticEvent(
   enriched: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
   privateData?: DiagnosticEventPrivateData,
+  options: { trustedListenersOnly?: boolean } = {},
 ): void {
   if (state.dispatchDepth > 100) {
     console.error(
@@ -976,23 +1048,25 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
-    for (const listener of state.listeners) {
-      try {
-        listener(
-          cloneDiagnosticEventForListener(enriched),
-          createDiagnosticMetadataForListener(metadata),
-        );
-      } catch (err) {
-        const errorMessage =
-          err instanceof Error
-            ? (err.stack ?? err.message)
-            : typeof err === "string"
-              ? err
-              : String(err);
-        console.error(
-          `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
-        );
-        // Ignore listener failures.
+    if (!options.trustedListenersOnly) {
+      for (const listener of state.listeners) {
+        try {
+          listener(
+            cloneDiagnosticEventForListener(enriched),
+            createDiagnosticMetadataForListener(metadata),
+          );
+        } catch (err) {
+          const errorMessage =
+            err instanceof Error
+              ? (err.stack ?? err.message)
+              : typeof err === "string"
+                ? err
+                : String(err);
+          console.error(
+            `[diagnostic-events] listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
+          );
+          // Ignore listener failures.
+        }
       }
     }
     for (const listener of state.trustedListeners) {
@@ -1103,7 +1177,9 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
     state.asyncDrainScheduled = false;
     const batch = state.asyncQueue.splice(0, MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN);
     for (const entry of batch) {
-      dispatchDiagnosticEvent(state, entry.event, entry.metadata, entry.privateData);
+      dispatchDiagnosticEvent(state, entry.event, entry.metadata, entry.privateData, {
+        trustedListenersOnly: entry.trustedListenersOnly,
+      });
     }
     if (state.asyncQueue.length > 0) {
       scheduleAsyncDiagnosticDrain(state);
@@ -1183,6 +1259,9 @@ function emitDiagnosticEventWithTrust(
   options: EmitDiagnosticEventOptions = {},
 ) {
   const state = getDiagnosticEventsState();
+  if (trusted && isToolExecutionEventInput(event)) {
+    dispatchTrustedToolExecutionEvent(state, event);
+  }
   if (!state.enabled) {
     return;
   }
@@ -1217,6 +1296,44 @@ function emitDiagnosticEventWithTrust(
   dispatchDiagnosticEvent(state, enriched, metadata, privateData);
 }
 
+function isToolExecutionEventInput(
+  event: DiagnosticDispatchInput,
+): event is TrustedToolExecutionEventInput {
+  return (
+    event.type === "tool.execution.started" ||
+    event.type === "tool.execution.completed" ||
+    event.type === "tool.execution.error" ||
+    event.type === "tool.execution.blocked"
+  );
+}
+
+function dispatchTrustedToolExecutionEvent(
+  state: DiagnosticEventsGlobalState,
+  event: TrustedToolExecutionEventInput,
+): void {
+  state.toolExecutionSeq += 1;
+  let enriched: TrustedToolExecutionEvent;
+  try {
+    enriched = deepFreezeDiagnosticValue(
+      structuredClone({ ...event, seq: state.toolExecutionSeq, ts: Date.now() }),
+    ) as TrustedToolExecutionEvent;
+  } catch (error) {
+    console.error(
+      `[diagnostic-events] tool execution clone error type=${event.type}: ${String(error)}`,
+    );
+    return;
+  }
+  for (const listener of state.toolExecutionListeners) {
+    try {
+      listener(enriched);
+    } catch (error) {
+      console.error(
+        `[diagnostic-events] tool execution listener error type=${enriched.type} seq=${enriched.seq}: ${String(error)}`,
+      );
+    }
+  }
+}
+
 /** Emits an untrusted diagnostic event from external/plugin-facing code. */
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false);
@@ -1240,6 +1357,30 @@ export function getInternalDiagnosticEventSequence(): number {
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
+}
+
+/** Keeps trusted internal skill accounting alive when optional diagnostics are disabled. */
+export function emitTrustedSkillUsedDiagnosticEvent(
+  event: TrustedSkillUsedEventInput,
+  privateData?: DiagnosticEventPrivateData,
+) {
+  const state = getDiagnosticEventsState();
+  if (state.enabled) {
+    emitDiagnosticEventWithTrust(event, true, { privateData });
+    return;
+  }
+  const queued = {
+    event: enrichDiagnosticEvent(state, event),
+    metadata: { trusted: true },
+    privateData,
+    trustedListenersOnly: true,
+  } satisfies QueuedDiagnosticEvent;
+  if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
+    noteAsyncDiagnosticDrop(state, queued);
+    return;
+  }
+  state.asyncQueue.push(queued);
+  scheduleAsyncDiagnosticDrain(state);
 }
 
 /** Emits a trusted diagnostic event with private listener-only payload data. */
@@ -1275,8 +1416,10 @@ export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "
 export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
+  setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   return () => {
     state.listeners.delete(listener);
+    setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   };
 }
 
@@ -1286,8 +1429,21 @@ export function onTrustedInternalDiagnosticEvent(
 ): () => void {
   const state = getDiagnosticEventsState();
   state.trustedListeners.add(listener);
+  setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   return () => {
     state.trustedListeners.delete(listener);
+    setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
+  };
+}
+
+/** Subscribes to trusted metadata-only tool execution events, even when diagnostics are disabled. */
+export function onTrustedToolExecutionEvent(
+  listener: TrustedToolExecutionEventListener,
+): () => void {
+  const state = getDiagnosticEventsState();
+  state.toolExecutionListeners.add(listener);
+  return () => {
+    state.toolExecutionListeners.delete(listener);
   };
 }
 
@@ -1343,6 +1499,9 @@ export function resetDiagnosticEventsForTest(): void {
   state.seq = 0;
   state.listeners.clear();
   state.trustedListeners.clear();
+  setInternalDiagnosticEventListenerCounts(0, 0);
+  state.toolExecutionListeners.clear();
+  state.toolExecutionSeq = 0;
   state.dispatchDepth = 0;
   state.asyncQueue = [];
   state.asyncDrainScheduled = false;
@@ -1351,3 +1510,4 @@ export function resetDiagnosticEventsForTest(): void {
   state.asyncDroppedUntrustedEvents = 0;
   state.asyncDroppedPriorityEvents = 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,7 @@ type DiscordChannelRuntime = {
   sendMessageDiscord?: typeof import("./send.js").sendMessageDiscord;
 };
 
-export type DiscordRuntime = PluginRuntime & {
+type DiscordRuntime = PluginRuntime & {
   channel: PluginRuntime["channel"] & {
     discord?: DiscordChannelRuntime;
   };

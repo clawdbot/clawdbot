@@ -20,14 +20,10 @@ import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/prov
 
 // Shared media-generation runtime helpers for provider fallback, request
 // timeout normalization, model selection, and capability value normalization.
-export type {
-  MediaGenerationNormalizationMetadataInput,
-  MediaNormalizationEntry,
-  MediaNormalizationValue,
-} from "../../packages/media-generation-core/src/normalization.js";
+export type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 
-export type ParsedProviderModelRef = {
+type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
@@ -52,9 +48,7 @@ export function recordCapabilityCandidateFailure(params: {
 
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
-export function resolveMediaProviderDefaultTimeoutMs(
-  timeoutMs: number | undefined,
-): number | undefined {
+function resolveMediaProviderDefaultTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? clampTimerTimeoutMs(timeoutMs)
     : undefined;
@@ -229,9 +223,8 @@ export function resolveCapabilityModelCandidates(params: {
     return [override];
   }
 
-  const autoProviderFallbackEnabled =
-    params.autoProviderFallback ??
-    params.cfg.agents?.defaults?.mediaGenerationAutoProviderFallback !== false;
+  // Cross-provider fallback is a fixed product policy; Doctor removes the retired opt-out.
+  const autoProviderFallbackEnabled = params.autoProviderFallback ?? true;
   add(params.modelOverride, { useProviderMetadata: true });
   add(resolveAgentModelPrimaryValue(params.modelConfig), {
     useProviderMetadata: autoProviderFallbackEnabled,
@@ -334,7 +327,7 @@ function greatestCommonDivisor(a: number, b: number): number {
 }
 
 /** Derives a reduced aspect ratio string from a WIDTHxHEIGHT size. */
-export function deriveAspectRatioFromSize(size?: string): string | undefined {
+function deriveAspectRatioFromSize(size?: string): string | undefined {
   const parsed = parseSizeValue(size);
   if (!parsed) {
     return undefined;

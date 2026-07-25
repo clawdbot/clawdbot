@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
@@ -80,6 +81,23 @@ describe("readPostCompactionContext", () => {
     expect(result).toBeNull();
   });
 
+  it("returns null when AGENTS.md exceeds the byte read limit", async () => {
+    // An unbounded read would extract the section header at the top of the file;
+    // the bound rejects the whole file instead of allocating it all.
+    const oversized = `## Session Startup\n\n` + "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), oversized);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toBeNull();
+  });
+
+  it("extracts sections from an AGENTS.md just under the byte read limit", async () => {
+    const section = `## Session Startup\n\nDo startup things.\n`;
+    const padding = "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - section.length);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), section + padding);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toContain("Do startup things");
+  });
+
   it("extracts Session Startup section", async () => {
     const content = `# Agent Rules
 
@@ -147,6 +165,22 @@ Ignore this.
     const result = await readDefaultPostCompactionContext();
     expect(result).toContain("[truncated]");
     expect(result?.length).toBeLessThan(2600);
+  });
+
+  it("keeps truncated post-compaction context UTF-16 safe", async () => {
+    const prefix = "A".repeat(159);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), `## Session Startup\n\n${prefix}😀tail`);
+    const cfg = {
+      agents: {
+        defaults: {
+          contextLimits: { postCompactionMaxChars: 180 },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await readDefaultPostCompactionContext({ cfg });
+
+    expect(result).toContain(`## Session Startup\n\n${prefix}\n...[truncated]...`);
   });
 
   it("honors per-agent post-compaction context limit overrides", async () => {

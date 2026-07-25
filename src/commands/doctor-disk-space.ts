@@ -1,5 +1,6 @@
-/** Doctor contribution for low disk space around the OpenClaw state directory. */
+// Doctor contribution for low disk space around the OpenClaw state directory.
 import os from "node:os";
+import { expectDefined, formatByteSize } from "@openclaw/normalization-core";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -28,23 +29,19 @@ export function formatBytes(bytes: number): string {
   if (bytes < 0 || !Number.isFinite(bytes)) {
     return "unknown";
   }
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${Math.floor(bytes / (1024 * 1024))} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.floor(bytes / 1024)} KB`;
-  }
-  return `${bytes} B`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "giga",
+    separator: " ",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "giga" ? 1 : 0),
+    floorUnits: ["kilo", "mega"],
+  });
 }
 
 /**
  * Build warning lines based on available disk space.
- * Pure function — exported for testing without FS side effects.
  */
-export function buildDiskSpaceWarnings(params: {
+function buildDiskSpaceWarnings(params: {
   availableBytes: number;
   displayStateDir: string;
 }): string[] {
@@ -119,7 +116,7 @@ export function collectDiskSpaceHealthFindings(
     {
       checkId: DISK_SPACE_CHECK_ID,
       severity: "warning",
-      message: message.replace(/^- /, ""),
+      message: expectDefined(message, "disk-space warning message").replace(/^- /, ""),
       path: result.stateDir,
       target: formatBytes(result.availableBytes),
       requirement:

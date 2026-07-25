@@ -1,0 +1,96 @@
+title: Matrix room continues after restart recovery
+
+scenario:
+  id: matrix-post-restart-room-continue
+  surface: channels
+  coverage:
+    primary:
+      - channels.resumed-final-reply
+  objective: Verify channel delivery resumes after a Gateway restart without replaying completed delivery.
+  successCriteria:
+    - A reply is delivered before restart.
+    - Restart does not replay the completed reply.
+    - A fresh reply is delivered after restart.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+  execution:
+    kind: flow
+    channel: matrix
+    suiteIsolation: isolated
+    summary: Exercise normalized restart and continuation delivery.
+    config:
+      conversationKind: group
+      conversationId: "!qa-restart:crabline.test"
+      senderId: "@driver:crabline.test"
+      mentionPrefix: "@openclaw "
+      firstPrefix: MATRIX_QA_RESTART_FIRST
+      secondPrefix: MATRIX_QA_RESTART_SECOND
+      timeoutMs: 60000
+
+flow:
+  steps:
+    - name: resumes after restart without replay
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: firstMarker
+          value:
+            expr: "`${config.firstPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: { ref: config.conversationKind }
+            senderId: { ref: config.senderId }
+            senderName: QA Driver
+            text:
+              expr: "`${config.mentionPrefix}Reply with only this exact marker: ${firstMarker}`"
+        - waitForOutbound:
+            textIncludes: { ref: firstMarker }
+            timeoutMs: { ref: config.timeoutMs }
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: qa gateway child does not expose restartAfterStateMutation
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: "Promise.resolve()"
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - set: secondMarker
+          value:
+            expr: "`${config.secondPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: { ref: config.conversationKind }
+            senderId: { ref: config.senderId }
+            senderName: QA Driver
+            text:
+              expr: "`${config.mentionPrefix}Reply with only this exact marker: ${secondMarker}`"
+        - waitForOutbound:
+            textIncludes: { ref: secondMarker }
+            timeoutMs: { ref: config.timeoutMs }
+        - set: thirdMarker
+          value:
+            expr: "`MATRIX_QA_RESTART_THIRD_${randomUUID().slice(0, 8).toUpperCase()}`"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: { ref: config.conversationKind }
+            senderId: { ref: config.senderId }
+            senderName: QA Driver
+            text:
+              expr: "`${config.mentionPrefix}Reply with only this exact marker: ${thirdMarker}`"
+        - waitForOutbound:
+            textIncludes: { ref: thirdMarker }
+            timeoutMs: { ref: config.timeoutMs }
+      detailsExpr: "`${firstMarker} -> restart -> ${secondMarker} -> ${thirdMarker}`"

@@ -1,7 +1,9 @@
 // Normalizes env flag values and logs env warnings lazily.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";
 
 let log: SubsystemLogger | null = null;
 const loadLog = createLazyPromise(
@@ -36,7 +38,7 @@ function formatEnvValue(value: string, redact?: boolean): string {
   if (singleLine.length <= 160) {
     return singleLine;
   }
-  return `${singleLine.slice(0, 160)}…`;
+  return `${truncateUtf16Safe(singleLine, 160)}…`;
 }
 
 /** Logs an accepted env option once, with optional redaction for sensitive values. */
@@ -105,17 +107,6 @@ export function isTruthyEnvValue(value?: string): boolean {
     default:
       return false;
   }
-}
-
-/** Detects Vitest/test execution from the env shape used by local and worker processes. */
-export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (
-    env.VITEST === "true" ||
-    env.VITEST === "1" ||
-    env.VITEST_POOL_ID !== undefined ||
-    env.VITEST_WORKER_ID !== undefined ||
-    env.NODE_ENV === "test"
-  );
 }
 
 /** Applies process-wide env normalization before runtime configuration is read. */

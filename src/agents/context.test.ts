@@ -11,6 +11,9 @@ import {
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   ANTHROPIC_FABLE_CONTEXT_TOKENS,
+  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
+  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
+  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
   ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
@@ -79,7 +82,7 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("gpt-5.4")).toBe(272_000);
   });
 
-  it("upgrades claude-cli GA 1M variants when discovery still reports 200k", () => {
+  it("keeps bare claude-cli GA variants at the discovered window", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -90,9 +93,9 @@ describe("applyDiscoveredContextWindows", () => {
       ],
     });
 
-    expect(cache.get("claude-cli/claude-opus-4.8-20260514")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
-    expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
-    expect(cache.get("claude-cli/claude-sonnet-4-6")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    expect(cache.get("claude-cli/claude-opus-4.8-20260514")).toBe(200_000);
+    expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(200_000);
+    expect(cache.get("claude-cli/claude-sonnet-4-6")).toBe(200_000);
   });
 
   it("does not upgrade non-Anthropic GA 1M model ids from discovery", () => {
@@ -305,6 +308,91 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it.each([
+    ["anthropic", "claude-opus-4-7"],
+    ["anthropic", "claude-sonnet-4-6"],
+    ["anthropic", "claude-opus-4-6"],
+  ])("resolves the corrected %s/%s context window", (provider, model) => {
+    resetContextWindowCacheForTest();
+    try {
+      MODEL_CONTEXT_TOKEN_CACHE.set(model, 200_000);
+      MODEL_CONTEXT_TOKEN_CACHE.set(
+        providerContextTokenCacheKey(provider, model),
+        ANTHROPIC_CONTEXT_1M_TOKENS,
+      );
+
+      expect(
+        resolveContextTokensForModel({
+          provider,
+          model,
+          allowAsyncLoad: false,
+        }),
+      ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    } finally {
+      resetContextWindowCacheForTest();
+    }
+  });
+
+  it.each(["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"])(
+    "keeps bare claude-cli/%s at its discovered window",
+    (model) => {
+      resetContextWindowCacheForTest();
+      try {
+        MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("claude-cli", model), 200_000);
+        expect(
+          resolveContextTokensForModel({
+            provider: "claude-cli",
+            model,
+            allowAsyncLoad: false,
+          }),
+        ).toBe(200_000);
+      } finally {
+        resetContextWindowCacheForTest();
+      }
+    },
+  );
+
+  it.each(["claude-opus-4-7[1m]", "claude-sonnet-4-6[1m]", "claude-opus-4-6[1m]"])(
+    "resolves explicit claude-cli/%s to 1M",
+    (model) => {
+      expect(
+        resolveContextTokensForModel({
+          provider: "claude-cli",
+          model,
+          allowAsyncLoad: false,
+        }),
+      ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    },
+  );
+
+  it("can exclude unscoped cache entries from provider-owned lookup", () => {
+    resetContextWindowCacheForTest();
+    try {
+      applyDiscoveredContextWindows({
+        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        models: [{ id: "large", contextTokens: 32_000 }],
+      });
+
+      expect(
+        resolveContextTokensForModel({
+          provider: "claude-cli",
+          model: "large",
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveContextTokensForModel({
+          provider: "claude-cli",
+          model: "large",
+          allowAsyncLoad: false,
+        }),
+      ).toBe(32_000);
+    } finally {
+      resetContextWindowCacheForTest();
+    }
+  });
+
   it("uses provider-level context defaults when no model-level cap is set", () => {
     const result = resolveContextTokensForModel({
       cfg: {
@@ -393,6 +481,59 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
+  it("lets a claude-cli model disable the global context1m default", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            params: { context1m: true },
+            models: {
+              "claude-cli/claude-opus-4-7": {
+                params: { context1m: false },
+              },
+            },
+          },
+        },
+      },
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
+  it.each(["claude-cli", "fixture-cli"])(
+    "uses the caller-supplied model provider for the %s runtime",
+    (provider) => {
+      const result = resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com",
+                models: [
+                  {
+                    ...testModelContextWindow("claude-opus-4-7", 200_000),
+                    contextTokens: 100_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        provider,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-7",
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      });
+
+      expect(result).toBe(100_000);
+    },
+  );
+
   it("returns 1M context for GA-capable Anthropic 4.x models even without context1m", () => {
     const result = resolveContextTokensForModel({
       cfg: {
@@ -418,6 +559,16 @@ describe("resolveContextTokensForModel", () => {
   it.each([
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["claude-cli", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-mythos-5", 200_000],
+    ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["anthropic", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
@@ -433,6 +584,28 @@ describe("resolveContextTokensForModel", () => {
       expect(result).toBe(expectedContextTokens);
     },
   );
+
+  it("does not give fable-5 context window to claude-fable-50 (prefix boundary check)", () => {
+    const result = resolveContextTokensForModel({
+      provider: "anthropic",
+      model: "claude-fable-50",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
+  it("does not give mythos-5 context window to claude-mythos-50", () => {
+    const result = resolveContextTokensForModel({
+      provider: "anthropic",
+      model: "claude-mythos-50",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
 
   it.each([
     ["anthropic", "claude-fable-5"],
@@ -530,6 +703,14 @@ describe("resolveContextTokensForModel", () => {
   it.each([
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["claude-cli", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-mythos-5", ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-mythos-5", 200_000],
+    ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
@@ -643,7 +824,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(200_000);
   });
 
-  it("returns 1M context for claude opus 4.7 variants without context1m", () => {
+  it("keeps bare claude-cli opus 4.7 variants at the fallback without context1m", () => {
     const result = resolveContextTokensForModel({
       provider: "claude-cli",
       model: "claude-opus-4.7-20260219",
@@ -651,7 +832,7 @@ describe("resolveContextTokensForModel", () => {
       allowAsyncLoad: false,
     });
 
-    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    expect(result).toBe(200_000);
   });
 
   it("does not force 1M context for non-Anthropic providers with opus 4.7 ids", () => {

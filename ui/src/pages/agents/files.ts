@@ -7,9 +7,10 @@ import type {
   AgentsFilesSetResult,
 } from "../../api/types.ts";
 
-export type AgentFilesState = {
+type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  requestGeneration: number;
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFilesList: AgentsFilesListResult | null;
@@ -39,20 +40,24 @@ export async function loadAgentFileContent(
   name: string,
   opts?: { force?: boolean; preserveDraft?: boolean },
 ): Promise<boolean> {
-  if (!state.client || !state.connected || state.agentFilesLoading) {
+  const client = state.client;
+  if (!client || !state.connected || state.agentFilesLoading) {
     return false;
   }
   if (!opts?.force && Object.hasOwn(state.agentFileContents, name)) {
     return true;
   }
+  const generation = state.requestGeneration;
+  const isCurrent = () =>
+    state.client === client && state.connected && state.requestGeneration === generation;
   state.agentFilesLoading = true;
   state.agentFilesError = null;
   try {
-    const res = await state.client.request<AgentsFilesGetResult | null>("agents.files.get", {
+    const res = await client.request<AgentsFilesGetResult | null>("agents.files.get", {
       agentId,
       name,
     });
-    if (res?.file) {
+    if (res?.file && isCurrent()) {
       const content = res.file.content ?? "";
       const previousBase = state.agentFileContents[name] ?? "";
       const currentDraft = state.agentFileDrafts[name];
@@ -69,10 +74,14 @@ export async function loadAgentFileContent(
       return true;
     }
   } catch (err) {
-    state.agentFilesError = String(err);
+    if (isCurrent()) {
+      state.agentFilesError = String(err);
+    }
     return false;
   } finally {
-    state.agentFilesLoading = false;
+    if (isCurrent()) {
+      state.agentFilesLoading = false;
+    }
   }
   return false;
 }
@@ -83,25 +92,37 @@ export async function saveAgentFile(
   name: string,
   content: string,
 ) {
-  if (!state.client || !state.connected || state.agentFileSaving) {
+  const client = state.client;
+  if (!client || !state.connected || state.agentFileSaving) {
     return;
   }
+  const generation = state.requestGeneration;
+  const isCurrent = () =>
+    state.client === client && state.connected && state.requestGeneration === generation;
   state.agentFileSaving = true;
   state.agentFilesError = null;
   try {
-    const res = await state.client.request<AgentsFilesSetResult | null>("agents.files.set", {
+    const res = await client.request<AgentsFilesSetResult | null>("agents.files.set", {
       agentId,
       name,
       content,
     });
-    if (res?.file) {
+    if (res?.file && isCurrent()) {
       state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+      // The response establishes the saved base, but must not discard text
+      // entered after this save started.
+      if (!Object.hasOwn(state.agentFileDrafts, name) || state.agentFileDrafts[name] === content) {
+        state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+      }
     }
   } catch (err) {
-    state.agentFilesError = String(err);
+    if (isCurrent()) {
+      state.agentFilesError = String(err);
+    }
   } finally {
-    state.agentFileSaving = false;
+    if (isCurrent()) {
+      state.agentFileSaving = false;
+    }
   }
 }

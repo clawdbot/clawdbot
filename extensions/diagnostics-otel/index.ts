@@ -1,6 +1,6 @@
 // Diagnostics Otel plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createDiagnosticsOtelService } from "./src/service.js";
+import { createDiagnosticsOtelService } from "./runtime-api.js";
 
 export default definePluginEntry({
   id: "diagnostics-otel",

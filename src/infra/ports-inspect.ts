@@ -1,6 +1,8 @@
 // Inspects gateway port listeners and connection state.
 import os from "node:os";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
@@ -28,6 +30,10 @@ type CommandResult = {
   error?: string;
 };
 
+// Each Unix mapper starts three child processes; cap mapper slots so port
+// diagnostics cannot fan out one process batch per socket record.
+const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
+
 async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
   try {
     const res = await runCommandWithTimeout(argv, { timeoutMs });
@@ -52,8 +58,8 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   let processFields: Pick<PortListener, "pid" | "command"> = {};
   for (const line of lines) {
     if (line.startsWith("p")) {
-      const pid = Number.parseInt(line.slice(1), 10);
-      processFields = Number.isFinite(pid) ? { pid } : {};
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
     } else if (line.startsWith("c")) {
       processFields.command = line.slice(1);
     } else if (line.startsWith("n")) {
@@ -182,7 +188,7 @@ function parseSsConnections(output: string, port: number): PortConnection[] {
     };
     const pidMatch = line.match(/pid=(\d+)/);
     if (pidMatch) {
-      const pid = Number.parseInt(pidMatch[1], 10);
+      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
       if (Number.isFinite(pid)) {
         connection.pid = pid;
       }
@@ -197,8 +203,9 @@ function parseSsConnections(output: string, port: number): PortConnection[] {
 }
 
 async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise<void> {
-  await Promise.all(
-    listeners.map(async (listener) => {
+  await pMap(
+    listeners,
+    async (listener) => {
       if (!listener.pid) {
         return;
       }
@@ -216,7 +223,8 @@ async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise
       if (parentPid !== undefined) {
         listener.ppid = parentPid;
       }
-    }),
+    },
+    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY },
   );
 }
 
@@ -321,7 +329,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
       continue;
     }
     const parts = line.split(/\s+/);
-    const localAddress = parts.find((part) => part.includes(`:${port}`));
+    const localAddress = parts.find((part) => parseTcpEndpoint(part)?.port === port);
     if (!localAddress) {
       continue;
     }
@@ -330,7 +338,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
     };
     const pidMatch = line.match(/pid=(\d+)/);
     if (pidMatch) {
-      const pid = Number.parseInt(pidMatch[1], 10);
+      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
       if (Number.isFinite(pid)) {
         listener.pid = pid;
       }
@@ -519,8 +527,9 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   }
 
   const entries = parse(res.stdout, port);
-  await Promise.all(
-    entries.map(async (entry) => {
+  await pMap(
+    entries,
+    async (entry) => {
       if (!entry.pid) {
         return;
       }
@@ -534,7 +543,8 @@ async function readWindowsNetstatEntries<T extends PortListener>(
       if (commandLine) {
         entry.commandLine = commandLine;
       }
-    }),
+    },
+    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY },
   );
   return { entries, detail: res.stdout.trim() || undefined, errors };
 }

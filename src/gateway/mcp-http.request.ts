@@ -2,15 +2,23 @@
 // Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { getHeader } from "./http-utils.js";
-import { resolveAttachGrant } from "./mcp-grant-store.js";
+import {
+  resolveAttachGrant,
+  resolveMcpLoopbackClientGrant,
+  type McpLoopbackRequestContext,
+} from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
@@ -49,19 +57,14 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
 
-type McpRequestContext = {
-  sessionKey: string;
-  sessionId: string | undefined;
-  messageProvider: string | undefined;
-  currentChannelId: string | undefined;
-  currentThreadTs: string | undefined;
-  currentMessageId: string | undefined;
-  currentInboundAudio: boolean | undefined;
-  accountId: string | undefined;
-  inboundEventKind: InboundEventKind | undefined;
-  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
-  requireExplicitMessageTarget: boolean | undefined;
-  senderIsOwner: boolean | undefined;
+type McpRequestContext = McpLoopbackRequestContext;
+
+type McpLoopbackRequestAuth = {
+  senderIsOwner: boolean;
+  boundSessionKey?: string;
+  boundContext?: McpLoopbackRequestContext;
+  boundCaptureKey?: string;
+  boundGrantToken?: string;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -79,6 +82,12 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpTaskSuggestionDeliveryMode(
+  value: string | undefined,
+): TaskSuggestionDeliveryMode | undefined {
+  return normalizeOptionalString(value) === "gateway" ? "gateway" : undefined;
 }
 
 function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
@@ -113,7 +122,7 @@ function resolveMcpSender(params: {
   req: IncomingMessage;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean; boundSessionKey?: string } | undefined {
+}): McpLoopbackRequestAuth | undefined {
   const authHeader = getHeader(params.req, "authorization") ?? "";
   const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
   const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
@@ -121,6 +130,23 @@ function resolveMcpSender(params: {
     return { senderIsOwner: ownerTokenMatched };
   }
   const grantToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const captureKey = normalizeOptionalString(getHeader(params.req, "x-openclaw-cli-capture-key"));
+  const clientGrant =
+    grantToken && captureKey
+      ? resolveMcpLoopbackClientGrant({
+          token: grantToken,
+          runtimeOwnerToken: params.ownerToken,
+          captureKey,
+        })
+      : undefined;
+  if (clientGrant) {
+    return {
+      senderIsOwner: clientGrant.context.senderIsOwner,
+      boundContext: clientGrant.context,
+      boundCaptureKey: clientGrant.captureKey,
+      boundGrantToken: grantToken,
+    };
+  }
   const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
   if (grant) {
     return { senderIsOwner: false, boundSessionKey: grant.sessionKey };
@@ -134,7 +160,7 @@ export function validateMcpLoopbackRequest(params: {
   ownerToken: string;
   nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
-}): { senderIsOwner: boolean; boundSessionKey?: string } | null {
+}): McpLoopbackRequestAuth | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -250,7 +276,13 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner: sender.senderIsOwner, boundSessionKey: sender.boundSessionKey };
+  return {
+    senderIsOwner: sender.senderIsOwner,
+    boundSessionKey: sender.boundSessionKey,
+    boundContext: sender.boundContext,
+    boundCaptureKey: sender.boundCaptureKey,
+    boundGrantToken: sender.boundGrantToken,
+  };
 }
 
 export async function readMcpHttpBody(
@@ -259,7 +291,7 @@ export async function readMcpHttpBody(
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? MAX_MCP_BODY_BYTES));
-    const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_MCP_BODY_TIMEOUT_MS));
+    const timeoutMs = resolveSafeTimeoutDelayMs(options.timeoutMs ?? DEFAULT_MCP_BODY_TIMEOUT_MS);
     const chunks: Buffer[] = [];
     let received = 0;
     let settled = false;
@@ -356,15 +388,34 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
-export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefined {
+export function resolveMcpCliCaptureKey(
+  req: IncomingMessage,
+  auth: McpLoopbackRequestAuth,
+): string | undefined {
+  if (auth.boundContext || auth.boundSessionKey) {
+    return auth.boundCaptureKey;
+  }
   return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
+}
+
+function normalizeMcpClientCapsHeader(value: string | undefined): string[] | undefined {
+  const clientCaps = [...new Set((value ?? "").split(",").map((cap) => cap.trim()))].filter(
+    Boolean,
+  );
+  return clientCaps.length > 0 ? clientCaps : undefined;
 }
 
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean; boundSessionKey?: string },
+  auth: McpLoopbackRequestAuth,
 ): McpRequestContext {
+  if (auth.boundContext) {
+    // Gateway-launched CLI clients receive an immutable context grant. The
+    // child process can replay the token, but cannot scope-shop by rewriting
+    // session, channel, capability, or ownership headers.
+    return structuredClone(auth.boundContext);
+  }
   // Grant-authenticated callers get only their server-bound session; spoofable
   // delivery/action headers stay reserved for the gateway-launched loopback client.
   if (auth.boundSessionKey) {
@@ -372,6 +423,7 @@ export function resolveMcpRequestContext(
       sessionKey: auth.boundSessionKey,
       sessionId: undefined,
       messageProvider: undefined,
+      clientCaps: undefined,
       currentChannelId: undefined,
       currentThreadTs: undefined,
       currentMessageId: undefined,
@@ -379,6 +431,7 @@ export function resolveMcpRequestContext(
       accountId: undefined,
       inboundEventKind: undefined,
       sourceReplyDeliveryMode: undefined,
+      taskSuggestionDeliveryMode: undefined,
       requireExplicitMessageTarget: undefined,
       senderIsOwner: auth.senderIsOwner,
     };
@@ -388,6 +441,9 @@ export function resolveMcpRequestContext(
     sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
+    // The token-authenticated loopback client is gateway-spawned on 127.0.0.1. Caps only
+    // widen tool availability; sender ownership remains derived from the bearer token.
+    clientCaps: normalizeMcpClientCapsHeader(getHeader(req, "x-openclaw-client-caps")),
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
@@ -398,6 +454,9 @@ export function resolveMcpRequestContext(
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
+    taskSuggestionDeliveryMode: normalizeMcpTaskSuggestionDeliveryMode(
+      getHeader(req, "x-openclaw-task-suggestion-delivery-mode"),
     ),
     requireExplicitMessageTarget: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-require-explicit-message-target"),

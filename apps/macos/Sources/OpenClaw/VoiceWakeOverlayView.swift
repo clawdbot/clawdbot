@@ -136,26 +136,6 @@ extension OverlayBackground: @MainActor Equatable {
     }
 }
 
-struct CloseHoverButton: View {
-    var onClose: () -> Void
-
-    var body: some View {
-        Button(action: self.onClose) {
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(Color.white.opacity(0.85))
-                .frame(width: 22, height: 22)
-                .background(Color.black.opacity(0.35))
-                .clipShape(Circle())
-                .shadow(color: Color.black.opacity(0.35), radius: 6, y: 2)
-        }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .contentShape(Circle())
-        .padding(6)
-    }
-}
-
 struct CloseButtonOverlay: View {
     var isVisible: Bool
     var onHover: (Bool) -> Void

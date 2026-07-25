@@ -1,21 +1,18 @@
 // @vitest-environment node
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   getRemoteCommandEntries,
   parseSlashCommand,
   replaceSlashCommands,
-  resetSlashCommandsForTest,
   SLASH_COMMANDS,
 } from "./commands.ts";
 
 afterEach(() => {
-  resetSlashCommandsForTest();
+  replaceSlashCommands(buildFallbackSlashCommands());
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
@@ -234,7 +231,8 @@ describe("parseSlashCommand", () => {
 
   it("caps remote command payload size and long metadata before it reaches UI state", () => {
     const longName = "x".repeat(260);
-    const longDescription = "d".repeat(2_500);
+    const longDescription = `${"d".repeat(1_999)}🚀tail`;
+    const boundaryArgName = `${"n".repeat(199)}🚀tail`;
     const oversizedCommand = {
       name: "plugin-0",
       textAliases: Array.from({ length: 25 }, (_, aliasIndex) => `/plugin-0-${aliasIndex}`),
@@ -243,7 +241,7 @@ describe("parseSlashCommand", () => {
       scope: "both" as const,
       acceptsArgs: true,
       args: Array.from({ length: 25 }, (_, argIndex) => ({
-        name: `${longName}-${argIndex}`,
+        name: argIndex === 0 ? boundaryArgName : `${longName}-${argIndex}`,
         description: longDescription,
         type: "string" as const,
         choices: Array.from({ length: 55 }, (_Local, choiceIndex) => ({
@@ -266,10 +264,11 @@ describe("parseSlashCommand", () => {
 
     const remoteCommands = SLASH_COMMANDS.filter((entry) => entry.name.startsWith("plugin-"));
     expect(remoteCommands).toHaveLength(500);
-    const first = remoteCommands[0];
+    const first = expectDefined(remoteCommands[0], "first capped remote command");
     expect(first.aliases).toHaveLength(19);
-    expect(first.description.length).toBeLessThanOrEqual(2_000);
+    expect(first.description).toBe("d".repeat(1_999));
     expect(first.args?.split(" ")).toHaveLength(20);
+    expect(first.args?.split(" ")[0]).toBe("[" + "n".repeat(199) + "]");
     expect(first.argOptions).toHaveLength(50);
   });
 

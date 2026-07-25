@@ -8,7 +8,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
+import { SANDBOX_STATE_DIR } from "./constants.js";
 import { hashTextSha256 } from "./hash.js";
+import type { SandboxConfig } from "./types.js";
+import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 
 /** Converts an arbitrary session key into a bounded filesystem/container-safe slug. */
 export function slugifySessionKey(value: string) {
@@ -22,7 +26,7 @@ export function slugifySessionKey(value: string) {
 }
 
 /** Resolves the per-session sandbox workspace directory under the configured sandbox root. */
-export function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
+function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
   const resolvedRoot = resolveUserPath(root);
   const slug = slugifySessionKey(sessionKey);
   return path.join(resolvedRoot, slug);
@@ -52,4 +56,40 @@ export function resolveSandboxAgentId(scopeKey: string): string | undefined {
     return normalizeAgentId(parts[1]);
   }
   return resolveAgentIdFromSessionKey(trimmed);
+}
+
+/** Resolves the host-side workspace paths shared by diagnostics and runtime setup. */
+export function resolveSandboxWorkspaceLayoutPaths(params: {
+  cfg: Pick<SandboxConfig, "scope" | "workspaceAccess" | "workspaceRoot">;
+  rawSessionKey: string;
+  workspaceDir?: string;
+}) {
+  const agentWorkspaceDir = resolveUserPath(
+    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
+  const workspaceRoot = resolveUserPath(params.cfg.workspaceRoot);
+  const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.rawSessionKey);
+  const sandboxWorkspaceDir =
+    params.cfg.scope === "shared"
+      ? workspaceRoot
+      : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
+  const workspaceDir =
+    params.cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+  const materializedSkillsRoot = resolveSandboxWorkspaceDir(
+    path.join(SANDBOX_STATE_DIR, "skills-workspaces"),
+    scopeKey,
+  );
+  const skillsWorkspaceDir =
+    params.cfg.workspaceAccess === "rw"
+      ? resolveMaterializedSandboxSkillsWorkspaceDir(materializedSkillsRoot)
+      : sandboxWorkspaceDir;
+
+  return {
+    agentWorkspaceDir,
+    scopeKey,
+    sandboxWorkspaceDir,
+    skillsWorkspaceDir,
+    workspaceDir,
+    workspaceSource: params.cfg.workspaceAccess === "rw" ? "agent" : "sandbox",
+  } as const;
 }

@@ -1,7 +1,6 @@
 // Telegram tests cover network errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
   isRetryableTelegramApiError,
   isTelegramRateLimitError,
@@ -76,10 +75,6 @@ describe("isRecoverableTelegramNetworkError", () => {
       method: "getUpdates",
       url: "https://api.telegram.org/bot123456:ABC/getUpdates",
     });
-    expect(getTelegramNetworkErrorOrigin(slackDnsError)).toEqual({
-      method: "getupdates",
-      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
-    });
     expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
   });
 
@@ -140,13 +135,15 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
-  it("treats delete/react (idempotent) contexts like polling, not send", () => {
+  it("treats delete/react/edit/action (idempotent) contexts like polling, not send", () => {
     const undiciSnippetErr = new Error("Undici: socket failure");
-    // delete and react are idempotent Telegram operations; a transient
-    // snippet-only error must be retried (allowMessageMatch defaults true),
+    // delete, react, edit, and action are idempotent or non-message operations;
+    // a transient snippet-only error must be retried (allowMessageMatch defaults true),
     // matching polling/webhook. send stays strict as the regression guard.
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "delete" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "react" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "edit" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "action" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
   });
 
@@ -172,7 +169,6 @@ describe("isRecoverableTelegramNetworkError", () => {
     const inner = new Error("inner");
     tagTelegramNetworkError(inner, { method: " ", url: " " });
     const outer = Object.assign(new Error("outer"), { cause: inner });
-    expect(getTelegramNetworkErrorOrigin(outer)).toEqual({ method: null, url: null });
     expect(isTelegramPollingNetworkError(outer)).toBe(false);
   });
 
@@ -237,7 +233,7 @@ describe("isSafeToRetrySendError", () => {
     ["ECONNRESET", "read ECONNRESET", false],
     ["ETIMEDOUT", "connect ETIMEDOUT", false],
     ["EPIPE", "write EPIPE", false],
-    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", false],
+    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", true],
   ])("returns %s => %s", (code, message, expected) => {
     expect(isSafeToRetrySendError(errorWithCode(message, code))).toBe(expected);
   });

@@ -1,4 +1,9 @@
 // Model Catalog Core helper module supports model catalog normalize behavior.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import {
   buildModelCatalogMergeKey,
   buildModelCatalogRef,
@@ -46,31 +51,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Reject object keys that can mutate prototypes when copied into records. */
 function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";
-}
-
-/** Normalize optional catalog strings. */
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-/** Normalize arrays of trimmed strings, dropping invalid entries. */
-function normalizeTrimmedStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
-    const normalized = normalizeOptionalString(entry);
-    return normalized ? [normalized] : [];
-  });
-}
-
-function normalizeOptionalTrimmedStringList(value: unknown): string[] | undefined {
-  const normalized = normalizeTrimmedStringList(value);
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeModelCatalogThinkingLevelMap(
@@ -375,21 +355,22 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsPromptCacheKey",
     "supportsDeveloperRole",
     "supportsReasoningEffort",
+    "supportsTemperature",
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",
+    "supportsJsonSchemaResponseFormat",
     "requiresStringContent",
     "strictMessageKeys",
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
+    "requiresReasoningContentOnAssistantMessages",
     "zaiToolStream",
     "sendSessionAffinityHeaders",
     "sendSessionIdHeader",
     "supportsEagerToolInputStreaming",
     "supportsLongCacheRetention",
-    "nativeWebSearchTool",
-    "requiresMistralToolIds",
     "requiresOpenAiAnthropicToolPayload",
   ] as const;
   for (const field of booleanFields) {
@@ -420,9 +401,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
 
   if (isRecord(value.reasoningEffortMap)) {
     const reasoningEffortMap = Object.fromEntries(
-      Object.entries(value.reasoningEffortMap)
-        .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
-        .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
+      Object.entries(value.reasoningEffortMap).flatMap(([rawKey, rawMapped]) => {
+        const key = rawKey.trim();
+        const mapped = typeof rawMapped === "string" ? rawMapped.trim() : "";
+        return key && mapped ? [[key, mapped]] : [];
+      }),
     );
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;
@@ -554,10 +537,12 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
   const api = normalizeModelCatalogApi(value.api);
   const headers = normalizeStringMap(value.headers);
+  const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
+    ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
     models,
   };
 }
@@ -756,16 +741,4 @@ export function normalizeModelCatalogProviderRows(params: {
   }
 
   return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
-}
-
-/** Normalize all provider catalogs into sorted runtime rows. */
-export function normalizeModelCatalogRows(params: {
-  providers: Record<string, ModelCatalogProvider>;
-  source: ModelCatalogSource;
-}): NormalizedModelCatalogRow[] {
-  return Object.entries(params.providers)
-    .flatMap(([provider, providerCatalog]) =>
-      normalizeModelCatalogProviderRows({ provider, providerCatalog, source: params.source }),
-    )
-    .toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }

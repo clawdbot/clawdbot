@@ -1,4 +1,4 @@
-import { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/openai";
+import { isOpenAIGpt56Model, projectRuntimeToolInputSchema } from "@openclaw/ai/internal/openai";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Anthropic-family tool payload compatibility wraps provider tool payload shapes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -17,10 +17,12 @@ type PayloadFieldRead = { ok: true; value: unknown } | { ok: false };
 type OpenAiToolProjection = {
   readonly kind?: "custom" | "function";
   readonly name?: string;
+  readonly projectedKind?: "custom" | "function";
   readonly tool: Record<string, unknown>;
 };
 
 type OpenAiFunctionToolsProjection = {
+  readonly customFunctionNames: ReadonlySet<string>;
   readonly customNames: ReadonlySet<string>;
   readonly functionNames: ReadonlySet<string>;
   readonly tools: readonly Record<string, unknown>[];
@@ -214,6 +216,7 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     return {
       kind: "function",
       name,
+      projectedKind: "function",
       tool: {
         ...metadata,
         type: "function",
@@ -234,7 +237,27 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     }
     if (snapshot.type === "custom" && isRecord(snapshot.custom)) {
       const name = normalizeOptionalString(snapshot.custom.name) ?? undefined;
-      return name ? { kind: "custom", name, tool: snapshot } : undefined;
+      if (!name) {
+        return undefined;
+      }
+      const inputSchema = snapshot.custom.input_schema;
+      if (inputSchema === undefined) {
+        return { kind: "custom", name, projectedKind: "custom", tool: snapshot };
+      }
+      const parameters = projectJsonObjectSchema(inputSchema, `${name}.input_schema`);
+      if (!parameters) {
+        return undefined;
+      }
+      const functionSpec: Record<string, unknown> = { name, parameters };
+      if (typeof snapshot.custom.description === "string" && snapshot.custom.description.trim()) {
+        functionSpec.description = snapshot.custom.description;
+      }
+      return {
+        kind: "custom",
+        name,
+        projectedKind: "function",
+        tool: { type: "function", function: functionSpec },
+      };
     }
     return { tool: snapshot };
   }
@@ -284,6 +307,7 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
   return {
     kind: "function",
     name: rawName,
+    projectedKind: "function",
     tool: {
       type: "function",
       function: functionSpec,
@@ -295,6 +319,7 @@ function projectOpenAiFunctionAnthropicTools(
   tools: readonly unknown[],
 ): OpenAiFunctionToolsProjection {
   const projectedTools: Record<string, unknown>[] = [];
+  const customFunctionNames = new Set<string>();
   const customNames = new Set<string>();
   const functionNames = new Set<string>();
   for (const tool of tools) {
@@ -305,11 +330,15 @@ function projectOpenAiFunctionAnthropicTools(
     projectedTools.push(projection.tool);
     if (projection.kind === "custom" && projection.name) {
       customNames.add(projection.name);
+      if (projection.projectedKind === "function") {
+        customFunctionNames.add(projection.name);
+      }
     } else if (projection.kind === "function" && projection.name) {
       functionNames.add(projection.name);
     }
   }
   return {
+    customFunctionNames,
     customNames,
     functionNames,
     tools: projectedTools,
@@ -326,6 +355,14 @@ function isProjectedToolAvailable(
   );
 }
 
+function projectToolChoiceKind(
+  projection: OpenAiFunctionToolsProjection,
+  kind: "custom" | "function",
+  name: string,
+): "custom" | "function" {
+  return kind === "custom" && projection.customFunctionNames.has(name) ? "function" : kind;
+}
+
 function normalizeAllowedToolChoice(
   choice: Record<string, unknown>,
   toolProjection: OpenAiFunctionToolsProjection | undefined,
@@ -337,16 +374,21 @@ function normalizeAllowedToolChoice(
   if ((mode !== "auto" && mode !== "required") || !Array.isArray(choice.allowed_tools.tools)) {
     return choice;
   }
-  const tools = choice.allowed_tools.tools.flatMap((tool) => {
+  const tools = choice.allowed_tools.tools.flatMap<Record<string, unknown>>((tool) => {
     const snapshot = snapshotJsonRecord(tool);
     if (!snapshot) {
       return [];
     }
     const kind =
-      snapshot.type === "custom" ? "custom" : snapshot.type === "function" ? "function" : undefined;
+      snapshot.type === "custom" || snapshot.type === "function" ? snapshot.type : undefined;
     const definition = kind && isRecord(snapshot[kind]) ? snapshot[kind] : undefined;
     const name = definition ? (normalizeOptionalString(definition.name) ?? "") : "";
-    return kind && name && isProjectedToolAvailable(toolProjection, kind, name) ? [snapshot] : [];
+    if (!kind || !name || !isProjectedToolAvailable(toolProjection, kind, name)) {
+      return [];
+    }
+    return projectToolChoiceKind(toolProjection, kind, name) === "function"
+      ? [{ type: "function", function: { name } }]
+      : [{ type: "custom", custom: { name } }];
   });
   if (tools.length === 0) {
     if (mode === "auto") {
@@ -433,10 +475,9 @@ function normalizeOpenAiStringModeAnthropicToolChoice(
       );
     }
     if (name) {
-      return {
-        type: "custom",
-        custom: { name },
-      };
+      return toolProjection && projectToolChoiceKind(toolProjection, "custom", name) === "function"
+        ? { type: "function", function: { name } }
+        : { type: "custom", custom: { name } };
     }
   }
   if (choice.type === "allowed_tools") {
@@ -485,6 +526,14 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
             } else {
               payloadObj.tool_choice = toolChoice;
             }
+          }
+          if (
+            isOpenAIGpt56Model(model) &&
+            toolProjection?.tools.some((tool) => tool.type === "function")
+          ) {
+            // GPT-5.6 Chat Completions rejects function tools while reasoning
+            // is enabled and defaults reasoning on when the field is omitted.
+            payloadObj.reasoning_effort = "none";
           }
         }
         return originalOnPayload?.(payload, model);

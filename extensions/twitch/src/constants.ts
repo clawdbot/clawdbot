@@ -1,0 +1,1 @@
+export const TWITCH_CHAT_MESSAGE_LIMIT = 500;

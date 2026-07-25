@@ -7,28 +7,87 @@ import type {
 import type { CronListPageOptions } from "./service/list-page-types.js";
 import * as ops from "./service/ops.js";
 import {
+  type CronAddOptions,
   type CronServiceDeps,
+  type CronUpdatePrecondition,
+  type CronUpdateOptions,
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
-export type { CronEvent, CronServiceDeps } from "./service/state.js";
+export type { CronEvent } from "./service/state.js";
 
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {
+  stopAndDrain?: () => Promise<void>;
   private readonly state;
+  private startInProgress = 0;
+  private startState: { generation: number; promise: Promise<void> } | null = null;
+  private lifecycleGeneration = 0;
 
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
   }
 
   async start() {
-    await ops.start(this.state);
+    const generation = this.lifecycleGeneration;
+    const pending = this.startState;
+    if (pending) {
+      try {
+        await pending.promise;
+      } catch (err) {
+        if (pending.generation === generation) {
+          throw err;
+        }
+      }
+      if (pending.generation === generation) {
+        return;
+      }
+      await this.start();
+      return;
+    }
+    const promise = this.startOnce(generation);
+    this.startState = { generation, promise };
+    try {
+      await promise;
+    } finally {
+      if (this.startState?.promise === promise) {
+        this.startState = null;
+      }
+    }
+  }
+
+  private async startOnce(generation: number) {
+    this.startInProgress += 1;
+    this.state.schedulerStarted = false;
+    try {
+      await ops.start(this.state);
+      if (generation !== this.lifecycleGeneration) {
+        ops.stop(this.state);
+        return;
+      }
+      this.state.schedulerStarted = !this.state.stopped;
+    } finally {
+      this.startInProgress -= 1;
+    }
   }
 
   stop() {
+    this.lifecycleGeneration += 1;
     ops.stop(this.state);
+  }
+
+  pauseScheduling() {
+    ops.pauseScheduling(this.state);
+  }
+
+  resumeScheduling() {
+    ops.resumeScheduling(this.state);
+  }
+
+  getSuspensionBlockerCount() {
+    return this.startInProgress;
   }
 
   async status() {
@@ -43,16 +102,29 @@ export class CronService implements CronServiceContract {
     return await ops.listPage(this.state, opts);
   }
 
-  async add(input: CronJobCreate) {
-    return await ops.add(this.state, input);
+  async add(input: CronJobCreate, opts?: CronAddOptions) {
+    return await ops.add(this.state, input, opts);
   }
 
-  async update(id: string, patch: CronJobPatch) {
-    return await ops.update(this.state, id, patch);
+  async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
+    return await ops.update(this.state, id, patch, opts);
   }
 
-  async remove(id: string) {
-    return await ops.remove(this.state, id);
+  async updateWithPrecondition(
+    id: string,
+    patch: CronJobPatch,
+    precondition: CronUpdatePrecondition,
+    opts?: CronUpdateOptions,
+  ) {
+    return await ops.updateWithPrecondition(this.state, id, patch, precondition, opts);
+  }
+
+  async remove(id: string, opts?: { systemOwned?: boolean }) {
+    return await ops.remove(this.state, id, opts);
+  }
+
+  async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
+    return await ops.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
   async run(
@@ -77,8 +149,68 @@ export class CronService implements CronServiceContract {
     return this.state.store?.jobs.find((job) => job.id === id);
   }
 
+  /** In-memory job snapshot; undefined until the store is loaded. */
+  getLoadedJobs(): readonly CronJob[] | undefined {
+    return this.state.store?.jobs;
+  }
+
   async readJob(id: string): Promise<CronJob | undefined> {
     return await ops.readJob(this.state, id);
+  }
+
+  async readScratch(id: string) {
+    return await ops.readScratch(this.state, id);
+  }
+
+  async writeScratch(
+    id: string,
+    params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+  ) {
+    return await ops.writeScratch(this.state, id, params);
+  }
+
+  async recordExternalFailure(
+    id: string,
+    error: string,
+    statePatch: Partial<CronJob["state"]>,
+    source?: { scheduleKey: string; identity: string },
+  ): Promise<void> {
+    await ops.recordExternalFailure(this.state, id, error, statePatch, source);
+  }
+
+  async updateExternalState(
+    id: string,
+    streamScheduleKey: string,
+    streamSourceIdentity: string,
+    statePatch: Partial<CronJob["state"]>,
+  ): Promise<boolean> {
+    return await ops.updateExternalState(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+      statePatch,
+    );
+  }
+
+  async retireExternalStreamSource(
+    id: string,
+    streamScheduleKey: string,
+    streamSourceIdentity: string,
+  ): Promise<string | undefined> {
+    return await ops.retireExternalStreamSource(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+    );
+  }
+
+  async updateExternalCounters(
+    id: string,
+    counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
+  ): Promise<void> {
+    await ops.updateExternalCounters(this.state, id, counters);
   }
 
   getDefaultAgentId(): string | undefined {

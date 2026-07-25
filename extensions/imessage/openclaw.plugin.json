@@ -4,6 +4,7 @@
   "activation": {
     "onStartup": false
   },
+  "skills": ["./skills"],
   "channels": ["imessage"],
   "configSchema": {
     "type": "object",

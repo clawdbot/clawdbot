@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   applyModelOverrideToSessionEntry,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  ModelSelectionLockedError,
   repairProviderWrappedModelOverride,
 } from "./model-overrides.js";
 
@@ -52,6 +54,38 @@ function contextBudgetStatus(params: {
 }
 
 describe("applyModelOverrideToSessionEntry", () => {
+  it("rejects locked session model mutations before changing any fields", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-locked",
+      updatedAt: 10,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelSelectionLocked: true,
+    };
+    const before = { ...entry };
+
+    expect(() =>
+      applyModelOverrideToSessionEntry({
+        entry,
+        selection: {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      }),
+    ).toThrow(ModelSelectionLockedError);
+    expect(() =>
+      applyModelOverrideToSessionEntry({
+        entry,
+        selection: {
+          provider: "openai",
+          model: "gpt-5.4",
+          isDefault: true,
+        },
+      }),
+    ).toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(entry).toEqual(before);
+  });
+
   it("clears stale runtime model fields when switching overrides", () => {
     const before = Date.now() - 5_000;
     const entry: SessionEntry = {
@@ -292,6 +326,30 @@ describe("applyModelOverrideToSessionEntry", () => {
 });
 
 describe("repairProviderWrappedModelOverride", () => {
+  it("rejects provider-wrapped repair for locked sessions without mutating them", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-locked-openrouter-repair",
+      updatedAt: Date.now() - 5_000,
+      providerOverride: "anthropic",
+      modelOverride: "claude-haiku-4.5",
+      modelOverrideSource: "user",
+      modelProvider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+      contextTokens: 200_000,
+      modelSelectionLocked: true,
+    };
+    const before = { ...entry };
+
+    expect(() =>
+      repairProviderWrappedModelOverride({
+        entry,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toThrow(ModelSelectionLockedError);
+    expect(entry).toEqual(before);
+  });
+
   it("restores a provider-wrapped override from aligned runtime model fields", () => {
     const before = Date.now() - 5_000;
     const entry: SessionEntry = {

@@ -1,6 +1,7 @@
 // Subagent announce flow tests cover the seam-level orchestration between wait
 // outcomes, requester lookup, delivery, and cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
@@ -336,6 +337,25 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-invalidated-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      onBeforeDeleteChildSession: () => false,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
+  });
+
   it("warns when ANNOUNCE_SKIP suppresses a cron job completion", async () => {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
 
@@ -417,7 +437,7 @@ describe("subagent announce seam flow", () => {
     });
   });
 
-  it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {
+  it("steers active announcements despite channel-specific followup mode", async () => {
     mockConfig = {
       session: {
         mainKey: "main",
@@ -435,7 +455,7 @@ describe("subagent announce seam flow", () => {
       "agent:main:main": {
         sessionId: "session-origin-provider-steer",
         updatedAt: Date.now(),
-        origin: { provider: "discord" },
+        delivery: { kind: "none" },
       },
     }));
     isEmbeddedAgentRunActiveMock.mockReturnValue(true);
@@ -451,6 +471,7 @@ describe("subagent announce seam flow", () => {
       childRunId: "run-origin-provider-steer",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord" },
       task: "do thing",
       timeoutMs: 10,
       cleanup: "keep",
@@ -537,14 +558,18 @@ describe("subagent announce seam flow", () => {
     expect(params.threadId).toBeUndefined();
   });
 
-  it("falls back to stored delivery target when mocked completion origins omit to", async () => {
+  it("uses the stored canonical delivery target when mocked completion origins omit to", async () => {
     loadSessionStoreMock.mockImplementation(() => ({
       "agent:main:main": {
         sessionId: "session-tg-group",
         updatedAt: Date.now(),
-        lastChannel: "telegram",
-        lastTo: "-1001234567890",
-        lastAccountId: "bot:123",
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "-1001234567890",
+            accountId: "bot:123",
+          },
+        }),
       },
     }));
 

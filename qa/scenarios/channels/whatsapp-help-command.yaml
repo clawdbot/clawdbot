@@ -1,0 +1,38 @@
+title: WhatsApp help command reply
+
+scenario:
+  id: whatsapp-help-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify WhatsApp help returns the concise command guide.
+  successCriteria:
+    - The help command is accepted in a WhatsApp DM.
+    - The reply advertises new-session or command/status guidance.
+  codeRefs:
+    - src/auto-reply/reply/commands-core.ts
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+  execution:
+    profiles: { "whatsapp:adapter": 5, "whatsapp:default": 7, "whatsapp:mock-default": 32 }
+    kind: flow
+    channel: whatsapp
+    summary: Send WhatsApp help and verify command guidance.
+
+flow:
+  steps:
+    - name: help returns command guidance
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /help
+        - waitForOutbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            textIncludes: /new
+            timeoutMs: 60000
+          saveAs: reply
+      detailsExpr: reply.text

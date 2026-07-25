@@ -41,6 +41,7 @@ export type FeishuMessageContext = {
   senderId: string;
   senderOpenId: string;
   senderName?: string;
+  senderType: "user" | "bot";
   chatType: FeishuChatType;
   mentionedBot: boolean;
   hasAnyMention?: boolean;
@@ -86,9 +87,9 @@ export interface FeishuProbeResult extends BaseProbeResult {
 }
 
 export type FeishuMediaInfo = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
+  kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 
 export type FeishuToolsConfig = {

@@ -12,6 +12,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS,
@@ -50,10 +51,11 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
-function buildCoreGroups(): ToolCatalogGroup[] {
+function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
-  return listCoreToolSections().map((section) => ({
+  const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
+  return listCoreToolSections({ swarmEnabled }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",
@@ -101,12 +103,9 @@ function buildPluginGroups(params: {
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
   // could override the catalog label/description/risk/tags for another plugin's
   // tool by registering metadata with the same toolName.
-  const pluginToolMetadata = new Map<
-    string,
-    NonNullable<PluginRegistry["toolMetadata"]>[number]["metadata"]
-  >();
+  const pluginToolMetadata = new Map<string, PluginRegistry["toolMetadata"][number]["metadata"]>();
   if (catalogRegistry) {
-    for (const entry of catalogRegistry.toolMetadata ?? []) {
+    for (const entry of catalogRegistry.toolMetadata) {
       const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
       pluginToolMetadata.set(metadataKey, entry.metadata);
     }
@@ -197,14 +196,14 @@ function buildPluginGroups(params: {
 }
 
 /** Build the merged core/plugin tool catalog for one agent. */
-export function buildToolsCatalogResult(params: {
+function buildToolsCatalogResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   includePlugins?: boolean;
 }): ToolsCatalogResult {
   const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
   const includePlugins = params.includePlugins !== false;
-  const groups = buildCoreGroups();
+  const groups = buildCoreGroups({ cfg: params.cfg, agentId });
   if (includePlugins) {
     const existingToolNames = new Set(
       groups.flatMap((group) => group.tools.map((tool) => tool.id)),

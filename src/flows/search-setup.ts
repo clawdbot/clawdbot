@@ -280,9 +280,6 @@ export function applySearchKey(
     return config;
   }
   const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
-  if (!providerEntry.setConfiguredCredentialValue) {
-    providerEntry.setCredentialValue(search, key);
-  }
   const nextBase: OpenClawConfig = {
     ...config,
     tools: {
@@ -531,7 +528,11 @@ export async function runSearchSetupFlow(
         ? t("wizard.search.keyFree")
         : providerIsReady(config, entry)
           ? t("wizard.search.configured")
-          : t("wizard.search.apiKeyRequired");
+          : entry.credentialLabel
+            ? // Some providers need a non-key credential (e.g. SearXNG's base
+              // URL); a generic "API key required" suffix contradicts the hint.
+              t("wizard.search.credentialRequired", { label: entry.credentialLabel })
+            : t("wizard.search.apiKeyRequired");
     const hint = [normalizeOptionalString(entry.hint), credentialHint].filter(Boolean).join(" · ");
     return { value: entry.id, label: formatSearchProviderOptionLabel(entry.label, hint) };
   });
@@ -559,6 +560,15 @@ export async function runSearchSetupFlow(
   if (!entry) {
     return config;
   }
+  const finalizeSelection = (nextConfig: OpenClawConfig) =>
+    finalizeSearchProviderSetup({
+      originalConfig: config,
+      nextConfig,
+      entry,
+      runtime,
+      prompter,
+      opts,
+    });
   const credentialLabel = resolveSearchProviderCredentialLabel(entry);
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
@@ -582,14 +592,7 @@ export async function runSearchSetupFlow(
     const result = existingKey
       ? applySearchKey(config, choice, existingKey)
       : applySearchProviderSelection(config, choice);
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: result,
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(result);
   }
 
   if (!needsCredential) {
@@ -601,14 +604,7 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: applySearchProviderSelection(config, choice),
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(applySearchProviderSelection(config, choice));
   }
 
   if (entry.credentialNote) {
@@ -625,14 +621,7 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: applySearchProviderSelection(config, choice),
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(applySearchProviderSelection(config, choice));
   }
 
   if (providerAuthProfileAvailable && authProviderId) {
@@ -645,27 +634,13 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: applySearchProviderSelection(config, choice),
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(applySearchProviderSelection(config, choice));
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
   if (useSecretRefMode) {
     if (keyConfigured) {
-      return await finalizeSearchProviderSetup({
-        originalConfig: config,
-        nextConfig: applySearchProviderSelection(config, choice),
-        entry,
-        runtime,
-        prompter,
-        opts,
-      });
+      return await finalizeSelection(applySearchProviderSelection(config, choice));
     }
     const ref = buildSearchEnvRef(config, choice);
     await prompter.note(
@@ -677,14 +652,7 @@ export async function runSearchSetupFlow(
       ].join("\n"),
       "Web search",
     );
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: applySearchKey(config, choice, ref),
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(applySearchKey(config, choice, ref));
   }
 
   const keyInput = await prompter.text({
@@ -700,36 +668,15 @@ export async function runSearchSetupFlow(
   const key = normalizeOptionalString(keyInput) ?? "";
   if (key) {
     const secretInput = resolveSearchSecretInput(config, choice, key, opts?.secretInputMode);
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: applySearchKey(config, choice, secretInput),
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(applySearchKey(config, choice, secretInput));
   }
 
   if (existingKey) {
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: applySearchKey(config, choice, existingKey),
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(applySearchKey(config, choice, existingKey));
   }
 
   if (keyConfigured || envAvailable) {
-    return await finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig: applySearchProviderSelection(config, choice),
-      entry,
-      runtime,
-      prompter,
-      opts,
-    });
+    return await finalizeSelection(applySearchProviderSelection(config, choice));
   }
 
   await prompter.note(

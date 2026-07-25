@@ -77,18 +77,6 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
-  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
-    expect(
-      resolveReplyToModeWithConfig({
-        slackConfig: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-        context: { ChatType: "direct" },
-      }),
-    ).toBe("all");
-  });
-
   it("uses all mode when MessageThreadId is present", () => {
     expect(
       resolveReplyToModeWithConfig({
@@ -211,6 +199,28 @@ describe("buildSlackThreadingToolContext", () => {
 
     expect(result.currentThreadTs).toBe("1771999998.834199");
     expect(result.replyToMode).toBe("first");
+  });
+
+  it("uses CurrentMessageId as a non-explicit anchor when ReplyToId is omitted", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "first",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("first");
+    expect(result.sameChannelThreadRequired).toBe(false);
   });
 
   it("keeps configured channel behavior when not in a thread", () => {

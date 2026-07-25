@@ -3,7 +3,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import { listAuthProfileSecretTargetEntries } from "./target-registry.js";
 
 /** Auth-profile credential kinds that can carry SecretRef-backed values. */
-export type AuthProfileCredentialType = "api_key" | "token";
+type AuthProfileCredentialType = "api_key" | "token";
 
 type AuthProfileFieldSpec = {
   valueField: string;
@@ -49,7 +49,7 @@ type OauthCredentialVisit = {
   hasRefresh: boolean;
 };
 
-export type AuthProfileCredentialVisit =
+type AuthProfileCredentialVisit =
   | ApiKeyCredentialVisit
   | TokenCredentialVisit
   | OauthCredentialVisit;
@@ -82,7 +82,7 @@ const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
 })();
 
 /** Returns the value/ref field names for one auth-profile credential type. */
-export function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthProfileFieldSpec {
+function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthProfileFieldSpec {
   return AUTH_PROFILE_FIELD_SPEC_BY_TYPE[type];
 }
 

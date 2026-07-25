@@ -34,7 +34,7 @@ const COPILOT_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-export type CopilotWorkspaceBootstrapResult = {
+type CopilotWorkspaceBootstrapResult = {
   bootstrapFiles: Awaited<ReturnType<typeof resolveBootstrapContextForRun>>["bootstrapFiles"];
   contextFiles: EmbeddedContextFile[];
   instructions?: string;
@@ -130,11 +130,11 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
  * (`src/agents/pi-embedded-runner/run/attempt.ts:603`). Files whose
  * resolved relative path escapes the source workspace (parent
  * traversal or absolute) are left untouched so we never pretend a
- * file lives inside the sandbox when it does not. Exported for unit
- * tests; intentionally local to the Copilot extension (codex keeps
- * similar helpers extension-local rather than importing from PI).
+ * file lives inside the sandbox when it does not. Intentionally local
+ * to the Copilot extension (codex keeps similar helpers extension-local
+ * rather than importing from PI).
  */
-export function remapCopilotBootstrapContextFiles(params: {
+function remapCopilotBootstrapContextFiles(params: {
   files: EmbeddedContextFile[];
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -176,7 +176,7 @@ function isRelativePathInsideOrEqual(relativePath: string): boolean {
  * natively (see {@link COPILOT_NATIVE_PROJECT_DOC_BASENAMES}) are
  * dropped to avoid duplication with SDK-managed sections.
  */
-export function renderCopilotWorkspaceBootstrapInstructions(
+function renderCopilotWorkspaceBootstrapInstructions(
   contextFiles: EmbeddedContextFile[],
 ): string | undefined {
   const files = contextFiles
@@ -247,10 +247,3 @@ function readResolvedWorkspacePath(value: unknown): string | undefined {
   }
   return resolveUserPath(raw);
 }
-
-export const TESTING_EXPORTS = {
-  COPILOT_NATIVE_PROJECT_DOC_BASENAMES,
-  COPILOT_BOOTSTRAP_CONTEXT_ORDER,
-  compareCopilotContextFiles,
-  getCopilotContextFileBasename,
-};

@@ -1,7 +1,10 @@
 // Tests stripping untrusted inbound metadata while preserving user-visible content.
 import { describe, it, expect } from "vitest";
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import type { TemplateContext } from "../templating.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT, ROOM_EVENT_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
@@ -9,13 +12,17 @@ import {
   stripLeadingInboundMetadata,
 } from "./strip-inbound-meta.js";
 
+const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
+
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
+{"message_id":"msg-abc","sender":{"id":"+1555000"}}
+\`\`\``;
+
+const LEGACY_PRETTY_CONV_BLOCK = `Conversation info (untrusted metadata):
+\`\`\`json
 {
-  "message_id": "msg-abc",
-  "sender": {
-    "id": "+1555000"
-  }
+  "message_id": "msg-abc"
 }
 \`\`\``;
 
@@ -52,6 +59,10 @@ const CHAT_WINDOW_CONTEXT_BLOCK = `Conversation context (untrusted, chronologica
 #10 2026-07-02T12:00:00Z Alice: prior generated context
 #11 2026-07-02T12:01:00Z Bob: more generated context`;
 
+const CHAT_HISTORY_PROSE_BLOCK = `Chat history since last reply (untrusted, for context):
+#1001 sam.rivera: did anyone see the game last night
+#1002 lee.chen: yeah it was wild`;
+
 describe("stripInboundMetadata", () => {
   it("fast-path: returns same string when no sentinels present", () => {
     const text = "Hello, how are you?";
@@ -72,7 +83,12 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("What is the weather today?");
   });
 
-  it("strips explicit bot mention notes with conversation info", () => {
+  it("strips legacy pretty-printed Conversation info blocks", () => {
+    const input = `${LEGACY_PRETTY_CONV_BLOCK}\n\nWhat is the weather today?`;
+    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
+  });
+
+  it("strips legacy explicit bot mention notes with conversation info", () => {
     const input = `Conversation info (untrusted metadata):
 \`\`\`json
 {
@@ -93,6 +109,11 @@ Actual user message`;
 
   it("strips generated chat-window context blocks", () => {
     const input = `${CONV_BLOCK}\n\n${CHAT_WINDOW_CONTEXT_BLOCK}\n\nCan you help me?`;
+    expect(stripInboundMetadata(input)).toBe("Can you help me?");
+  });
+
+  it("strips generated chat-history prose blocks", () => {
+    const input = `${CONV_BLOCK}\n\n${CHAT_HISTORY_PROSE_BLOCK}\n\nCan you help me?`;
     expect(stripInboundMetadata(input)).toBe("Can you help me?");
   });
 
@@ -172,6 +193,11 @@ What should I grab on the way?`;
 
   it("strips leading chat-window context blocks", () => {
     const input = `${CHAT_WINDOW_CONTEXT_BLOCK}\n\nwhat time is it?`;
+    expect(stripLeadingInboundMetadata(input)).toBe("what time is it?");
+  });
+
+  it("strips leading chat-history prose blocks", () => {
+    const input = `${CHAT_HISTORY_PROSE_BLOCK}\n\nwhat time is it?`;
     expect(stripLeadingInboundMetadata(input)).toBe("what time is it?");
   });
 

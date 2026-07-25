@@ -1,0 +1,72 @@
+title: Channel sender allowlist block and override
+
+scenario:
+  id: channel-sender-allowlist
+  surface: channels
+  coverage:
+    primary:
+      - channels.room-allowlist
+    secondary:
+      - channels.automatic-final-reply
+  objective: Verify a blocked secondary actor stays quiet while the configured driver override still triggers a reply.
+  successCriteria:
+    - A mentioned message from the observer actor produces no reply.
+    - A later mentioned message from the allowlisted driver receives the exact marker.
+  docsRefs:
+    - docs/channels/group-messages.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+    - src/channels/turn/kernel.ts
+  execution:
+    profiles: { "matrix:adapter": 4, "matrix:all": 47, "matrix:fast": 10, "matrix:transport": 46 }
+    kind: flow
+    summary: Exercise sender allowlist rejection and the configured driver override in one ordered flow.
+    transportPolicy:
+      requireGroupMention: true
+      senderAllowlist:
+        - driver
+    config:
+      conversationId: qa-routing-allowlist
+      expectedMarker: QA-ALLOWLIST-OVERRIDE-OK
+
+flow:
+  steps:
+    - name: blocks observer and allows driver
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: observer
+            senderName: QA Observer
+            text:
+              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+        - waitForNoOutbound:
+            quietMs: 1500
+            sinceIndex: { ref: outboundStartIndex }
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            textIncludes: { ref: config.expectedMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: outbound
+      detailsExpr: outbound.text

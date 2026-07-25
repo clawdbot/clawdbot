@@ -1,8 +1,19 @@
 import SwiftUI
 
-extension EnvironmentValues {
-    @Entry var menuItemHighlighted: Bool = false
+// Keep this explicit for SwiftPM toolchains where SwiftUI macro plugins are unavailable.
+// swiftformat:disable environmentEntry
+private struct MenuItemHighlightedKey: EnvironmentKey {
+    static let defaultValue = false
 }
+
+extension EnvironmentValues {
+    var menuItemHighlighted: Bool {
+        get { self[MenuItemHighlightedKey.self] }
+        set { self[MenuItemHighlightedKey.self] = newValue }
+    }
+}
+
+// swiftformat:enable environmentEntry
 
 struct SessionMenuLabelView: View {
     let row: SessionRow

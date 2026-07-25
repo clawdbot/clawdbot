@@ -1,4 +1,5 @@
-# Opt-in plugin dependencies at build time (space- or comma-separated directory names).
+# Opt-in plugin dependencies and supported runtime builds (space- or comma-separated ids).
+# Manifest ids and existing source-directory names are accepted.
 # Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .
 #
 # Multi-stage build produces a minimal runtime image without build tools,
@@ -12,12 +13,12 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
-ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"
+ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these blessed digests; release builds consume the
@@ -30,9 +31,14 @@ FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # Copy package.json files for workspace packages used by the install layer.
-RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
-    --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR},readonly \
-    mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
+# Manifest-only bundled plugins remain valid selections but need no workspace metadata.
+# Use COPY because build-context bind mounts are unreliable across supported
+# Podman/Buildah hosts. Full trees stay in this disposable stage; later stages
+# receive only extracted manifests.
+COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
+COPY packages /tmp/packages
+COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
+RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
     for manifest in /tmp/packages/*/package.json; do \
       [ -f "$manifest" ] || continue; \
       pkg_dir="${manifest%/package.json}"; \
@@ -40,18 +46,20 @@ RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
       mkdir -p "/out/packages/$pkg_name" && \
       cp "$manifest" "/out/packages/$pkg_name/package.json"; \
     done && \
-    for ext in $(printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' '); do \
-      if [ -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
+    node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
+      > /out/openclaw-selected-plugin-dirs && \
+    while IFS= read -r ext; do \
+      ext_dir="/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
+      if [ -f "$ext_dir/package.json" ]; then \
         mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
-        cp "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
+        cp "$ext_dir/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
       fi; \
-    done
+    done < /out/openclaw-selected-plugin-dirs
 
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS
@@ -72,6 +80,7 @@ COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 
 COPY --from=workspace-deps /out/packages/ ./packages/
 COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
@@ -86,7 +95,7 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
 # still exiting successfully, so retry the package downloader before failing.
 # Skip the entire check when matrix is not a bundled extension (e.g. msteams-only builds).
 RUN set -eux; \
-    if ! printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'matrix'; then \
+    if ! grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs; then \
       echo "==> matrix not bundled, skipping matrix-sdk-crypto check"; \
       exit 0; \
     fi; \
@@ -102,7 +111,18 @@ RUN set -eux; \
     find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q . || \
       (echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)
 
+# Public source provenance supplied by release automation or local setup. Keep
+# these after the dependency layer so a new timestamp does not invalidate install.
+ARG GIT_COMMIT=""
+ARG OPENCLAW_BUILD_TIMESTAMP=""
+ENV GIT_COMMIT=${GIT_COMMIT} \
+    OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
+
 COPY . .
+
+# The build stage also backs non-root live-test containers. Build contexts preserve
+# host modes, so normalize copied source readability without re-walking installed deps.
+RUN find /app -path /app/node_modules -prune -o -exec chmod a+rX {} +
 
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
@@ -122,14 +142,20 @@ RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
      echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
      echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
-RUN if printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'qa-lab'; then \
-      export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1; \
-    fi && \
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm_config_verify_deps_before_run=false pnpm ui:build
-RUN if printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'qa-lab'; then \
+RUN set -eu; \
+    selected_plugin_dirs="$(cat /tmp/openclaw-selected-plugin-dirs)"; \
+    if [ -z "$OPENCLAW_BUILD_TIMESTAMP" ]; then \
+      OPENCLAW_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+      export OPENCLAW_BUILD_TIMESTAMP; \
+    fi; \
+    if grep -qx 'qa-lab' /tmp/openclaw-selected-plugin-dirs; then \
+      export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1; \
+    fi; \
+    OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="$selected_plugin_dirs" OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker; \
+    pnpm_config_verify_deps_before_run=false pnpm ui:build
+RUN if grep -qx 'qa-lab' /tmp/openclaw-selected-plugin-dirs; then \
       pnpm_config_verify_deps_before_run=false pnpm qa:lab:build && \
       mkdir -p dist/extensions/qa-lab/web && \
       rm -rf dist/extensions/qa-lab/web/dist && \
@@ -139,7 +165,6 @@ RUN if printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -q
 # Prune dev dependencies, omitted plugin runtime packages, and build-only
 # metadata before copying runtime assets into the final image.
 FROM build AS runtime-assets
-ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # BuildKit cache mounts are not part of cached layers; seed tarballs for the
 # installed prod graph in the same step that runs offline prune.
@@ -150,9 +175,17 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
       --config.supportedArchitectures.libc=glibc && \
-    OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
+    OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     node scripts/postinstall-bundled-plugins.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
+    if [ -L /app/node_modules/@openclaw/ai ]; then \
+      ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
+      ai_runtime_tmp="$(mktemp -d)" && \
+      cp -a "$ai_runtime_target" "$ai_runtime_tmp/ai" && \
+      rm /app/node_modules/@openclaw/ai && \
+      mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai && \
+      rmdir "$ai_runtime_tmp"; \
+    fi && \
     rm -rf \
       /app/node_modules/openclaw \
       /app/node_modules/.bin/openclaw \
@@ -230,6 +263,7 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
 # Legacy alias: OPENCLAW_DOCKER_APT_PACKAGES is still accepted as a fallback.
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+ENV PATH="/home/node/.local/bin:${PATH}"
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     packages="${OPENCLAW_IMAGE_APT_PACKAGES-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
@@ -284,7 +318,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       # Require exactly one primary key (`pub` in --with-colons; subkeys use `sub`) so we
       # never pin the first fingerprint while apt trusts extra keys from the same file.
       # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
-      curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
+      curl -fsSL --connect-timeout 10 --max-time 120 \
+        https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
       docker_gpg_pub_count="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "pub" { c++ } END { print c+0 }')" && \
       if [ "$docker_gpg_pub_count" != "1" ]; then \

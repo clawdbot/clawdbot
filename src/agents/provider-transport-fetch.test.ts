@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 type ProviderRequestPolicyConfigMockResult = {
@@ -177,6 +178,110 @@ describe("buildGuardedModelFetch", () => {
     delete process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS;
   });
 
+  function sentinelModel(): Model<"openai-responses"> {
+    return {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+  }
+
+  it("swaps sentinels in Request-form headers", async () => {
+    const sentinel = mintSecretSentinel("request-form-secret", { label: "request-form" });
+    const request = new Request("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sentinel}` },
+    });
+
+    const response = await buildGuardedModelFetch(sentinelModel())(request);
+    await response.text();
+
+    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
+    expect(headers.get("authorization")).toBe("Bearer request-form-secret");
+  });
+
+  it("swaps sentinels in record init headers", async () => {
+    const recordSentinel = mintSecretSentinel("record-header-secret", { label: "record-header" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      {
+        headers: { "x-api-key": recordSentinel },
+      },
+    );
+    await response.text();
+    expect(
+      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
+    ).toBe("record-header-secret");
+    expect(
+      new Headers(ensureModelProviderLocalServiceMock.mock.calls[0]?.[1] as HeadersInit).get(
+        "x-api-key",
+      ),
+    ).toBe(recordSentinel);
+  });
+
+  it("swaps sentinels in tuple init headers", async () => {
+    const tupleSentinel = mintSecretSentinel("tuple-header-secret", { label: "tuple-header" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      {
+        headers: [["x-api-key", tupleSentinel]],
+      },
+    );
+    await response.text();
+    expect(
+      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
+    ).toBe("tuple-header-secret");
+  });
+
+  it("swaps sentinels in Headers init and composed Cloudflare auth values", async () => {
+    const sentinel = mintSecretSentinel("cloudflare-upstream-secret", { label: "cloudflare" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      {
+        headers: new Headers({ "cf-aig-authorization": `Bearer ${sentinel}` }),
+      },
+    );
+    await response.text();
+
+    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
+    expect(headers.get("cf-aig-authorization")).toBe("Bearer cloudflare-upstream-secret");
+  });
+
+  it("swaps sentinels in URL query parameters", async () => {
+    const sentinel = mintSecretSentinel("gemini&scope=two+#%", { label: "gemini-query" });
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      `https://api.openai.com/v1/responses?key=${sentinel}`,
+    );
+    await response.text();
+
+    expect(latestGuardedFetchParams().url).toBe(
+      "https://api.openai.com/v1/responses?key=gemini%26scope%3Dtwo%2B%23%25",
+    );
+  });
+
+  it("rejects unknown sentinel-shaped values before guarded fetch", async () => {
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+    await expect(
+      buildGuardedModelFetch(sentinelModel())("https://api.openai.com/v1/responses", {
+        headers: { Authorization: `Bearer ${unknown}` },
+      }),
+    ).rejects.toThrow(
+      `Secret sentinel ${unknown} is not registered in this process; refusing to send request`,
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the no-sentinel fast path request init untouched", async () => {
+    const init: RequestInit = { headers: { Authorization: "Bearer plain-env-key" } };
+    const response = await buildGuardedModelFetch(sentinelModel())(
+      "https://api.openai.com/v1/responses",
+      init,
+    );
+    await response.text();
+    expect(latestGuardedFetchParams().init).toStrictEqual(init);
+  });
+
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
     const model = {
       id: "gpt-5.4",
@@ -251,7 +356,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -281,7 +386,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -321,7 +426,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -350,7 +455,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -809,6 +914,31 @@ describe("buildGuardedModelFetch", () => {
     expect(policy).toBeUndefined();
   });
 
+  it("keeps Meta's native endpoint under DNS rebinding checks", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "meta-native" },
+    });
+    const model = {
+      id: "muse-spark-1.1",
+      provider: "meta",
+      api: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://api.meta.ai/v1/responses", { method: "POST" });
+
+    const policy = latestGuardedFetchParams().policy as Record<string, unknown> | undefined;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.meta.ai"],
+    });
+    expect(policy?.allowedOrigins).toBeUndefined();
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it.each([
     {
       label: "link-local metadata IP",
@@ -1193,6 +1323,110 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it.each([
+    {
+      name: "JSON-to-SSE synthesis",
+      contentType: "application/json",
+      body: '{"ok": true}',
+    },
+    {
+      name: "SSE sanitization",
+      contentType: "text/event-stream",
+      body: 'data: {"ok": true}\n\n',
+    },
+  ])("ignores source cancellation failures during $name", async ({ contentType, body }) => {
+    const cancel = vi.fn(async () => {
+      throw new Error("upstream cancellation failed");
+    });
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(body));
+          },
+          cancel,
+        }),
+        { headers: { "content-type": contentType } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release,
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.4", stream: true }),
+      },
+    );
+
+    expect(response.body).not.toBeNull();
+    await expect(response.body!.cancel("consumer stopped")).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-prefix SSE bodies mislabeled as JSON by streaming gateways", async () => {
+    const source = openResponseStreamText(
+      'data: {"id":"a","choices":[{"index":0,"delta":{"content":"Hi","role":"assistant"}}]}\n\n' +
+        'data: {"id":"a","choices":[{"index":0,"delta":{"content":" there"}}]}\n\n' +
+        "data: [DONE]\n\n",
+    );
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        source.stream,
+        // Mislabeled: SSE body served with a JSON content-type.
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      ),
+      finalUrl: "https://gateway.example/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "MiniMax-M3",
+      provider: "hetu",
+      api: "openai-completions",
+      baseUrl: "https://gateway.example/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const responsePromise = buildGuardedModelFetch(model)(
+      "https://gateway.example/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "MiniMax-M3", stream: true }),
+      },
+    );
+    const timeout = Symbol("timeout");
+    const result = await Promise.race<Response | typeof timeout>([
+      responsePromise,
+      new Promise<typeof timeout>((resolve) => {
+        setTimeout(() => resolve(timeout), 100);
+      }),
+    ]);
+    source.close();
+
+    expect(result).not.toBe(timeout);
+    const response = result as Response;
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+    expect(items).toEqual([
+      { id: "a", choices: [{ index: 0, delta: { content: "Hi", role: "assistant" } }] },
+      { id: "a", choices: [{ index: 0, delta: { content: " there" } }] },
+    ]);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -1540,6 +1774,47 @@ describe("buildGuardedModelFetch", () => {
     expect(text.length).toBeLessThan(OVER_LIMIT);
   });
 
+  it("returns a capped body before guarded cleanup finishes", async () => {
+    const OVER_LIMIT = 100 * 1024;
+    let finishRelease!: () => void;
+    const releasePending = new Promise<void>((resolve) => {
+      finishRelease = resolve;
+    });
+    const release = vi.fn(() => releasePending);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(new Uint8Array(OVER_LIMIT), {
+        status: 429,
+        statusText: "Too Many Requests",
+      }),
+      finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
+      release,
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "azure",
+      api: "azure-openai-responses",
+      baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
+    } as unknown as Model<"azure-openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-azure.openai.azure.com/openai/v1/responses",
+      { method: "POST" },
+    );
+    const timeout = Symbol("timeout");
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      response.text(),
+      new Promise<typeof timeout>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(timeout), 100);
+      }),
+    ]);
+    clearTimeout(timeoutHandle);
+    finishRelease();
+
+    expect(result).not.toBe(timeout);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves SDK ability to cancel retryable non-OK responses before reading body", async () => {
     // Regression: a non-OK body wrapper must be lazy. The OpenAI SDK may decide
     // to cancel a 429/5xx response and retry before reading the body. If the
@@ -1783,6 +2058,50 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
+    it.each([
+      "Sun, 31 Feb 2027 00:00:00 GMT",
+      "Sunday, 31-Feb-27 00:00:00 GMT",
+      "Mon, 06 Nov 1994 08:49:37 GMT",
+      "Monday, 06-Nov-94 08:49:37 GMT",
+    ])("ignores invalid HTTP-date retry-after values: %s", async (retryAfter) => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after": retryAfter },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
+    it("interprets RFC 850 retry-after years within the 50-year future window", async () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-06T00:00:00.000Z"));
+      try {
+        fetchWithSsrFGuardMock.mockResolvedValue({
+          response: new Response(null, {
+            status: 503,
+            headers: { "retry-after": "Sunday, 06-Nov-50 00:00:00 GMT" },
+          }),
+          finalUrl: "https://api.anthropic.com/v1/messages",
+          release: vi.fn(async () => undefined),
+        });
+        const response = await buildGuardedModelFetch(anthropicModel)(
+          "https://api.anthropic.com/v1/messages",
+          { method: "POST" },
+        );
+
+        expect(response.headers.get("x-should-retry")).toBe("false");
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
     it("respects OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS", async () => {
       process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "10";
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -1967,3 +2286,4 @@ describe("buildGuardedModelFetch", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

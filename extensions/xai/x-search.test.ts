@@ -3,6 +3,8 @@ import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXSearchTool } from "./x-search.js";
 
+const XAI_DOCUMENTED_HANDLE_LIMIT = 20;
+
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -74,6 +76,28 @@ function parseFirstRequestBody(mockFetch: ReturnType<typeof installXSearchFetch>
   >;
 }
 
+function createConfiguredXSearchTool() {
+  const tool = createXSearchTool({
+    config: {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              webSearch: {
+                apiKey: "xai-config-test", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!tool) {
+    throw new Error("expected x_search tool to be configured");
+  }
+  return tool;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -105,6 +129,21 @@ describe("xai x_search tool", () => {
     expect(queryDescription).toContain("Grok X-search agent");
     expect(queryDescription).toContain("meaningful and non-empty");
     expect(queryDescription).not.toContain("allowed_x_handles");
+  });
+
+  it("publishes xAI handle-filter constraints in the tool schema", () => {
+    const tool = createConfiguredXSearchTool();
+    const parameters = tool.parameters as {
+      properties?: Record<string, { description?: string; maxItems?: number }>;
+    };
+
+    for (const [key, counterpart] of [
+      ["allowed_x_handles", "excluded_x_handles"],
+      ["excluded_x_handles", "allowed_x_handles"],
+    ] as const) {
+      expect(parameters.properties?.[key]?.maxItems).toBe(XAI_DOCUMENTED_HANDLE_LIMIT);
+      expect(parameters.properties?.[key]?.description).toContain(counterpart);
+    }
   });
 
   it("enables x_search when runtime config carries the shared xAI key", () => {
@@ -178,10 +217,7 @@ describe("xai x_search tool", () => {
                 webSearch: {
                   apiKey: "xai-config-test", // pragma: allowlist secret
                 },
-                xSearch: {
-                  model: "grok-4-1-fast-non-reasoning",
-                  maxTurns: 2,
-                },
+                xSearch: { maxTurns: 2 },
               },
             },
           },
@@ -192,7 +228,6 @@ describe("xai x_search tool", () => {
     const result = await tool?.execute?.("x-search:1", {
       query: "dinner recipes",
       allowed_x_handles: ["openclaw"],
-      excluded_x_handles: ["spam"],
       from_date: "2026-03-01",
       to_date: "2026-03-20",
       enable_image_understanding: true,
@@ -201,13 +236,14 @@ describe("xai x_search tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4-1-fast-non-reasoning");
+    expect(body.model).toBe("grok-4.3");
+    expect(body.store).toBe(false);
+    expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_turns).toBe(2);
     expect(body.tools).toEqual([
       {
         type: "x_search",
         allowed_x_handles: ["openclaw"],
-        excluded_x_handles: ["spam"],
         from_date: "2026-03-01",
         to_date: "2026-03-20",
         enable_image_understanding: true,
@@ -217,6 +253,61 @@ describe("xai x_search tool", () => {
       "https://x.com/openclaw/status/1",
     ]);
   });
+
+  it("rejects combined allow and exclude handle filters before calling xAI", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createConfiguredXSearchTool();
+
+    await expect(
+      tool.execute("x-search:combined-handle-filters", {
+        query: "dinner recipes",
+        allowed_x_handles: ["openclaw"],
+        excluded_x_handles: ["spam"],
+      }),
+    ).rejects.toThrow("allowed_x_handles and excluded_x_handles cannot be used together");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["allowed_x_handles", "excluded_x_handles"] as const)(
+    "accepts the xAI limit for %s",
+    async (key) => {
+      const mockFetch = installXSearchFetch();
+      const tool = createConfiguredXSearchTool();
+      const handles = Array.from(
+        { length: XAI_DOCUMENTED_HANDLE_LIMIT },
+        (_, index) => `${key}-${index}`,
+      );
+
+      await tool.execute(`x-search:${key}:limit`, {
+        query: `${key} boundary`,
+        [key]: handles,
+      });
+
+      expect(parseFirstRequestBody(mockFetch).tools).toEqual([
+        { type: "x_search", [key]: handles },
+      ]);
+    },
+  );
+
+  it.each(["allowed_x_handles", "excluded_x_handles"] as const)(
+    "rejects %s above the xAI limit before calling xAI",
+    async (key) => {
+      const mockFetch = installXSearchFetch();
+      const tool = createConfiguredXSearchTool();
+      const handles = Array.from(
+        { length: XAI_DOCUMENTED_HANDLE_LIMIT + 1 },
+        (_, index) => `${key}-${index}`,
+      );
+
+      await expect(
+        tool.execute(`x-search:${key}:over-limit`, {
+          query: `${key} over limit`,
+          [key]: handles,
+        }),
+      ).rejects.toThrow(`${key} cannot contain more than ${XAI_DOCUMENTED_HANDLE_LIMIT} handles`);
+      expect(mockFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes x_search through plugin-owned xSearch.baseUrl", async () => {
     const mockFetch = installXSearchFetch();
@@ -245,30 +336,6 @@ describe("xai x_search tool", () => {
     });
 
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/xai-search/v1/responses");
-  });
-
-  it("falls back to Grok web search baseUrl for x_search", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-key", // pragma: allowlist secret
-                baseUrl: "https://api.x.ai/legacy/v1/",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("x-search:legacy-grok-base-url", {
-      query: "legacy base url route",
-    });
-
-    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/legacy/v1/responses");
   });
 
   it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
@@ -428,64 +495,6 @@ describe("xai x_search tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer x-search-runtime-key");
-  });
-
-  it("reuses the legacy grok web search key for x_search requests", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("x-search:legacy-key", {
-      query: "latest legacy-key post from huntharo",
-    });
-
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-legacy-key");
-  });
-
-  it("uses migrated runtime auth when the source config still carries legacy x_search apiKey", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {
-        tools: {
-          web: {
-            x_search: {
-              apiKey: "legacy-x-search-key", // pragma: allowlist secret
-              enabled: true,
-            } as Record<string, unknown>,
-          },
-        },
-      },
-      runtimeConfig: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "migrated-runtime-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("x-search:migrated-runtime-key", {
-      query: "migrated runtime auth",
-    });
-
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer migrated-runtime-key");
   });
 
   it("rejects invalid date ordering before calling xAI", async () => {

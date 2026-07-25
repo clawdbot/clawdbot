@@ -20,13 +20,27 @@ From URL `https://xxx.feishu.cn/drive/folder/ABC123` → `folder_token` = `ABC12
 { "action": "list" }
 ```
 
-Root directory (no folder_token).
+Requests the account root (no `folder_token`). Bot credentials normally have no root folder, so
+use a folder that has been shared with the bot instead.
 
 ```json
-{ "action": "list", "folder_token": "fldcnXXX" }
+{ "action": "list", "folder_token": "fldcnXXX", "page_size": 100 }
 ```
 
-Returns: files with token, name, type, url, timestamps.
+Returns one page of files with token, name, type, url, timestamps, and `next_page_token` when
+another page is available. To continue, pass the returned token with the same folder token:
+
+```json
+{
+  "action": "list",
+  "folder_token": "fldcnXXX",
+  "page_size": 100,
+  "page_token": "next-page-token"
+}
+```
+
+`page_size` must be between 1 and 200. Pagination requires a concrete shared `folder_token`;
+root-list cursors are not forwarded.
 
 ### Get File Info
 
@@ -34,7 +48,9 @@ Returns: files with token, name, type, url, timestamps.
 { "action": "info", "file_token": "ABC123", "type": "docx" }
 ```
 
-Searches for the file in the root directory. Note: file must be in root or use `list` to browse folders first.
+Looks up file metadata directly by token and type, regardless of which shared folder contains it.
+Shortcuts are the exception: Feishu's metadata API does not support the `shortcut` type, so shortcut
+info retains the root-directory lookup behavior.
 
 `type`: `doc`, `docx`, `sheet`, `bitable`, `folder`, `file`, `mindnote`, `shortcut`
 
@@ -87,7 +103,8 @@ channels:
 ## Permissions
 
 - `drive:drive` - Full access (create, move, delete)
-- `drive:drive:readonly` - Read only (list, info)
+- `drive:drive:readonly` - Read only (list and root-level info fallback)
+- `drive:drive.metadata:readonly` - Direct `info` lookup outside the root (not needed with `drive:drive`)
 
 ## Known Limitations
 

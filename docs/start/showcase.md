@@ -19,6 +19,66 @@ Recent standouts across coding, devtools, mobile, and chat-native product buildi
 
 <CardGroup cols={2}>
 
+<Card title="Dropage instant HTML deploy" icon="cloud-arrow-up" href="https://clawhub.ai/jiantoucn/skills/dropage-deploy">
+  **@jiantoucn** • `deploy` `hosting` `skill`
+
+Tell your agent "deploy this HTML" and get a public URL back in about a second. Pages self-expire after an hour — no server, no config, no signup.
+</Card>
+
+<Card title="Anti-scam URL checker" icon="shield-halved" href="https://clawhub.ai/phishguard-niki/anti-scam-guard">
+  **@phishguard-niki** • `security` `phishing` `skill`
+
+Paste any URL, get a verdict. 2.5M+ scam domains from 38 feeds (PhishTank, OpenPhish, CERT.PL, and more), matched locally so browsing history never leaves the machine.
+</Card>
+
+<Card title="Product-design reasoning skills" icon="pen-ruler" href="https://clawhub.ai/monikazapisekstudio/skills/socratic-dialog">
+  **@monikazapisekstudio** • `product` `reasoning` `skills`
+
+A trio for product work: [Socratic Dialogue](https://clawhub.ai/monikazapisekstudio/skills/socratic-dialog) cross-examines a question before answering, [Kano Model Strategist](https://clawhub.ai/monikazapisekstudio/skills/kano-model-strategist) sorts features into what earns its place, and [Legible Agent Output](https://clawhub.ai/monikazapisekstudio/skills/legible-agent-output) rewrites agent output into plain language.
+</Card>
+
+<Card title="Mailbox broker for sub-agents" icon="inbox" href="https://clawhub.ai/albzhu/skills/miab-broker">
+  **@albzhu** • `multi-agent` `async` `skill`
+
+Stops orchestrators from idling while sub-agents work: an async callback mechanism where results land in a mailbox instead of blocking the parent agent.
+</Card>
+
+<Card title="lite-mode for low-RAM machines" icon="feather" href="https://clawhub.ai/skills/lite-mode">
+  **@mirajmahmudul** • `performance` `skill`
+
+Keeps OpenClaw usable on 2-4 GB machines: checks free memory and trims heavy features before the box starts swapping. [Source on GitHub](https://github.com/mirajmahmudul/openclaw-lite-mode).
+</Card>
+
+<Card title="tokenomics cost tracker" icon="coins" href="https://github.com/ncz-os/tokenomics">
+  **@ncz-os** • `devtools` `costs` `tokens`
+
+Token cost tracker from an NVIDIA engineer with first-class OpenClaw support: see exactly where your agent spend goes, per model and per session.
+</Card>
+
+<Card title="Excalidraw diagram generator" icon="shapes" href="https://x.com/swiftlysingh/status/2009684853827281070">
+  **@swiftlysingh** • `diagrams` `excalidraw` `devtools`
+
+Describe a diagram in chat and get a programmatically generated Excalidraw sketch back.
+</Card>
+
+<Card title="GA4 analytics skill" icon="chart-column" href="https://x.com/jdrhyne/status/2012028725710192741">
+  **@jdrhyne** • `analytics` `ga4` `skill`
+
+Had OpenClaw build its own Google Analytics query tool, then packaged and published it to ClawHub.
+</Card>
+
+<Card title="ClawEval model rankings" icon="ranking-star" href="https://github.com/AIgenteur/ClawEval">
+  **@AIgenteur** • `evals` `models` `devtools`
+
+Benchmarks models across 59 agent roles to answer "which LLM for my GPU?". A community favorite for picking local models.
+</Card>
+
+<Card title="Music Craft" icon="music" href="https://clawhub.ai/luischarro/music-craft">
+  **@luischarro** • `music` `generation` `skill`
+
+Provider-agnostic song generation: plan the track, structure lyrics, and revise sparse results instead of one-shot prompting. Includes a [MiniMax variant](https://clawhub.ai/luischarro/music-craft-minimax) with BPM, key, structure, and mashup control.
+</Card>
+
 <Card title="PR Review to Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
@@ -211,6 +271,36 @@ Automated Todoist tasks and had OpenClaw generate the skill directly in Telegram
 Logs into TradingView via browser automation, screenshots charts, and performs technical analysis on demand. No API needed — just browser control.
 </Card>
 
+<Card title="Car negotiation ($4,200 saved)" icon="car-side" href="https://x.com/astuyve/status/2014147784098681217">
+  **@astuyve** • `negotiation` `email` `automation`
+
+Set OpenClaw loose on car dealers: it handled the back-and-forth negotiation and knocked $4,200 off the price.
+</Card>
+
+<Card title="Flight check-in autopilot" icon="plane-departure" href="https://x.com/armanddp/status/2008767951340794245">
+  **@armanddp** • `travel` `email` `automation`
+
+Finds the next flight in email, runs through online check-in, and picks a window seat — no airline app required.
+</Card>
+
+<Card title="Insurance claim filing" icon="file-signature" href="https://x.com/avi_press/status/2013066316467560521">
+  **@avi_press** • `automation` `insurance` `browser`
+
+Filed an insurance claim and scheduled the follow-up appointment autonomously.
+</Card>
+
+<Card title="Idealista real estate skill" icon="building" href="https://x.com/quifago/status/2012458753786859872">
+  **@quifago** • `real-estate` `api` `skill`
+
+Idealista API CLI for property queries and valuations, wrapped as a skill so the agent can house-hunt in chat.
+</Card>
+
+<Card title="Gardening business back office" icon="seedling" href="https://news.ycombinator.com/item?id=47783940">
+  **@mjsweet** • `automation` `email` `invoicing`
+
+Watches Gmail for work orders, analyzes property photos sent over Telegram, writes multi-page LaTeX quote PDFs, and invoices through Xero.
+</Card>
+
 <Card title="Slack auto-support" icon="slack">
   **@henrymascot** • `slack` `automation` `support`
 
@@ -231,6 +321,30 @@ Systems that index, search, remember, and reason over personal or team knowledge
 Chinese learning engine with pronunciation feedback and study flows via OpenClaw.
 
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
+</Card>
+
+<Card title="X post analysis pipeline" icon="hashtag" href="https://x.com/andrewjiang/status/2008388427180630155">
+  **@andrewjiang** • `analysis` `x` `pipeline`
+
+Pulled 4 million posts across 100 top X accounts and turned them into a queryable analysis pipeline.
+</Card>
+
+<Card title="Lab results to Notion" icon="flask" href="https://x.com/danpeguine/status/2013388700479058068">
+  **@danpeguine** • `health` `notion` `organization`
+
+Organized years of bloodwork lab results into a structured Notion database.
+</Card>
+
+<Card title="Obsidian second brain" icon="book" href="https://notesbylex.com/openclaw-the-missing-piece-for-obsidians-second-brain">
+  **@lexandstuff** • `obsidian` `whatsapp` `memory`
+
+Daily-driver assistant on WhatsApp with all memory stored as markdown in a version-controlled Obsidian vault: calorie and workout tracking, to-do lists, life admin.
+</Card>
+
+<Card title="Family history bot" icon="people-roof" href="https://news.ycombinator.com/item?id=47783940">
+  **@brtkwr** • `telegram` `memory` `family`
+
+Lives in a family Telegram group chat, documents stories across 50+ relatives, and asks informed follow-up questions — responding in Nepali for native speakers.
 </Card>
 
 <Card title="WhatsApp memory vault" icon="vault">
@@ -258,6 +372,24 @@ Separate memory manager that turns session files into memories, then beliefs, th
 Speech-first entry points, phone bridges, and transcription-heavy workflows.
 
 <CardGroup cols={2}>
+
+<Card title="Pebble Ring one-tap voice" icon="ring" href="https://x.com/thekitze/status/2014765279650189578">
+  **@thekitze** • `voice` `wearable` `hardware`
+
+One tap on a Pebble Ring starts a voice conversation with OpenClaw — agent access from a wearable.
+</Card>
+
+<Card title="Creator media studio" icon="clapperboard" href="https://x.com/cedric_chee/status/2014608153393168425">
+  **@cedric_chee** • `media` `tts` `transcription`
+
+A full media studio in chat: TTS, transcription, and browser automation hooked up to Codex 5.2 and MiniMax.
+</Card>
+
+<Card title="Action Button walkie-talkie" icon="walkie-talkie" href="https://x.com/i/status/2072766510053888497">
+  **@buddyhadry** • `voice` `ios` `mobile`
+
+iPhone Action Button wired to OpenClaw: press, talk, and the agent talks back like a walkie-talkie.
+</Card>
 
 <Card title="Clawdia phone bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
@@ -295,6 +427,12 @@ Control and automate Home Assistant devices via natural language.
   <img src="/assets/showcase/homeassistant.png" alt="Home Assistant skill on ClawHub" />
 </Card>
 
+<Card title="macOS menu bar manager" icon="desktop" href="https://x.com/MagiMetal/status/2009424267801485362">
+  **@MagiMetal** • `macos` `swift` `ui`
+
+Native Swift menu bar app showing agent status with quick controls.
+</Card>
+
 <Card title="Nix packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
   **@openclaw** • `nix` `packaging` `deployment`
 
@@ -316,6 +454,18 @@ Calendar skill using khal and vdirsyncer. Self-hosted calendar integration.
 The physical-world side of OpenClaw: homes, sensors, cameras, vacuums, and other devices.
 
 <CardGroup cols={2}>
+
+<Card title="Self-built HomePod skill" icon="volume-high" href="https://x.com/localghost/status/2014763987683225685">
+  **@localghost** • `homepod` `discovery` `skill`
+
+OpenClaw found the HomePods on the local network and wrote itself a skill to control them.
+</Card>
+
+<Card title="$35 holo cube interface" icon="cube" href="https://x.com/andrewjiang/status/2013140793649734032">
+  **@andrewjiang** • `hardware` `display` `fun`
+
+A cheap holographic cube as the agent's physical face on the desk.
+</Card>
 
 <Card title="GoHome automation" icon="house-signal" href="https://github.com/joshp123/gohome">
   **@joshp123** • `home` `nix` `grafana`
@@ -347,6 +497,12 @@ Things that grew beyond a single workflow into broader products or ecosystems.
 Full astronomy gear marketplace. Built with and around the OpenClaw ecosystem.
 </Card>
 
+<Card title="Clinch agent negotiation protocol" icon="handshake" href="https://clawhub.ai/publicstringapps/clinch">
+  **@publicstringapps** • `protocol` `p2p` `skill`
+
+Open agent-to-agent negotiation: your agent haggles deals, schedules, and service agreements with other nodes and cryptographically signs the result — you just approve or reject.
+</Card>
+
 </CardGroup>
 
 ## Submit your project
@@ -367,3 +523,4 @@ Full astronomy gear marketplace. Built with and around the OpenClaw ecosystem.
 
 - [Getting started](/start/getting-started)
 - [OpenClaw](/start/openclaw)
+- [Full X showcase on openclaw.ai](https://openclaw.ai/showcase/)

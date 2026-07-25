@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
-  getRoleSnapshotStats,
+  finalizeRoleSnapshot,
+  getRoleSnapshotIdentityKeys,
   parseRoleRef,
 } from "./pw-role-snapshot.js";
 
@@ -56,14 +57,160 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=e1]');
   });
 
-  it("computes stats", () => {
-    const aria = ['- button "OK"', '- button "Cancel"'].join("\n");
-    const res = buildRoleSnapshotFromAriaSnapshot(aria);
-    const stats = getRoleSnapshotStats(res.snapshot, res.refs);
-    expect(stats.refs).toBe(2);
-    expect(stats.interactive).toBe(2);
-    expect(stats.lines).toBeGreaterThan(0);
-    expect(stats.chars).toBeGreaterThan(0);
+  it("caps complete lines and derives refs and stats from the returned snapshot", () => {
+    const first = '- button "Visible" [ref=e1]';
+    const second = `- button "Hidden ${"X".repeat(100)} 🙂" [ref=e2]`;
+    const marker = "[...TRUNCATED - page too large]";
+    const result = finalizeRoleSnapshot({
+      snapshot: `${first}\n${second}`,
+      refs: {
+        e1: { role: "button", name: "Visible" },
+        e2: { role: "button", name: "Hidden 🙂" },
+      },
+      maxChars: first.length + 2 + marker.length,
+    });
+
+    expect(result).toEqual({
+      snapshot: `${first}\n\n${marker}`,
+      truncated: true,
+      refs: { e1: { role: "button", name: "Visible" } },
+      stats: {
+        lines: 3,
+        chars: first.length + 2 + marker.length,
+        refs: 1,
+        interactive: 1,
+      },
+    });
+    expect(result.snapshot).not.toContain("\ud83d");
+  });
+
+  it("does not treat hostile ref-like page text as a returned ref", () => {
+    const result = finalizeRoleSnapshot({
+      snapshot: [
+        '- button "Visible \\" [ref=e2]" [ref=e1]',
+        "- button: attacker [ref=e2]",
+        "",
+        "Links:",
+        "1. [ref=e3] -> https://example.com/",
+      ].join("\n"),
+      refs: {
+        e1: { role: "button" },
+        e2: { role: "button" },
+        e3: { role: "link" },
+      },
+    });
+
+    expect(result.refs).toEqual({ e1: { role: "button" } });
+    expect(result.stats.refs).toBe(1);
+  });
+
+  it("uses a bounded marker for budgets too small for a snapshot line", () => {
+    const result = finalizeRoleSnapshot({
+      snapshot: '- button "Visible" [ref=e1]',
+      refs: { e1: { role: "button" } },
+      maxChars: 1,
+    });
+
+    expect(result).toEqual({
+      snapshot: "…",
+      truncated: true,
+      refs: {},
+      stats: { lines: 1, chars: 1, refs: 0, interactive: 0 },
+    });
+  });
+
+  it("keeps maxChars zero uncapped", () => {
+    const snapshot = '- button "Visible" [ref=e1]';
+    const result = finalizeRoleSnapshot({
+      snapshot,
+      refs: { e1: { role: "button" } },
+      maxChars: 0,
+    });
+
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.truncated).toBeUndefined();
+    expect(result.refs).toEqual({ e1: { role: "button" } });
+  });
+
+  it("does not mark the first snapshot", () => {
+    const snapshot = '- button "Save" [ref=e1]';
+    const refs = { e1: { role: "button", name: "Save" } };
+
+    const result = finalizeRoleSnapshot({ snapshot, refs, delta: { mode: "role" } });
+
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.newElements).toBeUndefined();
+  });
+
+  it("marks only new role identities and preserves ref extraction", () => {
+    const previousKeys = getRoleSnapshotIdentityKeys(
+      { e1: { role: "button", name: "Save" } },
+      "role",
+    );
+    const refs = {
+      e7: { role: "button", name: "Save" },
+      e8: { role: "dialog", name: "Confirmation" },
+    };
+    const finalized = finalizeRoleSnapshot({
+      snapshot: ['- button "Save" [ref=e7]', '- dialog "Confirmation" [ref=e8]'].join("\n"),
+      refs,
+      delta: { mode: "role", previousKeys },
+    });
+
+    expect(finalized.snapshot).toBe(
+      [
+        '- button "Save" [ref=e7]',
+        '- dialog "Confirmation" [ref=e8] [new]',
+        "1 new element(s) since last snapshot",
+      ].join("\n"),
+    );
+    expect(finalized.newElements).toBe(1);
+    expect(finalized.refs).toEqual(refs);
+  });
+
+  it("uses preserved aria refs as AI snapshot identities", () => {
+    const finalized = finalizeRoleSnapshot({
+      snapshot: ['- button "Save" [ref=7]', '- dialog "Confirmation" [ref=8]'].join("\n"),
+      refs: {
+        "7": { role: "button", name: "Save" },
+        "8": { role: "dialog", name: "Confirmation" },
+      },
+      delta: { mode: "aria", previousKeys: new Set(["7"]) },
+    });
+
+    expect(finalized.snapshot).toContain('- button "Save" [ref=7]\n');
+    expect(finalized.snapshot).toContain('- dialog "Confirmation" [ref=8] [new]');
+    expect(finalized.newElements).toBe(1);
+  });
+
+  it("annotates before truncation and keeps only complete annotated refs", () => {
+    const first = '- button "Visible" [ref=e1] [new]';
+    const marker = "[...TRUNCATED - page too large]";
+    const result = finalizeRoleSnapshot({
+      snapshot: ['- button "Visible" [ref=e1]', '- dialog "Hidden" [ref=e2]'].join("\n"),
+      refs: {
+        e1: { role: "button", name: "Visible" },
+        e2: { role: "dialog", name: "Hidden" },
+      },
+      maxChars: first.length + 2 + marker.length,
+      delta: { mode: "role", previousKeys: new Set() },
+    });
+
+    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
+    expect(result.refs).toEqual({ e1: { role: "button", name: "Visible" } });
+    expect(result.newElements).toBe(1);
+  });
+
+  it("treats sub-unit internal budgets as uncapped", () => {
+    const snapshot = '- button "Visible" [ref=e1]';
+    const result = finalizeRoleSnapshot({
+      snapshot,
+      refs: { e1: { role: "button" } },
+      maxChars: 0.5,
+    });
+
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.truncated).toBeUndefined();
   });
 
   it("returns a helpful message when no interactive elements exist", () => {

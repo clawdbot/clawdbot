@@ -477,6 +477,45 @@ describe("createMatrixGuardedFetch", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+  it("preserves redirect success when the discarded body fails to cancel", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("cancel failed");
+    });
+    const runtimeFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: { location: "/final" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    stubRuntimeFetch(runtimeFetch);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const guardedFetch = createMatrixGuardedFetch({
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      const response = await guardedFetch("http://127.0.0.1:8008/start");
+
+      await expect(response.json()).resolves.toEqual({});
+      expect(runtimeFetch).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
+  });
+
   it("rejects and cancels SDK responses above the declared size limit", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({ cancel });

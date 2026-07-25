@@ -2,6 +2,7 @@
 summary: "iOS node app: connect to the Gateway, pairing, canvas, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
+  - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
   - Debugging gateway discovery or canvas commands
 title: "iOS app"
@@ -12,8 +13,14 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
-- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
+- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
 - Receives `node.invoke` commands and reports node status events.
+- Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
+- Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
+- Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
+- Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- **Settings -> OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
+- Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Requirements
 
@@ -24,6 +31,11 @@ Availability: iPhone app builds are distributed through Apple channels when enab
   - Manual host/port (fallback).
 
 ## Quick start (pair + connect)
+
+On first launch the app walks through a short pairing explainer and a
+permissions page (notifications, camera, microphone, photos, contacts,
+calendar, reminders, location). Every grant is optional and can be changed
+later in **Settings** -> **Permissions**, or in the iOS Settings app.
 
 1. Start an authenticated Gateway with a route your phone can reach. Tailscale
    Serve is the recommended remote path:
@@ -38,13 +50,32 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair mobile device** in the **Devices** card.
+   **Pair mobile device** on the **Devices** page. Full access is recommended
+   and selected by default; choose Limited access only when you want to omit
+   administrative Gateway controls, then click **Create setup code**.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
 
-4. The official app connects automatically. If **Devices** shows a pending
+   If the setup code contains both LAN and Tailscale Serve routes, the app
+   probes them in order and saves the first reachable endpoint.
+
+   Paired gateways remain in the **Gateways** list. The checkmark identifies
+   the focused gateway; use the bolt control on another row to keep its
+   operator session connected at the same time. Switching focus does not
+   disconnect other enabled gateways. Only the focused gateway receives the
+   iPhone's capability-bearing node session, so camera, screen, location, and
+   other device commands always have one unambiguous owner. iOS may suspend
+   these foreground connections after the app enters the background.
+
+4. The official app connects automatically. If **Pending approval** shows a
    request, review its role and scopes before approving it.
+
+   **Settings → Gateway** shows whether the saved operator connection has
+   **Full** or **Limited** access. Plaintext LAN `ws://` setup is automatically
+   limited for bearer-token safety. If it is limited, configure `wss://` or
+   Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
+   then reconnect to enable settings and upgrades.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered gateway in the iOS app (or enable
@@ -79,6 +110,95 @@ This is disabled by default. It applies only to fresh `role: node` pairing with 
 openclaw nodes status
 openclaw gateway call node.list --params "{}"
 ```
+
+## Health summaries
+
+The iOS node can return an opt-in, read-only HealthKit aggregate for the current
+calendar day. iOS device consent and explicit Gateway command authorization are
+independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
+setup, invocation, payload fields, privacy behavior, and troubleshooting.
+
+By default, the Apple Watch companion keeps using the existing iPhone relay and
+does not need a separate Gateway pairing. Pair the Watch with the iPhone in
+Apple's Watch app, install OpenClaw from **Watch app -> My Watch -> Available
+Apps**, then open OpenClaw once on both devices.
+
+## Review command approvals
+
+An operator connection with `operator.admin`, or a paired
+`operator.approvals` connection explicitly targeted by the Gateway, can review
+pending exec requests on iPhone. The approval card shows the Gateway's
+sanitized command preview, warning, host context, expiry, and only the
+decisions offered by that request. The paired Apple Watch receives the same
+reviewer-safe prompt through the existing iPhone relay and offers the compact
+allow-once/deny decision subset. Direct Watch Gateway mode does not carry
+approval prompts.
+
+Approval state is shared with the Control UI and supported chat surfaces. The
+first committed answer wins. iPhone and Watch fetch the Gateway's canonical
+terminal record after another surface resolves the request, after a remote
+resolved notification, and whenever a resolve acknowledgement may have been
+lost. Actions stay unavailable until that readback confirms whether the
+request remains pending.
+
+Approval ownership is bound to the selected Gateway. Switching gateways cannot
+apply an old prompt to the replacement connection. Gateways that predate the
+unified approval methods fall back to the shipped exec-specific methods;
+retained terminal state and richer cross-surface results require an updated
+Gateway.
+
+## Answer agent questions
+
+Chat shows pending Gateway questions as native cards for operator connections
+with `operator.questions` (or `operator.admin`). Cards support single- and
+multi-select options, option descriptions, free-text **Other** answers, and an
+expiry countdown. Reconnects reload pending questions from the Gateway. A card
+locks when this device answers it, another surface answers it first, or the
+question expires or is cancelled.
+
+## Optional direct Apple Watch node
+
+Direct mode gives the watch its own signed node identity and Gateway connection.
+Supported node commands continue to work over watch Wi-Fi or cellular while
+OpenClaw is active, even when the paired iPhone is unavailable.
+
+Requirements:
+
+- The iPhone is connected to the Gateway with `operator.admin` scope.
+- The setup code advertises a `wss://` Gateway endpoint with a certificate trusted
+  by watchOS; the watch polls the corresponding `https://` origin. Plain HTTP and
+  self-signed or fingerprint-only trust are unsupported. See [Gateway-owned
+  pairing](/gateway/pairing) for endpoint configuration. Loopback, iPhone-only,
+  and tailnet-only routes are not independently reachable by the watch.
+- Cellular use requires a cellular-capable Apple Watch with active service.
+- OpenClaw is active on the watch. Apple does not allow ordinary watchOS apps to
+  keep generic WebSocket/TCP connections, so the direct node uses short HTTPS
+  polls and reconnects when the app returns to the foreground. See Apple's
+  [watchOS low-level networking guidance](https://developer.apple.com/documentation/technotes/tn3135-low-level-networking-on-watchOS).
+
+Setup:
+
+1. On iPhone, open **Settings -> Apple Watch**.
+2. Tap **Enable Direct Gateway Connection**.
+3. Open OpenClaw on the watch before the short-lived setup code expires.
+4. Verify the separate Apple Watch row with `openclaw nodes status`.
+
+The setup code contains a short-lived, node-only bootstrap credential; treat it
+like a password until it expires. It never contains the iPhone's saved Gateway
+password or token. After pairing, the watch stores its own device token and
+deletes the bootstrap credential. Direct mode covers only the commands below.
+Chat, Talk, approvals, and the existing `watch.*` notification flow remain
+iPhone-relay features and still require the paired iPhone.
+
+Direct watchOS node commands:
+
+| Surface       | Commands                       | Notes                                                   |
+| ------------- | ------------------------------ | ------------------------------------------------------- |
+| Device        | `device.info`, `device.status` | Watch identity, battery, thermal, storage, and network. |
+| Notifications | `system.notify`                | While the app is active; requires watch permission.     |
+
+watchOS does not expose WebKit to third-party apps, so the direct watch node
+does not advertise Canvas commands.
 
 ## Relay-backed push for official builds
 
@@ -183,6 +303,15 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 
 In Settings, enable **Manual Host** and enter the gateway host + port (default `18789`).
 
+## Multiple gateways
+
+The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+
+- **Settings -> Gateway** shows a **Paired Gateways** list with the active gateway marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway. A quick-switch menu appears next to the connection row when more than one gateway is paired.
+- Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per gateway. Switching never mixes state between gateways, and push registration follows the active gateway.
+- Swipe a paired gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
+- Discovered gateways must be visible on the network to switch to them; manual gateways reconnect by saved host and port.
+
 ## Canvas + A2UI
 
 The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:
@@ -226,6 +355,12 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
 - `A2UI_HOST_UNAVAILABLE`: the bundled A2UI page was not reachable in the app WebView; keep the app foregrounded on the Screen tab and retry.
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
+- Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
+  and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
+  Watch in Apple's Watch app. If installation is false, install the companion
+  from **My Watch -> Available Apps**. After either change, open OpenClaw on the
+  Watch once; immediate reachability still requires both apps to be running,
+  while queued updates can arrive later in the background.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 
 ## Related docs

@@ -5,6 +5,7 @@ public enum OpenClawCapability: String, Codable, Sendable {
     case browser
     case camera
     case screen
+    case computer
     case voiceWake
     case talk
     case location
@@ -15,4 +16,5 @@ public enum OpenClawCapability: String, Codable, Sendable {
     case calendar
     case reminders
     case motion
+    case health
 }

@@ -1,3 +1,4 @@
+import type { UsageSummary as SharedProviderUsageSummary } from "../../../../src/infra/provider-usage.types.js";
 // Control UI module implements usage types behavior.
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,
@@ -8,6 +9,7 @@ import type { SessionsUsageResult as SharedSessionsUsageResult } from "../../../
 export type SessionsUsageEntry = SharedSessionsUsageResult["sessions"][number];
 export type SessionsUsageTotals = SharedSessionsUsageResult["totals"];
 export type SessionsUsageResult = SharedSessionsUsageResult;
+export type ProviderUsageSummary = SharedProviderUsageSummary;
 
 export type CostUsageDailyEntry = SessionsUsageTotals & { date: string };
 

@@ -12,6 +12,8 @@ without making you scan the raw changelog first.
 
 ## Releases
 
+- [v2026.7.1](/releases/2026.7.1) - Control UI and onboarding overhauls,
+  major iOS and Android updates, expanded model support, and Gateway recovery.
 - [v2026.6.11](/releases/2026.6.11) - Reliability fixes for replies, sends,
   reconnects, model setup, sessions, and safer admin defaults.
 

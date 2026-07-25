@@ -3,22 +3,33 @@
  * allowlists, and display paths. Manifest policies are optional so tests can
  * isolate built-in normalization behavior.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey as findNormalizedProviderKeyCore,
+  normalizeProviderId as normalizeProviderIdCore,
+  normalizeProviderIdForAuth as normalizeProviderIdForAuthCore,
+} from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
   normalizeBuiltInProviderModelId,
   normalizeConfiguredProviderCatalogModelRef,
   normalizeConfiguredProviderCatalogModelId as normalizeConfiguredProviderCatalogModelIdShared,
   normalizeStaticProviderModelIdWithPolicies,
+  stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { modelKey } from "../shared/model-key.js";
+import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 export { modelKey } from "../shared/model-key.js";
 
-type StaticModelRef = {
+export type ModelRef = {
   provider: string;
   model: string;
+};
+
+export type ModelManifestNormalizationContext = {
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
 
 export type ProviderModelIdNormalizationOptions = {
@@ -41,6 +52,24 @@ type ManifestModelIdNormalizationRecord = {
     providers?: Record<string, ManifestModelIdNormalizationProvider>;
   };
 };
+
+/** Normalize a provider ID using the shared catalog rules. */
+export function normalizeProviderId(provider: string): string {
+  return normalizeProviderIdCore(provider);
+}
+
+/** Normalize a provider ID for auth lookup. */
+export function normalizeProviderIdForAuth(provider: string): string {
+  return normalizeProviderIdForAuthCore(provider);
+}
+
+/** Find the original provider key matching a normalized provider ID. */
+export function findNormalizedProviderKey(
+  entries: Record<string, unknown> | undefined,
+  provider: string,
+): string | undefined {
+  return findNormalizedProviderKeyCore(entries, provider);
+}
 
 /** Normalize a static provider model ID with built-in and optional manifest policy. */
 export function normalizeStaticProviderModelId(
@@ -91,7 +120,57 @@ export function normalizeConfiguredProviderCatalogModelId(
   );
 }
 
-function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
+type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
+};
+
+function normalizeProviderModelId(
+  provider: string,
+  model: string,
+  options?: ModelRefNormalizeOptions,
+): string {
+  const providerModel = stripSelfProviderModelPrefix(provider, model);
+  const staticModelId = normalizeStaticProviderModelId(provider, providerModel, options);
+  if (options?.allowPluginNormalization === false) {
+    return staticModelId;
+  }
+  return (
+    normalizeProviderModelIdWithRuntime({
+      provider,
+      ...(options?.manifestPlugins ? { plugins: options.manifestPlugins } : {}),
+      context: {
+        provider,
+        modelId: staticModelId,
+      },
+    }) ?? staticModelId
+  );
+}
+
+/** Normalize a provider/model pair into a canonical model reference. */
+export function normalizeModelRef(
+  provider: string,
+  model: string,
+  options?: ModelRefNormalizeOptions,
+): ModelRef {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim(), options);
+  return { provider: normalizedProvider, model: normalizedModel };
+}
+
+/** Return the legacy raw key when it differs from the canonical key. */
+export function legacyModelKey(provider: string, model: string): string | null {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId || !modelId) {
+    return null;
+  }
+  const rawKey = `${providerId}/${modelId}`;
+  const canonicalKey = modelKey(providerId, modelId);
+  return rawKey === canonicalKey ? null : rawKey;
+}
+
+function parseStaticModelRef(raw: string, defaultProvider: string): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;

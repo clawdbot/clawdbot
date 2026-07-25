@@ -65,6 +65,7 @@ describe("operator approval runtime token", () => {
     expect(sharedToken).toEqual(expect.any(String));
     expect(sharedToken).not.toBe("shared-runtime-token");
     expect(runtimeToken.isOperatorApprovalRuntimeToken(` ${sharedToken} `)).toBe(true);
+    expect(runtimeToken.isOperatorApprovalRuntimeToken(sharedToken.slice(0, -1))).toBe(false);
     expect(runtimeToken.isOperatorApprovalRuntimeToken("shared-runtime-token")).toBe(false);
     expect(runtimeToken.isOperatorApprovalRuntimeToken("different-token")).toBe(false);
   });

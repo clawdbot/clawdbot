@@ -3,7 +3,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import {
   copyArrayEntries,
   copyRecordEntries,
-  isRecord,
+  isRecordWithoutThrowing,
   readRecordValue,
 } from "../shared/safe-record.js";
 import type { ProviderCatalogResult } from "./types.js";
@@ -46,7 +46,7 @@ const MODEL_DEFINITION_CONFIG_KEYS = [
 ] as const satisfies readonly (keyof ModelDefinitionConfig)[];
 
 /** Projection of a provider catalog result into provider config entries. */
-export type ProviderCatalogResultProjection =
+type ProviderCatalogResultProjection =
   | { kind: "provider"; provider: ModelProviderConfig }
   | { kind: "providers"; providers: Array<[string, ModelProviderConfig]> }
   | { kind: "empty" };
@@ -92,7 +92,7 @@ export function copyProviderCatalogModels(
 }
 
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
-  if (!isRecord(model)) {
+  if (!isRecordWithoutThrowing(model)) {
     return undefined;
   }
   const id = readRecordValue(model, "id");
@@ -115,10 +115,10 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
 }
 
 /** Copies the supported provider config fields from a provider catalog result. */
-export function copyProviderCatalogProviderConfig(
+function copyProviderCatalogProviderConfig(
   providerConfig: unknown,
 ): ModelProviderConfig | undefined {
-  if (!isRecord(providerConfig)) {
+  if (!isRecordWithoutThrowing(providerConfig)) {
     return undefined;
   }
 

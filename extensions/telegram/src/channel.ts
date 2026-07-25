@@ -55,6 +55,7 @@ import {
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
+import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -82,7 +83,7 @@ import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
 } from "./session-conversation.js";
-import { telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupAdapter, telegramSetupContract } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
   createTelegramPluginBase,
@@ -266,6 +267,7 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
 });
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
+  messageActionTargetAliases: telegramMessageActionsImpl.messageActionTargetAliases,
   resolveExecutionMode: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveExecutionMode?.(ctx) ??
     telegramMessageActionsImpl.resolveExecutionMode?.(ctx) ??
@@ -290,6 +292,14 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.isToolDeliveryAction?.(ctx) ??
     telegramMessageActionsImpl.isToolDeliveryAction?.(ctx) ??
     false,
+  prepareSendPayload: async (ctx) => {
+    const runtimePrepareSendPayload =
+      getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.prepareSendPayload;
+    if (runtimePrepareSendPayload) {
+      return await runtimePrepareSendPayload(ctx);
+    }
+    return await telegramMessageActionsImpl.prepareSendPayload?.(ctx);
+  },
   handleAction: async (ctx) => {
     const runtimeHandleAction =
       getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.handleAction;
@@ -534,22 +544,26 @@ function resolveTelegramOutboundSessionRoute(params: {
     return null;
   }
   const resolvedThreadId = parsed.messageThreadId ?? parseTelegramThreadId(params.threadId);
+  const resolvedKind = params.resolvedTarget?.kind;
   const isGroup =
     parsed.chatType === "group" ||
-    (parsed.chatType === "unknown" &&
-      params.resolvedTarget?.kind &&
-      params.resolvedTarget.kind !== "user");
+    (parsed.chatType === "unknown" && resolvedKind !== undefined && resolvedKind !== "user");
+  // Telegram private chat ids are the sender's stable numeric user id, while
+  // group ids are negative. Usernames remain aliases and cannot key replies.
+  const recipientSessionExact = /^-?\d+$/.test(chatId);
   const peerId =
     isGroup && resolvedThreadId ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "direct",
     id: peerId,
   };
+  const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "telegram",
-    accountId: params.accountId,
+    accountId,
+    recipientSessionExact,
     peer,
     chatType: isGroup ? ("group" as const) : ("direct" as const),
     from: isGroup
@@ -563,12 +577,29 @@ function resolveTelegramOutboundSessionRoute(params: {
   if (isGroup) {
     return baseRoute;
   }
+  const inboundBaseSessionKey = resolveTelegramConversationBaseSessionKey({
+    cfg: params.cfg,
+    route: {
+      agentId: params.agentId,
+      accountId,
+      matchedBy: "default",
+      sessionKey: baseRoute.sessionKey,
+    },
+    chatId,
+    isGroup: false,
+    senderId: chatId,
+  });
+  const directBaseRoute = {
+    ...baseRoute,
+    sessionKey: inboundBaseSessionKey,
+    baseSessionKey: inboundBaseSessionKey,
+  };
   const canonicalThreadId =
     resolvedThreadId !== undefined
       ? buildTelegramCanonicalTopicThreadId({ chatId, topicId: resolvedThreadId })
       : undefined;
   const route = buildThreadAwareOutboundSessionRoute({
-    route: baseRoute,
+    route: directBaseRoute,
     threadId: canonicalThreadId,
     currentSessionKey: params.currentSessionKey,
     precedence: ["threadId", "currentSession"],
@@ -657,6 +688,10 @@ async function resolveTelegramTargets(params: {
         const id = await lookupTelegramChatId({
           token,
           chatId: normalized,
+          // Runtime requests honor configured routing. Doctor intentionally omits these
+          // fields so repair does not send the bot token to config-controlled endpoints.
+          proxyUrl: account.config.proxy,
+          apiRoot: account.config.apiRoot,
           network: account.config.network,
         });
         if (!id) {
@@ -697,6 +732,7 @@ export const telegramPlugin = createChatChannelPlugin({
     ...createTelegramPluginBase({
       setupWizard: telegramSetupWizard,
       setup: telegramSetupAdapter,
+      setupContract: telegramSetupContract,
     }),
     allowlist: buildDmGroupAccountAllowlistAdapter({
       channelId: "telegram",
@@ -780,12 +816,34 @@ export const telegramPlugin = createChatChannelPlugin({
           cfg,
           accountId: accountId ?? undefined,
         });
-        const capabilities = inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+        return inlineButtonsScope === "off" ? [] : ["inlineButtons"];
+      },
+      // Authoring contract lives here so every runtime (including native Codex)
+      // sees it via inbound-meta response_format; core system-prompt no longer owns it.
+      inboundFormattingHints: ({ cfg, accountId }) => {
         const selectedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-        if (mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true) {
-          capabilities.push("richText");
+        const richMessages =
+          mergeTelegramAccountConfig(cfg, selectedAccountId).richMessages === true;
+        if (richMessages) {
+          return {
+            text_markup: "markdown_telegram_rich",
+            rules: [
+              "Telegram rich ON (Bot API 10.2 blocks; OpenClaw maps markdown + these HTML islands to typed blocks).",
+              'Supported: headings, tables (markdown, or `<table>` HTML for caption/colspan/rowspan/align), block/pull quotes (`<aside>` + `<cite>`), `<details><summary>` (+`open`), dividers `<hr/>`, sup/sub/mark/spoilers, `<ul>`/`<ol>` + `<input type="checkbox" checked/>` tasks, code, anchors `<a name="x"></a>` + `<a href="#x">label</a>`, custom emoji `<tg-emoji emoji-id="...">`, maps `<tg-map lat="" long="" zoom=""/>`, collages/slideshows `<tg-collage>`/`<tg-slideshow>`, block media e.g. `<img src="https://..."/>` (+`<figure>`/`<figcaption>`).',
+              "Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`.",
+              "Not MarkdownV2/parse_mode.",
+              "Collapse=`<details>` (not expandable blockquote); structured bullets=`<ul><li>` (not literal bullets).",
+              "Media https URLs only, block-level only, captions/credits when useful; buttons plain text; normal files via attachments.",
+            ],
+          };
         }
-        return capabilities;
+        return {
+          text_markup: "markdown",
+          rules: [
+            "Telegram rich OFF. Standard Telegram formatting only; no rich tables/details/block media/formulas.",
+            "Owner can enable `richMessages` for this Telegram account.",
+          ],
+        };
       },
       reactionGuidance: ({ cfg, accountId }) => {
         const level = resolveTelegramReactionLevel({
@@ -798,13 +856,15 @@ export const telegramPlugin = createChatChannelPlugin({
     messaging: {
       defaultMarkdownTableMode: "block",
       targetPrefixes: ["telegram", "tg"],
+      numericTopicShorthand: true,
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>
         resolveTelegramInboundConversation({ to, conversationId, threadId }),
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
         resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
-      resolveSessionConversation: ({ kind, rawId }) =>
-        resolveTelegramSessionConversation({ kind, rawId }),
+      // Same function as the public session-key artifact so the pre-registry
+      // fast path cannot drift from plugin behavior (pinned by contract test).
+      resolveSessionConversation: resolveTelegramSessionConversation,
       resolveSessionTarget: ({ kind, id }) => resolveTelegramSessionTarget({ kind, id }),
       inferTargetChatType: ({ to }) => resolveTelegramRouteTarget(to).chatType,
       preserveHeartbeatThreadIdForGroupRoute: true,
@@ -1008,17 +1068,14 @@ export const telegramPlugin = createChatChannelPlugin({
         let botInfo: TelegramBotInfo | undefined;
         try {
           const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
-            resolveTelegramProbe()(
-              token,
-              resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
-              {
-                accountId: account.accountId,
-                proxyUrl: account.config.proxy,
-                network: account.config.network,
-                apiRoot: account.config.apiRoot,
-                includeWebhookInfo: false,
-              },
-            ),
+            resolveTelegramProbe()(token, resolveTelegramStartupProbeTimeoutMs(undefined), {
+              accountId: account.accountId,
+              proxyUrl: account.config.proxy,
+              network: account.config.network,
+              apiRoot: account.config.apiRoot,
+              includeWebhookInfo: false,
+              abortSignal: ctx.abortSignal,
+            }),
           );
           const username = probe.ok ? probe.bot?.username?.trim() : null;
           if (username) {
@@ -1191,3 +1248,4 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   outbound: telegramChannelOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

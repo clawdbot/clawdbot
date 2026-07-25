@@ -1,6 +1,6 @@
 // OpenClaw NPM Publish tests cover publish wrapper argument safety.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,12 +14,38 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
-function runPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
+function runPublishWrapper(
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+  cwd: string = process.cwd(),
+) {
   return spawnSync("bash", [scriptPath, ...args], {
-    cwd: process.cwd(),
+    cwd,
     encoding: "utf8",
     env: { ...process.env, ...env },
   });
+}
+
+function makeReleaseCheckout(root: string, version: string): string {
+  const checkout = path.join(root, "checkout");
+  const scriptsDir = path.join(checkout, "scripts");
+  mkdirSync(scriptsDir, { recursive: true });
+  writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ version }), "utf8");
+  copyFileSync(scriptPath, path.join(checkout, scriptPath));
+  copyFileSync(
+    "scripts/openclaw-npm-extended-stable-release.mjs",
+    path.join(checkout, "scripts/openclaw-npm-extended-stable-release.mjs"),
+  );
+  mkdirSync(path.join(scriptsDir, "lib"));
+  copyFileSync(
+    "scripts/lib/npm-publish-plan.mjs",
+    path.join(checkout, "scripts/lib/npm-publish-plan.mjs"),
+  );
+  copyFileSync(
+    "scripts/lib/release-version.mjs",
+    path.join(checkout, "scripts/lib/release-version.mjs"),
+  );
+  return checkout;
 }
 
 function makePackageTarball(root: string, packageJson?: string): string {
@@ -85,7 +111,8 @@ describe("openclaw npm publish wrapper", () => {
   it.each(["beta", "latest"])("publishes the prepared tarball to the %s dist-tag", (distTag) => {
     const tempRoot = makeTempDir("openclaw-npm-publish-");
     const binDir = path.join(tempRoot, "bin");
-    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    const packageVersion = distTag === "beta" ? "2026.5.32-beta.1" : "2026.5.32";
+    const checkout = makeReleaseCheckout(tempRoot, packageVersion);
     const tarball = makePackageTarball(tempRoot, JSON.stringify({ version: packageVersion }));
     const npmLog = path.join(tempRoot, "npm.log");
     mkdirSync(binDir);
@@ -93,10 +120,14 @@ describe("openclaw npm publish wrapper", () => {
       mode: 0o755,
     });
 
-    const result = runPublishWrapper(["--publish", tarball], {
-      OPENCLAW_NPM_PUBLISH_TAG: distTag,
-      PATH: `${binDir}:${process.env.PATH}`,
-    });
+    const result = runPublishWrapper(
+      ["--publish", tarball],
+      {
+        OPENCLAW_NPM_PUBLISH_TAG: distTag,
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      checkout,
+    );
 
     expect(result.status).toBe(0);
     expect(readFileSync(npmLog, "utf8")).toContain(
@@ -136,9 +167,15 @@ describe("openclaw npm publish wrapper", () => {
   });
 
   it("rejects publishing the current pre-.33 final version to extended-stable", () => {
-    const result = runPublishWrapper(["--publish"], {
-      OPENCLAW_NPM_PUBLISH_TAG: "extended-stable",
-    });
+    const tempRoot = makeTempDir("openclaw-npm-publish-");
+    const checkout = makeReleaseCheckout(tempRoot, "2026.5.32");
+    const result = runPublishWrapper(
+      ["--publish"],
+      {
+        OPENCLAW_NPM_PUBLISH_TAG: "extended-stable",
+      },
+      checkout,
+    );
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
@@ -149,17 +186,22 @@ describe("openclaw npm publish wrapper", () => {
   it("publishes a pre-.33 final version to extended-stable with the explicit bypass", () => {
     const tempRoot = makeTempDir("openclaw-npm-publish-");
     const binDir = path.join(tempRoot, "bin");
+    const checkout = makeReleaseCheckout(tempRoot, "2026.5.32");
     const npmLog = path.join(tempRoot, "npm.log");
     mkdirSync(binDir);
     writeFileSync(path.join(binDir, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" > "${npmLog}"\n`, {
       mode: 0o755,
     });
 
-    const result = runPublishWrapper(["--publish"], {
-      BYPASS_EXTENDED_STABLE_GUARD: "true",
-      OPENCLAW_NPM_PUBLISH_TAG: "extended-stable",
-      PATH: `${binDir}:${process.env.PATH}`,
-    });
+    const result = runPublishWrapper(
+      ["--publish"],
+      {
+        BYPASS_EXTENDED_STABLE_GUARD: "true",
+        OPENCLAW_NPM_PUBLISH_TAG: "extended-stable",
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      checkout,
+    );
 
     expect(result.status).toBe(0);
     expect(readFileSync(npmLog, "utf8")).toContain(

@@ -26,7 +26,7 @@ openclaw daemon uninstall
 | Subcommand  | Options                                                                                          |
 | ----------- | ------------------------------------------------------------------------------------------------ |
 | `status`    | `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json` |
-| `install`   | `--port`, `--runtime <node\|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`            |
+| `install`   | `--port`, `--runtime <node>`, `--token`, `--wrapper <path>`, `--force`, `--json`                 |
 | `uninstall` | `--json`                                                                                         |
 | `start`     | `--json`                                                                                         |
 | `stop`      | `--json`, `--disable` (launchd only: persistently suppress KeepAlive/RunAtLoad until next start) |
@@ -34,7 +34,7 @@ openclaw daemon uninstall
 
 - `status`: shows service install state (launchd/systemd/schtasks) and probes Gateway health.
 - `install`: installs the service; `--force` reinstalls/overwrites an existing install.
-- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded by `gateway.reload.deferralTimeoutMs` (default 300000ms/5 minutes; set to `0` to wait indefinitely). When that budget expires, the restart is forced anyway. Plain `restart` uses the service manager directly; `--force` is the immediate override.
+- `restart --safe`: asks the running Gateway to preflight active work and schedule one coalesced restart after work drains, bounded to 5 minutes. When that budget expires, the restart is forced anyway. Plain `restart` uses the service manager directly; `--force` is the immediate override.
 - `restart --safe --skip-deferral`: bypasses the active-work deferral gate so the Gateway restarts immediately even when blockers are reported. Requires `--safe`.
 
 ## Notes

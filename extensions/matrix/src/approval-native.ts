@@ -152,12 +152,17 @@ function resolveSuppressionAccountId(params: {
 
 const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
   channel: "matrix",
-  shouldHandleRequest: ({ cfg, accountId, request }) =>
-    shouldHandleMatrixApprovalRequest({
+  shouldHandleRequest: ({ cfg, accountId, approvalKind, request }) => {
+    if (approvalKind !== "exec" && approvalKind !== "plugin") {
+      return false;
+    }
+    return shouldHandleMatrixApprovalRequest({
       cfg,
       accountId,
+      approvalKind,
       request,
-    }),
+    });
+  },
   resolveTurnSourceTarget: resolveTurnSourceMatrixOriginTarget,
   resolveSessionTarget: resolveSessionMatrixOriginTarget,
   normalizeTargetForMatch: normalizeMatrixOriginTarget,
@@ -239,10 +244,11 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
         cfg,
         accountId,
       }),
-    shouldHandle: ({ cfg, accountId, request }) =>
+    shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
       shouldHandleMatrixApprovalRequest({
         cfg,
         accountId,
+        approvalKind,
         request,
       }),
     load: async () =>
@@ -272,6 +278,22 @@ const matrixDeliveryAdapter = matrixBaseDeliveryAdapter && {
     ) {
       return false;
     }
+    if (params.approvalKind === "plugin") {
+      const targetChannel = normalizeLowercaseStringOrEmpty(params.target.channel);
+      const turnSourceChannel = normalizeLowercaseStringOrEmpty(
+        params.request.request.turnSourceChannel,
+      );
+      return (
+        targetChannel === "matrix" &&
+        turnSourceChannel === "matrix" &&
+        shouldHandleMatrixApprovalRequest({
+          cfg: params.cfg,
+          accountId,
+          approvalKind: "plugin",
+          request: params.request,
+        })
+      );
+    }
     return matrixBaseDeliveryAdapter.shouldSuppressForwardingFallback?.(params) ?? false;
   },
 };
@@ -292,7 +314,7 @@ const matrixNativeAdapter = matrixBaseNativeApprovalAdapter && {
     });
     return {
       ...capabilities,
-      enabled: capabilities.enabled && hasApprovers && clientEnabled,
+      enabled: hasApprovers && clientEnabled,
     };
   },
   resolveOriginTarget: matrixBaseNativeApprovalAdapter.resolveOriginTarget,

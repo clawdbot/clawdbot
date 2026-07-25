@@ -10,7 +10,7 @@ const RESEED_PREFIX = `${RESEED_HEADER}\n`;
 const RESEED_USER_BOUNDARY = "\n</conversation_history>\n\n<next_user_message>\n";
 const RESEED_USER_CLOSE = "\n</next_user_message>";
 
-export type ParsedCliReseedPrompt =
+type ParsedCliReseedPrompt =
   | { kind: "none" }
   | { kind: "legacy"; userMessage: string }
   | { kind: "invalid" };

@@ -1,5 +1,5 @@
 // Control UI chat module implements realtime talk conversation behavior.
-export type RealtimeTalkConversationRole = "user" | "assistant";
+type RealtimeTalkConversationRole = "user" | "assistant";
 
 export type RealtimeTalkConversationEntry = {
   id: string;
@@ -17,7 +17,7 @@ export type RealtimeTalkConversationState = {
   assistantEntryId: string | null;
 };
 
-export type RealtimeTalkTranscriptUpdate = {
+type RealtimeTalkTranscriptUpdate = {
   role: RealtimeTalkConversationRole;
   text: string;
   final: boolean;
@@ -112,7 +112,13 @@ function upsertRealtimeConversationEntry(
     return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
   }
   const entry = state.entries[targetIndex];
-  const updatedText = mergeRealtimeTranscriptText(entry.text, text, isFinal);
+  if (!entry) {
+    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
+  }
+  const updatedText =
+    role === "assistant"
+      ? mergeAssistantTranscriptText(entry.text, text, isFinal)
+      : mergeRealtimeTranscriptText(entry.text, text, isFinal);
   const entries =
     entry.text === updatedText && entry.isStreaming === !isFinal
       ? state.entries
@@ -142,7 +148,7 @@ function rememberRealtimeConversationEntry(
   return { ...state, assistantEntryId: isFinal ? null : entryId };
 }
 
-export function finishRealtimeConversationEntry(
+function finishRealtimeConversationEntry(
   state: RealtimeTalkConversationState,
   role: RealtimeTalkConversationRole,
   nowMs: number = Date.now(),
@@ -201,11 +207,35 @@ function shouldStartNewRealtimeUserEntry(
   return true;
 }
 
-export function mergeRealtimeTranscriptText(
+// Assistant transcripts are verbatim fragment streams: providers concatenate
+// deltas into the exact transcript (OpenAI audio-transcript deltas, Google Live
+// outputTranscription chunks). Never synthesize characters between fragments —
+// the user-side ASR spacing heuristic would mangle "ChatGPT" into "Chat G PT"
+// and "Version 1.2" into "Version 1. 2".
+function mergeAssistantTranscriptText(
   existing: string,
   incoming: string,
   isFinal: boolean,
 ): string {
+  if (existing.trim() === "") {
+    return incoming.trimStart();
+  }
+  if (!isFinal) {
+    return `${existing}${incoming}`;
+  }
+  // Final shape differs by provider: OpenAI-style finals carry the full
+  // transcript (replace), Google Live finals carry only the last fragment
+  // (append). Replace only when incoming restates what already streamed.
+  if (incoming === existing || incoming.startsWith(existing)) {
+    return incoming;
+  }
+  if (looksLikeTranscriptReplacement(existing, incoming)) {
+    return incoming;
+  }
+  return `${existing}${incoming}`;
+}
+
+function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal: boolean): string {
   if (existing.trim() === "") {
     return incoming.trimStart();
   }

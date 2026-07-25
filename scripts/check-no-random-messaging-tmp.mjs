@@ -2,7 +2,6 @@
 
 // Blocks host-random tmpdir usage in messaging/channel runtime sources.
 import ts from "typescript";
-import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import {
   collectCallExpressionLines,
@@ -21,8 +20,6 @@ export const messagingTmpdirGuardSourceRoots = [
   "src/media-understanding",
   "extensions",
 ];
-const allowedRelativePaths = new Set([bundledPluginFile("feishu", "src/dedup.ts")]);
-
 function collectOsTmpdirImports(sourceFile) {
   const osModuleSpecifiers = new Set(["node:os", "os"]);
   const osNamespaceOrDefault = new Set();
@@ -85,7 +82,6 @@ export async function main() {
     importMetaUrl: import.meta.url,
     sourceRoots: messagingTmpdirGuardSourceRoots,
     findCallLines: findMessagingTmpdirCallLines,
-    skipRelativePath: (relativePath) => allowedRelativePaths.has(relativePath),
     header: "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
     footer:
       "Use resolvePreferredOpenClawTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",

@@ -73,6 +73,11 @@ export async function resolveGatewayRuntimeConfig(params: {
       `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
     );
   }
+  if (bindMode === "tailnet" && bindHost === "0.0.0.0") {
+    throw new Error(
+      "gateway bind=tailnet could not resolve a Tailscale or loopback address; refusing wildcard fallback",
+    );
+  }
   if (bindMode === "custom") {
     const configuredCustomBindHost = customBindHost?.trim();
     if (!configuredCustomBindHost) {

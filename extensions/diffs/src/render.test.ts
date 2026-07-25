@@ -1,9 +1,11 @@
 // Diffs tests cover render plugin behavior.
 import { disposeHighlighter } from "@pierre/diffs";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
+import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
+
+const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
 describe("renderDiffDocument", () => {
   afterEach(async () => {
@@ -40,6 +42,9 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).toContain("--diffs-line-height: 24px;");
     expect(rendered.html).toContain("--diffs-font-size: 15px;");
     expect(rendered.html).not.toContain("fonts.googleapis.com");
+    expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
+    expect(rendered.html).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(rendered.html).toContain("scroll-behavior: auto;");
   });
 
   it("normalizes non-finite presentation numbers before rendering CSS", async () => {
@@ -173,14 +178,16 @@ describe("renderDiffDocument", () => {
     expect(payload.langs).toEqual(["abap"]);
   });
 
-  it("renders multi-file patch input", async () => {
+  it("renders multi-file patch input with a changed-files summary nav", async () => {
     const patch = [
       "diff --git a/a.ts b/a.ts",
       "--- a/a.ts",
       "+++ b/a.ts",
-      "@@ -1 +1 @@",
+      "@@ -1,2 +1,3 @@",
       "-const a = 1;",
       "+const a = 2;",
+      "+const extra = true;",
+      " const keep = 0;",
       "diff --git a/b.ts b/b.ts",
       "--- a/b.ts",
       "+++ b/b.ts",
@@ -214,6 +221,101 @@ describe("renderDiffDocument", () => {
     expect(rendered.fileCount).toBe(2);
     expect(rendered.html).toContain("Workspace patch");
     expect(rendered.imageHtml).toContain("max-width: 1180px;");
+
+    const html = rendered.html ?? "";
+    expect(html).toContain('<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files">');
+    expect(html).toContain("2 changed files");
+    expect(html).toContain(
+      '<span class="oc-diff-nav-additions">+3</span><span class="oc-diff-nav-deletions">-2</span>',
+    );
+    expect(html).toContain(
+      '<span class="oc-diff-nav-additions">+2</span><span class="oc-diff-nav-deletions">-1</span>',
+    );
+    expect(html).toContain('href="#oc-diff-file-1"');
+    expect(html).toContain('id="oc-diff-file-1"');
+    expect(html).toContain('href="#oc-diff-file-2"');
+    expect(html).toContain('id="oc-diff-file-2"');
+    expect(rendered.imageHtml).toContain('<nav class="oc-diff-card oc-diff-nav"');
+  });
+
+  it("labels added, deleted, and renamed files in the summary nav and escapes names", async () => {
+    const patch = [
+      "diff --git a/new.ts b/new.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/new.ts",
+      "@@ -0,0 +1 @@",
+      "+const created = true;",
+      "diff --git a/old.ts b/old.ts",
+      "deleted file mode 100644",
+      "--- a/old.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-const removed = true;",
+      "diff --git a/before.ts b/after.ts",
+      "similarity index 90%",
+      "rename from before.ts",
+      "rename to after.ts",
+      "--- a/before.ts",
+      "+++ b/after.ts",
+      "@@ -1 +1 @@",
+      "-const v = 1;",
+      "+const v = 2;",
+      "diff --git a/a&b.ts b/a&b.ts",
+      "--- a/a&b.ts",
+      "+++ b/a&b.ts",
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+    ].join("\n");
+
+    const rendered = await renderDiffDocument(
+      {
+        kind: "patch",
+        patch,
+      },
+      {
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+      "viewer",
+    );
+
+    const html = rendered.html ?? "";
+    expect(html).toContain("4 changed files");
+    expect(html).toContain('<span class="oc-diff-nav-badge" data-change="added">added</span>');
+    expect(html).toContain('<span class="oc-diff-nav-badge" data-change="deleted">deleted</span>');
+    expect(html).toContain('<span class="oc-diff-nav-badge" data-change="renamed">renamed</span>');
+    expect(html).toContain("before.ts &rarr; after.ts");
+    expect(html).toContain("a&amp;b.ts");
+  });
+
+  it("omits the summary nav for single-file patches", async () => {
+    const patch = [
+      "diff --git a/solo.ts b/solo.ts",
+      "--- a/solo.ts",
+      "+++ b/solo.ts",
+      "@@ -1 +1 @@",
+      "-const solo = 1;",
+      "+const solo = 2;",
+    ].join("\n");
+
+    const rendered = await renderDiffDocument(
+      {
+        kind: "patch",
+        patch,
+      },
+      {
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+      "viewer",
+    );
+
+    expect(rendered.fileCount).toBe(1);
+    expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
   });
 
   it("rejects patches that exceed file-count limits", async () => {

@@ -9,12 +9,12 @@ import {
 } from "../cli/program/register-command-groups.js";
 import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
 
-export type PluginCliCommandGroupEntry = CommandGroupEntry & {
+type PluginCliCommandGroupEntry = CommandGroupEntry & {
   pluginId: string;
   parentPath?: readonly string[];
 };
 
-export type PluginCliCommandGroupMode = "eager" | "lazy";
+type PluginCliCommandGroupMode = "eager" | "lazy";
 
 function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean {
   if (entry.placeholders.length === 0) {

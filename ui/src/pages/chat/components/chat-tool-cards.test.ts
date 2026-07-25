@@ -2,38 +2,14 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: (display: { detail?: string }) => display.detail,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
-    const labels: Record<string, string> = {
-      sessions_spawn: "Sub-agent",
-      skill_workshop: "Skill Workshop",
-      web_search: "Web Search",
-    };
-    const detail =
-      name === "skill_workshop" &&
-      args &&
-      typeof args === "object" &&
-      typeof (args as { action?: unknown }).action === "string"
-        ? (args as { action: string }).action
-        : undefined;
-    return {
-      name,
-      label: labels[name] ?? name,
-      icon: "zap",
-      detail,
-    };
-  },
-}));
-
+import { t } from "../../../i18n/index.ts";
 import {
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  isToolErrorOutput,
+  resolveCollapsedToolArgumentPreview,
 } from "../../../lib/chat/tool-cards.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -50,8 +26,115 @@ function requireFirstMockArg(
   return arg;
 }
 
+function selectText(element: Element) {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function pointerClick(element: Element) {
+  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+}
+
 describe("tool-cards", () => {
-  it("renders expanded cards with inline input and output sections", () => {
+  it("routes MCP App previews through the dedicated double-iframe host", async () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_app",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_message",
+        { sessionKey: "agent:main:main" },
+      ),
+      container,
+    );
+
+    const view = container.querySelector("mcp-app-view");
+    expect(view).not.toBeNull();
+    expect(view?.getAttribute("src")).toBeNull();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+    expect((view as { height?: number }).height).toBe(600);
+    await customElements.whenDefined("mcp-app-view");
+    expect(customElements.get("mcp-app-view")).toBeDefined();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+
+    const toolContainer = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_tool",
+        { sessionKey: "agent:main:main" },
+      ),
+      toolContainer,
+    );
+    expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+  });
+
+  it("keeps ordinary canvas previews off the MCP Apps chunk", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_canvas",
+          url: "https://canvas.example/widget",
+        },
+        "chat_message",
+        { allowExternalEmbedUrls: true },
+      ),
+      container,
+    );
+
+    expect(container.querySelector("iframe")).not.toBeNull();
+  });
+
+  it("keeps selected summary text from toggling the disclosure", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const toggle = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:selectable",
+          name: "web_search",
+          args: { query: "openclaw" },
+        },
+        { expanded: false, onToggleExpanded: toggle },
+      ),
+      container,
+    );
+
+    const summary = container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary");
+    const label = summary?.querySelector(".chat-tool-msg-summary__label");
+    expect(summary).not.toBeNull();
+    expect(label).not.toBeNull();
+    selectText(label!);
+    pointerClick(summary!);
+    expect(toggle).not.toHaveBeenCalled();
+
+    window.getSelection()?.removeAllRanges();
+    pointerClick(summary!);
+    expect(toggle).toHaveBeenCalledWith("msg:selectable");
+    container.remove();
+  });
+
+  it("renders expanded cards with key-value args and an output section", () => {
     const container = document.createElement("div");
     const toggle = vi.fn();
     render(
@@ -68,14 +151,271 @@ describe("tool-cards", () => {
       container,
     );
 
+    // Simple object args render as key-value rows instead of a raw JSON block.
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(kvRows).toHaveLength(1);
+    expect(kvRows[0]?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
+    expect(kvRows[0]?.querySelector(".chat-tool-kv__value")?.textContent).toBe(
+      "https://example.com",
+    );
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool output"]);
-    expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
-      '{\n  "url": "https://example.com"\n}',
-      "Opened page",
+    ).toEqual(["Tool output"]);
+    expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
+  });
+
+  it("renders multi-file patch headers, changed rows, and raw output together", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:multi",
+          name: "apply_patch",
+          args: {
+            changes: [
+              {
+                path: "src/a.ts",
+                kind: { type: "update" },
+                diff: [
+                  "--- a/src/a.ts",
+                  "+++ b/src/a.ts",
+                  "@@ -1 +1 @@",
+                  "-old a",
+                  "+new a",
+                  "",
+                ].join("\n"),
+              },
+              {
+                path: "src/b.ts",
+                kind: { type: "add" },
+                diff: "new b\n",
+              },
+            ],
+          },
+          outputText: "Applied patch",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const diff = container.querySelector(".chat-diff");
+    expect(diff?.getAttribute("aria-label")).toBe("File changes");
+    const fileRows = Array.from(diff?.querySelectorAll(".chat-diff__row--file") ?? []);
+    expect(fileRows.map((row) => row.querySelector(".chat-diff__text")?.textContent)).toEqual([
+      "Update src/a.ts",
+      "Add src/b.ts",
     ]);
+    expect(fileRows.every((row) => row.querySelector(".chat-diff__gutter") !== null)).toBe(true);
+    expect(diff?.querySelector(".chat-diff__row--del .chat-diff__text")?.textContent).toBe("old a");
+    expect(
+      Array.from(diff?.querySelectorAll(".chat-diff__row--add .chat-diff__text") ?? []).map(
+        (row) => row.textContent,
+      ),
+    ).toEqual(["new a", "new b"]);
+
+    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
+    expect(rawToggle?.textContent?.trim()).toBe("Raw details");
+    rawToggle?.click();
+    expect(container.querySelector(".chat-tool-card__raw-body code")?.textContent).toBe(
+      "Applied patch",
+    );
+  });
+
+  it("renders edit and write rows from their result outcome", () => {
+    const mutations = [
+      {
+        name: "edit",
+        args: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
+        verbs: { running: "Editing", succeeded: "Edited", neutral: "Edit" },
+      },
+      {
+        name: "write",
+        args: { path: "/repo/src/b.ts", content: "new file\n" },
+        verbs: { running: "Writing", succeeded: "Wrote", neutral: "Write" },
+      },
+    ] as const;
+    const states = [
+      {
+        name: "running",
+        card: { live: true },
+        runActive: true,
+        verb: "running",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: false,
+      },
+      {
+        name: "succeeded",
+        card: { completed: true },
+        runActive: false,
+        verb: "succeeded",
+        label: "File changes",
+        hasStat: true,
+        failed: false,
+      },
+      {
+        name: "failed after recovery",
+        card: { completed: true, isError: true },
+        runActive: false,
+        verb: "neutral",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: true,
+      },
+      {
+        name: "call only",
+        card: {},
+        runActive: false,
+        verb: "neutral",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: false,
+      },
+      {
+        name: "empty successful result",
+        card: { completed: true, outputText: "" },
+        runActive: false,
+        verb: "succeeded",
+        label: "File changes",
+        hasStat: true,
+        failed: false,
+      },
+    ] as const;
+
+    for (const mutation of mutations) {
+      for (const state of states) {
+        const container = document.createElement("div");
+        render(
+          renderToolCard(
+            {
+              id: `${mutation.name}:${state.name}`,
+              name: mutation.name,
+              args: mutation.args,
+              ...state.card,
+            },
+            {
+              expanded: true,
+              onToggleExpanded: vi.fn(),
+              runActive: state.runActive,
+            },
+          ),
+          container,
+        );
+
+        expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe(
+          mutation.verbs[state.verb],
+        );
+        expect(container.querySelector(".chat-diff")?.getAttribute("aria-label")).toBe(state.label);
+        expect(container.querySelector(".chat-diffstat") !== null).toBe(state.hasStat);
+        expect(container.querySelector(".chat-tool-row__badge")?.textContent === "failed").toBe(
+          state.failed,
+        );
+        expect(container.querySelector(".chat-tool-msg-summary--error") !== null).toBe(
+          state.failed,
+        );
+      }
+    }
+  });
+
+  it.each([
+    { name: "read", args: { path: "packages/app/src/read.ts" }, path: "packages/app/src/read.ts" },
+    {
+      name: "edit",
+      args: { file_path: "packages/app/src/edit.ts", oldText: "old", newText: "new" },
+      path: "packages/app/src/edit.ts",
+    },
+    {
+      name: "write",
+      args: { path: "packages/app/src/write.ts", content: "new" },
+      path: "packages/app/src/write.ts",
+    },
+  ])("opens the raw file path from an expanded $name card", ({ name, args, path }) => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: `msg:${name}:open`,
+          name,
+          args,
+          completed: true,
+        },
+        {
+          expanded: true,
+          onOpenWorkspaceFile,
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    const pathButton = container.querySelector<HTMLButtonElement>(
+      '.chat-tool-card__detail-link[title="Open file"]',
+    );
+    expect(pathButton).toBeInstanceOf(HTMLButtonElement);
+    pathButton!.click();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path });
+  });
+
+  it("keeps read offsets and limits visible in expanded args", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:read:range",
+          name: "read",
+          args: { path: "/repo/src/a.ts", offset: 40, limit: 20 },
+          inputText: JSON.stringify({ path: "/repo/src/a.ts", offset: 40, limit: 20 }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Read");
+    const rows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(
+      rows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["offset:", "40"],
+      ["limit:", "20"],
+    ]);
+  });
+
+  it("does not repeat the tool identity in expanded details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:4a:call-4a",
+          name: "skill_workshop",
+          args: { action: "create" },
+          inputText: '{\n  "action": "create"\n}',
+          outputText: "Proposal created",
+        },
+        {
+          expanded: true,
+          onOpenSidebar: vi.fn(),
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
+    const body = container.querySelector(".chat-tool-msg-body");
+    expect(body?.textContent).not.toContain("Skill Workshop");
+    const kvRow = body?.querySelector(".chat-tool-kv__row");
+    expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("action:");
+    expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("create");
+    expect(container.querySelector(".chat-tool-card__action-btn")).toBeInstanceOf(
+      HTMLButtonElement,
+    );
   });
 
   it("renders expanded tool calls without an inline output block when no output is present", () => {
@@ -93,13 +433,18 @@ describe("tool-cards", () => {
       container,
     );
 
-    const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
+    // No raw blocks: simple args render as key-value rows and there is no output.
+    expect(container.querySelector(".chat-tool-card__block")).toBeNull();
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
     expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input"]);
-    expect(blocks[0]?.querySelector("code")?.textContent).toBe(
-      '{\n  "mode": "session",\n  "thread": true\n}',
-    );
+      kvRows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["mode:", "session"],
+      ["thread:", "true"],
+    ]);
   });
 
   it("labels collapsed tool calls with the display summary", () => {
@@ -123,6 +468,48 @@ describe("tool-cards", () => {
     );
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("shows the first message line in collapsed message tool rows", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:5-message:call-5-message",
+          name: "message",
+          args: {
+            action: "send",
+            channel: "reef",
+            target: "@molty",
+            message: "Hello Molty, first claw-to-claw hello.\nSecond line stays in details.",
+          },
+          inputText: "message input",
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Message",
+    );
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+      "Hello Molty, first claw-to-claw hello.",
+    );
+  });
+
+  it("previews common intent arguments across generic tools", () => {
+    expect(resolveCollapsedToolArgumentPreview({ task: "Review the PR" })).toBe("Review the PR");
+    expect(resolveCollapsedToolArgumentPreview({ prompt: "Draw a crab" })).toBe("Draw a crab");
+    expect(resolveCollapsedToolArgumentPreview({ text: "First line\nSecond line" })).toBe(
+      "First line",
+    );
+    expect(resolveCollapsedToolArgumentPreview({ query: " \r\rSecond line" })).toBe("Second line");
+    const credential = ["sk", "1234567890abcdef"].join("-");
+    expect(
+      resolveCollapsedToolArgumentPreview({ description: `OPENAI_API_KEY=${credential}` }),
+    ).not.toContain(credential);
   });
 
   it("keeps tool display labels primary for collapsed result rows with action details", () => {
@@ -195,12 +582,26 @@ describe("tool-cards", () => {
     expect(formatCollapsedToolSummaryText("   ")).toBeUndefined();
   });
 
+  it("omits normalized tool details that repeat the label", () => {
+    expect(formatDistinctCollapsedToolSummaryText("bash", "Bash")).toBeUndefined();
+    expect(
+      formatDistinctCollapsedToolSummaryText("heartbeat_respond", "Heartbeat Respond"),
+    ).toBeUndefined();
+    expect(formatDistinctCollapsedToolSummaryText("run openclaw doctor", "Bash")).toBe(
+      "run openclaw doctor",
+    );
+  });
+
   it("keeps collapsed markdown previews bounded after display cleanup", () => {
     const preview = formatCollapsedToolPreviewText(`with ${"A".repeat(200)}`);
 
+    expect(formatCollapsedToolPreviewText("First line\nSecond line")).toBe(
+      "First line Second line",
+    );
     expect(preview).toHaveLength(120);
     expect(preview?.startsWith("A")).toBe(true);
     expect(preview).not.toContain("with ");
+    expect(formatCollapsedToolPreviewText(`${"A".repeat(119)}🚀tail`)).toBe("A".repeat(119));
   });
 
   it("bounds raw string argument fallbacks in collapsed summaries", () => {
@@ -361,6 +762,9 @@ describe("tool-cards", () => {
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
     expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
     expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
+    const tooltip = sidebarButton!.parentElement as HTMLElement & { content?: string };
+    expect(tooltip.content).toBe(t("chat.toolCards.openDetails"));
+    expect(sidebarButton!.getAttribute("aria-label")).toBe(t("chat.toolCards.openDetails"));
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
@@ -368,69 +772,8 @@ describe("tool-cards", () => {
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
-  describe("isToolErrorOutput", () => {
-    it("flags JSON payloads that carry a top-level error string", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            error: "missing_brave_api_key",
-            message: "BRAVE_API_KEY is not configured",
-            provider: "brave",
-          }),
-        ),
-      ).toBe(true);
-    });
 
-    it("flags JSON payloads that carry a top-level isError flag", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            isError: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            is_error: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-    });
-
-    it("flags 'Tool not found' bodies regardless of trailing punctuation or case", () => {
-      expect(isToolErrorOutput("Tool not found")).toBe(true);
-      expect(isToolErrorOutput("  tool not found.  ")).toBe(true);
-      expect(isToolErrorOutput("TOOL NOT FOUND")).toBe(true);
-    });
-
-    it("flags JSON payloads with top-level failure statuses", () => {
-      expect(isToolErrorOutput(JSON.stringify({ status: "error" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "failed" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "timeout" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "completed" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ status: "ok" }))).toBe(false);
-    });
-
-    it("does not flag successful payloads or strings without a tool error signal", () => {
-      expect(isToolErrorOutput(undefined)).toBe(false);
-      expect(isToolErrorOutput("")).toBe(false);
-      expect(isToolErrorOutput("Opened page")).toBe(false);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({ isError: false, result: "ok", error: "no validation errors" }),
-        ),
-      ).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: null }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: "" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok" }))).toBe(false);
-      expect(isToolErrorOutput("{ not really json }")).toBe(false);
-    });
-  });
-
-  it("renders a Tool error label and Error badge when output is an error JSON", () => {
+  it("renders an error summary without a redundant Error badge", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -453,10 +796,18 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toMatch(/\bTool output\b/);
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Tool error",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
     const expandedCard = container.querySelector(".chat-tool-card");
     expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-card__status-badge")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll(".chat-tool-card__block-label")).map(
+        (label) => label.textContent,
+      ),
+    ).toContain("Tool error");
   });
 
   it("renders a Tool error label when output has a status-only error payload", () => {
@@ -497,7 +848,7 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toMatch(/\bTool output\b/);
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
   it("renders a Tool error label when the tool card has an explicit error flag", () => {
@@ -519,6 +870,27 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toMatch(/\bTool output\b/);
     expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+  });
+
+  it("renders a plain error detail when a failed tool has no output", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:no-output",
+          name: "lookup",
+          isError: true,
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool error");
+    expect(container.querySelector(".chat-tool-card__block-content")?.textContent).toBe(
+      "No output — tool failed.",
+    );
   });
 
   it("respects an explicit success flag even when the payload looks like an error", () => {

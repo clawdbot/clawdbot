@@ -30,6 +30,11 @@ enum ExecShellWrapperParser {
     ]
     private static let loginStartupShellNames = Set(["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"])
 
+    static func isShellWrapperExecutable(_ token: String) -> Bool {
+        let name = ExecCommandToken.basenameLower(token)
+        return self.wrapperSpecs.contains { $0.names.contains(name) }
+    }
+
     static func extract(command: [String], rawCommand: String?) -> ParsedShellWrapper {
         let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let preferredRaw = trimmedRaw.isEmpty ? nil : trimmedRaw
@@ -75,7 +80,7 @@ enum ExecShellWrapperParser {
                 depth: depth + 1)
         }
 
-        guard let spec = self.wrapperSpecs.first(where: { $0.names.contains(base0) }) else {
+        guard let spec = wrapperSpecs.first(where: { $0.names.contains(base0) }) else {
             return .notWrapper
         }
         if spec.kind == .posix,
@@ -98,7 +103,7 @@ enum ExecShellWrapperParser {
         {
             return .blockedWrapper
         }
-        guard let payload = self.extractPayload(command: command, spec: spec) else {
+        guard let payload = extractPayload(command: command, spec: spec) else {
             return .notWrapper
         }
         let normalized = failClosedOnStartupWrappers ? payload : preferredRaw ?? payload
@@ -150,8 +155,8 @@ enum ExecShellWrapperParser {
     {
         guard let preferredRaw,
               base0 == "sh",
-              self.isLegacyLoginInlineForm(command),
-              let payload = self.extractPayload(command: command, spec: spec)
+              isLegacyLoginInlineForm(command),
+              let payload = extractPayload(command: command, spec: spec)
         else {
             return false
         }
@@ -190,8 +195,12 @@ enum ExecShellWrapperParser {
     private static func extractPowerShellInlineCommand(_ command: [String]) -> String? {
         for idx in 1..<command.count {
             let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if token.isEmpty { continue }
-            if token == "--" { break }
+            if token.isEmpty {
+                continue
+            }
+            if token == "--" {
+                break
+            }
             if self.powershellInlineFlags.contains(token) {
                 return ExecInlineCommandParser.extractInlineCommand(
                     command,

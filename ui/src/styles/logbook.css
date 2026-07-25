@@ -1,0 +1,410 @@
+/* ===========================================
+   Logbook Tab - automatic work journal timeline
+   =========================================== */
+
+.logbook {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.logbook__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.logbook__daynav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.logbook__day {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.logbook__chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.logbook__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  background: color-mix(in oklab, var(--panel) 80%, transparent);
+  white-space: nowrap;
+}
+
+.logbook__chip svg {
+  width: 12px;
+  height: 12px;
+}
+
+.logbook__chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.logbook__chip--ok .logbook__chip-dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ok) 25%, transparent);
+}
+
+.logbook__chip--warn .logbook__chip-dot {
+  background: var(--warn);
+}
+
+.logbook__chip--busy {
+  color: var(--accent);
+}
+
+.logbook__chip--error {
+  color: var(--danger);
+}
+
+.logbook__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.logbook__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 980px) {
+  .logbook__layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- Timeline ---- */
+
+.logbook__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.logbook__empty {
+  padding: 40px 20px;
+  text-align: center;
+  border: 1px dashed color-mix(in oklab, var(--muted) 35%, transparent);
+  border-radius: 12px;
+}
+
+.logbook__empty-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.logbook__empty-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.logbook-card {
+  border: 1px solid color-mix(in oklab, var(--muted) 18%, transparent);
+  border-radius: 10px;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.logbook-card__header {
+  display: grid;
+  grid-template-columns: 92px 4px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.logbook-card__header:hover {
+  background: color-mix(in oklab, var(--panel) 60%, transparent);
+}
+
+.logbook-card__time {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.logbook-card__time-sep {
+  opacity: 0.6;
+  padding: 0 2px;
+}
+
+.logbook-card__stripe {
+  width: 4px;
+  height: 100%;
+  min-height: 30px;
+  border-radius: 2px;
+  background: hsl(var(--logbook-hue, 200) 65% 55%);
+}
+
+.logbook-card__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.logbook-card__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logbook-card__summary {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logbook-card--expanded .logbook-card__summary {
+  white-space: normal;
+}
+
+.logbook-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.logbook-card__category {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: hsl(var(--logbook-hue, 200) 70% 70%);
+  background: hsl(var(--logbook-hue, 200) 60% 50% / 0.15);
+}
+
+.logbook-card__app {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.logbook-card__duration {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.logbook-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px 118px;
+}
+
+.logbook-card__keyframe {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklab, var(--muted) 20%, transparent);
+}
+
+.logbook-card__keyframe--loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.logbook-card__detail {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.logbook-card__distractions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.logbook-card__distractions-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+
+.logbook-card__distraction {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in oklab, var(--warn) 12%, transparent);
+}
+
+@media (max-width: 700px) {
+  .logbook-card__header {
+    grid-template-columns: 4px minmax(0, 1fr);
+  }
+
+  .logbook-card__time,
+  .logbook-card__meta {
+    display: none;
+  }
+
+  .logbook-card__body {
+    padding-left: 12px;
+  }
+}
+
+/* ---- Side panel ---- */
+
+.logbook__side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.logbook-side__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.logbook-side__card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.logbook-stats__focus-bar {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--warn) 25%, transparent);
+}
+
+.logbook-stats__focus-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.logbook-stats__focus-legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.logbook-stats__categories {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.logbook-stats__category {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.logbook-stats__category-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logbook-stats__category-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--panel) 85%, transparent);
+  overflow: hidden;
+}
+
+.logbook-stats__category-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: hsl(var(--logbook-hue, 200) 65% 55%);
+}
+
+.logbook-stats__category-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.logbook-stats__apps {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.logbook-stats__app {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in oklab, var(--panel) 80%, transparent);
+}
+
+.logbook-standup__body {
+  font-size: 13px;
+}
+
+.logbook-ask__form {
+  display: flex;
+  gap: 6px;
+}
+
+.logbook-ask__input {
+  flex: 1;
+  min-width: 0;
+}
+
+.logbook-ask__answer {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--panel) 70%, transparent);
+}

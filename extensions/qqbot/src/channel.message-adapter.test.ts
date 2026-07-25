@@ -4,6 +4,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { qqbotPlugin } from "./channel.js";
 
+describe("qqbotPlugin metadata", () => {
+  it("opts announce delivery into persisted session lookup", () => {
+    expect(qqbotPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+});
+
 describe("qqbot outbound sanitizeText", () => {
   it("strips reasoning/thinking tags before delivery", () => {
     const sanitize = qqbotPlugin.outbound?.sanitizeText;
@@ -20,6 +26,39 @@ describe("qqbot outbound sanitizeText", () => {
 
     const input3 = "plain text without tags";
     expect(sanitize({ text: input3, payload: { text: input3 } })).toBe("plain text without tags");
+  });
+});
+
+describe("qqbot outbound session routing", () => {
+  it.each([
+    {
+      target: "qqbot:c2c:user-openid",
+      peerKind: "direct",
+      chatType: "direct",
+    },
+    {
+      target: "qqbot:group:group-openid",
+      peerKind: "group",
+      chatType: "group",
+    },
+    {
+      target: "qqbot:channel:channel-id",
+      peerKind: "group",
+      chatType: "group",
+    },
+  ] as const)("routes $target as $chatType", async ({ target, peerKind, chatType }) => {
+    const route = await qqbotPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target,
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: peerKind },
+      chatType,
+      from: target,
+      to: target,
+    });
   });
 });
 

@@ -80,8 +80,17 @@ available to that process (for example, in `~/.openclaw/.env` or via
 | ---------------------------- | ----------------- | ----- | --------- | ---------- | ------------------------------------------ |
 | `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface |
 | `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                |
-| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 131,072   | 8,192      | DeepSeek V3.2 non-thinking surface         |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 131,072   | 65,536     | Reasoning-enabled V3.2 surface             |
+
+<Warning>
+DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
+15:59 UTC. Those model IDs are no longer accessible. Move configured model refs
+to `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro`.
+</Warning>
+
+OpenClaw's local cost estimates follow DeepSeek's published cache-hit,
+cache-miss, and output rates. DeepSeek can change those rates; its
+[Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) page is
+authoritative for billing.
 
 <Tip>
 V4 models support DeepSeek's `thinking` control. OpenClaw also replays

@@ -21,10 +21,21 @@ export async function listenGatewayHttpServer(params: {
   httpServer: HttpServer;
   bindHost: string;
   port: number;
+  retryEaddrinuse?: boolean;
+  serviceName?: string;
+  endpointScheme?: "http" | "https" | "ws" | "wss";
 }) {
-  const { httpServer, bindHost, port } = params;
+  const {
+    httpServer,
+    bindHost,
+    port,
+    retryEaddrinuse = true,
+    serviceName = "gateway",
+    endpointScheme = "ws",
+  } = params;
+  const maxRetries = retryEaddrinuse ? EADDRINUSE_MAX_RETRIES : 0;
 
-  for (const attempt of Array.from({ length: EADDRINUSE_MAX_RETRIES + 1 }, (_, index) => index)) {
+  for (const attempt of Array.from({ length: maxRetries + 1 }, (_, index) => index)) {
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: NodeJS.ErrnoException) => {
@@ -42,7 +53,7 @@ export async function listenGatewayHttpServer(params: {
       return; // bound successfully
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EADDRINUSE" && attempt < EADDRINUSE_MAX_RETRIES) {
+      if (code === "EADDRINUSE" && attempt < maxRetries) {
         // Port may still be in TIME_WAIT after a recent process exit; retry.
         await closeServerQuietly(httpServer);
         await sleep(EADDRINUSE_RETRY_INTERVAL_MS);
@@ -50,12 +61,12 @@ export async function listenGatewayHttpServer(params: {
       }
       if (code === "EADDRINUSE") {
         throw new GatewayLockError(
-          `another gateway instance is already listening on ws://${bindHost}:${port}`,
+          `another ${serviceName} instance is already listening on ${endpointScheme}://${bindHost}:${port}`,
           err,
         );
       }
       throw new GatewayLockError(
-        `failed to bind gateway socket on ws://${bindHost}:${port}: ${String(err)}`,
+        `failed to bind ${serviceName} socket on ${endpointScheme}://${bindHost}:${port}: ${String(err)}`,
         err,
       );
     }

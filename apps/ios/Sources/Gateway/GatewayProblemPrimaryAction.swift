@@ -9,23 +9,28 @@ enum GatewayProblemPrimaryAction {
         nonRetryableTitle: String? = nil) -> String?
     {
         if problem.suggestsOnboardingReset, let resetTitle {
-            return resetTitle
+            return String(localized: String.LocalizationValue(resetTitle))
         }
         if problem.canTrustRotatedCertificate {
-            return "Trust certificate"
+            return String(localized: "Trust certificate")
         }
         if problem.kind == .protocolMismatch {
-            return problem.actionLabel
+            return problem.localizedActionLabel
         }
         if problem.retryable {
-            return problem.actionLabel ?? retryTitle
+            return problem.localizedActionLabel
+                ?? String(localized: String.LocalizationValue(retryTitle))
         }
-        return nonRetryableTitle
+        return nonRetryableTitle.map { String(localized: String.LocalizationValue($0)) }
     }
 
     @MainActor
-    static func openProtocolMismatchHelpIfNeeded(_ problem: GatewayConnectionProblem) -> Bool {
+    static func handleProtocolMismatchIfNeeded(_ problem: GatewayConnectionProblem) -> Bool {
         guard problem.kind == .protocolMismatch else { return false }
+        if let command = problem.actionCommand {
+            UIPasteboard.general.string = command
+            return true
+        }
         if let url = problem.docsURL {
             UIApplication.shared.open(url)
         }

@@ -36,6 +36,114 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("rejects client-authored scheduled authority provenance", () => {
+    const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
+    expect(validateCronAddParams({ ...minimalAddParams, scheduledToolPolicy })).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { scheduledToolPolicy },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts failure alert field clears only in update patches", () => {
+    const failureAlert = {
+      after: null,
+      channel: null,
+      to: null,
+      cooldownMs: null,
+      includeSkipped: null,
+      mode: null,
+      accountId: null,
+    };
+
+    expect(validateCronUpdateParams({ id: "job-1", patch: { failureAlert } })).toBe(true);
+    expect(validateCronAddParams({ ...minimalAddParams, failureAlert })).toBe(false);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { failureAlert: null } })).toBe(true);
+    expect(validateCronAddParams({ ...minimalAddParams, failureAlert: null })).toBe(false);
+  });
+
+  it("rejects schedule integers that SQLite cannot round-trip safely", () => {
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        schedule: { kind: "every", everyMs: unsafe },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { schedule: { kind: "every", everyMs: 60_000, anchorMs: unsafe } },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { schedule: { kind: "cron", expr: "0 * * * *", staggerMs: unsafe } },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts trigger add, patch, and clear shapes", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        trigger: { script: "json({ fire: true })", once: true },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { trigger: { script: "json({ fire: false })" } },
+      }),
+    ).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { trigger: null } })).toBe(true);
+  });
+
+  it("accepts toolsAllow on systemEvent payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        payload: {
+          kind: "systemEvent",
+          text: "tick",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "systemEvent",
+            toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects invalid trigger scripts and additional properties", () => {
+    expect(validateCronAddParams({ ...minimalAddParams, trigger: { script: "" } })).toBe(false);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        trigger: { script: "json({ fire: true })", unexpected: true },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { trigger: { script: "json({ fire: true })", unexpected: true } },
+      }),
+    ).toBe(false);
+  });
+
   it("rejects public caller scope on cron admin params", () => {
     expect(validateCronListParams({ callerScope: agentToolCallerScope })).toBe(false);
     expect(validateCronGetParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);
@@ -117,6 +225,37 @@ describe("cron protocol validators", () => {
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
+  });
+
+  it("accepts only non-empty cron config revisions", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: "sha256:current",
+        patch: { enabled: false },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: "",
+        patch: { enabled: false },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: 1,
+        patch: { enabled: false },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: "x".repeat(129),
+        patch: { enabled: false },
+      }),
+    ).toBe(false);
   });
 
   it("accepts nullable model clears only on update payload patches", () => {
@@ -276,8 +415,15 @@ describe("cron protocol validators", () => {
   });
 
   it("accepts run params mode for id and jobId selectors", () => {
-    expect(validateCronRunParams({ id: "job-1", mode: "force" })).toBe(true);
+    expect(
+      validateCronRunParams({
+        id: "job-1",
+        mode: "force",
+        expectedProcessInstanceId: "process-1",
+      }),
+    ).toBe(true);
     expect(validateCronRunParams({ jobId: "job-2", mode: "due" })).toBe(true);
+    expect(validateCronRunParams({ id: "job-1", expectedProcessInstanceId: "" })).toBe(false);
   });
 
   it("accepts list paging/filter/sort params", () => {
@@ -336,6 +482,7 @@ describe("cron protocol validators", () => {
     expect(
       validateCronRunsParams({
         scope: "all",
+        agentId: "ops",
         limit: 25,
         statuses: ["ok", "error"],
         deliveryStatuses: ["delivered", "not-requested"],
@@ -343,6 +490,7 @@ describe("cron protocol validators", () => {
         sortDir: "desc",
       }),
     ).toBe(true);
+    expect(validateCronRunsParams({ scope: "all", agentId: "" })).toBe(false);
     expect(
       validateCronRunsParams({
         scope: "job",

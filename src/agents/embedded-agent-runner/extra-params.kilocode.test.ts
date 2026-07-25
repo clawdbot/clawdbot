@@ -28,7 +28,10 @@ function applyAndCapture(params: {
   };
   const streamFn =
     params.provider === "kilocode"
-      ? createKilocodeWrapper(baseStreamFn, params.modelId === "kilo/auto" ? undefined : "high")
+      ? createKilocodeWrapper(
+          baseStreamFn,
+          params.modelId === "kilo-auto/balanced" ? undefined : "high",
+        )
       : baseStreamFn;
 
   const context: Context = { messages: [] };
@@ -62,7 +65,7 @@ function applyAndCaptureReasoning(params: {
     return {} as ReturnType<StreamFn>;
   };
   const thinkingLevel =
-    params.modelId === "kilo/auto" || isProxyReasoningUnsupported(params.modelId)
+    params.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupported(params.modelId)
       ? undefined
       : (params.thinkingLevel ?? "high");
   const streamFn = createKilocodeWrapper(baseStreamFn, thinkingLevel);
@@ -142,14 +145,14 @@ describe("extra-params: Kilocode wrapper", () => {
   });
 });
 
-describe("extra-params: Kilocode kilo/auto reasoning", () => {
-  it("does not inject reasoning.effort for kilo/auto", () => {
+describe("extra-params: Kilocode kilo-auto/balanced reasoning", () => {
+  it("does not inject reasoning.effort for kilo-auto/balanced", () => {
     const capturedPayload = applyAndCaptureReasoning({
-      modelId: "kilo/auto",
+      modelId: "kilo-auto/balanced",
       initialPayload: { reasoning_effort: "high" },
     });
 
-    // kilo/auto chooses its own downstream model, so reasoning effort would be
+    // kilo-auto/balanced chooses its own downstream model, so reasoning effort would be
     // unsafe to inject.
     expect(capturedPayload?.reasoning).toBeUndefined();
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");

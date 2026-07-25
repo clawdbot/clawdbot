@@ -9,7 +9,7 @@ const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
 /** Provider identity that downstream telemetry should attribute to the local Codex turn. */
-export type CodexLocalRuntimeAttribution = {
+type CodexLocalRuntimeAttribution = {
   provider: string;
   api?: string;
 };

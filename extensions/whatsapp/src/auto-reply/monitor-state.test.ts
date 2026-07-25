@@ -133,4 +133,47 @@ describe("createWebChannelStatusController", () => {
       loggedOut: false,
     });
   });
+
+  it.each([
+    { healthState: "logged-out", statusCode: 401, terminalDisconnect: true },
+    { healthState: "conflict", statusCode: 440, terminalDisconnect: true },
+    { healthState: "reconnecting", statusCode: 408, terminalDisconnect: false },
+  ] as const)(
+    "sets terminalDisconnect=$terminalDisconnect after a $healthState stop",
+    ({ healthState, statusCode, terminalDisconnect }) => {
+      const patches: Record<string, unknown>[] = [];
+      const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+
+      controller.noteConnected(1000);
+      controller.noteClose({
+        at: 2000,
+        statusCode,
+        error: healthState,
+        reconnectAttempts: healthState === "reconnecting" ? 1 : 0,
+        healthState,
+      });
+      controller.markStopped(2100);
+
+      expect(patches.at(-1)!.terminalDisconnect).toBe(terminalDisconnect);
+    },
+  );
+
+  it("clears terminalDisconnect on noteConnected after a terminal stop", () => {
+    const patches: Record<string, unknown>[] = [];
+    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+
+    controller.noteConnected(1000);
+    controller.noteClose({
+      at: 2000,
+      statusCode: 401,
+      error: "logged out",
+      reconnectAttempts: 0,
+      healthState: "logged-out",
+    });
+    controller.markStopped(2100);
+    expect(patches.at(-1)!.terminalDisconnect).toBe(true);
+
+    controller.noteConnected(3000);
+    expect(patches.at(-1)!.terminalDisconnect).toBeUndefined();
+  });
 });

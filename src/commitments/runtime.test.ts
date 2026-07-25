@@ -4,20 +4,40 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { enqueueCommitmentExtraction } from "./runtime.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
-  enqueueCommitmentExtraction,
   resetCommitmentExtractionRuntimeForTests,
-} from "./runtime.js";
-import { loadCommitmentStore } from "./store.js";
+} from "./runtime.test-support.js";
+import { readCommitmentsForTest, seedCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
 const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const resolveDefaultModelMock = vi.hoisted(() => vi.fn());
+const resolveCommitmentsConfigMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  })),
+);
+
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: resolveCommitmentsConfigMock,
+}));
 
 vi.mock("../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
@@ -31,6 +51,7 @@ function requireFirstEmbeddedAgentRequest(): {
   provider?: string;
   model?: string;
   disableTools?: boolean;
+  sessionFile?: string;
 } {
   const [call] = runEmbeddedAgentMock.mock.calls;
   if (!call) {
@@ -40,7 +61,12 @@ function requireFirstEmbeddedAgentRequest(): {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw new Error("expected embedded OpenClaw agent extraction request");
   }
-  return request as { provider?: string; model?: string; disableTools?: boolean };
+  return request as {
+    provider?: string;
+    model?: string;
+    disableTools?: boolean;
+    sessionFile?: string;
+  };
 }
 
 describe("commitment extraction runtime", () => {
@@ -49,9 +75,11 @@ describe("commitment extraction runtime", () => {
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     resetCommitmentExtractionRuntimeForTests();
     runEmbeddedAgentMock.mockReset();
     resolveDefaultModelMock.mockReset();
+    resolveCommitmentsConfigMock.mockClear();
     vi.useRealTimers();
     vi.unstubAllEnvs();
     stateDirEnvSnapshot?.restore();
@@ -65,11 +93,7 @@ describe("commitment extraction runtime", () => {
     tmpDirs.push(tmpDir);
     stateDirEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
-    return {
-      commitments: {
-        enabled: true,
-      },
-    };
+    return {};
   }
 
   it("does not enqueue background extraction in test mode unless forced", async () => {
@@ -89,9 +113,19 @@ describe("commitment extraction runtime", () => {
   });
 
   it("keeps hidden extraction opt-in by default", () => {
-    const cfg: OpenClawConfig = {
-      commitments: {},
-    };
+    const cfg: OpenClawConfig = {};
+    resolveCommitmentsConfigMock.mockReturnValueOnce({
+      enabled: false,
+      maxPerDay: 3,
+      extraction: {
+        debounceMs: 15_000,
+        batchMaxItems: 8,
+        queueMaxItems: 64,
+        confidenceThreshold: 0.72,
+        careConfidenceThreshold: 0.86,
+        timeoutSeconds: 45,
+      },
+    });
     configureCommitmentExtractionRuntime({
       forceInTests: true,
       setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
@@ -165,7 +199,7 @@ describe("commitment extraction runtime", () => {
     ).toBe(true);
 
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(2);
-    const store = await loadCommitmentStore();
+    const commitments = readCommitmentsForTest();
 
     expect(extractBatch).toHaveBeenCalledTimes(1);
     const [extractCall] = extractBatch.mock.calls;
@@ -182,12 +216,49 @@ describe("commitment extraction runtime", () => {
     expect(firstBatchItem.itemId).not.toContain("telegram");
     expect(firstBatchItem.itemId).not.toContain("15551234567");
     expect(firstBatchItem.itemId).not.toContain("m1");
-    expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
+    expect(commitments.map((commitment) => commitment.dedupeKey).toSorted()).toEqual([
       "event:1",
       "event:2",
     ]);
-    expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
-    expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
+    expect(commitments[0]).not.toHaveProperty("sourceUserText");
+    expect(commitments[0]).not.toHaveProperty("sourceAssistantText");
+  });
+
+  it("partitions extraction batches by agent", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async (_params: { items: CommitmentExtractionItem[] }) => ({
+      candidates: [],
+    }));
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    for (const [index, agentId] of ["alpha", "beta", "alpha", "beta"].entries()) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + index,
+          agentId,
+          sessionKey: `agent:${agentId}:telegram:user-1`,
+          channel: "telegram",
+          sourceMessageId: `m${index}`,
+          userText: `Commitment candidate ${index}`,
+          assistantText: "I will follow up.",
+        }),
+      ).toBe(true);
+    }
+
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(4);
+    expect(extractBatch).toHaveBeenCalledTimes(2);
+    expect(
+      extractBatch.mock.calls.map(([params]) => params.items.map((item) => item.agentId)),
+    ).toEqual([
+      ["alpha", "alpha"],
+      ["beta", "beta"],
+    ]);
   });
 
   it("uses the configured agent model for the hidden extractor run", async () => {
@@ -231,6 +302,7 @@ describe("commitment extraction runtime", () => {
     expect(request.provider).toBe("openai");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);
+    expect(request.sessionFile).toBeUndefined();
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {
@@ -302,6 +374,7 @@ describe("commitment extraction runtime", () => {
 
   it("uses the queued item timestamp for terminal failure cooldowns", async () => {
     const cfg = await createConfig();
+    seedCommitmentsForTest([]);
     const extractBatch = vi.fn(async () => {
       throw new Error("OAuth token refresh failed");
     });
@@ -464,8 +537,7 @@ describe("commitment extraction runtime", () => {
     // First drain: the extractor throws a non-terminal error and nothing persists.
     await expect(drainCommitmentExtractionQueue()).rejects.toThrow("transient extraction failure");
     expect(extractBatch).toHaveBeenCalledTimes(1);
-    const emptyStore = await loadCommitmentStore();
-    expect(emptyStore.commitments).toHaveLength(0);
+    expect(readCommitmentsForTest()).toHaveLength(0);
 
     // Retry: the restored batch is reprocessed once, in the same order, with no
     // duplicate persistence or extraction.
@@ -476,8 +548,8 @@ describe("commitment extraction runtime", () => {
     const retryCallIds = extractBatch.mock.calls[1]?.[0].items.map((item) => item.itemId);
     expect(retryCallIds).toEqual(firstCallIds);
 
-    const store = await loadCommitmentStore();
-    expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
+    const commitments = readCommitmentsForTest();
+    expect(commitments.map((commitment) => commitment.dedupeKey).toSorted()).toEqual([
       "event:m1",
       "event:m2",
     ]);
@@ -566,6 +638,58 @@ describe("commitment extraction runtime", () => {
     // the dropped batch.
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(0);
     expect(extractBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps other agents queued after a terminal extraction failure", async () => {
+    const cfg = await createConfig();
+    const scheduled: Array<() => void> = [];
+    const extractBatch = vi.fn(async ({ items }: { items: CommitmentExtractionItem[] }) => {
+      if (items[0]?.agentId === "alpha") {
+        throw new Error('No API key found for provider "openai".');
+      }
+      return { candidates: [] };
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: (callback) => {
+        scheduled.push(callback);
+        return { unref() {} } as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: () => undefined,
+    });
+
+    for (const agentId of ["alpha", "beta"]) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs,
+          agentId,
+          sessionKey: `agent:${agentId}:telegram:user-1`,
+          channel: "telegram",
+          userText: "I have an interview tomorrow.",
+          assistantText: "Good luck.",
+        }),
+      ).toBe(true);
+    }
+
+    expect(scheduled).toHaveLength(1);
+    scheduled[0]?.();
+    await vi.waitFor(() => {
+      expect(extractBatch).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(scheduled).toHaveLength(2);
+    });
+
+    scheduled[1]?.();
+    await vi.waitFor(() => {
+      expect(extractBatch).toHaveBeenCalledTimes(2);
+    });
+    expect(extractBatch.mock.calls.map(([params]) => params.items[0]?.agentId)).toEqual([
+      "alpha",
+      "beta",
+    ]);
   });
 
   it("schedules a retry when a non-terminal failure leaves the queue full", async () => {
@@ -698,12 +822,12 @@ describe("commitment extraction runtime", () => {
     await vi.waitFor(() => {
       expect(extractBatch).toHaveBeenCalledTimes(2);
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(async () => {
+      expect(readCommitmentsForTest().map((commitment) => commitment.dedupeKey)).toEqual([
+        "event:m1",
+      ]);
     });
 
-    const store = await loadCommitmentStore();
-    expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual(["event:m1"]);
     // The successful drain empties the queue, so no further retry is armed.
     expect(scheduled).toHaveLength(2);
   });

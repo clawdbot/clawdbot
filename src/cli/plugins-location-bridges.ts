@@ -12,7 +12,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
 
-export type PersistedBundledPluginRecoveryLocation = {
+type PersistedBundledPluginRecoveryLocation = {
   pluginId: string;
   loadPaths: readonly string[];
 };

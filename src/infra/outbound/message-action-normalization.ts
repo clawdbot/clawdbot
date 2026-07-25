@@ -11,6 +11,7 @@ import {
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
 import {
+  actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
   resolveActionDeliveryTargetAlias,
@@ -31,6 +32,7 @@ export function normalizeMessageActionInput(params: {
     explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
 
   const explicitTarget = normalizeOptionalString(normalizedArgs.target) ?? "";
+  const hasExplicitTargets = Object.hasOwn(normalizedArgs, "targets");
   const hasLegacyTargetFields =
     typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
   const hasLegacyTarget =
@@ -41,6 +43,10 @@ export function normalizeMessageActionInput(params: {
     normalizeOptionalString(normalizedArgs.channelId) ??
     "";
   const deliveryAliasTarget = resolveActionDeliveryTargetAlias(action, normalizedArgs, {
+    channel: inferredChannel,
+    aliasSpec: params.targetAliasSpec,
+  });
+  const hasResourceReference = actionHasResourceReference(action, normalizedArgs, {
     channel: inferredChannel,
     aliasSpec: params.targetAliasSpec,
   });
@@ -64,10 +70,11 @@ export function normalizeMessageActionInput(params: {
 
   if (
     !explicitTarget &&
+    !hasExplicitTargets &&
     !hasLegacyTarget &&
     !deliveryAliasTarget &&
     actionRequiresTarget(action) &&
-    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
+    (hasResourceReference || !actionHasTarget(action, normalizedArgs, { channel: inferredChannel }))
   ) {
     const inferredTarget =
       normalizeOptionalString(toolContext?.currentChannelId) ??
@@ -92,9 +99,15 @@ export function normalizeMessageActionInput(params: {
   }
 
   applyTargetToParams({ action, args: normalizedArgs });
+  const hasCanonicalTarget = [
+    normalizedArgs.target,
+    normalizedArgs.to,
+    normalizedArgs.channelId,
+  ].some((value) => Boolean(normalizeOptionalString(value)));
   if (
     actionRequiresTarget(action) &&
-    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
+    (!actionHasTarget(action, normalizedArgs, { channel: inferredChannel }) ||
+      (hasResourceReference && !hasCanonicalTarget))
   ) {
     throw new Error(`Action ${action} requires a target.`);
   }

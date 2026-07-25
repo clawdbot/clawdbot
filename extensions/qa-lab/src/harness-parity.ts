@@ -9,7 +9,7 @@ import type {
 } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
-export type HarnessVariant = {
+type HarnessVariant = {
   id: string;
   label: string;
   runtime?: RuntimeId;
@@ -25,7 +25,7 @@ export type HarnessParityDrift =
   | "tool-description"
   | "tool-schema";
 
-export type HarnessParityPromptStats = {
+type HarnessParityPromptStats = {
   systemPromptChars: number;
   projectContextChars: number;
   nonProjectContextChars: number;
@@ -70,7 +70,7 @@ export type HarnessRuntimeParityCell = RuntimeParityCell & {
   systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
-export type HarnessParityCell = HarnessRuntimeParityCell & {
+type HarnessParityCell = HarnessRuntimeParityCell & {
   variant: HarnessVariant;
   promptStats: HarnessParityPromptStats;
   systemPromptHash: string;
@@ -80,7 +80,7 @@ export type HarnessParityCell = HarnessRuntimeParityCell & {
   tokenUsageSource: "live-usage" | "mock-estimate";
 };
 
-export type HarnessParityResult = {
+type HarnessParityResult = {
   scenarioId: string;
   left: HarnessParityCell;
   right: HarnessParityCell;

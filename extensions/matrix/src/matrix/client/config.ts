@@ -38,7 +38,6 @@ import { resolveValidatedMatrixHomeserverUrl } from "./url-validation.js";
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
   ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
-  retryMinDelayMs?: number;
 };
 
 const loadDefaultMatrixAuthClientDeps = createLazyRuntimeModule(() =>
@@ -47,23 +46,10 @@ const loadDefaultMatrixAuthClientDeps = createLazyRuntimeModule(() =>
     ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
   })),
 );
-let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
-
 const MATRIX_AUTH_REQUEST_RETRY_RE =
   /\b(fetch failed|econnreset|econnrefused|enotfound|etimedout|ehostunreach|enetunreach|eai_again|und_err_|socket hang up|network|headers timeout|body timeout|connect timeout)\b/i;
 
-export function setMatrixAuthClientDepsForTest(deps?: {
-  MatrixClient: typeof import("../sdk.js").MatrixClient;
-  ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
-  retryMinDelayMs?: number;
-}): void {
-  matrixAuthClientDepsForTest = deps;
-}
-
 async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
-  if (matrixAuthClientDepsForTest) {
-    return matrixAuthClientDepsForTest;
-  }
   return await loadDefaultMatrixAuthClientDeps();
 }
 
@@ -109,7 +95,7 @@ function credentialsMatchBackfillAuthLineage(params: {
 async function retryMatrixAuthRequest<T>(label: string, run: () => Promise<T>): Promise<T> {
   return await retryAsync(run, {
     attempts: 3,
-    minDelayMs: matrixAuthClientDepsForTest?.retryMinDelayMs ?? 250,
+    minDelayMs: 250,
     maxDelayMs: 1_500,
     jitter: 0.1,
     label,
@@ -420,7 +406,6 @@ function buildMatrixNetworkFields(params: {
   };
 }
 
-export { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 export {
   hasReadyMatrixEnvAuth,
   resolveMatrixEnvAuthReadiness,
@@ -540,7 +525,11 @@ export function resolveMatrixAuthContext(params: {
 } {
   const cfg = requireRuntimeConfig(params.cfg, "Matrix auth context") as CoreConfig;
   const env = params?.env ?? process.env;
+  const requestedAccountId = params?.accountId?.trim();
   const explicitAccountId = normalizeOptionalAccountId(params?.accountId);
+  if (requestedAccountId && !explicitAccountId) {
+    throw new Error(`Matrix account id "${requestedAccountId}" is invalid.`);
+  }
   const effectiveAccountId = explicitAccountId ?? resolveImplicitMatrixAccountId(cfg, env);
   if (!effectiveAccountId) {
     throw new Error(
@@ -556,6 +545,11 @@ export function resolveMatrixAuthContext(params: {
     throw new Error(
       `Matrix account "${explicitAccountId}" is not configured. Add channels.matrix.accounts.${explicitAccountId} or define scoped ${getMatrixScopedEnvVarNames(explicitAccountId).accessToken.replace(/_ACCESS_TOKEN$/, "")}_* variables.`,
     );
+  }
+  const matrix = resolveMatrixBaseConfig(cfg);
+  const account = findMatrixAccountConfig(cfg, effectiveAccountId);
+  if (matrix.enabled === false || account?.enabled === false) {
+    throw new Error(`Matrix account "${effectiveAccountId}" is disabled.`);
   }
   const resolved = resolveMatrixConfigForAccount(cfg, effectiveAccountId, env);
 
@@ -834,3 +828,4 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   );
   return saved === "saved" ? deviceId : undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

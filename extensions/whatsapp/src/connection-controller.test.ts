@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { DisconnectReason } from "baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -17,6 +16,7 @@ import {
   createWaSocket,
   logoutWeb,
   readWebAuthExistsForDecision,
+  waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
 } from "./session.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
@@ -29,13 +29,41 @@ vi.mock("./session.js", async () => {
     waitForWaConnection: vi.fn(),
     logoutWeb: vi.fn(async () => true),
     readWebAuthExistsForDecision: vi.fn(async () => ({ outcome: "stable" as const, exists: true })),
+    waitForCredsSaveQueueWithTimeout: vi.fn(async () => "drained" as const),
   };
 });
+
+const runtimeContextMocks = vi.hoisted(() => ({
+  channelRuntime: { runtimeContexts: {} },
+  register: vi.fn(),
+}));
+
+const connectionOwnerMocks = vi.hoisted(() => ({
+  acquire: vi.fn(),
+  release: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => {
+  return {
+    getChannelRuntimeContext: vi.fn(),
+    registerChannelRuntimeContext: runtimeContextMocks.register,
+  };
+});
+
+vi.mock("./runtime.js", () => ({
+  getWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
+}));
+
+vi.mock("./connection-owner.js", () => ({
+  acquireWhatsAppGatewayConnectionOwner: connectionOwnerMocks.acquire,
+}));
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
+const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
+const registerChannelRuntimeContextMock = runtimeContextMocks.register;
 
 function createListenerStub(messageId = "ok") {
   return {
@@ -47,10 +75,19 @@ function createListenerStub(messageId = "ok") {
 }
 
 function createSocketWithTransportEmitter() {
-  const ws = new EventEmitter() as EventEmitter & { close: ReturnType<typeof vi.fn> };
-  ws.close = vi.fn();
+  let closed = false;
+  const ws = new EventEmitter() as EventEmitter & {
+    close: ReturnType<typeof vi.fn>;
+    readonly isClosed: boolean;
+  };
+  Object.defineProperty(ws, "isClosed", { get: () => closed });
+  ws.close = vi.fn(async () => {
+    closed = true;
+  });
   return {
-    end: vi.fn(),
+    end: vi.fn(async (_error?: Error) => {
+      closed = true;
+    }),
     ws,
   };
 }
@@ -126,10 +163,14 @@ describe("WhatsAppConnectionController", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    registerChannelRuntimeContextMock.mockReturnValue({ dispose: vi.fn() });
+    connectionOwnerMocks.acquire.mockResolvedValue({ release: connectionOwnerMocks.release });
+    connectionOwnerMocks.release.mockResolvedValue(undefined);
     logoutWebMock.mockResolvedValue(true);
     readWebAuthExistsForDecisionMock
       .mockReset()
       .mockResolvedValue({ outcome: "stable", exists: true });
+    waitForCredsSaveQueueWithTimeoutMock.mockReset().mockResolvedValue("drained");
     controller = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
@@ -154,12 +195,7 @@ describe("WhatsAppConnectionController", () => {
   });
 
   it("closes the socket when open fails before listener creation", async () => {
-    const sock = {
-      end: vi.fn(),
-      ws: {
-        close: vi.fn(),
-      },
-    };
+    const sock = createSocketWithTransportEmitter();
     const createListener = vi.fn();
 
     createWaSocketMock.mockResolvedValueOnce(sock as never);
@@ -190,11 +226,26 @@ describe("WhatsAppConnectionController", () => {
     expect(sock.ws.close).toHaveBeenCalledOnce();
   });
 
+  it("keeps asynchronous fallback close failures best-effort", async () => {
+    const sock = {
+      end: vi.fn().mockRejectedValue(new Error("end failed")),
+      ws: { close: vi.fn(() => Promise.reject(new Error("websocket close failed"))) },
+    };
+
+    closeWaSocket(sock);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(sock.end).toHaveBeenCalledOnce();
+    expect(sock.ws.close).toHaveBeenCalledOnce();
+  });
+
   it("lets createWaSocket own the auth barrier before opening a socket", async () => {
     const callOrder: string[] = [];
     createWaSocketMock.mockImplementationOnce(async () => {
       callOrder.push("create");
-      return { ws: { close: vi.fn() } } as never;
+      return createSocketWithTransportEmitter() as never;
     });
     waitForWaConnectionMock.mockImplementationOnce(async () => {
       callOrder.push("wait-for-connection");
@@ -420,6 +471,44 @@ describe("WhatsAppConnectionController", () => {
     expect(waitForConnection).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves credential persistence guards on a replacement login socket", async () => {
+    const harness = createLoginResultHarness();
+    const restartError = { output: { statusCode: DisconnectReason.restartRequired } };
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce(restartError)
+      .mockResolvedValueOnce(undefined);
+    const createSocket = vi.fn(async () => harness.replacementSock);
+    const beforeCredentialPersistence = vi.fn(async () => {});
+    const onCredentialPersistenceError = vi.fn();
+    const onCredentialPersistenceTask = vi.fn();
+    const waitForCredentialPersistence = vi.fn(async () => {});
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: harness.initialSock as never,
+      authDir: loginAuthDir,
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: harness.runtime,
+      waitForConnection: waitForConnection as never,
+      createSocket: createSocket as never,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+      waitForCredentialPersistence,
+    });
+
+    expect(result.outcome).toBe("connected");
+    expect(createSocket).toHaveBeenCalledWith(false, false, {
+      authDir: loginAuthDir,
+      onQr: undefined,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+    });
+    expect(waitForCredentialPersistence).toHaveBeenCalledOnce();
+  });
+
   it("returns a retryable failure when the socket opens before auth persistence settles", async () => {
     readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "unstable" });
     const waitForConnection = vi.fn().mockResolvedValueOnce(undefined);
@@ -438,6 +527,31 @@ describe("WhatsAppConnectionController", () => {
       expect(result.message).toMatch(/retry/i);
       expect((result.error as { code?: string })?.code).toBe("whatsapp-auth-unstable");
     }
+  });
+
+  it("aborts an indefinite login wait when guarded credential persistence fails", async () => {
+    const guardError = new Error("verified inference route changed");
+    let persistenceFailure: { error: unknown } | null = null;
+    let resolvePersistenceFailure = (_failure: { error: unknown }) => {};
+    const persistenceFailurePromise = new Promise<{ error: unknown }>((resolve) => {
+      resolvePersistenceFailure = resolve;
+    });
+    const pendingResult = waitForWhatsAppLoginResult({
+      sock: createSocketWithTransportEmitter() as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime: { log: vi.fn() } as never,
+      waitForConnection: vi.fn(() => new Promise<void>(() => {})) as never,
+      credentialPersistenceFailure: persistenceFailurePromise,
+      getCredentialPersistenceFailure: () => persistenceFailure,
+    });
+
+    persistenceFailure = { error: guardError };
+    resolvePersistenceFailure(persistenceFailure);
+
+    const result = await pendingResult;
+    expect(result).toMatchObject({ outcome: "failed", error: guardError });
   });
 
   it("returns a retryable failure when auth is not linked on disk after the socket opens", async () => {
@@ -480,6 +594,8 @@ describe("WhatsAppConnectionController", () => {
 
   it("waits for queued creds persistence so linked auth survives an auth-dir reuse", async () => {
     const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
+    const actualAuthStore =
+      await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
     const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "wa-auth-durability-"));
     try {
       readWebAuthExistsForDecisionMock.mockImplementation(
@@ -510,13 +626,15 @@ describe("WhatsAppConnectionController", () => {
       expect(credsSaved).toBe(true);
       expect(result.outcome).toBe("connected");
       // A fresh read of the same auth dir is what a restarted/rebuilt container does.
-      await expect(actualSession.webAuthExists(authDir)).resolves.toBe(true);
+      await expect(actualAuthStore.webAuthExists(authDir)).resolves.toBe(true);
     } finally {
       await fs.rm(authDir, { recursive: true, force: true });
     }
   });
 
-  it("keeps the previous registered controller until a replacement listener is ready", async () => {
+  it("keeps the ready controller published while a different-auth replacement connects", async () => {
+    const disposeRuntimeContext = vi.fn();
+    registerChannelRuntimeContextMock.mockReturnValueOnce({ dispose: disposeRuntimeContext });
     const liveController = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
@@ -535,14 +653,12 @@ describe("WhatsAppConnectionController", () => {
       },
     });
     const liveListener = createListenerStub("live");
-    createWaSocketMock.mockResolvedValueOnce({ ws: { close: vi.fn() } } as never);
+    createWaSocketMock.mockResolvedValueOnce(createSocketWithTransportEmitter() as never);
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
     await liveController.openConnection({
       connectionId: "live-conn",
       createListener: async () => liveListener,
     });
-
-    expect(getRegisteredWhatsAppConnectionController("work")).toBe(liveController);
 
     const replacement = new WhatsAppConnectionController({
       accountId: "work",
@@ -563,7 +679,7 @@ describe("WhatsAppConnectionController", () => {
     });
 
     try {
-      createWaSocketMock.mockResolvedValueOnce({ ws: { close: vi.fn() } } as never);
+      createWaSocketMock.mockResolvedValueOnce(createSocketWithTransportEmitter() as never);
       waitForWaConnectionMock.mockRejectedValueOnce(new Error("replacement failed"));
 
       await expect(
@@ -573,11 +689,231 @@ describe("WhatsAppConnectionController", () => {
         }),
       ).rejects.toThrow("replacement failed");
 
-      expect(getRegisteredWhatsAppConnectionController("work")).toBe(liveController);
+      expect(registerChannelRuntimeContextMock).toHaveBeenCalledTimes(3);
+      expect(registerChannelRuntimeContextMock).toHaveBeenLastCalledWith({
+        channelRuntime: runtimeContextMocks.channelRuntime,
+        channelId: "whatsapp",
+        accountId: "work",
+        capability: "connection-owner-pending",
+        context: true,
+        abortSignal: undefined,
+      });
+      const activeControllerRegistrations = registerChannelRuntimeContextMock.mock.calls.filter(
+        ([registration]) => registration.capability === "connection-controller",
+      );
+      expect(activeControllerRegistrations).toHaveLength(1);
+      expect(activeControllerRegistrations[0]?.[0].context).toBe(liveController);
     } finally {
       await replacement.shutdown();
       await liveController.shutdown();
     }
+    expect(disposeRuntimeContext).toHaveBeenCalledOnce();
+  });
+
+  it("releases connection ownership only after the Baileys socket closes", async () => {
+    const order: string[] = [];
+    let closed = false;
+    const sock = {
+      end: vi.fn(async () => {
+        closed = true;
+        order.push("socket-close");
+      }),
+      ws: {
+        close: vi.fn(async () => {
+          closed = true;
+        }),
+        get isClosed() {
+          return closed;
+        },
+      },
+    };
+    connectionOwnerMocks.release.mockImplementationOnce(async () => {
+      order.push("owner-release");
+    });
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+
+    await controller.openConnection({
+      connectionId: "owned-conn",
+      createListener: async () => createListenerStub() as never,
+    });
+    await controller.shutdown();
+
+    expect(order).toEqual(["socket-close", "owner-release"]);
+  });
+
+  it("joins pending ownership acquisition before shutdown returns", async () => {
+    let resolveOwner = (_lease: { release: () => Promise<void> }) => {};
+    connectionOwnerMocks.acquire.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOwner = resolve;
+      }),
+    );
+    const openPromise = controller.openConnection({
+      connectionId: "pending-owner",
+      createListener: async () => createListenerStub() as never,
+    });
+    const shutdownPromise = controller.shutdown();
+
+    resolveOwner({ release: connectionOwnerMocks.release });
+
+    await expect(openPromise).rejects.toThrow("controller is shutting down");
+    await expect(shutdownPromise).resolves.toBeUndefined();
+    expect(registerChannelRuntimeContextMock).not.toHaveBeenCalled();
+    expect(createWaSocketMock).not.toHaveBeenCalled();
+    expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("cancels handshake setup and closes its socket before shutdown returns", async () => {
+    const sock = createSocketWithTransportEmitter();
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockReturnValueOnce(new Promise(() => {}));
+    const openPromise = controller.openConnection({
+      connectionId: "pending-handshake",
+      createListener: async () => createListenerStub() as never,
+    });
+    await vi.waitFor(() => expect(waitForWaConnectionMock).toHaveBeenCalledOnce());
+
+    await expect(controller.shutdown()).resolves.toBeUndefined();
+    await expect(openPromise).rejects.toThrow("controller is shutting down");
+    expect(sock.end).toHaveBeenCalledOnce();
+    expect(registerChannelRuntimeContextMock).toHaveBeenCalledTimes(1);
+    expect(registerChannelRuntimeContextMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ capability: "connection-owner-pending" }),
+    );
+    expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("does not publish a listener that resolves after setup is cancelled", async () => {
+    const sock = createSocketWithTransportEmitter();
+    const lateListener = { ...createListenerStub(), close: vi.fn(async () => {}) };
+    let resolveListener = (_listener: ReturnType<typeof createListenerStub>) => {};
+    const listenerPromise = new Promise<ReturnType<typeof createListenerStub>>((resolve) => {
+      resolveListener = resolve;
+    });
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    const openPromise = controller.openConnection({
+      connectionId: "pending-listener",
+      createListener: async () => await listenerPromise,
+    });
+    await vi.waitFor(() => expect(waitForWaConnectionMock).toHaveBeenCalledOnce());
+
+    await expect(controller.shutdown()).resolves.toBeUndefined();
+    await expect(openPromise).rejects.toThrow("controller is shutting down");
+    resolveListener(lateListener);
+    await listenerPromise;
+    await vi.waitFor(() => expect(lateListener.close).toHaveBeenCalledOnce());
+    expect(controller.getActiveListener()).toBeNull();
+    expect(controller.getCurrentSock()).toBeNull();
+    expect(registerChannelRuntimeContextMock).toHaveBeenCalledTimes(1);
+    expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("closes a listener resolved at the setup cancellation boundary", async () => {
+    const sock = createSocketWithTransportEmitter();
+    const listener = { ...createListenerStub(), close: vi.fn(async () => {}) };
+    let shutdownPromise: Promise<void> | undefined;
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    const openPromise = controller.openConnection({
+      connectionId: "resolved-listener",
+      createListener: async () => {
+        queueMicrotask(() => {
+          shutdownPromise = controller.shutdown();
+        });
+        return listener as never;
+      },
+    });
+
+    await expect(openPromise).rejects.toThrow("controller is shutting down");
+    await vi.waitFor(() => expect(shutdownPromise).toBeDefined());
+    await shutdownPromise;
+    expect(listener.close).toHaveBeenCalledOnce();
+    expect(controller.getActiveListener()).toBeNull();
+    expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("retains connection ownership when socket close cannot be confirmed", async () => {
+    let closed = false;
+    const sock = {
+      end: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("end failed"))
+        .mockImplementationOnce(async () => {
+          closed = true;
+        }),
+      ws: {
+        close: vi.fn().mockRejectedValueOnce(new Error("websocket close failed")),
+        get isClosed() {
+          return closed;
+        },
+      },
+    };
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    await controller.openConnection({
+      connectionId: "uncertain-close",
+      createListener: async () => createListenerStub() as never,
+    });
+
+    await expect(controller.shutdown()).rejects.toThrow("socket close could not be confirmed");
+    expect(connectionOwnerMocks.release).not.toHaveBeenCalled();
+  });
+
+  it("retains connection ownership until queued credentials drain", async () => {
+    let closed = false;
+    const sock = {
+      end: vi.fn(async () => {
+        closed = true;
+      }),
+      ws: {
+        close: vi.fn(async () => {
+          closed = true;
+        }),
+        get isClosed() {
+          return closed;
+        },
+      },
+    };
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    waitForCredsSaveQueueWithTimeoutMock
+      .mockResolvedValueOnce("timed_out")
+      .mockResolvedValueOnce("drained");
+    await controller.openConnection({
+      connectionId: "pending-creds",
+      createListener: async () => createListenerStub() as never,
+    });
+
+    await expect(controller.shutdown()).rejects.toThrow("credential persistence did not drain");
+    expect(connectionOwnerMocks.release).not.toHaveBeenCalled();
+    expect(sock.end).toHaveBeenCalledOnce();
+    expect(controller.getActiveListener()).toBeNull();
+    expect(controller.getCurrentSock()).toBeNull();
+
+    await expect(controller.shutdown()).resolves.toBeUndefined();
+    expect(connectionOwnerMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("retains connection ownership until a failed release can be retried", async () => {
+    const sock = createSocketWithTransportEmitter();
+    connectionOwnerMocks.release
+      .mockRejectedValueOnce(new Error("owner release failed"))
+      .mockResolvedValueOnce(undefined);
+    createWaSocketMock.mockResolvedValueOnce(sock as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    await controller.openConnection({
+      connectionId: "release-retry",
+      createListener: async () => createListenerStub() as never,
+    });
+
+    await expect(controller.shutdown()).rejects.toThrow("owner release failed");
+    expect(controller.getActiveListener()).toBeNull();
+    expect(controller.getCurrentSock()).toBeNull();
+
+    await expect(controller.shutdown()).resolves.toBeUndefined();
+    expect(connectionOwnerMocks.release).toHaveBeenCalledTimes(2);
   });
 
   it("tracks real websocket frame activity in the connection snapshot", async () => {
@@ -715,6 +1051,55 @@ describe("WhatsAppConnectionController", () => {
     } finally {
       await controllerLocal.shutdown();
       vi.useRealTimers();
+    }
+  });
+
+  it("settles close and cancels setup when the stop signal is already aborted", async () => {
+    const abort = new AbortController();
+    const stopReason = new Error("already stopped");
+    abort.abort(stopReason);
+    const preAbortedController = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: false,
+      heartbeatSeconds: 30,
+      transportTimeoutMs: 60_000,
+      messageTimeoutMs: 60_000,
+      watchdogCheckMs: 5_000,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+      abortSignal: abort.signal,
+    });
+
+    let ownerAcquireSignal: AbortSignal | undefined;
+    connectionOwnerMocks.acquire.mockImplementationOnce(async (_authDir, signal) => {
+      ownerAcquireSignal = signal;
+      return { release: connectionOwnerMocks.release };
+    });
+
+    try {
+      const abortPromise = (
+        preAbortedController as unknown as { abortPromise?: Promise<"aborted"> }
+      ).abortPromise;
+      await expect(abortPromise).resolves.toBe("aborted");
+      await expect(
+        preAbortedController.openConnection({
+          connectionId: "conn-pre-aborted",
+          createListener: async () => createListenerStub() as never,
+        }),
+      ).rejects.toThrow("controller is shutting down");
+
+      expect(ownerAcquireSignal?.aborted).toBe(true);
+      expect(ownerAcquireSignal?.reason).toBe(stopReason);
+      expect(createWaSocketMock).not.toHaveBeenCalled();
+    } finally {
+      await preAbortedController.shutdown();
     }
   });
 });

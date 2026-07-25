@@ -27,10 +27,6 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
-<Note>
-`activate` is a legacy alias for `register` — the loader resolves whichever is present (`def.register ?? def.activate`) and calls it at the same point. All bundled plugins use `register`; prefer `register` for new plugins.
-</Note>
-
 Safety gates run **before** runtime execution. Discovery blocks a candidate
 when:
 
@@ -228,10 +224,9 @@ conversation, and it runs after core approval handling finishes.
 Provider plugins have three layers:
 
 - **Manifest metadata** for cheap pre-runtime lookup:
-  `setup.providers[].envVars`, deprecated compatibility `providerAuthEnvVars`,
-  `providerAuthAliases`, `providerAuthChoices`, and `channelEnvVars`.
-- **Config-time hooks**: `catalog` (legacy `discovery`) plus
-  `applyConfigDefaults`.
+  `setup.providers[].envVars`, `providerAuthAliases`, `providerAuthChoices`,
+  and `channelConfigs`.
+- **Config-time hooks**: `catalog` plus `applyConfigDefaults`.
 - **Runtime hooks**: 40+ optional hooks covering auth, model resolution,
   stream wrapping, thinking levels, replay policy, and usage endpoints. See
   [Hook order and usage](#hook-order-and-usage).
@@ -242,9 +237,7 @@ behavior without needing a whole custom inference transport.
 
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
-loading plugin runtime. Deprecated `providerAuthEnvVars` is still read by the
-compatibility adapter during the deprecation window, and non-bundled plugins
-that use it receive a manifest diagnostic. Use manifest `providerAuthAliases`
+loading plugin runtime. Use manifest `providerAuthAliases`
 when one provider id should reuse another provider id's env vars, auth profiles,
 config-backed auth, and API-key onboarding choice. Use manifest
 `providerAuthChoices` when onboarding/auth-choice CLI surfaces should know the
@@ -253,9 +246,8 @@ loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
 
-Use manifest `channelEnvVars` when a channel has env-driven auth or setup that
-generic shell-env fallback, config/status checks, or setup prompts should see
-without loading channel runtime.
+Describe env-driven channel setup and auth through the owning
+`channelConfigs.<id>.schema` and setup descriptors.
 
 ### Hook order and usage
 
@@ -325,10 +317,16 @@ that still runs on OpenClaw's normal inference loop.
 
 `resolveUsageAuth` decides whether OpenClaw should call `fetchUsageSnapshot` or
 fall back to generic credential resolution for usage/status surfaces. Return
-`{ token, accountId? }` when the provider has a usage credential, return
+`{ token, accountId?, subscriptionType?, rateLimitTier? }` when the provider
+has a usage credential (the optional plan metadata flows into
+`fetchUsageSnapshot`), return
 `{ handled: true }` when provider-owned usage auth has handled the request and
 must suppress generic API-key/OAuth fallback, and return `null` or `undefined`
 when the provider did not handle usage auth.
+
+Declare organization or billing credentials in manifest
+`providerUsageAuthEnvVars`. This lets generic discovery and secret-scrubbing
+surfaces recognize them without making them inference auth candidates.
 
 ### Provider example
 
@@ -446,9 +444,10 @@ const voices = await api.runtime.tts.listVoices({
 Notes:
 
 - `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
-- Uses core `messages.tts` configuration and provider selection.
+- Uses core `tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
+- Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.
 - Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
 - OpenAI and ElevenLabs support telephony today. Microsoft does not.
 
@@ -519,7 +518,7 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
 
 const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
   provider: "codex",
-  model: "gpt-5.5",
+  model: "gpt-5.6-sol",
   input: [
     {
       type: "image",
@@ -564,7 +563,6 @@ Notes:
   schemas while OpenClaw owns the provider/runtime boundary.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
-- `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
 Plugins can also launch background subagent runs through `api.runtime.subagent`:
 
@@ -572,6 +570,7 @@ Plugins can also launch background subagent runs through `api.runtime.subagent`:
 const result = await api.runtime.subagent.run({
   sessionKey: "agent:main:subagent:search-helper",
   message: "Expand this query into focused follow-up searches.",
+  toolsAlsoAllow: ["my_plugin_progress"],
   provider: "openai",
   model: "gpt-4.1-mini",
   deliver: false,
@@ -581,6 +580,7 @@ const result = await api.runtime.subagent.run({
 Notes:
 
 - `provider` and `model` are optional per-run overrides, not persistent session changes.
+- `toolsAlsoAllow` accepts exact, uniquely owned tool names registered by the calling plugin. Core and ambiguous names are rejected. It is additive to the normal profile, but operator allowlists and denies remain authoritative.
 - OpenClaw only honors those override fields for trusted callers.
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
@@ -667,19 +667,21 @@ Notes:
   - `trusted-proxy` callers without an explicit `x-openclaw-scopes` header also keep the legacy `operator.write`-only surface
   - `trusted-proxy` callers that do send `x-openclaw-scopes` get the declared scopes instead
   - a route can opt into `gatewayRuntimeScopeSurface: "trusted-operator"` to always honor `x-openclaw-scopes` for identity-bearing auth modes (falling back to the full CLI default scope set when the header is absent)
+- Sandboxed external Control UI tabs backed by `auth: "gateway"` routes use a short-lived signed cookie grant minted only by authenticated bootstrap; plugin-auth tabs keep their direct iframe path. Before mounting, the parent runs a route-owned probe inside the same opaque sandbox and fails closed when browser privacy policy blocks the cookie. The grant is bound to the owning plugin, matched route root, and current auth generation; its process-random cookie name prevents trusted same-host Gateways from overwriting one another, but cookies never isolate TCP ports. The Gateway hostname is therefore one credential boundary: do not cohost mutually untrusted services on that hostname, including other ports. Route dispatch rejects reuse against a nested route owned by another plugin. Because sandbox descendants are cross-site for cookie purposes, the grant accepts only `GET` and `HEAD` with `operator.read`; mutations and WebSocket upgrades stay on explicit Gateway-authenticated surfaces. The cookie intentionally cannot use CHIPS: current browsers include a cross-site-ancestor bit in the partition key, so nested opaque sandbox frames would lose access to same-route assets. The cookie requires a secure context and browser permission for cross-site cookies, so gateway-auth external tabs are unavailable on plain-HTTP LAN origins or under full third-party-cookie blocking; use HTTPS/Tailscale Serve or browser-trusted loopback with a compatible cookie policy.
+- The grant prevents Gateway bearer-token disclosure and accidental route/scope reuse; it does not create a security boundary between native plugins. Native plugin code and the UI content it serves remain part of the same trusted in-process plugin boundary.
 - Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, opt into `trusted-operator` scope surface, require an identity-bearing auth mode, and document the explicit `x-openclaw-scopes` header contract.
+- After route matching and authentication, ordinary handlers participate in Gateway root-work admission. A prepared or restarting Gateway returns `503` before invoking the handler. The narrow exception is a manifest-entitled `auth: "gateway"` route that also opts into the route-specific `trusted-operator` surface; it remains reachable so suspension control dispatch cannot be stranded, while ordinary sibling routes from the same plugin remain behind the admission boundary. WebSocket `handleUpgrade` ownership uses the same atomic admission boundary; once the handler accepts a socket, the socket's later lifetime is plugin-owned and is not tracked by this boundary.
 
 ## Plugin SDK import paths
 
 Use narrow SDK subpaths instead of the monolithic `openclaw/plugin-sdk` root
 barrel when authoring new plugins. Core subpaths:
 
-| Subpath                             | Purpose                                            |
-| ----------------------------------- | -------------------------------------------------- |
-| `openclaw/plugin-sdk/plugin-entry`  | Plugin registration primitives                     |
-| `openclaw/plugin-sdk/channel-core`  | Channel entry/build helpers                        |
-| `openclaw/plugin-sdk/core`          | Generic shared helpers and umbrella contract       |
-| `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
+| Subpath                            | Purpose                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `openclaw/plugin-sdk/plugin-entry` | Plugin registration primitives               |
+| `openclaw/plugin-sdk/channel-core` | Channel entry/build helpers                  |
+| `openclaw/plugin-sdk/core`         | Generic shared helpers and umbrella contract |
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
@@ -697,11 +699,10 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
-small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
-`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
-and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
-older plugins. New code should import narrower generic primitives instead.
+`openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
+`openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
+are deprecated compatibility shims for older plugins. New code should import
+narrower generic primitives instead.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
@@ -732,7 +733,8 @@ fallback rules, provider mapping, and plugin author checklist.
 
 Send-capable plugins declare what they can render through message capabilities:
 
-- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `buttons`, `select`)
+- `presentation` for semantic presentation blocks (`text`, `context`,
+  `divider`, `chart`, `table`, `buttons`, `select`)
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.
@@ -1001,7 +1003,6 @@ Useful `openclaw.channel` fields beyond the minimal example:
 - `exposure.configured`: hide the channel from configured-channel listing surfaces when set to `false`
 - `exposure.setup`: hide the channel from interactive setup/configure pickers when set to `false`
 - `exposure.docs`: mark the channel as internal/private for docs navigation surfaces
-- `showConfigured` / `showInSetup`: legacy aliases still accepted for compatibility; prefer `exposure`
 - `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
 - `forceAccountBinding`: require explicit account binding even when only one account exists
 - `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets
@@ -1064,13 +1065,14 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentSessionKey: sessionKey,
         }),
       };
     },
@@ -1083,6 +1085,12 @@ export default function (api) {
 
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
+
+The host completes registered async memory prompt preparation before calling a
+non-legacy engine's `assemble()`. `buildMemorySystemPromptAddition(...)` stays
+synchronous and reads that immutable run snapshot while `assemble()` is active.
+Pass the supplied tool and citation context through unchanged so the snapshot
+cannot cross run boundaries.
 
 `assemble()` may return `contextProjection` when the active harness has a
 persistent backend thread. Omit it for legacy per-turn projection. Return
@@ -1113,13 +1121,14 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentSessionKey: sessionKey,
         }),
       };
     },

@@ -114,9 +114,9 @@ describe("exec approvals node host allowlist check", () => {
 
   it("satisfies via safeBins even when not in allowlist", () => {
     const resolution = {
-      rawExecutable: "jq",
-      resolvedPath: "/usr/bin/jq",
-      executableName: "jq",
+      rawExecutable: "head",
+      resolvedPath: "/usr/bin/head",
+      executableName: "head",
     };
     // Not in allowlist
     const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
@@ -125,9 +125,9 @@ describe("exec approvals node host allowlist check", () => {
 
     // But is a safe bin with non-file args
     const safe = isSafeBinUsage({
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution,
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
     });
     // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
     if (process.platform === "win32") {
@@ -146,7 +146,7 @@ describe("exec approvals default agent migration", () => {
         default: { allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
     expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
@@ -160,7 +160,7 @@ describe("exec approvals default agent migration", () => {
         default: { ask: "off", allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
     expect(resolved.agent.ask).toBe("always");
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
@@ -429,7 +429,7 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
         "*": { security: "none", ask: "off" },
       },
     } as unknown as ExecApprovalsFile;
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
     // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("full")
     expect(resolved.defaults.security).toBe("full");
     // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("off")

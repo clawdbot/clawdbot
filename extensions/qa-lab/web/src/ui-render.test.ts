@@ -71,7 +71,7 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
     scenarioRun: null,
     selectedCaptureEventKey: null,
     selectedCaptureSessionIds: [],
-    selectedConversationId: null,
+    selectedConversationKey: null,
     selectedEvidenceEntryId: null,
     selectedScenarioId: null,
     selectedThreadId: null,
@@ -84,6 +84,81 @@ function evidenceState(overrides: Partial<UiState> = {}): UiState {
 }
 
 describe("QA Lab UI evidence render", () => {
+  it("keeps same-id conversations isolated by account and kind", () => {
+    const selectedConversationKey = JSON.stringify(["account-a", "channel", "shared"]);
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "chat",
+        selectedConversationKey,
+        snapshot: {
+          conversations: [
+            { accountId: "account-a", id: "shared", kind: "channel" },
+            { accountId: "account-b", id: "shared", kind: "channel" },
+            { accountId: "account-a", id: "shared", kind: "direct" },
+          ],
+          events: [],
+          messages: [
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "channel" },
+              direction: "outbound",
+              id: "selected-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "selected account message",
+              timestamp: 1,
+            },
+            {
+              accountId: "account-b",
+              conversation: { id: "shared", kind: "channel" },
+              direction: "outbound",
+              id: "foreign-account-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "foreign account message",
+              timestamp: 2,
+            },
+            {
+              accountId: "account-a",
+              conversation: { id: "shared", kind: "direct" },
+              direction: "outbound",
+              id: "foreign-kind-message",
+              reactions: [],
+              senderId: "openclaw",
+              text: "foreign kind message",
+              timestamp: 3,
+            },
+          ],
+          threads: [
+            {
+              accountId: "account-a",
+              conversationId: "shared",
+              id: "selected-thread",
+              title: "Selected thread",
+            },
+            {
+              accountId: "account-b",
+              conversationId: "shared",
+              id: "foreign-thread",
+              title: "Foreign thread",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(html).toContain("selected account message");
+    expect(html).toContain("Selected thread");
+    expect(html).not.toContain("foreign account message");
+    expect(html).not.toContain("foreign kind message");
+    expect(html).not.toContain("Foreign thread");
+    expect(html).toContain("shared (account-a)");
+    expect(html).toContain("shared (account-b)");
+    expect(html).toContain(
+      `data-conversation-key="${selectedConversationKey.replaceAll('"', "&quot;")}"`,
+    );
+  });
+
   it("renders capture startup commands without personal home paths", () => {
     const html = renderQaLabUi(evidenceState({ activeTab: "capture" }));
 
@@ -177,7 +252,7 @@ describe("QA Lab UI evidence render", () => {
                   source: "ux-matrix:web-ui:first-run",
                 },
               ],
-              coverage: [{ id: "ui.control", role: "primary" }],
+              coverage: [],
               failureReason: null,
               id: "ux-matrix.web-ui.first-run",
               kind: "ux-matrix-cell",
@@ -204,10 +279,11 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: ["screenshot"],
                   artifactPaths: ["screenshot.png"],
-                  coverageIds: ["ui.control"],
+                  coverageIds: [],
                   runner: {
                     availability: "local",
-                    command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+                    command:
+                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
                     lane: "web-ui-playwright",
                     workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
                   },
@@ -220,10 +296,11 @@ describe("QA Lab UI evidence render", () => {
                 {
                   artifactKinds: [],
                   artifactPaths: [],
-                  coverageIds: ["cli.entrypoint"],
+                  coverageIds: [],
                   runner: {
                     availability: "local",
-                    command: "pnpm openclaw qa suite --scenario ux-matrix-evidence-dashboard",
+                    command:
+                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
                     lane: "cli-status",
                     workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
                   },
@@ -241,7 +318,7 @@ describe("QA Lab UI evidence render", () => {
             },
             preflight: { adbDevices: null, memory: null },
             releaseLedger: null,
-            rootPath: ".artifacts/qa-e2e/suite/script/ux-matrix-evidence-dashboard/run-1",
+            rootPath: ".artifacts/qa-e2e/suite/script/ux-matrix-producer/run-1",
             scorecard: null,
           },
           profile: null,
@@ -254,7 +331,7 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain('data-evidence-entry-id="ux-matrix.web-ui.first-run"');
     expect(html).toContain("evidence-matrix-cell-proof-gap");
     expect(html).toContain("not executed in this run");
-    expect(html).toContain("Coverage: cli.entrypoint");
+    expect(html).not.toContain("Coverage:");
     expect(html).toContain("Runner: cli-status");
     expect(html).toContain("Open media artifact");
     expect(html).toContain("Open video artifact");
@@ -409,5 +486,39 @@ describe("QA Lab UI evidence render", () => {
 
     expect(html).toContain("[redacted]");
     expect(html).not.toContain("secret-token");
+  });
+
+  it.each([
+    ["head", `${"a".repeat(279)}😀${"b".repeat(200)}`],
+    ["tail", `${"a".repeat(350)}😀${"z".repeat(79)}`],
+  ])("keeps the bounded capture %s free of lone surrogates", (_edge, payload) => {
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "capture",
+        captureDetailView: "payload",
+        capturePayloadDetailLayout: "raw",
+        captureEvents: [
+          {
+            contentType: "text/plain",
+            dataText: payload,
+            direction: "outbound",
+            flowId: "flow-1",
+            host: "api.example.test",
+            id: 1,
+            kind: "request",
+            method: "POST",
+            path: "/v1/messages",
+            payloadPreview: payload,
+            protocol: "https",
+            provider: "mock",
+            ts: 1,
+          },
+        ],
+        selectedCaptureEventKey: "1:flow-1:1:request",
+      }),
+    );
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+    expect(html).not.toMatch(loneSurrogate);
   });
 });

@@ -15,7 +15,6 @@ import {
   parseCaseFilter,
   parseCsvFilter,
   parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveImageModels,
   resolveLiveImageAuthStore,
 } from "../src/image-generation/live-test-helpers.js";
@@ -264,14 +263,14 @@ describeLive("image generation live (provider sweep)", () => {
             agentDir,
             store: authStore,
           });
-          authLabel = `${auth.source} ${redactLiveApiKey(auth.apiKey)}`;
+          authLabel = auth.source;
         } catch {
           skipped.push(`${providerCase.providerId}: no usable auth`);
           continue;
         }
 
         const { imageProviders } = await registerProviderPlugin({
-          plugin: loadBundledProviderPlugin(providerCase.pluginId),
+          plugin: await loadBundledProviderPlugin(providerCase.pluginId),
           id: providerCase.pluginId,
           name: providerCase.pluginName,
         });

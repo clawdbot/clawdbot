@@ -3,9 +3,9 @@ import path from "node:path";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -14,7 +14,7 @@ const tempDirs: string[] = [];
 /** Clears auto-enable plugin caches and temp dirs between tests. */
 export function resetPluginAutoEnableTestState(): void {
   clearCurrentPluginMetadataSnapshot();
-  clearPluginSetupRegistryCache();
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 }
 
@@ -42,6 +42,7 @@ export function makeRegistry(
     modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
     contracts?: {
       speechProviders?: string[];
+      workerProviders?: string[];
       webSearchProviders?: string[];
       webFetchProviders?: string[];
       tools?: string[];

@@ -1,8 +1,10 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Browser plugin registration helpers. This file keeps registration lazy while
  * advertising Browser tools, services, node-host commands, and audits.
  */
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -16,7 +18,14 @@ import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
 } from "./src/browser-gateway-contract.js";
+import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
+import { describeBrowserTool } from "./src/browser-tool-description.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+import { initializeBrowserSessionTabStore } from "./src/browser/session-tab-store.js";
+import {
+  configureSystemProfileImportStateStore,
+  type SystemProfileImportState,
+} from "./src/browser/system-profile-import-state.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 
@@ -65,30 +74,28 @@ function createLazyBrowserTool(opts?: {
     channel?: string;
     chatType?: string;
   };
+  runToolBinding?: unknown;
 }): AnyAgentTool {
+  const bindingResult =
+    opts?.runToolBinding === undefined
+      ? undefined
+      : parseBrowserTabToolBinding(opts.runToolBinding);
+  if (bindingResult && !bindingResult.ok) {
+    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
+  }
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
   return {
     label: "Browser",
     name: "browser",
-    description: [
-      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
-      'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
-      'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
-      "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
-      'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
-      "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
-      `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
-      hostHint,
-    ].join(" "),
+    description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
-      const tool = createBrowserTool(opts);
+      const tool = createBrowserTool(
+        bindingResult?.ok ? { ...opts, runToolBinding: bindingResult.binding } : opts,
+      );
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
@@ -109,6 +116,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
     channel?: string;
     chatType?: string;
   };
+  runToolBinding?: unknown;
 } {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
   const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
@@ -137,17 +145,25 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
           },
         }
       : {}),
+    ...(ctx.toolBindings && Object.hasOwn(ctx.toolBindings, "browser")
+      ? { runToolBinding: ctx.toolBindings.browser }
+      : {}),
   };
 }
 
 /** Browser plugin reload policy. */
-export const browserPluginReload = { restartPrefixes: ["browser"] };
+export const browserPluginReload = {
+  restartPrefixes: ["browser"],
+  hotPrefixes: ["browser.profiles"],
+};
 
 /** Node-host command descriptors exposed by the Browser plugin. */
 export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "browser.proxy",
     cap: "browser",
+    isAvailable: ({ config }) =>
+      config.browser?.enabled !== false && config.nodeHost?.browserProxy?.enabled !== false,
     handle: async (paramsJSON) => {
       const { runBrowserProxyCommand } = await loadBrowserRegistrationRuntimeModule();
       return await runBrowserProxyCommand(paramsJSON);
@@ -184,7 +200,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
     stop: async (ctx) => {
       if (!service) {
         const { stopBrowserControlService } = await import("./src/control-service.js");
-        await stopBrowserControlService().catch(() => {});
+        await stopBrowserControlService();
         return;
       }
       await service.stop?.(ctx);
@@ -194,12 +210,19 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
 
 /** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
+  initializeBrowserSessionTabStore(api.runtime);
+  configureSystemProfileImportStateStore(
+    api.runtime.state.openKeyedStore<SystemProfileImportState>({
+      namespace: "browser.system-profile-import",
+      maxEntries: 1,
+    }),
+  );
   api.registerTool(((ctx: OpenClawPluginToolContext) =>
     createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./src/cli/browser-cli.js");
-      registerBrowserCli(program);
+      registerBrowserCli(program, process.argv, api.rootDir);
     },
     { commands: ["browser"], descriptors: [BROWSER_CLI_DESCRIPTOR] },
   );
@@ -213,5 +236,24 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       scope: BROWSER_REQUEST_GATEWAY_SCOPE,
     },
   );
+  // Remote extension relay: lets the Chrome extension connect directly to this
+  // gateway over wss:// (no node host on the browser machine). auth:"plugin"
+  // with no nodeCapability means the gateway does not pre-enforce token auth;
+  // the handler self-validates the host-local relay secret. Path kept in sync
+  // with GATEWAY_EXTENSION_RELAY_PATH (hardcoded here to stay lazy).
+  api.registerHttpRoute({
+    path: "/browser/extension",
+    auth: "plugin",
+    match: "exact",
+    handler: (_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(426, { "Content-Type": "text/plain" });
+      res.end("Upgrade Required: connect the OpenClaw Chrome extension over WebSocket.");
+    },
+    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const { handleGatewayExtensionUpgrade } =
+        await import("./src/browser/extension-relay/gateway-relay-route.js");
+      return await handleGatewayExtensionUpgrade(req, socket, head);
+    },
+  });
   api.registerService(createLazyBrowserPluginService());
 }

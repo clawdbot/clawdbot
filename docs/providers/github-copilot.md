@@ -30,7 +30,7 @@ provider or agent runtime in three different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/claude-opus-4.7
+        openclaw models set github-copilot/claude-opus-5
         ```
 
         Or in config:
@@ -38,7 +38,7 @@ provider or agent runtime in three different ways.
         ```json5
         {
           agents: {
-            defaults: { model: { primary: "github-copilot/claude-opus-4.7" } },
+            defaults: { model: { primary: "github-copilot/claude-opus-5" } },
           },
         }
         ```
@@ -62,9 +62,9 @@ provider or agent runtime in three different ways.
     {
       agents: {
         defaults: {
-          model: "github-copilot/gpt-5.5",
+          model: "github-copilot/gpt-5.6-sol",
           models: {
-            "github-copilot/gpt-5.5": {
+            "github-copilot/gpt-5.6-sol": {
               agentRuntime: { id: "copilot" },
             },
           },
@@ -100,6 +100,75 @@ provider or agent runtime in three different ways.
 
   </Tab>
 </Tabs>
+
+## GitHub Enterprise (data residency)
+
+If your organization uses a data-residency GitHub Enterprise tenant (a
+`*.ghe.com` host such as `your-org.ghe.com`), Copilot lives on tenant-local
+endpoints rather than public `github.com`. OpenClaw exposes this as a
+first-class auth choice so you do not have to hand-edit URLs.
+
+<Steps>
+  <Step title="Pick the Enterprise auth choice">
+    In onboarding or `openclaw models auth`, choose
+    **GitHub Copilot (Enterprise / data residency)**. You will be prompted for
+    your Enterprise domain (for example `your-org.ghe.com`), then the device
+    login runs against that tenant.
+
+    Enter the tenant root only (`your-org.ghe.com`). Derived service hosts such
+    as `api.your-org.ghe.com` or `copilot-api.your-org.ghe.com` are not accepted;
+    OpenClaw derives those endpoints from the tenant root automatically.
+
+    ```bash
+    openclaw models auth login --provider github-copilot --method device-enterprise
+    ```
+
+  </Step>
+  <Step title="Domain is persisted to config">
+    The chosen host is stored under the provider params so later token refreshes
+    and completions target the tenant automatically:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "github-copilot": { params: { githubDomain: "your-org.ghe.com" } },
+        },
+      },
+    }
+    ```
+
+  </Step>
+</Steps>
+
+The device flow, token exchange, and completions resolve to
+`https://your-org.ghe.com/login/device/code`,
+`https://api.your-org.ghe.com/copilot_internal/v2/token`, and
+`https://copilot-api.your-org.ghe.com` respectively. Data-residency tokens carry
+a tenant stamp and no proxy hint, so the completions base URL falls back to the
+tenant Copilot host instead of the public endpoint.
+
+<Note>
+Switching domains always re-runs the device login. If you already have a stored
+Copilot token and pick a different domain (public `github.com` ↔ a `*.ghe.com`
+tenant, or one tenant to another), OpenClaw will not reuse the existing token —
+it forces a fresh login so the token is scoped to the domain being written to
+config. Re-running login for the *same* domain still offers to reuse the current
+token. Switching back to public `github.com` clears the persisted
+`githubDomain` so config returns to the default.
+</Note>
+
+<Note>
+The `COPILOT_GITHUB_DOMAIN` environment variable overrides the resolved domain
+for every Copilot path that resolves it — the Enterprise device login
+(`--method device-enterprise`), the standalone
+`openclaw models auth login-github-copilot` shortcut, token refresh, embeddings,
+and completions. Set it to your `*.ghe.com` host for fully headless or CI
+setups. Leave it unset (and the config param absent) to use public `github.com`.
+Logins persist the domain they minted the token for (and clear it when logging
+in against public `github.com`), so routing stays correct even after the
+environment variable is unset.
+</Note>
 
 ## Optional flags
 
@@ -142,7 +211,7 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 
   <Accordion title="Model availability depends on your plan">
     Copilot model availability depends on your GitHub plan. If a model is
-    rejected, try another ID (for example `github-copilot/gpt-5.5`). See
+    rejected, try another ID (for example `github-copilot/gpt-5.6-sol`). See
     GitHub's [supported models per Copilot plan](https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-per-copilot-plan)
     for the current model list.
   </Accordion>
@@ -222,19 +291,17 @@ have logged in, OpenClaw can use it for embeddings without a separate API key.
 
 ### Config
 
-Set `memorySearch.provider` explicitly to use GitHub Copilot embeddings. If a
+Set `memory.search.provider` explicitly to use GitHub Copilot embeddings. If a
 GitHub token is available, OpenClaw discovers available embedding models from
 the Copilot API and picks the best one automatically.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "github-copilot",
-        // Optional: override the auto-discovered model
-        model: "text-embedding-3-small",
-      },
+  memory: {
+    search: {
+      provider: "github-copilot",
+      // Optional: override the auto-discovered model
+      model: "text-embedding-3-small",
     },
   },
 }

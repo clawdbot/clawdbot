@@ -105,6 +105,59 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
   });
 
+  it("auto-enables a bundled worker provider selected by a cloud worker profile", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        cloudWorkers: {
+          profiles: {
+            development: {
+              provider: " STATIC-SSH ",
+              settings: { host: "worker.example.test" },
+            },
+          },
+        },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "qa-lab",
+          channels: [],
+          contracts: { workerProviders: ["static-ssh"] },
+          origin: "bundled",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["qa-lab"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "qa-lab"]);
+    expect(result.autoEnabledReasons).toEqual({
+      "qa-lab": ["static-ssh worker provider selected"],
+    });
+  });
+
+  it("requires explicit enablement for external worker providers", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        cloudWorkers: {
+          profiles: { production: { provider: "cloud-vendor" } },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "cloud-vendor-plugin",
+          channels: [],
+          contracts: { workerProviders: ["cloud-vendor"] },
+          origin: "global",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["cloud-vendor-plugin"]).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
   it("does not auto-enable selected web search provider plugins when web search is disabled", () => {
     const result = applyPluginAutoEnable({
       config: {

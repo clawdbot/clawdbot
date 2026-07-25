@@ -72,7 +72,7 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
   };
 }
 
-function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
+export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
   if (result.meta.error?.kind === "hook_block") {
     return true;
   }
@@ -110,6 +110,7 @@ function classifyGenericExternalRunFailurePayload(params: {
     payload?.isReasoning === true ||
     typeof text !== "string" ||
     text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
+    !payload ||
     hasNonTextVisiblePayloadContent(payload)
   ) {
     return null;
@@ -230,7 +231,6 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   ) {
     return null;
   }
-
   if (fallbackSafeIncompleteTurn) {
     const terminalErrorText = payloads.find(
       (payload) => payload.isError === true && typeof payload.text === "string",
@@ -258,6 +258,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     .filter((payload) => payload?.isError === true)
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
+  // Provider error payloads are auth/profile health signals even when they arrive as an
+  // embedded result rather than a transport exception.
   const failoverReason = classifyProviderErrorPayloadReason(errorText, params.provider);
   if (failoverReason) {
     return {
@@ -272,6 +274,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
 
+  // Legacy GPT-5 handling treats empty/reasoning-only payloads as fallback
+  // candidates, while deliberate silent replies remain successful terminal work.
   if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }

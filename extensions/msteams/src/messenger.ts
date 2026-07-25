@@ -16,10 +16,11 @@ import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
+import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  uploadAndShareOneDrive,
+  requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
@@ -30,7 +31,7 @@ import { getMSTeamsRuntime } from "./runtime.js";
 
 /**
  * MSTeams-specific media size limit (100MB).
- * Higher than the default because OneDrive upload handles large files well.
+ * Higher than the default to support Teams file-consent and SharePoint uploads.
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
@@ -45,7 +46,7 @@ import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-export type MSTeamsConversationReference = {
+type MSTeamsConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
@@ -67,7 +68,7 @@ export type MSTeamsConversationReference = {
   aadObjectId?: string;
 };
 
-export type MSTeamsReplyRenderOptions = {
+type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
@@ -84,13 +85,13 @@ export type MSTeamsRenderedMessage = {
   mediaUrl?: string;
 };
 
-export type MSTeamsSendRetryOptions = {
+type MSTeamsSendRetryOptions = {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
 };
 
-export type MSTeamsSendRetryEvent = {
+type MSTeamsSendRetryEvent = {
   messageIndex: number;
   messageCount: number;
   nextAttempt: number;
@@ -110,6 +111,7 @@ export function buildConversationReference(
   if (!conversationId) {
     throw new Error("Invalid stored reference: missing conversation.id");
   }
+  // Legacy imported rows may only carry `bot`; see StoredConversationReference.bot.
   const agent = ref.agent ?? ref.bot ?? undefined;
   if (agent == null || !agent.id) {
     throw new Error("Invalid stored reference: missing agent.id");
@@ -230,7 +232,7 @@ export function renderReplyPayloadsToMessages(
 
   for (const payload of replies) {
     const reply = resolveSendableOutboundReplyParts(payload, {
-      text: getMSTeamsRuntime().channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+      text: formatMSTeamsMarkdown(payload.text ?? "", tableMode),
     });
 
     if (!reply.hasContent) {
@@ -274,7 +276,7 @@ export function renderReplyPayloadsToMessages(
 
 import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 
-export async function buildActivity(
+async function buildActivity(
   msg: MSTeamsRenderedMessage,
   conversationRef: StoredConversationReference,
   tokenProvider?: MSTeamsAccessTokenProvider,
@@ -342,27 +344,27 @@ export async function buildActivity(
         return consentActivity;
       }
 
-      if (!isPersonal && !isImage && tokenProvider && sharePointSiteId) {
-        // Non-image in group chat/channel with SharePoint site configured:
-        // Upload to SharePoint and use native file card attachment.
-        // Use the cached Graph-native chat ID when available — Bot Framework conversation IDs
-        // for personal DMs use a format (e.g. `a:1xxx`) that Graph API rejects.
-        const chatId = conversationRef.graphChatId ?? conversationRef.conversation?.id;
+      if (!isPersonal && !isImage) {
+        // Non-images in group chats/channels require SharePoint because an
+        // application token has no signed-in `/me/drive` to fall back to.
+        const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
+        if (!tokenProvider) {
+          throw new Error("MS Teams Graph token provider unavailable for SharePoint file send");
+        }
+        const chatId = conversationRef.conversation?.id;
 
-        // Upload to SharePoint
         const uploaded = await uploadAndShareSharePoint({
           buffer: media.buffer,
           filename: fileName,
           contentType,
           tokenProvider,
-          siteId: sharePointSiteId,
+          siteId,
           chatId: chatId ?? undefined,
           usePerUserSharing: conversationType === "groupchat",
         });
 
-        // Get driveItem properties needed for native file card attachment
         const driveItem = await getDriveItemProperties({
-          siteId: sharePointSiteId,
+          siteId,
           itemId: uploaded.itemId,
           tokenProvider,
         });
@@ -371,22 +373,6 @@ export async function buildActivity(
         const fileCardAttachment = buildTeamsFileInfoCard(driveItem);
         activity.attachments = [fileCardAttachment];
 
-        return activity;
-      }
-
-      if (!isPersonal && media.kind !== "image" && tokenProvider) {
-        // Fallback: no SharePoint site configured, try OneDrive upload
-        const uploaded = await uploadAndShareOneDrive({
-          buffer: media.buffer,
-          filename: fileName,
-          contentType,
-          tokenProvider,
-        });
-
-        // Bot Framework doesn't support "reference" attachment type for sending
-        const fileLink = `📎 [${uploaded.name}](${uploaded.shareUrl})`;
-        const existingText = typeof activity.text === "string" ? activity.text : undefined;
-        activity.text = existingText ? `${existingText}\n\n${fileLink}` : fileLink;
         return activity;
       }
 
@@ -416,7 +402,7 @@ export async function sendMSTeamsMessages(params: {
   messages: MSTeamsRenderedMessage[];
   retry?: false | MSTeamsSendRetryOptions;
   onRetry?: (event: MSTeamsSendRetryEvent) => void;
-  /** Token provider for OneDrive/SharePoint uploads in group chats/channels */
+  /** Token provider for SharePoint uploads in group chats/channels */
   tokenProvider?: MSTeamsAccessTokenProvider;
   /** SharePoint site ID for file uploads in group chats/channels */
   sharePointSiteId?: string;

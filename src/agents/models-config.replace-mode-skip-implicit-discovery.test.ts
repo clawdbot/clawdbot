@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveProvidersForModelsJsonWithDeps } from "./models-config.plan.js";
+import { resolveProvidersForModelsJsonWithDeps } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 function createExplicitProvider(): ProviderConfig {

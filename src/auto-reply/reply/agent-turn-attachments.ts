@@ -22,7 +22,7 @@ export function loadAgentTurnMediaRuntime() {
 }
 
 /** Runtime surface needed to resolve agent-turn media attachments. */
-export type AgentTurnAttachmentRuntime = Pick<
+type AgentTurnAttachmentRuntime = Pick<
   Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
   | "MediaAttachmentCache"
   | "isMediaUnderstandingSkipError"

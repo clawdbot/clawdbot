@@ -1,223 +1,284 @@
-/**
- * MCP OAuth credential store and login helpers. Credentials are stored in the
- * private OpenClaw state directory with one hashed file per MCP server URL.
- */
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import fsPromises from "node:fs/promises";
-import path from "node:path";
-import {
-  auth,
-  type OAuthClientProvider,
-  type OAuthDiscoveryState,
-} from "@modelcontextprotocol/sdk/client/auth.js";
-import type {
-  OAuthClientInformationMixed,
-  OAuthClientMetadata,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+/** MCP OAuth credential provider, flow coordinator, and login helpers. */
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStateDir } from "../config/paths.js";
-import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import {
+  type OpenClawStateLeaseContext,
+  withOpenClawStateLease,
+} from "../state/openclaw-state-lease.js";
+import {
+  bindMcpOAuthLeaseAssertion,
+  createMcpOAuthClientProvider,
+  type McpOAuthConfig,
+  withMcpOAuthLeaseSignal,
+} from "./mcp-oauth-provider.js";
+import {
+  clearMcpOAuthStore,
+  readMcpOAuthStore,
+  readMcpOAuthStoreReadOnly,
+  resolveMcpOAuthStoreKey,
+  updateMcpOAuthStore,
+  type McpOAuthStore,
+} from "./mcp-oauth-store.js";
 
-type McpOAuthStore = {
-  clientInformation?: OAuthClientInformationMixed;
-  tokens?: OAuthTokens;
-  codeVerifier?: string;
-  discoveryState?: OAuthDiscoveryState;
-  lastAuthorizationUrl?: string;
-  redirectUrl?: string;
-  state?: string;
-};
+export type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 
-type McpOAuthConfig = {
-  scope?: unknown;
-  redirectUrl?: unknown;
-  clientMetadataUrl?: unknown;
-};
-
-/** Persisted OAuth credential presence flags for one MCP server. */
+/** Persisted OAuth credential presence and authorization state for one MCP server. */
 export type McpOAuthCredentialsStatus = {
   hasTokens: boolean;
+  requiresAuthorization: boolean;
   hasClientInformation: boolean;
   hasCodeVerifier: boolean;
   hasDiscoveryState: boolean;
   hasLastAuthorizationUrl: boolean;
 };
 
-const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
+const TOKEN_EXPIRY_SKEW_MS = 30_000;
+const MCP_OAUTH_LEASE_MS = 60_000;
+const MCP_OAUTH_LEASE_WAIT_MS = 30_000;
 
 function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
   return /invalid_client_metadata|redirect_uri/i.test(String(error));
 }
 
-function oauthStorePath(serverName: string, serverUrl: string): string {
-  const safeServerName = sanitizeServerName(serverName, new Set<string>());
-  const key = createHash("sha256").update(serverName).update("\0").update(serverUrl).digest("hex");
-  return path.join(resolveStateDir(), "mcp-oauth", `${safeServerName}-${key.slice(0, 16)}.json`);
-}
-
-async function readStore(filePath: string): Promise<McpOAuthStore> {
-  try {
-    return JSON.parse(await fsPromises.readFile(filePath, "utf-8")) as McpOAuthStore;
-  } catch {
-    return {};
-  }
-}
-
-function readStoreSync(filePath: string): McpOAuthStore {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as McpOAuthStore;
-  } catch {
-    return {};
-  }
-}
-
-async function writeStore(filePath: string, store: McpOAuthStore): Promise<void> {
-  await fsPromises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await fsPromises.writeFile(filePath, JSON.stringify(store, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  await fsPromises.chmod(filePath, 0o600).catch(() => {});
-}
-
-function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
-  return (
-    normalizeOptionalString(config.redirectUrl) ??
-    normalizeOptionalString(store.redirectUrl) ??
-    LEGACY_DEFAULT_REDIRECT_URL
+async function withMcpOAuthLease<T>(
+  storeKey: string,
+  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return await withOpenClawStateLease(
+    {
+      scope: "core:mcp-oauth",
+      key: storeKey,
+      database: { scope: "shared" },
+      leaseMs: MCP_OAUTH_LEASE_MS,
+      waitMs: MCP_OAUTH_LEASE_WAIT_MS,
+      ...(signal ? { signal } : {}),
+    },
+    run,
   );
 }
 
-function buildOAuthClientMetadata(
-  config: McpOAuthConfig,
-  store: McpOAuthStore = {},
-): OAuthClientMetadata {
-  const redirectUrl = resolveOAuthRedirectUrl(config, store);
-  return {
-    client_name: "OpenClaw MCP",
-    redirect_uris: [redirectUrl],
-    grant_types: ["authorization_code", "refresh_token"],
-    response_types: ["code"],
-    token_endpoint_auth_method: "none",
-    ...(normalizeOptionalString(config.scope)
-      ? { scope: normalizeOptionalString(config.scope) }
-      : {}),
-  };
+function mcpOAuthAdditionalAuthorizationError(serverName: string): Error {
+  return new Error(
+    `MCP server "${serverName}" requires additional OAuth authorization. Run openclaw mcp login ${serverName}.`,
+  );
 }
 
-/** Creates the MCP SDK OAuth provider backed by OpenClaw's private store. */
-export function createMcpOAuthClientProvider(params: {
+function applyMcpOAuthAuthorizationChallenge(
+  current: McpOAuthStore,
+  params: {
+    resourceMetadataUrl?: string;
+    scope?: string;
+    requiresAuthorization?: true;
+  },
+): McpOAuthStore {
+  const next: McpOAuthStore = {
+    ...current,
+    pendingAuthorizationChallenge: {
+      ...current.pendingAuthorizationChallenge,
+      ...(params.resourceMetadataUrl ? { resourceMetadataUrl: params.resourceMetadataUrl } : {}),
+      ...(params.scope ? { scope: params.scope } : {}),
+      ...(params.requiresAuthorization ? { requiresAuthorization: true } : {}),
+    },
+  };
+  if (
+    current.credentialState === undefined &&
+    current.tokens === undefined &&
+    current.clientInformation === undefined &&
+    current.codeVerifier === undefined &&
+    current.discoveryState === undefined &&
+    current.lastAuthorizationUrl === undefined &&
+    current.redirectUrl === undefined
+  ) {
+    next.credentialState = "uninitialized";
+  }
+  if (
+    params.resourceMetadataUrl &&
+    current.discoveryState?.resourceMetadataUrl !== params.resourceMetadataUrl
+  ) {
+    delete next.discoveryState;
+  }
+  return next;
+}
+
+type ResolveMcpOAuthAccessTokenParams = {
   serverName: string;
   serverUrl: string;
   config?: McpOAuthConfig;
-  onAuthorizationUrl?: (url: URL) => void | Promise<void>;
-  allowAuthorizationRedirect?: boolean;
-}): OAuthClientProvider {
-  const config = params.config ?? {};
-  const filePath = oauthStorePath(params.serverName, params.serverUrl);
-  const allowAuthorizationRedirect =
-    params.allowAuthorizationRedirect ?? Boolean(params.onAuthorizationUrl);
-  const assertAuthorizationRedirectAllowed = () => {
-    if (!allowAuthorizationRedirect) {
-      throw new Error(
-        `MCP server "${params.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.serverName}.`,
-      );
-    }
-  };
-  return {
-    get redirectUrl() {
-      return resolveOAuthRedirectUrl(config, readStoreSync(filePath));
-    },
-    clientMetadataUrl: normalizeOptionalString(config.clientMetadataUrl),
-    get clientMetadata() {
-      return buildOAuthClientMetadata(config, readStoreSync(filePath));
-    },
-    async state() {
-      assertAuthorizationRedirectAllowed();
-      const store = await readStore(filePath);
-      const state = randomUUID();
-      await writeStore(filePath, { ...store, state });
-      return state;
-    },
-    async clientInformation() {
-      return (await readStore(filePath)).clientInformation;
-    },
-    async saveClientInformation(clientInformation) {
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, clientInformation });
-    },
-    async tokens() {
-      return (await readStore(filePath)).tokens;
-    },
-    async saveTokens(tokens) {
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, tokens });
-    },
-    async redirectToAuthorization(authorizationUrl) {
-      assertAuthorizationRedirectAllowed();
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, lastAuthorizationUrl: authorizationUrl.toString() });
-      await params.onAuthorizationUrl?.(authorizationUrl);
-    },
-    async saveCodeVerifier(codeVerifier) {
-      assertAuthorizationRedirectAllowed();
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, codeVerifier });
-    },
-    async codeVerifier() {
-      const codeVerifier = (await readStore(filePath)).codeVerifier;
-      if (!codeVerifier) {
-        throw new Error("Missing MCP OAuth code verifier. Run the login flow again.");
+  fetchFn?: FetchLike;
+  acceptUnknownExpiry?: boolean;
+  rejectedAccessToken?: string;
+  resourceMetadataUrl?: URL;
+  scope?: string;
+  allowMissingToken?: boolean;
+  authorizationChallenge?: boolean;
+  interactiveAuthorizationRequired?: boolean;
+  signal?: AbortSignal;
+};
+
+/** Returns a current MCP-native OAuth token under one cross-process flow lease. */
+export function resolveMcpOAuthAccessToken(
+  params: ResolveMcpOAuthAccessTokenParams & { allowMissingToken: true },
+): Promise<string | undefined>;
+export function resolveMcpOAuthAccessToken(
+  params: ResolveMcpOAuthAccessTokenParams,
+): Promise<string>;
+export async function resolveMcpOAuthAccessToken(
+  params: ResolveMcpOAuthAccessTokenParams,
+): Promise<string | undefined> {
+  const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
+  return await withMcpOAuthLease(
+    storeKey,
+    async (lease) => {
+      const store = readMcpOAuthStore(storeKey);
+      const tokens = store.tokens;
+      const rejectedCurrentToken = params.rejectedAccessToken === tokens?.access_token;
+      const challengeAppliesToCurrentState = !tokens?.access_token || rejectedCurrentToken;
+      if (params.authorizationChallenge === true && challengeAppliesToCurrentState) {
+        const resourceMetadataUrl = params.resourceMetadataUrl?.toString();
+        const scope = normalizeOptionalString(params.scope);
+        if (resourceMetadataUrl || scope || params.interactiveAuthorizationRequired === true) {
+          updateMcpOAuthStore(
+            storeKey,
+            (current) =>
+              applyMcpOAuthAuthorizationChallenge(current, {
+                resourceMetadataUrl,
+                scope,
+                ...(params.interactiveAuthorizationRequired === true
+                  ? { requiresAuthorization: true }
+                  : {}),
+              }),
+            bindMcpOAuthLeaseAssertion(lease),
+          );
+        }
       }
-      return codeVerifier;
-    },
-    async invalidateCredentials(scope) {
-      const store = await readStore(filePath);
-      const next: McpOAuthStore = { ...store };
-      if (scope === "all" || scope === "client") {
-        delete next.clientInformation;
+      if (
+        params.authorizationChallenge === true &&
+        params.interactiveAuthorizationRequired === true &&
+        challengeAppliesToCurrentState
+      ) {
+        throw mcpOAuthAdditionalAuthorizationError(params.serverName);
       }
-      if (scope === "all" || scope === "tokens") {
-        delete next.tokens;
+      if (store.pendingAuthorizationChallenge?.requiresAuthorization === true) {
+        throw mcpOAuthAdditionalAuthorizationError(params.serverName);
       }
-      if (scope === "all" || scope === "verifier") {
-        delete next.codeVerifier;
+      if (!tokens?.access_token) {
+        if (params.allowMissingToken === true) {
+          return undefined;
+        }
+        throw new Error(
+          `MCP server "${params.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.serverName}.`,
+        );
       }
-      if (scope === "all" || scope === "discovery") {
-        delete next.discoveryState;
+
+      const tokenIsFresh =
+        store.tokenExpiresAt !== undefined &&
+        store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS;
+      if (
+        !rejectedCurrentToken &&
+        (tokenIsFresh ||
+          (store.tokenExpiresAt === undefined &&
+            (params.acceptUnknownExpiry === true || !tokens.refresh_token)))
+      ) {
+        return tokens.access_token;
       }
-      await writeStore(filePath, next);
+      if (!tokens.refresh_token) {
+        throw new Error(
+          `MCP server "${params.serverName}" has expired OAuth credentials. Run openclaw mcp login ${params.serverName}.`,
+        );
+      }
+
+      const pendingChallenge = store.pendingAuthorizationChallenge;
+      const provider = createMcpOAuthClientProvider({ ...params, lease });
+      const result = await auth(provider, {
+        serverUrl: params.serverUrl,
+        resourceMetadataUrl:
+          params.resourceMetadataUrl ??
+          (pendingChallenge?.resourceMetadataUrl
+            ? new URL(pendingChallenge.resourceMetadataUrl)
+            : undefined),
+        scope:
+          params.scope ??
+          normalizeOptionalString(pendingChallenge?.scope) ??
+          normalizeOptionalString(params.config?.scope),
+        fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
+      });
+      lease.assertOwned();
+      const refreshedTokens = await provider.tokens();
+      if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
+        throw new Error(
+          `MCP server "${params.serverName}" could not refresh OAuth credentials. Run openclaw mcp login ${params.serverName}.`,
+        );
+      }
+      return refreshedTokens.access_token;
     },
-    async saveDiscoveryState(discoveryState) {
-      const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, discoveryState });
-    },
-    async discoveryState() {
-      return (await readStore(filePath)).discoveryState;
-    },
-  };
+    params.signal,
+  );
 }
 
-/** Deletes stored OAuth credentials for one MCP server. */
+/** Persist a terminal resource rejection without overwriting newer credentials. */
+export async function recordMcpOAuthAuthorizationRequired(params: {
+  serverName: string;
+  serverUrl: string;
+  rejectedAccessToken: string;
+  resourceMetadataUrl?: URL;
+  scope?: string;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
+  return await withMcpOAuthLease(
+    storeKey,
+    async (lease) => {
+      const store = readMcpOAuthStore(storeKey);
+      if (store.tokens?.access_token !== params.rejectedAccessToken) {
+        return false;
+      }
+      let recorded = false;
+      updateMcpOAuthStore(
+        storeKey,
+        (current) => {
+          if (current.tokens?.access_token !== params.rejectedAccessToken) {
+            return current;
+          }
+          recorded = true;
+          return applyMcpOAuthAuthorizationChallenge(current, {
+            resourceMetadataUrl: params.resourceMetadataUrl?.toString(),
+            scope: normalizeOptionalString(params.scope),
+            requiresAuthorization: true,
+          });
+        },
+        bindMcpOAuthLeaseAssertion(lease),
+      );
+      return recorded;
+    },
+    params.signal,
+  );
+}
+
+/** Deletes one OAuth session without racing an in-flight refresh or login. */
 export async function clearMcpOAuthCredentials(params: {
   serverName: string;
   serverUrl: string;
 }): Promise<void> {
-  await fsPromises.rm(oauthStorePath(params.serverName, params.serverUrl), { force: true });
+  const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
+  await withMcpOAuthLease(storeKey, async (lease) => {
+    clearMcpOAuthStore(storeKey, bindMcpOAuthLeaseAssertion(lease));
+  });
 }
 
-/** Reads stored OAuth credential presence without exposing credential values. */
+/** Reads stored OAuth credential presence without exposing values or creating state. */
 export async function readMcpOAuthCredentialsStatus(params: {
   serverName: string;
   serverUrl: string;
 }): Promise<McpOAuthCredentialsStatus> {
-  const store = await readStore(oauthStorePath(params.serverName, params.serverUrl));
+  const store = readMcpOAuthStoreReadOnly(
+    resolveMcpOAuthStoreKey(params.serverName, params.serverUrl),
+  );
   return {
     hasTokens: Boolean(store.tokens),
+    requiresAuthorization: store.pendingAuthorizationChallenge?.requiresAuthorization === true,
     hasClientInformation: Boolean(store.clientInformation),
     hasCodeVerifier: Boolean(store.codeVerifier),
     hasDiscoveryState: Boolean(store.discoveryState),
@@ -225,30 +286,40 @@ export async function readMcpOAuthCredentialsStatus(params: {
   };
 }
 
-async function runMcpOAuthLoginAttempt(params: {
-  serverName: string;
-  serverUrl: string;
-  config?: McpOAuthConfig;
-  authorizationCode?: string;
-  fetchFn?: FetchLike;
-  onAuthorizationUrl?: (url: URL) => void | Promise<void>;
-}): Promise<"authorized" | "redirect"> {
+async function runMcpOAuthLoginAttempt(
+  params: {
+    serverName: string;
+    serverUrl: string;
+    config?: McpOAuthConfig;
+    authorizationCode?: string;
+    fetchFn?: FetchLike;
+    onAuthorizationUrl?: (url: URL) => void | Promise<void>;
+    resourceMetadataUrl?: URL;
+    scope?: string;
+    forceAuthorization?: boolean;
+  },
+  lease: OpenClawStateLeaseContext,
+): Promise<"authorized" | "redirect"> {
   const result = await auth(
     createMcpOAuthClientProvider({
       ...params,
       allowAuthorizationRedirect: true,
+      suppressStoredTokens: params.forceAuthorization,
+      lease,
     }),
     {
       serverUrl: params.serverUrl,
       authorizationCode: normalizeOptionalString(params.authorizationCode),
-      scope: normalizeOptionalString(params.config?.scope),
-      fetchFn: params.fetchFn,
+      resourceMetadataUrl: params.resourceMetadataUrl,
+      scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
+      fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
     },
   );
+  lease.assertOwned();
   return result === "AUTHORIZED" ? "authorized" : "redirect";
 }
 
-/** Runs the MCP OAuth login flow, returning whether it authorized or needs redirect. */
+/** Runs both redirect-registration attempts under one OAuth session lease. */
 export async function runMcpOAuthLogin(params: {
   serverName: string;
   serverUrl: string;
@@ -257,34 +328,45 @@ export async function runMcpOAuthLogin(params: {
   fetchFn?: FetchLike;
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
 }): Promise<"authorized" | "redirect"> {
-  const filePath = oauthStorePath(params.serverName, params.serverUrl);
-  const store = await readStore(filePath);
-  const loginParams = {
-    ...params,
-    config: {
-      ...params.config,
-      redirectUrl: normalizeOptionalString(params.config?.redirectUrl) ?? store.redirectUrl,
-    },
-  };
-  try {
-    return await runMcpOAuthLoginAttempt(loginParams);
-  } catch (error) {
-    if (
-      !normalizeOptionalString(params.authorizationCode) &&
-      !normalizeOptionalString(params.config?.redirectUrl) &&
-      isMcpOAuthRedirectRegistrationError(error)
-    ) {
-      const result = await runMcpOAuthLoginAttempt({
-        ...params,
-        config: {
-          ...params.config,
-          redirectUrl: LOCALHOST_REDIRECT_URL,
-        },
-      });
-      const retryStore = await readStore(filePath);
-      await writeStore(filePath, { ...retryStore, redirectUrl: LOCALHOST_REDIRECT_URL });
-      return result;
+  const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
+  return await withMcpOAuthLease(storeKey, async (lease) => {
+    const store = readMcpOAuthStore(storeKey);
+    const pendingChallenge = store.pendingAuthorizationChallenge;
+    const loginParams = {
+      ...params,
+      config: {
+        ...params.config,
+        redirectUrl: normalizeOptionalString(params.config?.redirectUrl) ?? store.redirectUrl,
+      },
+      resourceMetadataUrl: pendingChallenge?.resourceMetadataUrl
+        ? new URL(pendingChallenge.resourceMetadataUrl)
+        : undefined,
+      scope: normalizeOptionalString(pendingChallenge?.scope),
+      forceAuthorization: pendingChallenge?.requiresAuthorization === true,
+    };
+    try {
+      return await runMcpOAuthLoginAttempt(loginParams, lease);
+    } catch (error) {
+      if (
+        !normalizeOptionalString(params.authorizationCode) &&
+        !normalizeOptionalString(params.config?.redirectUrl) &&
+        isMcpOAuthRedirectRegistrationError(error)
+      ) {
+        const result = await runMcpOAuthLoginAttempt(
+          {
+            ...loginParams,
+            config: { ...params.config, redirectUrl: LOCALHOST_REDIRECT_URL },
+          },
+          lease,
+        );
+        updateMcpOAuthStore(
+          storeKey,
+          (current) => ({ ...current, redirectUrl: LOCALHOST_REDIRECT_URL }),
+          bindMcpOAuthLeaseAssertion(lease),
+        );
+        return result;
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }

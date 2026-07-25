@@ -11,6 +11,7 @@ import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
+import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
@@ -31,8 +32,9 @@ export type ApplicationTheme = {
 
 export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
-  navGroupsCollapsed: Record<string, boolean>;
-  recentSessionsCollapsed: boolean;
+  navWidth: number;
+  sidebarEntries: readonly string[];
+  pinnedAgentIds: readonly string[];
 };
 
 export type ApplicationNavigationPreferences = {
@@ -41,9 +43,11 @@ export type ApplicationNavigationPreferences = {
   subscribe: (listener: (snapshot: ApplicationNavigationPreferencesSnapshot) => void) => () => void;
 };
 
-export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
+export type ApplicationNavigationOptions = Partial<
+  Pick<RouteLocation, "pathname" | "search" | "hash">
+>;
 
-export type SkillWorkshopRevisionHandoff = {
+type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
   proposalId: string;
@@ -54,6 +58,25 @@ export type ApplicationSkillWorkshopRevisionHandoff = {
   prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
   consume: (sessionKey: string) => SkillWorkshopRevisionHandoff | null;
   clear: () => void;
+};
+
+export type ApplicationInitialUserMessage = {
+  role: "user";
+  content: unknown[];
+  timestamp: number;
+  __openclaw?: { idempotencyKey?: string; seq?: number };
+};
+
+type InitialUserMessageHandoff = {
+  message: ApplicationInitialUserMessage;
+  owner: object;
+  sessionKey: string;
+};
+
+export type ApplicationInitialUserMessageHandoff = {
+  prepare: (handoff: InitialUserMessageHandoff) => void;
+  read: (sessionKey: string, owner: object | null) => ApplicationInitialUserMessage | null;
+  clear: (sessionKey?: string) => void;
 };
 
 export type ApplicationContext<TRouteId extends string = string> = {
@@ -71,10 +94,13 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
   readonly nativeChatDrafts: NativeChatDrafts;
+  readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
   readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
+  readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
+  readonly revalidate: (routeId?: TRouteId) => Promise<void>;
   readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 

@@ -24,7 +24,19 @@ import {
   type MemorySyncParams,
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  resolveMemoryCoreLocalServiceHostIdentity,
+  type MemoryCoreAcquireLocalService,
+} from "./embedding-local-service.js";
+import { resolveMemoryCoreLeaseHostIdentity } from "./runtime-host.js";
+import {
+  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  runMemorySearchWithDeadline,
+  type MemorySearchDeadlineControlOptions,
+} from "./search-deadline.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
@@ -59,7 +71,7 @@ type MemorySearchManagerCacheState =
   | "fallback-builtin"
   | "recent-failure-cooldown";
 
-export type MemorySearchManagerDebug = {
+type MemorySearchManagerDebug = {
   backend?: "builtin" | "qmd";
   purpose?: MemorySearchManagerPurpose;
   managerMs?: number;
@@ -118,13 +130,20 @@ const loadManagerRuntime = managerRuntimeLoader;
 
 const loadQmdManagerModule = createLazyRuntimeModule(() => import("./qmd-manager.js"));
 
-export type MemorySearchManagerResult = {
+type MemorySearchManagerResult = {
   manager: Maybe<MemorySearchManager>;
   error?: string;
   debug?: MemorySearchManagerDebug;
 };
 
-export type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: MemorySearchManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
+};
 
 function getActiveQmdManagerOpenFailure(
   scopeKey: string,
@@ -182,11 +201,9 @@ function applyManagerDebug(
   };
 }
 
-export async function getMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+export async function getMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   const acquireStartedAt = Date.now();
   const purpose = params.purpose ?? "default";
   const finish = (
@@ -206,12 +223,23 @@ export async function getMemorySearchManager(params: {
     const { workspaceDir } = runtimeConfig;
     const transient = params.purpose === "status" || params.purpose === "cli";
     const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
-    const identityKey = buildQmdManagerIdentityKey(normalizedAgentId, qmdResolved, runtimeConfig);
+    const identityKey = buildQmdManagerIdentityKey(
+      normalizedAgentId,
+      qmdResolved,
+      runtimeConfig,
+      params.acquireLocalService,
+      params.withLease,
+    );
     const debugIdentityHash = hashQmdManagerIdentity(identityKey);
 
     const createPrimaryQmdManager = async (
       mode: "full" | "status" | "cli",
     ): Promise<{ manager: Maybe<MemorySearchManager>; failureReason?: string }> => {
+      if (!params.withLease) {
+        const message = "memory-core host does not provide SQLite lease coordination";
+        log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+        return { manager: null, failureReason: `qmd memory unavailable: ${message}` };
+      }
       try {
         await fs.mkdir(workspaceDir, { recursive: true });
       } catch (err) {
@@ -250,6 +278,7 @@ export async function getMemorySearchManager(params: {
           resolved: { ...resolved, qmd: qmdResolved },
           mode,
           runtimeConfig,
+          withLease: params.withLease,
         });
         if (primary) {
           clearQmdManagerOpenFailure(scopeKey, identityKey);
@@ -414,11 +443,7 @@ export async function getMemorySearchManager(params: {
 }
 
 async function getBuiltinMemorySearchManagerAfterQmdFailure(
-  params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    purpose?: MemorySearchManagerPurpose;
-  },
+  params: MemorySearchManagerParams,
   qmdFailureReason: string | undefined,
 ): Promise<MemorySearchManagerResult> {
   const fallback = await getBuiltinMemorySearchManager(params);
@@ -434,11 +459,9 @@ async function getBuiltinMemorySearchManagerAfterQmdFailure(
   };
 }
 
-async function getBuiltinMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+async function getBuiltinMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
@@ -588,16 +611,34 @@ class FallbackMemoryManager implements MemorySearchManager {
         this.primaryFailed = true;
         this.lastError = formatErrorMessage(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
-        await this.deps.primary.close?.().catch(() => {});
         // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
         this.evictCacheEntry();
+        // Retirement must not delay the same-call builtin fallback. QMD owns
+        // its internal shutdown bounds; this close is best-effort cleanup.
+        void this.deps.primary.close?.().catch(() => {});
       }
     }
-    const fallback = await this.ensureFallback();
-    if (fallback) {
-      return await fallback.search(query, opts);
-    }
-    throw new Error(this.lastError ?? "memory search unavailable");
+    // The fallback owns a fresh default budget. Release any outer QMD clock
+    // before builtin setup so earlier QMD maintenance cannot shorten it.
+    (opts as MemorySearchDeadlineControlOptions | undefined)?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.(
+      "handoff",
+    );
+    // Expose the backend transition before fallback setup starts. This must run
+    // for concurrent and later calls that observe an already-failed primary too.
+    opts?.onDebug?.({ backend: "builtin" });
+    // Calls already queued on this failed wrapper must receive the same
+    // bounded builtin setup and search budget as the first fallback call.
+    return await runMemorySearchWithDeadline({
+      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+      parentSignal: opts?.signal,
+      run: async (signal) => {
+        const fallback = await this.ensureFallback();
+        if (!fallback) {
+          throw new Error(this.lastError ?? "memory search unavailable");
+        }
+        return await fallback.search(query, { ...opts, signal });
+      },
+    });
   }
 
   async readFile(params: { relPath: string; from?: number; lines?: number }) {
@@ -760,10 +801,14 @@ function buildQmdManagerIdentityKey(
   agentId: string,
   config: ResolvedQmdConfig,
   runtimeConfig: QmdManagerRuntimeConfig,
+  acquireLocalService: MemoryCoreAcquireLocalService | undefined,
+  withLease: PluginStateLeaseRunner | undefined,
 ): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}`;
+  const localServiceHostId = resolveMemoryCoreLocalServiceHostIdentity(acquireLocalService);
+  const leaseHostId = resolveMemoryCoreLeaseHostIdentity(withLease);
+  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}:${localServiceHostId}:${leaseHostId}`;
 }
 
 function resolveQmdManagerRuntimeConfig(
@@ -776,3 +821,4 @@ function resolveQmdManagerRuntimeConfig(
     contextLimits: resolveAgentContextLimits(cfg, agentId),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

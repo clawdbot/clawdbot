@@ -1,4 +1,5 @@
 // Discord tests cover send.webhook activity plugin behavior.
+import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
@@ -113,6 +114,14 @@ describe("sendWebhookMessageDiscord activity", () => {
       accountId: "runtime",
       direction: "outbound",
     });
+    expect(
+      isRecentOutboundMessageIdentity({
+        channel: "discord",
+        accountId: "runtime",
+        conversationId: "thread-1",
+        messageId: "msg-1",
+      }),
+    ).toBe(true);
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 

@@ -52,7 +52,7 @@ export function findLocalWildcardReexports(source) {
 /**
  * Collects guarded extension API/runtime barrels that use wildcard re-exports.
  */
-export async function collectExtensionWildcardReexports(rootDir = repoRoot) {
+async function collectExtensionWildcardReexports(rootDir = repoRoot) {
   const files = await listGuardedFiles(rootDir);
   const violations = [];
   for (const filePath of files) {

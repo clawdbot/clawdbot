@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
-  hasDirectProviderApiKeyAuthForTool,
   hasProviderAuthForTool,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
+import { hasDirectProviderApiKeyAuthForTool } from "./model-config.helpers.test-support.js";
 
 vi.mock("../auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
@@ -79,7 +79,7 @@ const resolveMedia = (
     agentDir: AGENT_DIR,
     authStore: store({}),
     openAiModel: MODEL,
-    codexModel: MODEL,
+    resolveCodexMediaRoute: () => ({ model: MODEL }),
     ...overrides,
   });
 
@@ -143,6 +143,23 @@ describe("hasProviderAuthForTool", () => {
     } as OpenClawConfig;
 
     expect(hasProviderAuthForTool({ provider: "hatchery", cfg })).toBe(true);
+  });
+
+  it("accepts AWS SDK auth without a static credential", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            auth: "aws-sdk",
+            api: "bedrock-converse-stream",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg })).toBe(true);
   });
 
   it("keeps auth-store profiles as valid tool auth", () => {

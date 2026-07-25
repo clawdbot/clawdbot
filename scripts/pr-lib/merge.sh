@@ -115,6 +115,7 @@ merge_verify() {
     echo "Re-run prepare to refresh prep artifacts and gates: scripts/pr-prepare run $pr"
     echo "Note: docs/changelog-only follow-ups reuse prior gate results automatically."
 
+    mark_pr_operation_side_effects_started
     git fetch origin "pull/$pr/head" >/dev/null 2>&1 || true
     if git cat-file -e "${PREP_HEAD_SHA}^{commit}" 2>/dev/null && git cat-file -e "${pr_head_sha}^{commit}" 2>/dev/null; then
       echo "HEAD delta (expected...current):"
@@ -125,6 +126,7 @@ merge_verify() {
     exit 1
   fi
 
+  mark_pr_operation_side_effects_started
   gh pr checks "$pr" --required --watch --fail-fast >.local/merge-checks-watch.log 2>&1 || true
   local checks_json
   local checks_err_file
@@ -164,10 +166,19 @@ merge_verify() {
       "${PREP_MAINLINE_BASE_SHA:-${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}}" \
       "$PREP_HEAD_SHA"
     then
-      echo "Merge verify failed: mainline drift is relevant to this PR; run scripts/pr prepare-sync-head $pr before merge."
-      exit 1
+      # Relevant drift is advisory by default: required checks are already
+      # green at the prepared head and GitHub's mergeable state still blocks
+      # true conflicts. The hard fail serialized every landing behind a full
+      # CI cycle per merged sibling, which collapses under multi-session
+      # traffic. Set OPENCLAW_PR_STRICT_DRIFT=1 to restore the hard gate.
+      if [ "${OPENCLAW_PR_STRICT_DRIFT:-}" = "1" ]; then
+        echo "Merge verify failed: mainline drift is relevant to this PR; run scripts/pr prepare-sync-head $pr before merge."
+        exit 1
+      fi
+      echo "Merge verify: WARNING — mainline drift is relevant to this PR; proceeding (OPENCLAW_PR_STRICT_DRIFT=1 restores the hard gate)."
+    else
+      echo "Merge verify: continuing without prep-head sync because behind-main drift is unrelated."
     fi
-    echo "Merge verify: continuing without prep-head sync because behind-main drift is unrelated."
   fi
 
   echo "merge-verify passed for PR #$pr"
@@ -224,8 +235,30 @@ merge_run() {
     return 0
   }
 
+  local merge_method="${OPENCLAW_PR_MERGE_METHOD:-squash}"
+  local merge_flag
+  local merge_label
+  case "$merge_method" in
+    squash)
+      merge_flag="--squash"
+      merge_label="squash"
+      ;;
+    merge)
+      merge_flag="--merge"
+      merge_label="merge commit"
+      ;;
+    rebase)
+      merge_flag="--rebase"
+      merge_label="rebase"
+      ;;
+    *)
+      echo "Invalid OPENCLAW_PR_MERGE_METHOD: $merge_method (expected squash, merge, or rebase)."
+      exit 2
+      ;;
+  esac
+
   if ! gh pr merge "$pr" \
-    --squash \
+    "$merge_flag" \
     --match-head-commit "$PREP_HEAD_SHA" \
     >.local/merge-output.log 2>&1
   then
@@ -290,7 +323,7 @@ merge_run() {
   for attempt in 1 2 3; do
     if comment_output=$(
       {
-        echo "Merged via squash."
+        echo "Merged via $merge_label."
         echo
         echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
         echo "- Landed commit: [$landed_sha]($landed_sha_url)"

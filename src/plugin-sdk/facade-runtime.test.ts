@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   clearCurrentPluginMetadataSnapshot,
@@ -72,7 +71,6 @@ function createBundledPluginDir(prefix: string, marker: string): string {
 
 function useBundledPluginDirOverrideForTest(dir: string): void {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
-  setBundledPluginsDirOverrideForTest(dir);
 }
 
 function createThrowingPluginDir(prefix: string): string {
@@ -102,7 +100,6 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   clearCurrentPluginMetadataSnapshot();
   resetFacadeRuntimeStateForTest();
-  setBundledPluginsDirOverrideForTest(undefined);
   vi.doUnmock("../plugins/manifest-registry.js");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -547,10 +544,10 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
-  it("keeps shared runtime-core facades available without plugin activation", () => {
+  it("keeps bundled extension runtime-core facades available without plugin activation", () => {
     setRuntimeConfigSnapshot({});
 
-    for (const dirName of ["speech-core", "image-generation-core", "media-understanding-core"]) {
+    for (const dirName of ["image-generation-core", "media-understanding-core"]) {
       expect(
         resolveActivationCheckBundledPluginPublicSurfaceAccess({
           dirName,
@@ -564,6 +561,23 @@ describe("plugin-sdk facade runtime", () => {
         pluginId: dirName,
       });
     }
+  });
+
+  it("does not treat package-backed speech-core as a bundled extension facade", () => {
+    setRuntimeConfigSnapshot({});
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "speech-core",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: "",
+        resolutionKey: "runtime-core:speech-core",
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "no bundled plugin manifest found for speech-core",
+    });
   });
 
   it("prefers the source runtime snapshot for facade activation checks", () => {

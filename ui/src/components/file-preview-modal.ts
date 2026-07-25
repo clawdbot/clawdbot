@@ -1,69 +1,49 @@
 // Control UI component implements the file preview modal element.
-import { LitElement, css, html, type PropertyValues } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
+import { t } from "../i18n/index.ts";
+import { OpenClawLitElement } from "../lit/openclaw-element.ts";
+import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
+import "./modal-dialog.ts";
 
-export type FilePreviewModalFile = {
+type FilePreviewModalFile = {
   path: string;
   size: string;
   contents: string;
 };
 
-export class OpenClawFilePreviewModal extends LitElement {
+export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property({ attribute: false }) files: FilePreviewModalFile[] = [];
   @property() activePath = "";
   @property() query = "";
-  @property() label = "Support files";
-  @property() listLabel = "Files";
-  @property() searchPlaceholder = "Search files...";
+  @property() label = "";
+  @property() listLabel = "";
+  @property() searchPlaceholder = "";
   @property() contextLabel = "";
-  @property() readOnlyLabel = "read-only";
-  @property() emptyTitle = "No files match";
-  @property() emptySubtitle = "Try another file name or content search.";
+  @property() readOnlyLabel = "";
+  @property() emptyTitle = "";
+  @property() emptySubtitle = "";
+  @property() copyLabel = "";
   @query(".search") private searchInput?: HTMLInputElement;
+  @query(".detail-body") private detailBody?: HTMLElement;
+
+  private filteredFiles: FilePreviewModalFile[] = [];
+  private activeFile?: FilePreviewModalFile;
+  private derivedInputsReady = false;
+  private codeSource?: string;
+  private codeChunks: string[] = [];
+  private resetScrollAfterUpdate = true;
+  // Reconnection does not rerun firstUpdated; defer focus until shadow DOM is ready.
+  private focusAfterUpdate = false;
 
   static override styles = css`
     :host {
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      display: block;
-    }
-
-    .backdrop {
-      position: absolute;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(6px);
-      animation: fade 140ms ease-out;
-    }
-
-    @keyframes fade {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-
-    @keyframes pop {
-      from {
-        transform: translate(-50%, -48%) scale(0.97);
-        opacity: 0;
-      }
-      to {
-        transform: translate(-50%, -50%) scale(1);
-        opacity: 1;
-      }
+      display: contents;
     }
 
     .modal {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: min(1100px, 92vw);
+      width: 100%;
       height: min(780px, 86vh);
       background: var(--bg);
       border: 1px solid var(--border-strong);
@@ -72,7 +52,6 @@ export class OpenClawFilePreviewModal extends LitElement {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      animation: pop 160ms ease-out;
     }
 
     .head {
@@ -124,18 +103,10 @@ export class OpenClawFilePreviewModal extends LitElement {
       background: var(--bg-elevated);
     }
 
-    .esc,
     .kbd {
       font-family: var(--mono);
       border: 1px solid var(--border);
       color: var(--muted);
-    }
-
-    .esc {
-      font-size: 10px;
-      padding: 1px 5px;
-      border-radius: 3px;
-      background: var(--bg);
     }
 
     .body {
@@ -172,7 +143,6 @@ export class OpenClawFilePreviewModal extends LitElement {
       border: none;
       background: transparent;
       color: var(--text);
-      cursor: pointer;
       font: inherit;
       outline: none;
       text-align: left;
@@ -258,8 +228,17 @@ export class OpenClawFilePreviewModal extends LitElement {
       border-bottom: 1px solid var(--border);
     }
 
+    .detail-title-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
     .title {
-      margin: 0 0 10px;
+      flex: 1;
+      min-width: 0;
+      margin: 0;
       font-family: var(--mono);
       font-size: 22px;
       color: var(--text-strong);
@@ -268,6 +247,83 @@ export class OpenClawFilePreviewModal extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .chat-copy-btn {
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-elevated);
+      color: var(--muted);
+    }
+
+    .chat-copy-btn:hover {
+      border-color: var(--border-strong);
+      color: var(--text-strong);
+    }
+
+    .chat-copy-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .chat-copy-btn__icon {
+      display: inline-flex;
+      width: 16px;
+      height: 16px;
+      position: relative;
+    }
+
+    .chat-copy-btn__icon-copy,
+    .chat-copy-btn__icon-check {
+      position: absolute;
+      inset: 0;
+      transition: opacity 150ms ease;
+    }
+
+    .chat-copy-btn__icon-check {
+      opacity: 0;
+    }
+
+    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-copy {
+      opacity: 0;
+    }
+
+    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-check {
+      opacity: 1;
+    }
+
+    .chat-copy-btn[data-copying="1"] {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .chat-copy-btn[data-error="1"] {
+      border-color: var(--danger-subtle);
+      background: var(--danger-subtle);
+      color: var(--danger);
+    }
+
+    .chat-copy-btn[data-copied="1"] {
+      border-color: var(--ok-subtle);
+      background: var(--ok-subtle);
+      color: var(--ok);
+    }
+
+    .chat-copy-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.5px;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .chips {
@@ -301,20 +357,26 @@ export class OpenClawFilePreviewModal extends LitElement {
 
     .detail-body {
       flex: 1;
-      overflow: auto;
+      overflow-x: hidden;
+      overflow-y: auto;
       padding: 20px 24px 24px;
     }
 
-    .pre {
+    .code-content {
+      min-width: 0;
+    }
+
+    .code-chunk {
       margin: 0;
+      min-width: 0;
       font-family: var(--mono);
       font-size: 13px;
       line-height: 1.7;
       color: var(--text);
-      background: transparent;
-      border: none;
       white-space: pre-wrap;
       word-break: break-word;
+      content-visibility: auto;
+      contain-intrinsic-block-size: auto 1414px;
     }
 
     .foot {
@@ -354,7 +416,6 @@ export class OpenClawFilePreviewModal extends LitElement {
       background: var(--bg-elevated);
       color: var(--text);
       font-weight: 600;
-      cursor: pointer;
     }
 
     .button:hover {
@@ -377,65 +438,93 @@ export class OpenClawFilePreviewModal extends LitElement {
     }
   `;
 
+  protected override willUpdate(changed: PropertyValues<this>) {
+    const inputsChanged =
+      !this.derivedInputsReady ||
+      changed.has("activePath") ||
+      changed.has("query") ||
+      changed.has("files");
+    if (!inputsChanged) {
+      return;
+    }
+
+    this.derivedInputsReady = true;
+    this.filteredFiles = this.filterFiles();
+    const nextActiveFile = this.resolveActiveFile(this.filteredFiles);
+    this.activeFile = nextActiveFile;
+
+    const nextCodeSource = nextActiveFile?.contents;
+    if (nextCodeSource !== this.codeSource) {
+      this.codeSource = nextCodeSource;
+      this.codeChunks = nextCodeSource === undefined ? [] : chunkFileContents(nextCodeSource);
+    }
+
+    this.resetScrollAfterUpdate = true;
+  }
+
   override render() {
-    const filteredFiles = this.filterFiles();
-    const activeFile = this.resolveActiveFile(filteredFiles);
+    const filteredFiles = this.filteredFiles;
+    const activeFile = this.activeFile;
     const fileCount =
       filteredFiles.length === this.files.length
-        ? `${this.files.length} files`
-        : `${filteredFiles.length}/${this.files.length} files`;
+        ? t("filePreview.fileCount", { count: String(this.files.length) })
+        : t("filePreview.filteredFileCount", {
+            count: String(filteredFiles.length),
+            total: String(this.files.length),
+          });
+    const label = this.label || t("filePreview.label");
+    const listLabel = this.listLabel || t("filePreview.listLabel");
+    const searchPlaceholder = this.searchPlaceholder || t("filePreview.searchPlaceholder");
 
     return html`
-      <div class="backdrop" @click=${this.emitClose}></div>
-      <div
-        class="modal"
-        role="dialog"
-        aria-label=${this.label}
-        aria-modal="true"
-        tabindex="-1"
+      <openclaw-modal-dialog
+        label=${label}
+        style="--openclaw-modal-width: min(1100px, 92vw); --openclaw-modal-max-height: 86vh;"
+        @modal-cancel=${this.emitClose}
         @keydown=${this.handleKeydown}
       >
-        <header class="head">
-          <span class="search-icon">⌕</span>
-          <input
-            class="search"
-            placeholder=${this.searchPlaceholder}
-            .value=${this.query}
-            @input=${this.handleQueryInput}
-            autofocus
-          />
-          <span class="state">${fileCount} <span class="esc">esc</span></span>
-        </header>
-        <div class="body">
-          <aside class="list">
-            <div class="list-section">${this.listLabel} · ${filteredFiles.length}</div>
-            ${filteredFiles.length === 0
-              ? html`<div class="empty-list">No files match.</div>`
-              : filteredFiles.map(
-                  (file) => html`
-                    <button
-                      class="item ${file.path === activeFile?.path ? "is-active" : ""}"
-                      @pointerdown=${this.preventItemPointerFocus}
-                      @mousedown=${this.preventItemPointerFocus}
-                      @click=${() => this.emitSelect(file.path)}
-                    >
-                      <span class="item-icon">${iconForFile(file.path)}</span>
-                      <span class="item-name">${file.path}</span>
-                      <span class="item-meta">${file.size}</span>
-                    </button>
-                  `,
-                )}
-          </aside>
-          ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
+        <div class="modal">
+          <header class="head">
+            <span class="search-icon">⌕</span>
+            <input
+              class="search"
+              placeholder=${searchPlaceholder}
+              .value=${this.query}
+              @input=${this.handleQueryInput}
+            />
+            <span class="state">${fileCount}</span>
+          </header>
+          <div class="body">
+            <aside class="list">
+              <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
+              ${filteredFiles.length === 0
+                ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
+                : filteredFiles.map(
+                    (file) => html`
+                      <button
+                        class="item ${file.path === activeFile?.path ? "is-active" : ""}"
+                        @pointerdown=${this.preventItemPointerFocus}
+                        @mousedown=${this.preventItemPointerFocus}
+                        @click=${() => this.emitSelect(file.path)}
+                      >
+                        <span class="item-icon">${iconForFile(file.path)}</span>
+                        <span class="item-name">${file.path}</span>
+                        <span class="item-meta">${file.size}</span>
+                      </button>
+                    `,
+                  )}
+            </aside>
+            ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
+          </div>
+          <footer class="foot">
+            <span class="foot-group"><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span>
+            <span class="spacer"></span>
+            <button class="button" @click=${this.emitClose}>
+              ${t("common.close")} <span class="kbd">esc</span>
+            </button>
+          </footer>
         </div>
-        <footer class="foot">
-          <span class="foot-group"><span class="kbd">↑↓</span> navigate</span>
-          <span class="spacer"></span>
-          <button class="button" @click=${this.emitClose}>
-            Close <span class="kbd">esc</span>
-          </button>
-        </footer>
-      </div>
+      </openclaw-modal-dialog>
     `;
   }
 
@@ -443,16 +532,25 @@ export class OpenClawFilePreviewModal extends LitElement {
     return html`
       <section class="detail">
         <div class="detail-head">
-          <h2 class="title">${file.path}</h2>
+          <div class="detail-title-row">
+            <h2 class="title">${file.path}</h2>
+            ${file.contents
+              ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
+              : ""}
+          </div>
           <div class="chips">
             <span class="chip accent">${fileKind(file.path)}</span>
             <span class="chip">${file.size}</span>
-            <span class="chip">${this.readOnlyLabel}</span>
+            <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
             ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
           </div>
         </div>
         <div class="detail-body">
-          <pre class="pre">${file.contents}</pre>
+          <div class="code-content">
+            ${this.codeChunks.map(
+              (chunk, index) => html`<pre class="code-chunk" data-chunk=${index}>${chunk}</pre>`,
+            )}
+          </div>
         </div>
       </section>
     `;
@@ -461,8 +559,8 @@ export class OpenClawFilePreviewModal extends LitElement {
   private renderEmpty() {
     return html`
       <section class="detail empty">
-        <p class="empty-title">${this.emptyTitle}</p>
-        <p class="empty-subtitle">${this.emptySubtitle}</p>
+        <p class="empty-title">${this.emptyTitle || t("filePreview.emptyTitle")}</p>
+        <p class="empty-subtitle">${this.emptySubtitle || t("filePreview.emptySubtitle")}</p>
       </section>
     `;
   }
@@ -482,13 +580,28 @@ export class OpenClawFilePreviewModal extends LitElement {
     return files.find((file) => file.path === this.activePath) ?? files[0];
   }
 
-  protected override firstUpdated() {
-    this.focusModal();
+  override connectedCallback() {
+    super.connectedCallback();
+    this.resetScrollAfterUpdate = true;
+    this.focusAfterUpdate = true;
+    this.requestUpdate();
   }
 
   protected override updated(changed: PropertyValues<this>) {
+    if (this.resetScrollAfterUpdate) {
+      this.resetScrollAfterUpdate = false;
+      const body = this.detailBody;
+      if (body) {
+        body.scrollTop = 0;
+        body.scrollLeft = 0;
+      }
+    }
     if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
       this.scrollActiveFileIntoView();
+    }
+    if (this.focusAfterUpdate && this.isConnected) {
+      this.focusAfterUpdate = false;
+      this.focusModal();
     }
   }
 
@@ -578,6 +691,17 @@ export class OpenClawFilePreviewModal extends LitElement {
   };
 }
 
+const FILE_PREVIEW_CHUNK_LINES = 64;
+
+function chunkFileContents(contents: string): string[] {
+  const lines = contents.split("\n");
+  const chunks: string[] = [];
+  for (let index = 0; index < lines.length; index += FILE_PREVIEW_CHUNK_LINES) {
+    chunks.push(lines.slice(index, index + FILE_PREVIEW_CHUNK_LINES).join("\n"));
+  }
+  return chunks;
+}
+
 function fileKind(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
@@ -592,10 +716,6 @@ function fileKind(path: string): string {
     sh: "Shell",
   };
   return map[ext] ?? (ext ? ext.toUpperCase() : "File");
-}
-
-if (!customElements.get("openclaw-file-preview-modal")) {
-  customElements.define("openclaw-file-preview-modal", OpenClawFilePreviewModal);
 }
 
 const CODE_EXTENSIONS = new Set([

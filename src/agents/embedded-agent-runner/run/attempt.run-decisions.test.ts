@@ -1,5 +1,6 @@
 // Coverage for small run-attempt decision helpers.
 import { describe, expect, it } from "vitest";
+import { resolveCredentialScopedAuthAttemptModelDecision } from "../../runtime-plan/credential-scoped-model.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
@@ -46,6 +47,37 @@ describe("resolveAttemptStreamAuthProfileId", () => {
       }),
     ).toBeUndefined();
   });
+
+  describe("resolveCredentialScopedAuthAttemptModelDecision", () => {
+    const resolveDecision = (
+      plan: Record<string, unknown>,
+      requestedProfileId?: string,
+      providerUsesProfileScopedModelMetadata = false,
+    ) =>
+      resolveCredentialScopedAuthAttemptModelDecision({
+        attempt: { kind: "implicit", plan } as never,
+        priorProfileAttempted: false,
+        requestedProfileId,
+        providerUsesProfileScopedModelMetadata,
+      });
+
+    it("materializes route-less plans when a provider profile scopes model metadata", () => {
+      expect(resolveDecision({ forwardedAuthProfileId: "github-copilot:work" })).toMatchObject({
+        forceResolve: false,
+        shouldMaterialize: true,
+      });
+      expect(resolveDecision({}, "github-copilot:requested").shouldMaterialize).toBe(true);
+      expect(resolveDecision({ selectedAuthMode: "api-key" }, undefined, true)).toMatchObject({
+        forceResolve: false,
+        shouldMaterialize: true,
+        authRequirement: "api-key",
+      });
+      expect(
+        resolveDecision({ selectedAuthMode: "api-key" }, undefined, false).shouldMaterialize,
+      ).toBe(false);
+      expect(resolveDecision({}).shouldMaterialize).toBe(false);
+    });
+  });
 });
 
 describe("resolveAttemptToolPolicyMessageProvider", () => {
@@ -83,17 +115,5 @@ describe("resolveUnknownToolGuardThreshold", () => {
     // Unknown-tool guard is a model-safety circuit, separate from configurable
     // repeated-tool loop detection.
     expect(resolveUnknownToolGuardThreshold({ enabled: false })).toBe(10);
-    expect(resolveUnknownToolGuardThreshold({ enabled: false, unknownToolThreshold: 3 })).toBe(3);
-  });
-
-  it("uses positive integer thresholds and floors fractions", () => {
-    expect(resolveUnknownToolGuardThreshold({ enabled: true, unknownToolThreshold: 4 })).toBe(4);
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 3.7 })).toBe(3);
-  });
-
-  it("falls back to the default threshold when the override is non-positive", () => {
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 0 })).toBe(10);
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: -5 })).toBe(10);
-    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: Number.NaN })).toBe(10);
   });
 });

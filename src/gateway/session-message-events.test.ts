@@ -5,22 +5,41 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import type { RawData } from "ws";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  loadTranscriptEvents,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  emitAgentEvent,
+} from "../infra/agent-events.js";
+import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
-import {
-  emitInternalSessionTranscriptUpdate,
-  emitSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
+  connectReq,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
+import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
+import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -31,6 +50,10 @@ let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
 
+// No explicit hook timeout: the suite harness cold-imports the full gateway
+// server graph, which can legitimately exceed 60s on contended CI runners.
+// Sibling gateway suites rely on the shared project hookTimeout (120s, 180s on
+// Windows) for the same boot; tightening it here caused flaky hook timeouts.
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
@@ -39,7 +62,7 @@ beforeAll(async () => {
     timeoutMs: SETUP_RPC_TIMEOUT_MS,
   });
   await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
-}, 60_000);
+});
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
@@ -154,6 +177,347 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
 }
 
 describe("session.message websocket events", () => {
+  test("projects watched sessions into per-connection presence", async () => {
+    const observerWs = await harness.openWs();
+    const watchedWs = await harness.openWs();
+    const instanceId = "presence-watched-sessions";
+    try {
+      await connectOk(observerWs, { scopes: ["operator.read"] });
+      const watchedHello = await connectOk(watchedWs, {
+        scopes: ["operator.read"],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TEST,
+          version: "1.0.0",
+          platform: "test",
+          mode: GATEWAY_CLIENT_MODES.TEST,
+          instanceId,
+        },
+      });
+      const initialPresenceVersion = (
+        watchedHello as { snapshot?: { stateVersion?: { presence?: number } } }
+      ).snapshot?.stateVersion?.presence;
+      expect(initialPresenceVersion).toEqual(expect.any(Number));
+
+      const findWatchedEntry = (message: unknown) => {
+        const record = requireRecord(message, "presence event");
+        if (record.event !== "presence") {
+          return undefined;
+        }
+        const payload = requireRecord(record.payload, "presence payload");
+        const presence = Array.isArray(payload.presence) ? payload.presence : [];
+        return presence.find(
+          (entry): entry is Record<string, unknown> =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            (entry as { instanceId?: unknown }).instanceId === instanceId,
+        );
+      };
+      const firstKey = "agent:main:watch-00";
+      const subscribePresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return Array.isArray(entry?.watchedSessions) && entry.watchedSessions.includes(firstKey);
+      });
+      const firstSubscribe = await rpcReq(watchedWs, "sessions.messages.subscribe", {
+        key: firstKey,
+      });
+      expect(firstSubscribe.ok).toBe(true);
+      const subscribedEvent = await subscribePresence;
+      const subscribedEntry = findWatchedEntry(subscribedEvent);
+      expect(subscribedEntry?.watchedSessions).toEqual([firstKey]);
+      expect(subscribedEntry?.user).toBeUndefined();
+      expect(subscribedEvent.stateVersion?.presence).toBeGreaterThan(initialPresenceVersion ?? 0);
+
+      const remainingKeys = Array.from(
+        { length: 33 },
+        (_, index) => `agent:main:watch-${String(index + 1).padStart(2, "0")}`,
+      );
+      for (const key of remainingKeys) {
+        const response = await rpcReq(watchedWs, "sessions.messages.subscribe", { key });
+        expect(response.ok).toBe(true);
+      }
+      const presenceResponse = await rpcReq(observerWs, "system-presence", {});
+      const presence = presenceResponse.payload as unknown as Array<Record<string, unknown>>;
+      const cappedEntry = presence.find((entry) => entry.instanceId === instanceId);
+      const expectedCappedKeys = remainingKeys.slice(-32).toSorted();
+      expect(cappedEntry?.watchedSessions).toEqual(expectedCappedKeys);
+
+      const removedKey = "agent:main:watch-10";
+      const unsubscribePresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return Array.isArray(entry?.watchedSessions) && !entry.watchedSessions.includes(removedKey);
+      });
+      const unsubscribe = await rpcReq(watchedWs, "sessions.messages.unsubscribe", {
+        key: removedKey,
+      });
+      expect(unsubscribe.ok).toBe(true);
+      const unsubscribedEvent = await unsubscribePresence;
+      expect(findWatchedEntry(unsubscribedEvent)?.watchedSessions).not.toContain(removedKey);
+      const subscribedPresenceVersion = subscribedEvent.stateVersion?.presence;
+      expect(unsubscribedEvent.stateVersion?.presence).toBeGreaterThan(
+        typeof subscribedPresenceVersion === "number" ? subscribedPresenceVersion : 0,
+      );
+
+      const disconnectPresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return entry?.reason === "disconnect" && entry.watchedSessions === undefined;
+      });
+      watchedWs.close();
+      const disconnectedEvent = await disconnectPresence;
+      const unsubscribedPresenceVersion = unsubscribedEvent.stateVersion?.presence;
+      expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
+        typeof unsubscribedPresenceVersion === "number" ? unsubscribedPresenceVersion : 0,
+      );
+    } finally {
+      observerWs.close();
+      watchedWs.close();
+    }
+  });
+
+  test("enforces session-scoped chat delivery on real gateway connections", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        other: { sessionId: "sess-other", updatedAt: Date.now() },
+      },
+      storePath,
+    });
+    const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const copilotClient = {
+      id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+      version: "test",
+      platform: "chrome",
+      deviceFamily: "extension",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const copilotIdentityPath = path.join(path.dirname(storePath), "copilot-device.json");
+    const unpairedWs = await harness.openWs({ origin: copilotOrigin });
+    const pairingWs = await harness.openWs({ origin: copilotOrigin });
+    const wrongOriginWs = await harness.openWs({
+      origin: "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
+    });
+    const mainWs = await harness.openWs({ origin: copilotOrigin });
+    const otherWs = await harness.openWs();
+    const legacyWs = await harness.openWs();
+    try {
+      const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+      const unpaired = await connectReq(unpairedWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: path.join(path.dirname(storePath), "unpaired-copilot-device.json"),
+        prePairDevice: false,
+      });
+      expect(unpaired.ok).toBe(false);
+      expect(unpaired.error?.code).toBe("NOT_PAIRED");
+      unpairedWs.close();
+
+      const pairedHello = await connectOk(pairingWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: true,
+        browserOrigin: copilotOrigin,
+      });
+      const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
+      expect(deviceToken).toBeTruthy();
+      pairingWs.close();
+      const wrongOrigin = await connectReq(wrongOriginWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        deviceToken,
+        skipDefaultAuth: true,
+      });
+      expect(wrongOrigin.ok).toBe(false);
+      expect(wrongOrigin.error?.code).toBe("NOT_PAIRED");
+      expect(wrongOrigin.error?.message).toContain("dedicated paired device identity");
+      wrongOriginWs.close();
+
+      await connectOk(mainWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        deviceToken,
+        skipDefaultAuth: true,
+      });
+      await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
+      await connectOk(legacyWs, { scopes: ["operator.read"] });
+      await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
+      await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+
+      const mainEvent = onceMessage(
+        mainWs,
+        (message) =>
+          message.type === "event" &&
+          message.event === "chat" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+      const legacyEvent = onceMessage(
+        legacyWs,
+        (message) =>
+          message.type === "event" &&
+          message.event === "chat" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+      const otherReceived = onceMessage(
+        otherWs,
+        (message) => message.type === "event" && message.event === "chat",
+        300,
+      ).then(
+        () => true,
+        () => false,
+      );
+
+      const send = await rpcReq(mainWs, "chat.send", {
+        sessionKey: "main",
+        message: "/status",
+        toolBindings: {
+          browser: {
+            kind: "tab",
+            tabId: 7,
+            target: "host",
+            profile: "chrome",
+            targetId: "target-7",
+          },
+        },
+        idempotencyKey: "scoped-delivery-proof",
+      });
+      expect(send.ok, JSON.stringify(send)).toBe(true);
+      await expect(Promise.all([mainEvent, legacyEvent])).resolves.toHaveLength(2);
+      await expect(otherReceived).resolves.toBe(false);
+    } finally {
+      unpairedWs.close();
+      pairingWs.close();
+      wrongOriginWs.close();
+      mainWs.close();
+      otherWs.close();
+      legacyWs.close();
+    }
+  });
+
+  test("rejects client identity changes across a dedicated copilot pairing", async () => {
+    const storePath = await createSessionStoreFile();
+    const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const identityPath = path.join(path.dirname(storePath), "other-client-device.json");
+    const copilotIdentityPath = path.join(path.dirname(storePath), "copilot-paired-device.json");
+    const controlWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const copilotWs = await harness.openWs({
+      origin: copilotOrigin,
+    });
+    const pairingWs = await harness.openWs({
+      origin: copilotOrigin,
+    });
+    const downgradeWs = await harness.openWs();
+    const wrongModeWs = await harness.openWs({
+      origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    });
+    const webOriginWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const missingCapsWs = await harness.openWs({
+      origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    });
+    try {
+      const clientBase = {
+        version: "test",
+        platform: "chrome",
+        deviceFamily: "extension",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      };
+      const wrongMode = await connectReq(wrongModeWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          ...clientBase,
+          id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "wrong-mode-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(wrongMode.ok).toBe(false);
+      expect(wrongMode.error?.message).toContain("requires ui mode");
+      wrongModeWs.close();
+
+      const missingCaps = await connectReq(missingCapsWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: path.join(path.dirname(storePath), "missing-caps-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(missingCaps.ok).toBe(false);
+      expect(missingCaps.error?.message).toContain("session-scoped-events");
+      missingCapsWs.close();
+
+      const webOrigin = await connectReq(webOriginWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: path.join(path.dirname(storePath), "web-origin-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(webOrigin.ok).toBe(false);
+      expect(webOrigin.error?.message).toContain("canonical Chrome extension origin");
+      webOriginWs.close();
+
+      await connectOk(controlWs, {
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.CONTROL_UI },
+        deviceIdentityPath: identityPath,
+        prePairDevice: true,
+        scopes: ["operator.read", "operator.write"],
+      });
+      controlWs.close();
+
+      const response = await connectReq(copilotWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: identityPath,
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("NOT_PAIRED");
+      expect(response.error?.message).toContain("dedicated paired device identity");
+
+      await connectOk(pairingWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: true,
+        browserOrigin: copilotOrigin,
+        scopes: ["operator.read", "operator.write"],
+      });
+      pairingWs.close();
+
+      const downgrade = await connectReq(downgradeWs, {
+        client: {
+          ...clientBase,
+          id: GATEWAY_CLIENT_IDS.TEST,
+          mode: GATEWAY_CLIENT_MODES.TEST,
+        },
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(downgrade.ok).toBe(false);
+      expect(downgrade.error?.code).toBe("NOT_PAIRED");
+      expect(downgrade.error?.message).toContain("dedicated paired device identity");
+    } finally {
+      controlWs.close();
+      copilotWs.close();
+      pairingWs.close();
+      downgradeWs.close();
+      wrongModeWs.close();
+      webOriginWs.close();
+      missingCapsWs.close();
+    }
+  });
+
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
@@ -322,8 +686,21 @@ describe("session.message websocket events", () => {
         role: "assistant",
         content: [{ type: "text", text: "live websocket message" }],
       });
-      const transcript = await fs.readFile(appended.sessionFile, "utf-8");
-      expect(transcript).toContain('"live websocket message"');
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        }),
+      ).resolves.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "live websocket message" }],
+          }),
+          type: "message",
+        }),
+      );
     } finally {
       emitSpy.mockRestore();
     }
@@ -537,7 +914,7 @@ describe("session.message websocket events", () => {
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
-      emitInternalSessionTranscriptUpdate({
+      emitSessionTranscriptUpdate({
         target: {
           agentId: "main",
           sessionId: "sess-main",
@@ -577,7 +954,6 @@ describe("session.message websocket events", () => {
       },
       storePath,
     });
-    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "usage snapshot" }],
@@ -592,20 +968,24 @@ describe("session.message websocket events", () => {
       },
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-usage", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: transcriptPath,
+        sessionFile: turn.sessionFile,
         message: transcriptMessage,
         messageId: "msg-usage",
       });
@@ -661,12 +1041,10 @@ describe("session.message websocket events", () => {
 
   test("derives message sequence for selected-session transcript subscribers", async () => {
     const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "selected-session.jsonl");
     await writeSessionStore({
       entries: {
         main: {
           sessionId: "sess-main",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
       },
@@ -677,13 +1055,17 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-selected", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
     );
 
     const ws = await harness.openWs();
@@ -697,7 +1079,7 @@ describe("session.message websocket events", () => {
 
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
+        sessionFile: turn.sessionFile,
         sessionKey: "agent:main:main",
         message: transcriptMessage,
         messageId: "msg-selected",
@@ -1188,50 +1570,215 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript path", async () => {
+  test("streams worker commits and local-equivalent live events to the selected session", async () => {
     const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "shared.jsonl");
+    const sessionId = "sess-worker-commit-fanout";
+    const sessionKey = "agent:main:worker";
+    await writeSessionStore({
+      entries: {
+        worker: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { mainKey: "main", store: storePath },
+    };
+    const ledger: WorkerTranscriptCommitStore = {
+      begin: () => ({ kind: "claimed" }),
+      complete: ({ outcome }) => outcome,
+    };
+    const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
+    const identity: WorkerConnectionIdentity = {
+      environmentId: "environment-fanout",
+      credentialHash: ["fanout", "credential", "hash"].join("-"),
+      bundleHash: "f".repeat(64),
+      sessionId,
+      runId: "run-fanout",
+      ownerEpoch: 4,
+      rpcSetVersion: 1,
+      protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
+      credentialExpiresAtMs: Date.now() + 10_000,
+    };
+    const receiver = createWorkerLiveEventReceiver({
+      getConfig: () => config,
+      startupBindings: [{ environmentId: identity.environmentId, runEpoch: 4, sessionId }],
+      startupOwners: new Map([[identity.environmentId, 4]]),
+    });
+    const ws = await harness.openWs();
+    const workerChats: Record<string, unknown>[] = [];
+    const collectWorkerChats = (data: RawData) => {
+      const message = JSON.parse(rawDataToString(data)) as {
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown>;
+      };
+      if (
+        message.type === "event" &&
+        message.event === "chat" &&
+        message.payload?.runId === "worker"
+      ) {
+        workerChats.push(message.payload);
+      }
+    };
+    ws.on("message", collectWorkerChats);
+    try {
+      await connectOk(ws, { scopes: ["operator.read"] });
+      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+      expect(subscribeRes.ok).toBe(true);
+      expect(subscribeRes.payload?.subscribed).toBe(true);
+      expect(subscribeRes.payload?.key).toBe(sessionKey);
+
+      const eventPromises = [1, 2, 3].map((messageSeq) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: unknown } | undefined)?.sessionKey === sessionKey &&
+            (message.payload as { messageSeq?: unknown } | undefined)?.messageSeq === messageSeq,
+        ),
+      );
+      const outcome = await committer.commit({
+        identity,
+        request: {
+          runEpoch: identity.ownerEpoch,
+          seq: 1,
+          baseLeafId: null,
+          messages: ["first", "second", "third"].map((text, index) => ({
+            role: "user" as const,
+            content: [{ type: "text" as const, text }],
+            timestamp: 100 + index,
+          })),
+        },
+      });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        throw new Error(`expected worker transcript commit, received ${outcome.reason}`);
+      }
+      const events = await Promise.all(eventPromises);
+      const payloads = events.map((event) =>
+        requireRecord(event.payload, "session.message payload"),
+      );
+      expect(payloads.map((payload) => payload.messageId)).toEqual(outcome.result.entryIds);
+      expect(payloads.map((payload) => payload.messageSeq)).toEqual([1, 2, 3]);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").id;
+        }),
+      ).toEqual(outcome.result.entryIds);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").seq;
+        }),
+      ).toEqual([1, 2, 3]);
+
+      const waitForChat = (runId: string, timeoutMs?: number) =>
+        onceMessage(
+          ws,
+          ({ type, event, payload }) =>
+            type === "event" &&
+            event === "chat" &&
+            (payload as Record<string, unknown>).runId === runId,
+          timeoutMs,
+        );
+      const liveEvent = {
+        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
+        lastAckedSeq: 0,
+        seq: 1,
+      } as const;
+      const push = (runEpoch = 4, runId = "worker") =>
+        receiver.apply({ identity, request: { ...liveEvent, runEpoch, runId } });
+      const [workerEvent] = await Promise.all([
+        waitForChat("worker"),
+        expectNoMessageWithin({
+          watch: (timeoutMs) => waitForSessionMessageEvent(ws, sessionKey, timeoutMs),
+          action: () => expect(push().ok).toBe(true),
+        }),
+      ]);
+      const workerChat = requireRecord(workerEvent.payload, "worker chat");
+      await expectNoMessageWithin({
+        watch: (timeoutMs) => waitForChat("worker", timeoutMs),
+        action: () => {
+          expect(push()).toEqual({ ok: true, result: { ackedSeq: 1 } });
+        },
+      });
+      expect(workerChats).toHaveLength(1);
+
+      claimAgentRunContext("local", {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        isControlUiVisible: false,
+      });
+      const localEvent = waitForChat("local");
+      emitAgentEvent({
+        runId: "local",
+        stream: "assistant",
+        data: { text: "hello", delta: "hello" },
+      });
+      const localChat = requireRecord((await localEvent).payload, "local chat");
+      for (const payload of [workerChat, localChat]) {
+        payload.runId = "normalized";
+        requireRecord(payload.message, "chat message").timestamp = 0;
+      }
+      expect(workerChat).toEqual(localChat);
+      await expectNoMessageWithin({
+        watch: (timeoutMs) => waitForChat("stale", timeoutMs),
+        action: () => expect(push(3, "stale").ok).toBe(false),
+      });
+    } finally {
+      receiver.clear();
+      clearAgentRunContext("local");
+      ws.off("message", collectWorkerChats);
+      ws.close();
+    }
+  });
+
+  test("routes transcript-only SQLite marker updates to the matching session owner", async () => {
+    const storePath = await createSessionStoreFile();
     await writeSessionStore({
       entries: {
         older: {
           sessionId: "sess-old",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
         newer: {
           sessionId: "sess-new",
-          sessionFile: transcriptPath,
           updatedAt: Date.now() + 10,
         },
       },
       storePath,
     });
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-new" }),
-        JSON.stringify({
-          id: "msg-shared",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "shared transcript update" }],
-            timestamp: Date.now(),
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "shared transcript update" }],
+      timestamp: Date.now(),
+    };
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-new",
+        sessionKey: "agent:main:newer",
+        storePath,
+      },
+      {
+        messages: [{ message }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "shared transcript update" }],
-          timestamp: Date.now(),
-        },
+        sessionFile: turn.sessionFile,
+        message,
         messageId: "msg-shared",
       });
 
@@ -1244,3 +1791,4 @@ describe("session.message websocket events", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -120,6 +120,71 @@ describe("refreshQueuedFollowupSession", () => {
       modelOverrideSource: "user",
     });
   });
+
+  it("clamps queued Sol Ultra work to Codex Luna Max", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.items.push({
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: {
+        ...makeRun(),
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        thinkLevel: "ultra",
+      },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "openai",
+      nextModel: "gpt-5.6-luna",
+      nextThinking: { level: "ultra", agentRuntime: "codex" },
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      thinkLevel: "max",
+    });
+  });
+
+  it("uses the highest supported non-max level when retargeting queued work", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.items.push({
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: { ...makeRun(), thinkLevel: "ultra" },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "custom",
+      nextModel: "reasoner",
+      nextThinking: { level: "ultra", agentRuntime: "openclaw" },
+    });
+
+    expect(queue.items[0]?.run.thinkLevel).toBe("high");
+  });
+
+  it("recomputes the retargeted model default when the session has no thinking override", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.items.push({
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: { ...makeRun(), thinkLevel: "ultra" },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "openai",
+      nextModel: "gpt-5.6-sol",
+      nextThinking: { agentRuntime: "codex" },
+    });
+
+    // Sol's provider default reasoning level is medium (extensions/openai
+    // thinking-policy.ts); retargeting without an override adopts it.
+    expect(queue.items[0]?.run.thinkLevel).toBe("medium");
+  });
 });
 
 describe("getFollowupQueue", () => {

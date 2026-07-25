@@ -42,6 +42,6 @@
 		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
 	</dict>
 	<key>OpenClawAppGroupIdentifier</key>
-	<string>$(OPENCLAW_APP_GROUP_ID)</string>
+	<string>$(OPENCLAW_ACTIVE_APP_GROUP_ID)</string>
 </dict>
 </plist>

@@ -32,6 +32,24 @@ describe("qa channel transport", () => {
     });
   });
 
+  it("maps declared transport policy without inspecting scenario ids", () => {
+    const transport = createQaChannelTransport(createQaBusState(), {
+      requireGroupMention: true,
+      senderAllowlist: ["driver"],
+    });
+
+    expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:43123" })).toMatchObject({
+      channels: {
+        "qa-channel": {
+          allowFrom: ["driver"],
+          groupAllowFrom: ["driver"],
+          groupPolicy: "allowlist",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+  });
+
   it("builds agent delivery params for qa-channel replies", () => {
     const transport = createQaChannelTransport(createQaBusState());
 

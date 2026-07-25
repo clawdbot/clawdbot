@@ -3,10 +3,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import {
+  isModelKeyAllowedBySet,
+  parseConfiguredModelVisibilityEntries,
+} from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   buildConfiguredModelCatalog,
@@ -15,7 +18,9 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,7 +37,6 @@ import {
   type ModelPickerCatalogEntry,
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
-export { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 
 function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
@@ -42,10 +46,14 @@ function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
 function resolveStatusHarnessRuntime(params: {
   sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
   defaultRuntime: string;
+  provider: string;
+  cfg: OpenClawConfig;
 }): string {
-  const sessionRuntime = normalizeOptionalAgentRuntimeId(
-    params.sessionEntry?.agentRuntimeOverride ?? params.sessionEntry?.agentHarnessId,
-  );
+  const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
+    provider: params.provider,
+    entry: params.sessionEntry,
+    cfg: params.cfg,
+  });
   if (sessionRuntime) {
     return sessionRuntime;
   }
@@ -83,6 +91,8 @@ async function resolveStatusAuthLabel(params: {
   const harnessRuntime = resolveStatusHarnessRuntime({
     sessionEntry: params.sessionEntry,
     defaultRuntime: harnessPolicy.runtime,
+    provider,
+    cfg: params.cfg,
   });
   const auth = await resolveAuthLabel(
     params.provider,
@@ -156,13 +166,17 @@ function buildModelPickerCatalog(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
+  agentId: string;
   aliasIndex: ModelAliasIndex;
+  policyAliasIndex: ModelAliasIndex;
+  allowedModelKeys: ReadonlySet<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
 }): ModelPickerCatalogEntry[] {
   const resolvedDefault = resolveConfiguredModelRef({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
 
   const buildConfiguredCatalog = (): ModelPickerCatalogEntry[] => {
@@ -234,8 +248,11 @@ function buildModelPickerCatalog(params: {
     });
   };
 
-  const hasAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0;
-  if (!hasAllowlist) {
+  const visibility = parseConfiguredModelVisibilityEntries({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (!visibility.hasEntries) {
     for (const entry of params.allowedModelCatalog) {
       push({
         provider: entry.provider,
@@ -249,9 +266,14 @@ function buildModelPickerCatalog(params: {
     return out;
   }
 
-  // Prefer catalog entries (when available), but always merge in config-only
-  // allowlist entries. This keeps custom providers/models visible in /model.
-  for (const entry of params.allowedModelCatalog) {
+  // Expand wildcard policy entries through the same discovered-catalog path as
+  // the main model selection policy.
+  for (const entry of params.allowedModelCatalog.filter((candidate) =>
+    isModelKeyAllowedBySet(
+      params.allowedModelKeys,
+      modelKey(candidate.provider, candidate.id ?? ""),
+    ),
+  )) {
     push({
       provider: entry.provider,
       id: entry.id ?? "",
@@ -259,25 +281,42 @@ function buildModelPickerCatalog(params: {
     });
   }
 
-  // Merge any configured allowlist keys that the catalog doesn't know about.
-  for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
+  // Merge exact policy refs that the catalog doesn't know about.
+  for (const raw of visibility.exactModelRefs) {
     const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
       raw,
       defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
+      aliasIndex: params.policyAliasIndex,
+      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     });
     if (!resolved) {
       continue;
     }
-    push({
-      provider: resolved.ref.provider,
-      id: resolved.ref.model,
-      name: resolved.ref.model,
-    });
+    const catalogEntry = params.allowedModelCatalog.find(
+      (entry) =>
+        modelKey(entry.provider, entry.id ?? "") ===
+        modelKey(resolved.ref.provider, resolved.ref.model),
+    );
+    push(
+      catalogEntry
+        ? { provider: catalogEntry.provider, id: catalogEntry.id ?? "", name: catalogEntry.name }
+        : {
+            provider: resolved.ref.provider,
+            id: resolved.ref.model,
+            name: resolved.ref.model,
+          },
+    );
   }
 
-  // Ensure the configured default is always present (even when no allowlist).
-  if (resolvedDefault.model) {
+  // A restricted picker must not reintroduce a default rejected by the active policy.
+  if (
+    resolvedDefault.model &&
+    isModelKeyAllowedBySet(
+      params.allowedModelKeys,
+      modelKey(resolvedDefault.provider, resolvedDefault.model),
+    )
+  ) {
     push({
       provider: resolvedDefault.provider,
       id: resolvedDefault.model,
@@ -338,6 +377,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  policyAliasIndex?: ModelAliasIndex;
+  allowedModelKeys: ReadonlySet<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
   workspaceDir?: string;
@@ -366,7 +407,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.activeAgentId,
     aliasIndex: params.aliasIndex,
+    policyAliasIndex: params.policyAliasIndex ?? params.aliasIndex,
+    allowedModelKeys: params.allowedModelKeys,
     allowedModelCatalog: params.allowedModelCatalog,
   });
 

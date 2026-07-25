@@ -8,18 +8,14 @@ import { commitmentsDismissCommand, commitmentsListCommand } from "./commitments
 const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
-  resolveCommitmentStorePath: vi.fn(() => "/tmp/openclaw-commitments.json"),
-  getRuntimeConfig: vi.fn(() => ({
-    commitments: {
-      enabled: true,
-    },
-  })),
+  resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw.sqlite"),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../commitments/store.js", () => ({
   listCommitments: mocks.listCommitments,
   markCommitmentsStatus: mocks.markCommitmentsStatus,
-  resolveCommitmentStorePath: mocks.resolveCommitmentStorePath,
+  resolveCommitmentDatabasePath: mocks.resolveCommitmentDatabasePath,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -83,7 +79,7 @@ describe("commitments command", () => {
 
     expect(logs.map(stripAnsi)).toEqual([
       "Commitments: 1",
-      "Store: /tmp/openclaw-commitments.json",
+      "Store: /tmp/openclaw.sqlite",
       "Status filter: pending",
       "ID               Status     Kind             Due                      Scope                        Suggested text",
       "cm_escape        pending    event_check_in   2026-04-30T17:00:00.000Z main/telegram/+15551234567   How did it go?\\nspoofed",
@@ -204,6 +200,17 @@ describe("commitments command", () => {
     expect(row?.indexOf("pending")).toBe(header?.indexOf("Status"));
   });
 
+  it("keeps truncated table cells UTF-16 well-formed", async () => {
+    mocks.listCommitments.mockResolvedValue([commitment({ id: `${"x".repeat(14)}🚀tail` })]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({}, runtime);
+
+    const row = logs.map(stripAnsi).find((line) => line.startsWith("x"));
+    expect(row?.slice(0, 16)).toBe(`${"x".repeat(14)}… `);
+    expect(row).not.toContain("\uD83D");
+  });
+
   it("writes list JSON to runtime stdout instead of log output", async () => {
     const { runtime, logs, stdout } = createRuntime();
 
@@ -215,7 +222,7 @@ describe("commitments command", () => {
       count: 1,
       status: "pending",
       agentId: null,
-      store: "/tmp/openclaw-commitments.json",
+      store: "/tmp/openclaw.sqlite",
       commitments: [{ id: "cm_escape" }],
     });
   });
@@ -228,7 +235,7 @@ describe("commitments command", () => {
     expect(logs).toEqual([]);
     expect(stdout).toEqual([JSON.stringify({ dismissed: ["cm_escape"] }, null, 2)]);
     expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
-      cfg: { commitments: { enabled: true } },
+      cfg: {},
       ids: ["cm_escape"],
       status: "dismissed",
       nowMs: expect.any(Number),

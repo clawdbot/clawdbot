@@ -293,12 +293,12 @@ describe("bundled plugin public surface loader", () => {
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=missing-location-retry");
 
-    expect(
-      publicSurfaceLoader.resolveBundledPluginPublicArtifactPath({
+    expect(() =>
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync({
         dirName: "demo",
         artifactBasename: "api.js",
       }),
-    ).toBeNull();
+    ).toThrow("Unable to resolve bundled plugin public surface demo/api.js");
 
     const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });

@@ -56,7 +56,7 @@ function formatAzureOpenAIError(error: unknown): string {
 }
 
 // Azure OpenAI Responses-specific options
-export interface AzureOpenAIResponsesOptions extends StreamOptions {
+interface AzureOpenAIResponsesOptions extends StreamOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   azureApiVersion?: string;
@@ -183,14 +183,11 @@ function createClient(
   apiKeyInput: string,
   options?: AzureOpenAIResponsesOptions,
 ) {
-  let apiKey = apiKeyInput;
+  const apiKey = apiKeyInput.trim();
   if (!apiKey) {
-    if (!process.env.AZURE_OPENAI_API_KEY) {
-      throw new Error(
-        "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
-      );
-    }
-    apiKey = process.env.AZURE_OPENAI_API_KEY;
+    throw new Error(
+      "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+    );
   }
 
   const headers = { ...model.headers };
@@ -200,6 +197,7 @@ function createClient(
   }
 
   const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
+  // Both OpenAI clients support custom fetch, so sentinels stay opaque until guarded egress.
   const guardedFetch = getAiTransportHost().buildModelFetch({ ...model, baseUrl });
 
   if (isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)) {
@@ -238,6 +236,7 @@ function buildParams(
       options?.cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+    store: false,
   };
 
   applyCommonResponsesParams(params, model, context, options);

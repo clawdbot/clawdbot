@@ -7,15 +7,15 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-} from "../../../packages/terminal-core/src/prompt-style.js";
+import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -33,7 +33,7 @@ import {
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
-import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
+import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -41,6 +41,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { callGateway } from "../../gateway/call.js";
 import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
@@ -71,6 +72,19 @@ import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-r
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+// CLI auth writes occur outside the gateway process, which may retain an older runtime snapshot.
+async function refreshRunningGatewayAuthState(): Promise<void> {
+  try {
+    await callGateway({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Auth writes must still succeed when no local gateway is running.
+  }
+}
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -115,23 +129,16 @@ const password = async (params: Parameters<typeof clackPassword>[0]) =>
     }),
   );
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  guardCancel(
-    await clackSelect({
-      ...params,
-      message: stylePromptMessage(params.message),
-      options: params.options.map((opt) =>
-        opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-      ),
-    }),
-  );
+  guardCancel(await clackSelect(styleSelectParams(params)));
+
+const MODELS_AUTH_STDIN_MAX_BYTES = 1024 * 1024;
 
 async function readPipedStdin(): Promise<string> {
-  process.stdin.setEncoding("utf8");
-  let input = "";
-  for await (const chunk of process.stdin) {
-    input += String(chunk);
-  }
-  return input;
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: MODELS_AUTH_STDIN_MAX_BYTES,
+    onOverflow: ({ maxBytes }) => new Error(`Piped auth input exceeds ${maxBytes} bytes.`),
+  });
+  return bytes.toString("utf8");
 }
 
 async function readPastedSecret(params: {
@@ -493,6 +500,8 @@ async function persistProviderAuthResult(params: {
     logConfigUpdated(params.runtime);
   }
 
+  await refreshRunningGatewayAuthState();
+
   for (const profile of profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
@@ -502,7 +511,7 @@ async function persistProviderAuthResult(params: {
     params.runtime.log(
       params.setDefault
         ? `Default model set to ${defaultModel}`
-        : `Default model available: ${defaultModel} (use --set-default to apply)`,
+        : `Default model available: ${defaultModel} (current default unchanged; run ${formatCliCommand(`openclaw models set ${defaultModel}`)} to apply)`,
     );
   }
   if (params.result.notes && params.result.notes.length > 0) {
@@ -713,6 +722,8 @@ export async function modelsAuthPasteTokenCommand(
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
+  await refreshRunningGatewayAuthState();
+
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
@@ -770,6 +781,8 @@ export async function modelsAuthPasteApiKeyCommand(
   await updateConfig((cfg) =>
     applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
   );
+
+  await refreshRunningGatewayAuthState();
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
@@ -979,7 +992,7 @@ export function resolveLoginProfiles(params: {
   }
 
   const [profile] = params.result.profiles;
-  return [{ ...profile, profileId: requestedProfileId }];
+  return [{ ...expectDefined(profile, "auth profile"), profileId: requestedProfileId }];
 }
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
@@ -987,7 +1000,7 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
     return;
   }
   runtime.log(
-    "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    `Tip: Codex-capable models can use native Codex web search. Configure the \`web_search\` tool with \`${formatCliCommand("openclaw configure --section web")}\`. Docs: https://docs.openclaw.ai/tools/web`,
   );
 }
 
@@ -1111,3 +1124,4 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     prompter: createClackPrompter(),
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

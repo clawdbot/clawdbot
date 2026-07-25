@@ -18,6 +18,7 @@ function healthSnapshotCallArg(index = 0) {
         includeSensitive?: boolean;
         probe?: boolean;
         runtimeSnapshot?: unknown;
+        configReloadHotReloadStatus?: unknown;
       }
     | undefined;
 }
@@ -101,6 +102,25 @@ describe("refreshGatewayHealthSnapshot", () => {
     expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
     expect(healthSnapshotCallArg()?.eventLoop).toBe(eventLoop);
     expect(Object.hasOwn(healthSnapshotCallArg(1) ?? {}, "eventLoop")).toBe(false);
+  });
+
+  it("passes the config reloader hot-reload status only when the hook returns one", async () => {
+    const healthState = await loadHealthState();
+
+    await healthState.refreshGatewayHealthSnapshot({
+      probe: false,
+      getConfigReloaderHotReloadStatus: () => "disabled",
+    });
+    await healthState.refreshGatewayHealthSnapshot({
+      probe: true,
+      getConfigReloaderHotReloadStatus: () => undefined,
+    });
+
+    expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(healthSnapshotCallArg()?.configReloadHotReloadStatus).toBe("disabled");
+    expect(Object.hasOwn(healthSnapshotCallArg(1) ?? {}, "configReloadHotReloadStatus")).toBe(
+      false,
+    );
   });
 
   it("captures runtime snapshots for completed refreshes and guards snapshot failures", async () => {

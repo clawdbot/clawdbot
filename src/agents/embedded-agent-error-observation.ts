@@ -2,6 +2,7 @@
  * Builds structured observations for embedded-agent API/text failures.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
@@ -43,7 +44,7 @@ function truncateForObservation(text: string | undefined, maxChars: number): str
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}…` : trimmed;
+  return trimmed.length > maxChars ? `${truncateUtf16Safe(trimmed, maxChars)}…` : trimmed;
 }
 
 function boundObservationInput(text: string | undefined): string | undefined {
@@ -52,7 +53,7 @@ function boundObservationInput(text: string | undefined): string | undefined {
     return undefined;
   }
   return trimmed.length > MAX_OBSERVATION_INPUT_CHARS
-    ? trimmed.slice(0, MAX_OBSERVATION_INPUT_CHARS)
+    ? truncateUtf16Safe(trimmed, MAX_OBSERVATION_INPUT_CHARS)
     : trimmed;
 }
 
@@ -100,7 +101,7 @@ function buildObservationFingerprint(params: {
 }): string | null {
   const boundedMessage =
     params.message && params.message.length > MAX_FINGERPRINT_MESSAGE_CHARS
-      ? params.message.slice(0, MAX_FINGERPRINT_MESSAGE_CHARS)
+      ? truncateUtf16Safe(params.message, MAX_FINGERPRINT_MESSAGE_CHARS)
       : params.message;
   const structured =
     params.httpCode || params.type || boundedMessage

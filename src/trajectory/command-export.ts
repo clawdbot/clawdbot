@@ -69,7 +69,7 @@ async function resolveTrajectoryExportBaseDir(workspaceDir: string): Promise<{
   return { baseDir: path.resolve(baseDir), realBase };
 }
 
-export async function resolveTrajectoryCommandOutputDir(params: {
+async function resolveTrajectoryCommandOutputDir(params: {
   outputPath?: string;
   workspaceDir: string;
   sessionId: string;

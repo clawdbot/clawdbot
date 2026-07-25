@@ -23,17 +23,19 @@ describe("prepareCliBundleMcpConfig gemini", () => {
             url: "http://127.0.0.1:23119/mcp",
             headers: {
               Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-openclaw-client-caps": "${OPENCLAW_MCP_CLIENT_CAPS}",
             },
           },
         },
       },
       env: {
-        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+        OPENCLAW_MCP_TOKEN: "lb-tk-123",
+        OPENCLAW_MCP_CLIENT_CAPS: "tool-events,inline-widgets",
       },
     });
 
     expect(prepared.backend.args).toEqual(["--prompt", "{prompt}"]);
-    expect(prepared.env?.OPENCLAW_MCP_TOKEN).toBe("loopback-token-123");
+    expect(prepared.env?.OPENCLAW_MCP_TOKEN).toBe("lb-tk-123");
     expect(typeof prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe("string");
     // Gemini reads MCP servers from a generated system settings JSON file.
     const raw = JSON.parse(
@@ -44,7 +46,10 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     };
     expect(raw.mcp?.allowed).toEqual(["openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
+    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
+    expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-client-caps"]).toBe(
+      "tool-events,inline-widgets",
+    );
 
     await prepared.cleanup?.();
   });

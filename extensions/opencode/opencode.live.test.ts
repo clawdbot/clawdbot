@@ -5,7 +5,7 @@ import {
   type Model,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
-import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildStaticOpencodeZenProviderConfig } from "./provider-catalog.js";
@@ -71,12 +71,15 @@ async function fetchOpencodeZenModelIds(): Promise<string[]> {
   });
   expect(response.ok).toBe(true);
   const json = (await response.json()) as OpencodeModelsResponse;
-  return (json.data ?? [])
+  expect(Array.isArray(json.data)).toBe(true);
+  const modelIds = (json.data ?? [])
     .filter((model) => model.object === undefined || model.object === "model")
     .map((model) => model.id)
     .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
     .map((id) => id.trim().toLowerCase())
     .toSorted();
+  expect(new Set(modelIds).size).toBe(modelIds.length);
+  return modelIds;
 }
 
 function listStaticOpencodeZenModelIds(): string[] {
@@ -89,6 +92,7 @@ describeCatalogLive("opencode Zen live catalog drift", () => {
   it("keeps the provider-owned static seed aligned with the live model ids", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
     const staticIds = listStaticOpencodeZenModelIds();
+    expect(new Set(staticIds).size).toBe(staticIds.length);
 
     const staticIdSet = new Set(staticIds);
     const liveIdSet = new Set(liveIds);

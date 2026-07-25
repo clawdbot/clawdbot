@@ -2,10 +2,20 @@
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 
+export type RuntimeExitOptions = {
+  /** Route ANSI terminal-reset bytes away from structured stdout when needed. */
+  resetStream?: NodeJS.WriteStream;
+};
+
 export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
-  exit: (code: number) => void;
+  /**
+   * Exit the process after restoring terminal state.
+   * Pass `resetStream` to route the ANSI reset sequence to a specific
+   * stream (e.g. stderr) when structured output on stdout must stay clean.
+   */
+  exit: (code: number, opts?: RuntimeExitOptions) => void;
 };
 
 export type OutputRuntimeEnv = RuntimeEnv & {
@@ -88,18 +98,32 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
 
 export const defaultRuntime: OutputRuntimeEnv = {
   ...createRuntimeIo(),
-  exit: (code) => {
-    restoreTerminalState("runtime exit", { resumeStdinIfPaused: false });
+  exit: (code, opts) => {
+    restoreTerminalState("runtime exit", {
+      resumeStdinIfPaused: false,
+      resetStream: opts?.resetStream,
+    });
     process.exit(code);
     throw new Error("unreachable"); // satisfies tests when mocked
   },
 };
 
+/** Signals a deferred or non-exiting runtime exit so callers can unwind owned resources. */
+export class ExitError extends Error {
+  constructor(
+    public readonly code: number,
+    message?: string,
+  ) {
+    super(message ?? `exit ${code}`);
+    this.name = "ExitError";
+  }
+}
+
 export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
-    exit: (code: number) => {
-      throw new Error(`exit ${code}`);
+    exit: (code: number, _opts?: RuntimeExitOptions) => {
+      throw new ExitError(code);
     },
   };
 }

@@ -33,10 +33,7 @@ const CONFIGURE_NON_TTY_HINT = [
  *
  * Returns true when the wizard may proceed.
  */
-function assertInteractiveConfigureTerminal(
-  runtime: RuntimeEnv,
-  interactive?: boolean,
-): boolean {
+function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: boolean): boolean {
   const interactiveTerminal = interactive ?? (process.stdin.isTTY && process.stdout.isTTY);
   if (interactiveTerminal) {
     return true;
@@ -63,6 +60,15 @@ export async function configureCommandFromSectionsArg(
   runtime: RuntimeEnv = defaultRuntime,
   options?: { interactive?: boolean },
 ): Promise<void> {
+  const { sections, invalid } = parseConfigureWizardSections(rawSections);
+  if (invalid.length > 0) {
+    runtime.error(
+      `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+
   // Fail closed once at the shared entry: both `openclaw configure` and the
   // no-subcommand `openclaw config` route here, so a single guard keeps them
   // consistent instead of partially entering the wizard on a non-TTY pipe.
@@ -72,17 +78,8 @@ export async function configureCommandFromSectionsArg(
     return;
   }
 
-  const { sections, invalid } = parseConfigureWizardSections(rawSections);
   if (sections.length === 0) {
     await configureCommand(runtime);
-    return;
-  }
-
-  if (invalid.length > 0) {
-    runtime.error(
-      `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
-    );
-    runtime.exit(1);
     return;
   }
 

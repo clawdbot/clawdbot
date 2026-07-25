@@ -22,8 +22,8 @@ export function resolveConfiguredProviderFallback(params: {
   const defaultProviderConfig = configuredProviders[params.defaultProvider];
   const defaultModel = params.defaultModel?.trim();
   const defaultProviderHasDefaultModel =
-    Boolean(defaultProviderConfig) &&
-    Boolean(defaultModel) &&
+    defaultProviderConfig !== undefined &&
+    defaultModel !== undefined &&
     Array.isArray(defaultProviderConfig.models) &&
     defaultProviderConfig.models.some((model) => model?.id === defaultModel);
   if (defaultProviderConfig && (!defaultModel || defaultProviderHasDefaultModel)) {

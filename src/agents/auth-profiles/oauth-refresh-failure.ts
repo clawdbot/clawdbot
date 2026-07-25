@@ -22,6 +22,13 @@ type OAuthRefreshFailure = {
   reason: OAuthRefreshFailureReason | null;
 };
 
+type StructuredClaudeCliAuthFailure = {
+  provider?: unknown;
+  rawError?: unknown;
+  reason?: unknown;
+  status?: unknown;
+};
+
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly provider: string;
@@ -39,17 +46,71 @@ export class OAuthRefreshFailureError extends Error {
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+// Matches the error surfaced via FailoverError when the `claude` subprocess
+// has an expired/invalid OAuth token.  The message always includes the
+// "claude-cli" provider prefix (injected by the failover layer) and the
+// literal 401 status plus Anthropic's "Invalid authentication credentials"
+// phrase, so the pattern is narrow enough to avoid false-positives from
+// unrelated provider 401 failures.
+const CLAUDE_CLI_AUTH_FAILURE_RE =
+  /\bclaude-cli\b.+?\b(failed to authenticate|401\s+invalid authentication credentials)\b/is;
+
+function isClaudeCliExpiredOAuthMessage(message: string): boolean {
+  return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
+}
+
+function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAuthFailure | null {
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+  const candidate = err as StructuredClaudeCliAuthFailure & { name?: unknown };
+  if (
+    candidate.name !== "FailoverError" ||
+    candidate.provider !== "claude-cli" ||
+    candidate.reason !== "auth" ||
+    candidate.status !== 401
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+function classifyStructuredClaudeCliOAuthFailureReason(
+  err: unknown,
+): OAuthRefreshFailureReason | null {
+  const failure = readStructuredClaudeCliAuthFailure(err);
+  if (!failure) {
+    return null;
+  }
+  const rawError = typeof failure.rawError === "string" ? failure.rawError : "";
+  const message = err instanceof Error ? err.message : "";
+  const combined = `${message}\n${rawError}`;
+  const lower = combined.toLowerCase();
+  if (/\bnot logged in\b\s*·\s*please run \/login\b/i.test(combined)) {
+    return "sign_in_again";
+  }
+  const hasExpiredTokenSignal =
+    lower.includes("failed to authenticate") ||
+    lower.includes("invalid authentication credentials");
+  return hasExpiredTokenSignal ? "revoked" : null;
+}
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
   const lower = message.toLowerCase();
   return (
     lower.includes("oauth token refresh failed") ||
     lower.includes("access token could not be refreshed") ||
-    lower.includes("authentication session could not be refreshed automatically")
+    lower.includes("authentication session could not be refreshed automatically") ||
+    isClaudeCliExpiredOAuthMessage(message)
   );
 }
 
 function extractOAuthRefreshFailureProvider(message: string): string | null {
+  if (isClaudeCliExpiredOAuthMessage(message)) {
+    // The message was produced by the claude-cli subprocess; the provider is
+    // statically known — no need to parse it from the error text.
+    return "claude-cli";
+  }
   const provider = message.match(OAUTH_REFRESH_FAILURE_PROVIDER_RE)?.[1]?.trim();
   return provider && provider.length > 0 ? provider : null;
 }
@@ -100,6 +161,13 @@ export function classifyOAuthRefreshFailureReason(
   if (lower.includes("expired or revoked") || lower.includes("revoked")) {
     return "revoked";
   }
+  if (isClaudeCliExpiredOAuthMessage(message)) {
+    // The claude subprocess emits "401 Invalid authentication credentials"
+    // when its stored OAuth token has expired.  Map this to "revoked" so the
+    // caller surfaces the targeted re-auth hint rather than the generic login
+    // failure copy.
+    return "revoked";
+  }
   return null;
 }
 
@@ -119,6 +187,13 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
   const seen = new Set<object>();
   let candidate = err;
   while (candidate && typeof candidate === "object") {
+    const claudeCliReason = classifyStructuredClaudeCliOAuthFailureReason(candidate);
+    if (claudeCliReason) {
+      return {
+        provider: "claude-cli",
+        reason: claudeCliReason,
+      };
+    }
     if (candidate instanceof OAuthRefreshFailureError) {
       const profileId = sanitizeOAuthRefreshFailureProfileId(candidate.profileId);
       return {
@@ -143,6 +218,18 @@ export function buildOAuthRefreshFailureLoginCommand(
 ): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
+  if (sanitizedProvider === "claude-cli") {
+    // claude-cli is not a standalone provider id; it is the Anthropic provider
+    // accessed via the CLI auth method. Refresh the local Claude CLI session
+    // first, then re-register that auth method with OpenClaw.
+    const claudeLoginCommand = formatCliCommand("claude auth login");
+    const openclawLoginCommand = formatCliCommand(
+      sanitizedProfileId
+        ? `openclaw models auth login --provider anthropic --method cli --profile-id ${quoteShellArg(sanitizedProfileId)}`
+        : "openclaw models auth login --provider anthropic --method cli",
+    );
+    return `${claudeLoginCommand} && ${openclawLoginCommand}`;
+  }
   return sanitizedProvider
     ? formatCliCommand(
         sanitizedProfileId

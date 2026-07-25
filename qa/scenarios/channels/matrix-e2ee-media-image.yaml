@@ -1,0 +1,35 @@
+title: Matrix E2EE encrypted image attachments reach the model vision path
+scenario:
+  id: matrix-e2ee-media-image
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encrypted-media-upload-download
+  execution:
+    profiles: { "matrix:all": 57, "matrix:media": 6 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-media-image
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Media Image Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js
+  call: runMatrixQaE2eeMediaImageScenario
+  args:
+    - expr: "scenarioContext"

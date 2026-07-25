@@ -11,7 +11,7 @@ import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from "../oc-path.js"
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./ast.js";
 import { resolveJsoncValueOcPath } from "./resolve-value.js";
 
-export type JsoncOcPathMatch =
+type JsoncOcPathMatch =
   | { readonly kind: "root"; readonly node: JsoncAst }
   | { readonly kind: "value"; readonly node: JsoncValue; readonly path: readonly string[] }
   | {

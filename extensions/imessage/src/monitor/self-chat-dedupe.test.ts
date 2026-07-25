@@ -7,11 +7,10 @@ import {
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
-import {
-  rememberPersistedIMessageEcho,
-  resetPersistedIMessageEchoCacheForTest,
-} from "./persisted-echo-cache.js";
+import { rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
+
+const IMAGE_MEDIA_FACT = { contentType: "image/png", kind: "image" } as const;
 
 /**
  * Self-chat dedupe regression tests for #47830.
@@ -35,7 +34,6 @@ const cfg = {} as OpenClawConfig;
 
 beforeEach(() => {
   installIMessageStateRuntimeForTest();
-  resetPersistedIMessageEchoCacheForTest();
 });
 
 function createParams(
@@ -471,16 +469,13 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
   });
 
-  it("drops attachment-only agent echo in self-chat via bodyText placeholder", async () => {
+  it("drops attachment-only agent echo in self-chat via its media fact", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
-
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();
-
     const scope = "default:imessage:+15551234567";
-    echoCache.remember(scope, { text: "<media:image>", messageId: "p:0/GUID-media" });
-
+    echoCache.remember(scope, { media: IMAGE_MEDIA_FACT, messageId: "p:0/GUID-media" });
     vi.advanceTimersByTime(1000);
 
     const decision = await resolveIMessageInboundDecision(
@@ -496,7 +491,8 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           is_group: false,
         },
         messageText: "",
-        bodyText: "<media:image>",
+        bodyText: "",
+        mediaFacts: [IMAGE_MEDIA_FACT],
         echoCache,
         selfChatCache,
       }),
@@ -508,7 +504,6 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
   it("drops self-chat echo when outbound cache stored numeric id but inbound also carries a guid", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
-
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();
 
@@ -539,7 +534,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
   });
 
-  it("does not drop a real self-chat image just because a recent agent image used the same placeholder", async () => {
+  it("does not drop a real self-chat image just because a recent agent image had the same fact", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
@@ -547,7 +542,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     const selfChatCache = createSelfChatCache();
 
     const scope = "default:imessage:+15551234567";
-    echoCache.remember(scope, { text: "<media:image>", messageId: "p:0/GUID-agent-image" });
+    echoCache.remember(scope, { media: IMAGE_MEDIA_FACT, messageId: "p:0/GUID-agent-image" });
 
     vi.advanceTimersByTime(1000);
 
@@ -564,7 +559,8 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           is_group: false,
         },
         messageText: "",
-        bodyText: "<media:image>",
+        bodyText: "",
+        mediaFacts: [IMAGE_MEDIA_FACT],
         echoCache,
         selfChatCache,
       }),

@@ -15,7 +15,6 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
@@ -34,6 +33,17 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import {
+  OPENAI_CHATGPT_MODERN_MODEL_IDS,
+  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID as OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+  OPENAI_GPT_54_LEGACY_MODEL_ID as OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID,
+  OPENAI_GPT_54_MINI_MODEL_ID as OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID as OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID as OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_55_MODEL_ID as OPENAI_CODEX_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
+} from "./model-route-contract.js";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
@@ -43,33 +53,24 @@ import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
   matchesExactOrPrefix,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveOpenAICodexThinkingProfile } from "./thinking-policy.js";
+import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
-const OPENAI_CODEX_GPT_56_MODEL_IDS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
 const OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP = {
   off: null,
   xhigh: "xhigh",
   max: "max",
 } as const;
-const OPENAI_CODEX_GPT_55_MODEL_ID = "gpt-5.5";
-const OPENAI_CODEX_GPT_55_PRO_MODEL_ID = "gpt-5.5-pro";
-const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
-const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
-const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
-const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const OPENAI_CODEX_GPT_56_CONTEXT_TOKENS = 372_000;
+const OPENAI_CODEX_GPT_56_NATIVE_CONTEXT_TOKENS = 372_000;
 const OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS = 400_000;
-const OPENAI_CODEX_GPT_55_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS = 1_000_000;
-const OPENAI_CODEX_GPT_55_PRO_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
-const OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS = 400_000;
 const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
@@ -107,15 +108,6 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
-] as const;
-const OPENAI_CODEX_MODERN_MODEL_IDS = [
-  ...OPENAI_CODEX_GPT_56_MODEL_IDS,
-  OPENAI_CODEX_GPT_55_MODEL_ID,
-  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
 const OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS = [
   ...OPENAI_CODEX_GPT_56_MODEL_IDS,
@@ -241,8 +233,8 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       | undefined;
     const registeredModel = withDefaultCodexContextMetadata({
       model: withCodexTransport(model, synthBaseUrl),
-      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
+      contextWindow: OPENAI_CODEX_GPT_56_NATIVE_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
     });
     if (registeredModel) {
       return normalizeModelCompat({
@@ -262,8 +254,8 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
+      contextWindow: OPENAI_CODEX_GPT_56_NATIVE_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       thinkingLevelMap: OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP,
     } as ProviderRuntimeModel);
@@ -277,7 +269,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       withDefaultCodexContextMetadata({
         model: withCodexTransport(model, synthBaseUrl),
         contextWindow: OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS,
-        contextTokens: OPENAI_CODEX_GPT_55_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+        contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       }) ??
       normalizeModelCompat({
         id: trimmedModelId,
@@ -289,7 +281,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS,
-        contextTokens: OPENAI_CODEX_GPT_55_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+        contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
         maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       } as ProviderRuntimeModel)
     );
@@ -301,7 +293,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     templateIds = OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS;
     patch = {
       contextWindow: OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_55_PRO_DEFAULT_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_55_PRO_COST,
     };
@@ -312,7 +304,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
     patch = {
       contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_COST,
     };
@@ -320,7 +312,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
     patch = {
       contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_PRO_COST,
     };
@@ -328,7 +320,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
     patch = {
       contextWindow: OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
@@ -517,9 +509,13 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
   const spin = ctx.prompter.progress("Starting device code flow…");
   try {
     const creds = await loginOpenAICodexDeviceCode({
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
       onProgress: (message) => spin.update(message),
       onVerification: async ({ verificationUrl, userCode, expiresInMs }) => {
         const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+        if (ctx.isRemote) {
+          await ctx.openUrl(verificationUrl);
+        }
         // The prompter note is the user-facing TTY surface, so remote/headless
         // users need the code there; keep the persistent runtime log URL-only.
         await ctx.prompter.note(
@@ -632,22 +628,16 @@ export function buildOpenAICodexProviderHooks(): Pick<
   return {
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveThinkingProfile: ({ modelId }) => resolveOpenAICodexThinkingProfile(modelId),
-    isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
+    resolveThinkingProfile: ({ modelId, agentRuntime, api, compat }) =>
+      resolveOpenAICodexThinkingProfile(modelId, agentRuntime, compat, api),
+    isModernModelRef: ({ modelId }) =>
+      matchesExactOrPrefix(modelId, OPENAI_CHATGPT_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {
       if (!isOpenAIOrLegacyCodexProvider(ctx.provider)) {
         return false;
       }
       const id = ctx.modelId.trim().toLowerCase();
-      return [
-        ...OPENAI_CODEX_GPT_56_MODEL_IDS,
-        OPENAI_CODEX_GPT_55_MODEL_ID,
-        OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-        OPENAI_CODEX_GPT_54_MODEL_ID,
-        OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-        OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-        OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-      ].includes(id);
+      return OPENAI_CHATGPT_MODERN_MODEL_IDS.some((modelId) => modelId === id);
     },
     ...buildOpenAIResponsesProviderHooks(),
     resolveReasoningOutputMode: () => "native",
@@ -673,9 +663,8 @@ export function buildOpenAICodexProviderHooks(): Pick<
       }
       return normalized;
     },
-    resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
-    fetchUsageSnapshot: async (ctx) =>
-      await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
+    resolveUsageAuth: resolveOpenAIUsageAuth,
+    fetchUsageSnapshot: fetchOpenAIUsage,
     refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
     augmentModelCatalog: (ctx) => {
       const gpt54Template = findCatalogTemplate({
@@ -694,7 +683,7 @@ export function buildOpenAICodexProviderHooks(): Pick<
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS,
-          contextTokens: OPENAI_CODEX_GPT_55_PRO_DEFAULT_CONTEXT_TOKENS,
+          contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_55_PRO_COST,
         }),
         buildOpenAISyntheticCatalogEntry(gpt54Template, {
@@ -702,7 +691,7 @@ export function buildOpenAICodexProviderHooks(): Pick<
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
-          contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+          contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_54_COST,
         }),
         buildOpenAISyntheticCatalogEntry(gpt54Template, {
@@ -710,7 +699,7 @@ export function buildOpenAICodexProviderHooks(): Pick<
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
-          contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+          contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_54_PRO_COST,
         }),
         buildOpenAISyntheticCatalogEntry(gpt54Template, {
@@ -718,7 +707,7 @@ export function buildOpenAICodexProviderHooks(): Pick<
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS,
-          contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+          contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_54_MINI_COST,
         }),
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);

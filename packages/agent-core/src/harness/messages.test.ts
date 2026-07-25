@@ -39,3 +39,31 @@ describe("harness message timestamps", () => {
     expect(message?.timestamp).toBe(0);
   });
 });
+
+describe("convertToLlm runtime-context carrier marking", () => {
+  const timestamp = "2026-05-30T17:00:00.000Z";
+
+  it("marks a runtime-context carrier custom message so providers skip cache anchoring", () => {
+    const [message] = convertToLlm([
+      createCustomMessage(
+        "openclaw.runtime-context",
+        "current-turn metadata",
+        false,
+        { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+        timestamp,
+      ),
+    ]);
+
+    expect(message?.role).toBe("user");
+    expect((message as { runtimeContextCarrier?: boolean }).runtimeContextCarrier).toBe(true);
+  });
+
+  it("does not mark ordinary custom messages", () => {
+    const [message] = convertToLlm([
+      createCustomMessage("note", "some note", false, { source: "other" }, timestamp),
+    ]);
+
+    expect(message?.role).toBe("user");
+    expect((message as { runtimeContextCarrier?: boolean }).runtimeContextCarrier).toBeUndefined();
+  });
+});

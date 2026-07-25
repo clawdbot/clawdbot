@@ -1,7 +1,7 @@
 // Video generation task-status tests cover active background task detection and
 // prompt/status text that prevents duplicate media generation requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 import {
   buildActiveVideoGenerationTaskPromptContextForSession,
   buildVideoGenerationTaskStatusDetails,

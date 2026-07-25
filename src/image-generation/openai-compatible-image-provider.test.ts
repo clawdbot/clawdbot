@@ -240,10 +240,10 @@ describe("OpenAI-compatible image provider helper", () => {
   });
 
   it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
-    const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
+    const imageBytes = Buffer.alloc(3 * 1024 * 1024 + 64 * 1024, 1);
     postJsonRequestMock.mockResolvedValue({
       response: jsonResponse({
-        data: Array.from({ length: 3 }, () => ({
+        data: Array.from({ length: 4 }, () => ({
           b64_json: imageBytes.toString("base64"),
         })),
       }),
@@ -255,12 +255,13 @@ describe("OpenAI-compatible image provider helper", () => {
       provider: "sample",
       model: "sample-image",
       prompt: "large",
-      count: 3,
+      count: 4,
       cfg: {} as never,
     });
 
-    expect(result.images).toHaveLength(3);
+    expect(result.images).toHaveLength(4);
     expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
+      imageBytes.byteLength,
       imageBytes.byteLength,
       imageBytes.byteLength,
       imageBytes.byteLength,

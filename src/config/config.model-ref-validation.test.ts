@@ -34,6 +34,34 @@ function createModelSuppressionRegistry(): PluginManifestRegistry {
   };
 }
 
+function createModelNormalizationRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      {
+        id: "custom-provider-plugin",
+        channels: [],
+        providers: ["myproxy"],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        origin: "config",
+        rootDir: "/tmp/custom-provider-plugin",
+        source: "test",
+        manifestPath: "/tmp/custom-provider-plugin/openclaw.plugin.json",
+        modelIdNormalization: {
+          providers: {
+            myproxy: {
+              aliases: { latest: "modern-model" },
+              prefixWhenBare: "vendor",
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
 describe("config model reference validation", () => {
   it("rejects statically suppressed provider/model pairs during config validation", () => {
     const res = validateConfigObjectWithPlugins(
@@ -107,5 +135,43 @@ describe("config model reference validation", () => {
     );
 
     expect(res.ok).toBe(true);
+  });
+
+  it("loads model normalization policies when plugin validation is skipped", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        models: {
+          providers: {
+            myproxy: {
+              baseUrl: "https://proxy.example/v1",
+              apiKey: "sk-test",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "latest",
+                  name: "Custom latest",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        pluginValidation: "skip",
+        loadPluginMetadataSnapshot: () => ({
+          manifestRegistry: createModelNormalizationRegistry(),
+        }),
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
+    }
   });
 });

@@ -6,11 +6,11 @@ import { escapeRegExp } from "../lib/regexp.mjs";
 export const PROOF_OVERRIDE_LABEL = "proof: override";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_PR_CONTEXT_LABEL = "triage: needs-pr-context";
-export const MAINTAINER_TEAM_SLUG = "maintainer";
-export const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
-export const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
+const MAINTAINER_TEAM_SLUG = "maintainer";
+const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
-export const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
+const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
 const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
@@ -66,7 +66,7 @@ function createTooLargeGitHubApiBodyError(label, maxBytes) {
   return error;
 }
 
-export async function withGitHubApiTimeout(label, timeoutMs, run) {
+async function withGitHubApiTimeout(label, timeoutMs, run) {
   const boundedTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, boundedTimeoutMs);
@@ -168,7 +168,7 @@ function isAutomationUser(user = {}, fallbackLogin = "") {
   return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
 }
 
-export function isExternalPullRequest(pullRequest) {
+function isExternalPullRequest(pullRequest) {
   if (!pullRequest) {
     return false;
   }

@@ -16,6 +16,7 @@ import {
 import {
   createProviderHttpError,
   providerOperationRetryConfig,
+  resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -160,11 +161,11 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
+  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = normalizeLowercaseStringOrEmpty(modelId).match(/^gemini(?:-live)?-(\d+)/);
+  const match = normalizeLowercaseStringOrEmpty(modelId).match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return true;
   }
@@ -366,10 +367,7 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-export function resolveGoogleVertexBaseOrigin(
-  model: GoogleTransportModel,
-  location: string,
-): string {
+function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {
@@ -487,7 +485,7 @@ function resolveGoogleThinkingConfig(
     }
     return normalizeGoogleThinkingConfig(model.id, config);
   }
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
@@ -660,7 +658,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image",
+              item.type === "image" && describeToolResultMediaPlaceholder([item]) !== undefined,
           )
         : [];
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
@@ -779,15 +777,23 @@ function buildGoogleHeaders(
 ): Record<string, string> {
   const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
   return (
-    mergeTransportHeaders(
-      {
-        "Content-Type": "application/json",
-        accept: "text/event-stream",
-      },
-      authHeaders,
-      model.headers,
-      optionHeaders,
-    ) ?? {
+    resolveProviderRequestHeaders({
+      provider: model.provider,
+      api: normalizeGoogleTransportRouteApi(model.api),
+      baseUrl: model.baseUrl,
+      capability: "llm",
+      transport: "stream",
+      defaultHeaders: mergeTransportHeaders(
+        {
+          "Content-Type": "application/json",
+          accept: "text/event-stream",
+        },
+        authHeaders,
+        model.headers,
+      ),
+      callerHeaders: optionHeaders,
+      precedence: "caller-wins",
+    }) ?? {
       "Content-Type": "application/json",
       accept: "text/event-stream",
     }
@@ -875,7 +881,7 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
   }
 }
 
-export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
+function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   if (raw === undefined || raw.trim() === "") {
     return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
@@ -913,7 +919,7 @@ function cloneGoogleGenerateContentRequest(
   return JSON.parse(serialized) as GoogleGenerateContentRequest;
 }
 
-export function buildGoogleGemini3FirstResponseRetryParams(params: {
+function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
 }): GoogleGenerateContentRequest | undefined {
@@ -1488,3 +1494,4 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
 export function createGoogleVertexTransportStreamFn(): StreamFn {
   return createGoogleTransportStreamFn("google-vertex");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

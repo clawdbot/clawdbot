@@ -7,87 +7,12 @@ Welcome to the lobster tank! 🦞
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
 - **Discord:** https://discord.gg/clawd
-- **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
+- **X/Twitter:** [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
 
-- **Peter Steinberger** - Benevolent Dictator
-  - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
-
-- **Frank Yang** - PR triage, Agents, Gateway, Channels
-  - GitHub: [@frankekn](https://github.com/frankekn) · X: [@frankekn](https://x.com/frankekn)
-
-- **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
-  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
-
-- **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
-  - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
-
-- **Jos** - Telegram, API, Nix mode
-  - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
-
-- **Ayaan Zaidi** - Telegram subsystem, Android app
-  - GitHub: [@obviyus](https://github.com/obviyus) · X: [@obviyus](https://x.com/obviyus)
-
-- **Tyler Yust** - Agents/subagents, cron, iMessage, macOS app
-  - GitHub: [@tyler6204](https://github.com/tyler6204) · X: [@tyleryust](https://x.com/tyleryust)
-
-- **Mariano Belinky** - iOS app, Security
-  - GitHub: [@mbelinky](https://github.com/mbelinky) · X: [@belimad](https://x.com/belimad)
-
-- **Nimrod Gutman** - iOS app, macOS app and crustacean features
-  - GitHub: [@ngutman](https://github.com/ngutman) · X: [@theguti](https://x.com/theguti)
-
-- **Vincent Koc** - Agents, Telemetry, Hooks, Security
-  - GitHub: [@vincentkoc](https://github.com/vincentkoc) · X: [@vincent_koc](https://x.com/vincent_koc)
-
-- **Val Alexander** - UI/UX, Docs, SDK, and Agent DevX
-  - GitHub: [@BunsDev](https://github.com/BunsDev) · X: [@BunsDev](https://x.com/BunsDev)
-
-- **Seb Slight** - Docs, Agent Reliability, Runtime Hardening
-  - GitHub: [@sebslight](https://github.com/sebslight) · X: [@sebslig](https://x.com/sebslig)
-
-- **Christoph Nakazawa** - JS Infra
-  - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
-
-- **Gustavo Madeira Santana** - Multi-agents, CLI, Performance, Plugins, Matrix
-  - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
-
-- **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
-  - GitHub: [@onutc](https://github.com/onutc), [@osolmaz](https://github.com/osolmaz) · X: [@onusoz](https://x.com/onusoz)
-
-- **Josh Avant** - Core, CLI, Gateway, Security, Agents
-  - GitHub: [@joshavant](https://github.com/joshavant) · X: [@joshavant](https://x.com/joshavant)
-
-- **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
-  - GitHub [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
-
-- **Josh Lehman** - Compaction, Context Engine
-  - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
-
-- **Radek Sienkiewicz** - Docs, Control UI
-  - GitHub [@velvet-shark](https://github.com/velvet-shark) · X: [@velvet_shark](https://twitter.com/velvet_shark)
-
-- **Muhammed Mukhthar** - Mattermost, CLI
-  - GitHub [@mukhtharcm](https://github.com/mukhtharcm) · X: [@mukhtharcm](https://x.com/mukhtharcm)
-
-- **Altay** - Agents, CLI, error handling
-  - GitHub [@altaywtf](https://github.com/altaywtf) · X: [@altaywtf](https://x.com/altaywtf)
-
-- **Robin Waslander** - Security, PR triage, bug fixes
-  - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
-
-- **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
-  - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
-
-- **Sliverp** - Chinese Channel: QQ, WeChat, Wecom, Yuanbao, Dingtalk, Feishu
-  - GitHub: [@sliverp](https://github.com/sliverp) · X: [@sliver01234](https://x.com/sliver01234)
-
-- **Mason Huang** - Stability, Security, Speed
-  - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
-
-- **Maurice Niu** - ClawHub, Security, Stability, Data integrity
-  - GitHub: [@momothemage](https://github.com/momothemage) · X: [@MomoPsicasso](https://x.com/MomoPsicasso)
+The current OpenClaw Foundation team and Core Maintainers are listed on the
+OpenClaw people page: https://www.openclaw.org/people
 
 ## How to Contribute
 
@@ -112,7 +37,7 @@ Start from this routing map before creating GitHub items:
 
 For agent-authored or otherwise non-trivial work, create or reuse the issue first, then open the PR against it. Bugs and very small fixes may go straight to PR, but still link existing context when it exists and fill out the PR template.
 
-Do not guess who to tag. Let issue forms, labels/automation, `.github/CODEOWNERS`, and the maintainer areas above route the work. Mention a maintainer only when their listed area or owned path is directly relevant and you need a decision; otherwise rely on normal review. For coordinated change sets, ask in **#clawtributors** before opening more than the PR limit.
+Do not guess who to tag. Let issue forms, labels/automation, and `.github/CODEOWNERS` route the work. Mention a maintainer only when an owned path or documented responsibility is directly relevant and you need a decision; otherwise rely on normal review. For coordinated change sets, ask in **#clawtributors** before opening more than the PR limit.
 
 ## PR Limits
 
@@ -122,10 +47,10 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 ## Before You PR
 
-- Use **Node 24** for source checkouts when possible. OpenClaw also supports Node 22.19+, but older Node 22 minors such as 22.17 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
 - Test locally with your OpenClaw instance
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
-- When ClawSweeper, Codex, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
+- When ClawSweeper, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes, changelog entries, or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit `CHANGELOG.md` in contributor PRs. Maintainers or ClawSweeper add the changelog entry when landing user-facing changes.
 - Run tests: `pnpm build && pnpm check && pnpm test`
@@ -142,29 +67,20 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
   - `node scripts/check-sdk-package-extension-import-boundary.mjs --json` for `src/plugin-sdk/**` and `packages/**`
   - `node scripts/check-test-helper-extension-import-boundary.mjs --json` for `test/helpers/**`
 - Shared test helpers must use `src/test-utils/bundled-plugin-public-surface.ts` instead of repo-relative `extensions/**` imports. Keep plugin-local deep mocks inside the owning bundled plugin package.
-- If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
+- If you are using an AI coding agent with OpenClaw skills available, run the `autoreview` skill before opening or updating your PR. Address accepted/actionable findings before asking for review.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
 - Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
 - Do not submit test-only PRs that just try to make known `main` CI failures pass. Test changes are acceptable when they are required to validate a new fix or cover new behavior in the same PR.
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
-- Reply to or resolve bot review conversations you addressed before asking for review again
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 - Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
 
 ## Review Conversations Are Author-Owned
 
-If a review bot leaves review conversations on your PR, you are expected to handle the follow-through:
-
-- Resolve the conversation yourself once the code or explanation fully addresses the bot's concern
-- Reply and leave it open only when you need maintainer or reviewer judgment
-- Do not leave "fixed" bot review conversations for maintainers to clean up for you
-- If Codex leaves comments, address every relevant one or resolve it with a short explanation when it is not applicable to your change
-- If GitHub Codex review does not trigger for some reason, run `codex review --base origin/main` locally anyway and treat that output as required review work
-
-This applies to both human-authored and AI-assisted PRs.
+After your PR receives Barnacle, ClawSweeper, or maintainer feedback, read the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) for how to interpret rank-up moves, proof guidance, re-review requests, and review conversation follow-up.
 
 ## Control UI Decorators
 
@@ -191,10 +107,10 @@ Please include in your PR:
 - [ ] Include a concise **Evidence** section with the most useful validation. Reviewers will inspect the code, tests, and CI rather than relying on the PR body alone.
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
-- [ ] If you have access to Codex, run `codex review --base origin/main` locally and address the findings before asking for review
-- [ ] Resolve or reply to bot review conversations after you address them
+- [ ] Run the `autoreview` skill when available and address accepted/actionable findings
+- [ ] Follow the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) after Barnacle, ClawSweeper, or maintainer feedback
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for. If you are using an LLM coding agent, instruct it to resolve bot review conversations it has addressed instead of leaving them for maintainers.
+AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
 
 ## Current Focus & Roadmap 🗺
 

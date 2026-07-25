@@ -4,6 +4,27 @@ import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-s
 import { MemoryIndexManager } from "./manager.js";
 
 describe("memory search async sync", () => {
+  it("returns before provider or index bootstrap for a blank query", async () => {
+    const manager = Object.create(MemoryIndexManager.prototype) as MemoryIndexManager;
+    const ensureProviderInitialized = vi.fn(async () => {});
+    const assertRequiredProviderAvailable = vi.fn();
+    const hasIndexedContent = vi.fn(() => false);
+    const sync = vi.fn(async () => {});
+    Object.assign(manager as unknown as Record<string, unknown>, {
+      providerRequirement: { mode: "required" },
+      ensureProviderInitialized,
+      assertRequiredProviderAvailable,
+      hasIndexedContent,
+      sync,
+    });
+
+    await expect(manager.search(" \n\t ")).resolves.toStrictEqual([]);
+    expect(ensureProviderInitialized).not.toHaveBeenCalled();
+    expect(assertRequiredProviderAvailable).not.toHaveBeenCalled();
+    expect(hasIndexedContent).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
+  });
+
   it("waits for dirty sync before querying", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
@@ -70,6 +91,42 @@ describe("memory search async sync", () => {
 
     releaseSync();
     await closePromise;
+  });
+
+  it("reports pending sync failures during close", async () => {
+    const onError = vi.fn();
+    const syncError = new Error("sync failed");
+
+    await awaitPendingManagerWork({
+      pendingSync: Promise.reject(syncError),
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledWith(syncError);
+  });
+
+  it("reports pending provider initialization failures during close", async () => {
+    const onError = vi.fn();
+    const providerError = new Error("provider init failed");
+
+    await awaitPendingManagerWork({
+      pendingProviderInit: Promise.reject(providerError),
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledWith(providerError);
+  });
+
+  it("does not report errors for completed pending close work", async () => {
+    const onError = vi.fn();
+
+    await awaitPendingManagerWork({
+      pendingSync: Promise.resolve(),
+      pendingProviderInit: Promise.resolve(),
+      onError,
+    });
+
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("skips background search sync when search-triggered sync is disabled", async () => {

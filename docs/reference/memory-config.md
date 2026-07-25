@@ -1,11 +1,11 @@
 ---
-summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+summary: "Memory search providers, retrieval modes, QMD, and multimodal indexing"
 title: "Memory configuration reference"
 sidebarTitle: "Memory config"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
-  - You want to tune hybrid search, MMR, or temporal decay
+  - You want to enable hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
 
@@ -29,18 +29,73 @@ This page lists every configuration knob for OpenClaw memory search. For concept
   </Card>
 </CardGroup>
 
-All memory search settings live under `agents.defaults.memorySearch` in `openclaw.json` (or a per-agent `agents.list[].memorySearch` override) unless noted otherwise.
+All shared memory settings live under top-level `memory` in `openclaw.json`. Search defaults use `memory.search`; per-agent search overrides use `agents.entries.*.memory.search`.
 
 <Note>
-If you are looking for the **active memory** feature toggle and sub-agent config, that lives under `plugins.entries.active-memory` instead of `memorySearch`.
+For the recommended personal-agent workflow, use
+`memory.search.rememberAcrossConversations`. Advanced Active Memory targeting,
+model, prompt, and latency controls live under `plugins.entries.active-memory`.
 
-Active memory uses a two-gate model:
-
-1. the plugin must be enabled and target the current agent id
-2. the request must be an eligible interactive persistent chat session
-
-See [Active Memory](/concepts/active-memory) for the activation model, plugin-owned config, transcript persistence, and safe rollout pattern.
+See [Active Memory](/concepts/active-memory) for both activation paths,
+transcript persistence, and safe rollout guidance.
 </Note>
+
+---
+
+## Remember across conversations
+
+| Key                           | Type      | Default                                                    | Description                                                                    |
+| ----------------------------- | --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `rememberAcrossConversations` | `boolean` | On for personal installs; off with configured DM isolation | Use relevant context from this agent's other recognized private conversations. |
+
+Configure it per agent when only a trusted personal agent should use
+cross-conversation transcript recall:
+
+```json5
+{
+  agents: {
+    entries: {
+      personal: {
+        memory: {
+          search: {
+            rememberAcrossConversations: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The value follows normal `memory.search` inheritance with a
+per-agent override. When unset, it defaults on only if global
+`session.dmScope` is unset or `"main"` and no binding has a `session.dmScope`
+override. Any configured DM isolation defaults it off. An explicit `true` or
+`false` always wins. Enabling it implies session transcript indexing and
+adds `sessions` to the agent's resolved memory sources. With QMD, it also
+enables that agent's session export; no separate
+`memory.qmd.sessions.enabled` setting is required for this mode.
+
+OpenClaw's built-in memory provider supports this protected path with both the
+builtin and QMD backends. Alternate memory providers can keep using their own
+recall hooks and advanced Active Memory tools, but this setting is skipped
+unless the current provider supports protected private transcript recall.
+`openclaw doctor` reports an unsupported provider or an explicit Active Memory
+`toolsAllow` list that omits `memory_search`.
+
+The retrieval boundary is narrower than general session search:
+
+- only the same agent's recognized private conversations are eligible
+- the conversation being answered is excluded
+- groups and channels are excluded as sources and destinations
+- unknown conversation kinds fail closed
+- sandboxed recall cannot use the special cross-conversation authorization
+
+The setting does not change `tools.sessions.visibility`, session keys,
+transcript storage, delivery routing, or the permissions of `sessions_list`,
+`sessions_history`, and `sessions_send`. Active Memory performs a bounded
+read-only retrieval pass; unavailable or timed-out retrieval does not block the
+reply.
 
 ---
 
@@ -71,7 +126,7 @@ When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
 
-Explicit non-local providers fail closed. If you set `memorySearch.provider` to
+Explicit non-local providers fail closed. If you set `memory.search.provider` to
 a concrete remote-backed provider such as Bedrock, DeepInfra, Gemini, GitHub
 Copilot, LM Studio, Mistral, Ollama, OpenAI, Voyage, or an OpenAI-compatible
 custom provider, and that provider is unavailable at runtime, `memory_search`
@@ -81,7 +136,7 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### Custom provider ids
 
-`memorySearch.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+`memory.search.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
 
 ```json5
 {
@@ -95,12 +150,10 @@ provider/auth configuration, switch to a reachable provider, or set
       },
     },
   },
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "ollama-5080",
-        model: "qwen3-embedding:0.6b",
-      },
+  memory: {
+    search: {
+      provider: "ollama-5080",
+      model: "qwen3-embedding:0.6b",
     },
   },
 }
@@ -144,15 +197,13 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai-compatible",
-        model: "text-embedding-3-small",
-        remote: {
-          baseUrl: "https://api.example.com/v1/",
-          apiKey: "YOUR_KEY",
-        },
+  memory: {
+    search: {
+      provider: "openai-compatible",
+      model: "text-embedding-3-small",
+      remote: {
+        baseUrl: "https://api.example.com/v1/",
+        apiKey: "YOUR_KEY",
       },
     },
   },
@@ -187,18 +238,16 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai-compatible",
-            remote: {
-              baseUrl: "https://embeddings.example/v1",
-              apiKey: "${EMBEDDINGS_API_KEY}",
-            },
-            model: "asymmetric-embedder",
-            queryInputType: "query",
-            documentInputType: "passage",
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          remote: {
+            baseUrl: "https://embeddings.example/v1",
+            apiKey: "${EMBEDDINGS_API_KEY}",
           },
+          model: "asymmetric-embedder",
+          queryInputType: "query",
+          documentInputType: "passage",
         },
       },
     }
@@ -214,12 +263,10 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-            model: "amazon.titan-embed-text-v2:0",
-          },
+      memory: {
+        search: {
+          provider: "bedrock",
+          model: "amazon.titan-embed-text-v2:0",
         },
       },
     }
@@ -247,7 +294,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
     Throughput-suffixed variants (e.g., `amazon.titan-embed-text-v1:2:8k`) and region-prefixed inference profile IDs (e.g., `us.amazon.titan-embed-text-v2:0`) inherit the base model's configuration.
 
-    **Region:** resolved in this order: the `memorySearch.remote.baseUrl` override, the `models.providers.amazon-bedrock.baseUrl` config, `AWS_REGION`, `AWS_DEFAULT_REGION`, then a default of `us-east-1`.
+    **Region:** resolved in this order: the `memory.search.remote.baseUrl` override, the `models.providers.amazon-bedrock.baseUrl` config, `AWS_REGION`, `AWS_DEFAULT_REGION`, then a default of `us-east-1`.
 
     **Authentication:** OpenClaw checks for `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` or `AWS_BEARER_TOKEN_BEDROCK` first, then falls through to the standard AWS SDK default credential provider chain:
 
@@ -292,100 +339,40 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     openclaw memory index --force --agent main
     ```
 
+    Numeric `local.contextSize` values also inform node-llama-cpp's automatic GPU-layer placement so model weights and the requested embedding context are fitted together. `openclaw memory status --deep` reports last-known llama.cpp backend, device, offload, requested-context, and timestamped memory facts after the runtime has loaded; passive status does not load a model.
+
     Set `provider: "local"` explicitly for local GGUF embeddings. `hf:` and HTTP(S) model references are supported for explicit local configs (via node-llama-cpp's model resolution), but they do not change the default provider.
 
   </Accordion>
 </AccordionGroup>
 
-### Inline embedding timeout
-
-<ParamField path="sync.embeddingBatchTimeoutSeconds" type="number">
-  Override the timeout for inline embedding batches during memory indexing.
-
-Unset uses the provider default: 600 seconds for local/self-hosted providers such as `local`, `ollama`, and `lmstudio`, and 120 seconds for hosted providers. Increase this when local CPU-bound embedding batches are healthy but slow.
-</ParamField>
-
----
-
 ## Indexing behavior
 
-All under `memorySearch.sync` unless noted:
-
-| Key                            | Type      | Default | Description                                                           |
-| ------------------------------ | --------- | ------- | --------------------------------------------------------------------- |
-| `onSessionStart`               | `boolean` | `true`  | Sync the memory index when a session starts                           |
-| `onSearch`                     | `boolean` | `true`  | Sync lazily on search after detecting content changes                 |
-| `watch`                        | `boolean` | `true`  | Watch memory files (chokidar) and schedule reindex on changes         |
-| `watchDebounceMs`              | `number`  | `1500`  | Debounce window for coalescing rapid file-watch events                |
-| `intervalMinutes`              | `number`  | `0`     | Periodic reindex interval in minutes (`0` disables)                   |
-| `sessions.postCompactionForce` | `boolean` | `true`  | Force a session reindex after compaction-triggered transcript updates |
-
-<ParamField path="chunking.tokens" type="number">
-  Chunk size in tokens used when splitting memory sources before embedding (default: 400).
-</ParamField>
-<ParamField path="chunking.overlap" type="number">
-  Token overlap between adjacent chunks to preserve context near split boundaries (default: 80).
-</ParamField>
-
-<Note>
-Changing `chunking.tokens` or `chunking.overlap` changes chunk boundaries and invalidates the existing index identity (see the Warning under Provider selection).
-</Note>
-
----
+Memory engines own synchronization, batching, watch, and post-compaction
+indexing heuristics. OpenClaw keeps these behaviors enabled with maintained
+defaults rather than exposing per-install timing switches.
 
 ## Hybrid search config
 
-All under `memorySearch.query`:
+All under `memory.search.query`:
 
 | Key          | Type     | Default | Description                               |
 | ------------ | -------- | ------- | ----------------------------------------- |
 | `maxResults` | `number` | `6`     | Max memory hits returned before injection |
 | `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
 
-And under `memorySearch.query.hybrid`:
-
-| Key                   | Type      | Default | Description                        |
-| --------------------- | --------- | ------- | ---------------------------------- |
-| `enabled`             | `boolean` | `true`  | Enable hybrid BM25 + vector search |
-| `vectorWeight`        | `number`  | `0.7`   | Weight for vector scores (0-1)     |
-| `textWeight`          | `number`  | `0.3`   | Weight for BM25 scores (0-1)       |
-| `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
-
-<Tabs>
-  <Tab title="MMR (diversity)">
-    | Key           | Type      | Default | Description                          |
-    | ------------- | --------- | ------- | ------------------------------------- |
-    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking                |
-    | `mmr.lambda`  | `number`  | `0.7`   | 0 = max diversity, 1 = max relevance |
-  </Tab>
-  <Tab title="Temporal decay (recency)">
-    | Key                          | Type      | Default | Description               |
-    | ---------------------------- | --------- | ------- | -------------------------- |
-    | `temporalDecay.enabled`      | `boolean` | `false` | Enable recency boost      |
-    | `temporalDecay.halfLifeDays` | `number`  | `30`    | Score halves every N days |
-
-    Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
-
-  </Tab>
-</Tabs>
+Hybrid retrieval remains enabled; MMR and temporal decay remain disabled by
+the built-in engine policy.
 
 ### Full example
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        query: {
-          maxResults: 6,
-          minScore: 0.35,
-          hybrid: {
-            vectorWeight: 0.7,
-            textWeight: 0.3,
-            mmr: { enabled: true, lambda: 0.7 },
-            temporalDecay: { enabled: true, halfLifeDays: 30 },
-          },
-        },
+  memory: {
+    search: {
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
       },
     },
   },
@@ -402,11 +389,9 @@ And under `memorySearch.query.hybrid`:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        extraPaths: ["../team-docs", "/srv/shared-notes"],
-      },
+  memory: {
+    search: {
+      extraPaths: ["../team-docs", "/srv/shared-notes"],
     },
   },
 }
@@ -414,7 +399,7 @@ And under `memorySearch.query.hybrid`:
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for `.md` files. Symlink handling depends on the active backend: the builtin engine skips symlinks, while QMD follows the underlying QMD scanner behavior.
 
-For agent-scoped cross-agent transcript search, use `agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape, but they are merged per agent and can preserve explicit shared names when the path points outside the current workspace. If the same resolved path appears in both `memory.qmd.paths` and `memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
+For agent-scoped cross-agent transcript search, use `agents.entries.*.memory.search.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape, but they are merged per agent and can preserve explicit shared names when the path points outside the current workspace. If the same resolved path appears in both `memory.qmd.paths` and `memory.search.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
 
 ---
 
@@ -438,58 +423,53 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (i
 
 ## Embedding cache
 
-| Key                | Type      | Default | Description                                  |
-| ------------------ | --------- | ------- | -------------------------------------------- |
-| `cache.enabled`    | `boolean` | `true`  | Cache chunk embeddings in SQLite             |
-| `cache.maxEntries` | `number`  | unset   | Best-effort upper bound on cached embeddings |
+| Key             | Type      | Default | Description                      |
+| --------------- | --------- | ------- | -------------------------------- |
+| `cache.enabled` | `boolean` | `true`  | Cache chunk embeddings in SQLite |
 
-Prevents re-embedding unchanged text during reindex or transcript updates. Leave `maxEntries` unset for an unbounded cache; set it when disk growth matters more than peak reindex speed. When set, the oldest entries (by last-updated time) are pruned first once the cache exceeds the limit.
+Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ---
 
 ## Batch indexing
 
-| Key                           | Type      | Default | Description                |
-| ----------------------------- | --------- | ------- | -------------------------- |
-| `remote.nonBatchConcurrency`  | `number`  | `4`     | Parallel inline embeddings |
-| `remote.batch.enabled`        | `boolean` | `false` | Enable batch embedding API |
-| `remote.batch.concurrency`    | `number`  | `2`     | Parallel batch jobs        |
-| `remote.batch.wait`           | `boolean` | `true`  | Wait for batch completion  |
-| `remote.batch.pollIntervalMs` | `number`  | `2000`  | Poll interval              |
-| `remote.batch.timeoutMinutes` | `number`  | `60`    | Batch timeout              |
+| Key                          | Type      | Default | Description                |
+| ---------------------------- | --------- | ------- | -------------------------- |
+| `remote.nonBatchConcurrency` | `number`  | `4`     | Parallel inline embeddings |
+| `remote.batch.enabled`       | `boolean` | `false` | Enable batch embedding API |
 
 Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
-`remote.nonBatchConcurrency` controls inline embedding calls used by local/self-hosted providers and hosted providers when provider batch APIs are not active. Ollama defaults to `1` for non-batch indexing to avoid overwhelming smaller local hosts; set a higher value on larger machines.
-
-This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls the timeout for inline embedding calls.
+Concurrency, polling, and timeout behavior are provider-owned.
 
 ---
 
-## Session memory search (experimental)
+## Session memory search
 
 Index session transcripts and surface them via `memory_search`:
 
-| Key                           | Type       | Default      | Description                             |
-| ----------------------------- | ---------- | ------------ | --------------------------------------- |
-| `experimental.sessionMemory`  | `boolean`  | `false`      | Enable session indexing                 |
-| `sources`                     | `string[]` | `["memory"]` | Add `"sessions"` to include transcripts |
-| `sync.sessions.deltaBytes`    | `number`   | `100000`     | Byte threshold for reindex              |
-| `sync.sessions.deltaMessages` | `number`   | `50`         | Message threshold for reindex           |
+| Key                           | Type       | Default      | Description                              |
+| ----------------------------- | ---------- | ------------ | ---------------------------------------- |
+| `rememberAcrossConversations` | `boolean`  | `false`      | Permit private cross-conversation recall |
+| `sources`                     | `string[]` | `["memory"]` | Add `"sessions"` to include transcripts  |
 
 <Warning>
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
 </Warning>
 
-Session transcript hits also obey
+Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
-`tree` visibility only exposes the current session and sessions it spawned. To
-recall an unrelated same-agent gateway-dispatched session from a different
-session, such as a DM, intentionally widen visibility to `agent` (or `all` only
-when cross-agent recall is also required and agent-to-agent policy allows it).
+`tree` visibility exposes the current session, sessions it spawned, and
+same-agent group sessions watched through ambient group awareness. Other
+unrelated sessions require `agent` visibility (or `all` only when cross-agent
+recall is also required and agent-to-agent policy allows it).
 
-The examples below place these settings under `agents.defaults`. You can also
-apply equivalent `memorySearch` settings in a per-agent override when only one
+`rememberAcrossConversations` does not widen that setting. It supplies a
+separate runtime-only authorization limited to same-agent private
+transcripts during the bounded Active Memory pass.
+
+The examples below place these settings under top-level `memory.search`. You can also
+apply equivalent settings in a per-agent `memory.search` override when only one
 agent should index and search session transcripts.
 
 For same-agent gateway-to-DM recall:
@@ -498,12 +478,10 @@ For same-agent gateway-to-DM recall:
   <Tab title="Builtin backend">
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            experimental: { sessionMemory: true },
-            sources: ["memory", "sessions"],
-          },
+      memory: {
+        search: {
+          experimental: { sessionMemory: true },
+          sources: ["memory", "sessions"],
         },
       },
       tools: {
@@ -515,16 +493,12 @@ For same-agent gateway-to-DM recall:
   <Tab title="QMD backend">
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            experimental: { sessionMemory: true },
-            sources: ["memory", "sessions"],
-          },
-        },
-      },
       memory: {
         backend: "qmd",
+        search: {
+          experimental: { sessionMemory: true },
+          sources: ["memory", "sessions"],
+        },
         qmd: {
           sessions: { enabled: true },
         },
@@ -537,9 +511,16 @@ For same-agent gateway-to-DM recall:
   </Tab>
 </Tabs>
 
-When using QMD, `agents.defaults.memorySearch.experimental.sessionMemory` and
-`sources: ["sessions"]` do not by themselves export transcripts into QMD. Set
-`memory.qmd.sessions.enabled: true` as well.
+When using QMD, `sources: ["sessions"]` does not by itself export transcripts into QMD. Set
+`memory.qmd.sessions.enabled: true` as well. The higher-level
+`rememberAcrossConversations: true` setting is the exception: it implies the
+required QMD session export for that agent. Implied exports stay private:
+they always use the default internal export location (a configured
+`sessions.exportDir` applies only to explicit exports), they are searched only
+during that agent's cross-conversation recall, and ordinary `memory_get`
+cannot read them. Explicit
+`memory.qmd.sessions.enabled: true` keeps its existing behavior and makes
+exported transcripts part of the ordinary memory corpus.
 
 ---
 
@@ -590,40 +571,14 @@ OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QM
 QMD model overrides stay on the QMD side, not OpenClaw config. If you need to override QMD's models globally, set environment variables such as `QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway runtime environment.
 </Note>
 
-### mcporter integration
-
-All under `memory.qmd.mcporter`. Routes QMD searches through a long-lived `mcporter` MCP daemon instead of spawning `qmd` per query, cutting cold-start overhead for larger models.
-
-| Key           | Type      | Default | Description                                                            |
-| ------------- | --------- | ------- | ---------------------------------------------------------------------- |
-| `enabled`     | `boolean` | `false` | Route QMD calls through mcporter instead of spawning `qmd` per request |
-| `serverName`  | `string`  | `qmd`   | mcporter server name that runs `qmd mcp` with `lifecycle: keep-alive`  |
-| `startDaemon` | `boolean` | `true`  | Automatically start the mcporter daemon when `enabled` is true         |
-
-Requires `mcporter` installed and on PATH, plus a configured mcporter server that runs `qmd mcp`. Keep disabled for simpler local setups where per-query process spawn cost is acceptable.
-
 <AccordionGroup>
-  <Accordion title="Update schedule">
-    | Key                       | Type      | Default | Description                           |
-    | --------------------------- | --------- | -------- | ---------------------------------------- |
-    | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
-    | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; set false to skip the immediate boot update |
-    | `update.startup`          | `string`  | `off`   | Optional gateway-start QMD initialization: `off`, `idle`, or `immediate` |
-    | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
-    | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
-    | `update.embedInterval`    | `string`  | `60m`   | Separate embed cadence                |
-    | `update.commandTimeoutMs` | `number`  | `30000` | Timeout for QMD maintenance commands (collection list/add) |
-    | `update.updateTimeoutMs`  | `number`  | `120000` | Timeout for each `qmd update` cycle   |
-    | `update.embedTimeoutMs`   | `number`  | `120000` | Timeout for each `qmd embed` cycle    |
-  </Accordion>
   <Accordion title="Limits">
     | Key                       | Type     | Default | Description                |
     | --------------------------- | -------- | ------- | ------------------------------ |
     | `limits.maxResults`       | `number` | `4`     | Max search results         |
     | `limits.maxSnippetChars`  | `number` | `450`   | Clamp snippet length       |
     | `limits.maxInjectedChars` | `number` | `2200`  | Clamp total injected chars |
-    | `limits.timeoutMs`        | `number` | `4000`  | Search timeout             |
+    | `limits.timeoutMs`        | `number` | `4000`  | QMD command timeout during QMD-backed search, including `memory_search`; setup, sync, builtin fallback, and supplemental work keep the default tool deadline |
   </Accordion>
   <Accordion title="Scope">
     Controls which sessions can receive QMD search results. Same schema as [`session.sendPolicy`](/gateway/config-agents#session):
@@ -656,7 +611,7 @@ Requires `mcporter` installed and on PATH, plus a configured mcporter server tha
   </Accordion>
 </AccordionGroup>
 
-When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for eligible agents. If `update.onBoot` is true and no interval/embed maintenance is configured, startup uses a one-shot manager for the boot refresh and closes it. If an update or embed interval is configured, startup opens the long-lived QMD manager so it can own the watcher and interval timers; `update.onBoot: false` skips only the immediate boot refresh.
+QMD initializes lazily when memory is first used; its adapter owns refresh and embedding schedules.
 
 ### Full QMD example
 
@@ -683,7 +638,7 @@ When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for e
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `agents.defaults.memorySearch`.
+Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 

@@ -19,6 +19,8 @@ const scrubbedEnvKeys = [
   "FIXTURE_PORT",
   "MOCK_PORT",
   "MOCK_REQUEST_LOG",
+  "MOCK_TLS_CERT",
+  "MOCK_TLS_KEY",
   "OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES",
   "OPENCLAW_CONFIG_RELOAD_LOG_PATH",
   "OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS",
@@ -89,7 +91,7 @@ async function stopServer(child: ChildProcess) {
   child.kill("SIGTERM");
   await Promise.race([
     exited,
-    delay(1_000).then(() => {
+    delay(1_000, undefined, { ref: false }).then(() => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
@@ -136,6 +138,61 @@ async function withMockServer(
     await stopServer(child);
   }
 }
+
+describe("mock OpenAI response markers", () => {
+  it("echoes dynamic OpenClaw E2E markers", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      for (const marker of ["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"]) {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input: `Reply exactly with ${marker}.`,
+            stream: false,
+          }),
+        });
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
+      }
+    });
+  });
+
+  it("drives the MCP App fixture tool before returning the visible marker", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const first = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [{ content: "mcp app conformance qa check", role: "user" }],
+          stream: false,
+          tools: [{ name: "fixture__show", parameters: { type: "object" }, type: "function" }],
+        }),
+      });
+      const firstBody = await first.json();
+      expect(firstBody.output?.[0]).toMatchObject({
+        arguments: "{}",
+        name: "fixture__show",
+        type: "function_call",
+      });
+
+      const second = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "mcp app conformance qa check", role: "user" },
+            { output: "initial-result", type: "function_call_output" },
+          ],
+          stream: false,
+        }),
+      });
+      const secondBody = await second.json();
+      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("MCP_APP_CONFORMANCE_READY");
+    });
+  });
+});
 
 describe("e2e mock and config helper numeric limits", () => {
   it("rejects loose mock OpenAI port env values", () => {

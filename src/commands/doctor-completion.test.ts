@@ -4,16 +4,23 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../cli/completion-runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
   doctorShellCompletion,
+  ensureCompletionCacheExists,
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
 } from "./doctor-completion.js";
 
-const originalEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "SHELL"]);
+const originalEnv = captureEnv([
+  "HOME",
+  "OPENCLAW_STATE_DIR",
+  "SHELL",
+  COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
@@ -166,6 +173,36 @@ describe("doctorShellCompletion", () => {
     installCompletionMock.mockReset();
     spawnSyncMock.mockClear();
   });
+
+  it.each([
+    { generationMode: "core-only" as const, expectedSkipValue: "1" },
+    { generationMode: "full" as const, expectedSkipValue: undefined },
+  ])(
+    "uses explicit $generationMode cache generation even with an ambient skip guard",
+    async ({ generationMode, expectedSkipValue }) => {
+      const stateDir = tempDirs.make("openclaw-doctor-state-");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue(COMPLETION_SKIP_PLUGIN_COMMANDS_ENV, "1");
+
+      await expect(
+        ensureCompletionCacheExists("openclaw", {
+          shell: "powershell",
+          generationMode,
+        }),
+      ).resolves.toBe(true);
+
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        process.execPath,
+        expect.arrayContaining(["completion", "--write-state", "--shell", "powershell"]),
+        expect.any(Object),
+      );
+      const spawnCalls = spawnSyncMock.mock.calls as unknown as Array<
+        [string, string[], { env?: NodeJS.ProcessEnv }]
+      >;
+      const spawnOptions = spawnCalls.at(-1)?.[2];
+      expect(spawnOptions?.env?.[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]).toBe(expectedSkipValue);
+    },
+  );
 
   it.each([
     { code: "EACCES", usesSlowPattern: true, action: "upgraded" },

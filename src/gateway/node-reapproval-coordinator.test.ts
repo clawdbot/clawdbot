@@ -1,5 +1,6 @@
 // Covers paired-node reapproval reuse and changed-surface write limits.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -13,6 +14,18 @@ import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.j
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-reapproval-" });
 
 async function setupPairedNode(baseDir: string): Promise<void> {
+  // Node surfaces attach to paired devices, so device pairing comes first.
+  const devicePairing = await requestDevicePairing(
+    {
+      deviceId: "node-1",
+      publicKey: "pk-node-1",
+      role: "node",
+      roles: ["node"],
+      scopes: [],
+    },
+    baseDir,
+  );
+  await approveDevicePairing(devicePairing.request.requestId, { callerScopes: [] }, baseDir);
   const request = await requestNodePairing(
     {
       nodeId: "node-1",

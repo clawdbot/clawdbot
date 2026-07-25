@@ -10,7 +10,6 @@ export {
   openMatrixStorageMetaStoreOptions,
 } from "./src/matrix/client/storage.js";
 export type { MatrixStorageMetadata } from "./src/matrix/client/storage.js";
-export { openMatrixInboundDedupeStoreOptions } from "./src/matrix/monitor/inbound-dedupe.js";
 export type {
   EncryptedFile,
   MatrixDeviceVerificationStatus,

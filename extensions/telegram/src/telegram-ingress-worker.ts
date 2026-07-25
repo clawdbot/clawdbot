@@ -64,7 +64,7 @@ export type TelegramIngressWorkerOptions = {
   proxy?: string;
 };
 
-export type TelegramIngressWorkerHandle = {
+type TelegramIngressWorkerHandle = {
   onMessage(listener: (message: TelegramIngressWorkerMessage) => void): () => void;
   ackSpooledUpdate?(
     requestId: string,

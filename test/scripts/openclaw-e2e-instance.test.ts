@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const helperPath = path.resolve("scripts/lib/openclaw-e2e-instance.sh");
@@ -65,7 +66,9 @@ function runSourcedHelper(
 }
 
 function expectShellSuccess(result: ReturnType<typeof spawnSync>) {
-  expect(result.status, result.stderr || result.stdout || result.error?.message).toBe(0);
+  expect(result.status, String(result.stderr || result.stdout || result.error?.message || "")).toBe(
+    0,
+  );
 }
 
 function writePackageFixture(packagePath: string): void {
@@ -200,6 +203,28 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     expect(zero.stdout).toBe("0");
     expect(size.status).toBe(2);
     expect(size.stderr).toContain("invalid OPENCLAW_E2E_SAMPLE_BYTES: 64kb");
+  });
+
+  it("probes default and explicit mock OpenAI base URLs", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-mock-openai-url-"));
+    try {
+      const probePath = path.join(tempDir, "probe-url.txt");
+      const result = runSourcedHelper(
+        [
+          `openclaw_e2e_probe_http() { printf "%s\\n" "$1" >>${shellQuote(probePath)}; return 0; }`,
+          "openclaw_e2e_wait_mock_openai 44080 1 400",
+          "openclaw_e2e_wait_mock_openai 443 1 400 https://api.openai.com:443",
+        ].join("; "),
+      );
+
+      expectShellSuccess(result);
+      expect(fs.readFileSync(probePath, "utf8").trim().split("\n")).toEqual([
+        "http://127.0.0.1:44080/health",
+        "https://api.openai.com:443/health",
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("requires /readyz after the gateway ready log", () => {
@@ -1079,7 +1104,7 @@ exit 1
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("recent command tail");
       expect(result.stdout).not.toContain("DO_NOT_PRINT_OLD_COMMAND_LOG");
-      const [logFile] = fs.readdirSync(logDir);
+      const logFile = expectDefined(fs.readdirSync(logDir)[0], "OpenClaw E2E command log file");
       expect(fs.readFileSync(path.join(logDir, logFile), "utf8")).toContain(
         "DO_NOT_PRINT_OLD_COMMAND_LOG",
       );

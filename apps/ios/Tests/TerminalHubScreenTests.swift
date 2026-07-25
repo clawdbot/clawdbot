@@ -3,11 +3,14 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@MainActor
 struct TerminalHubScreenTests {
     private static func makeConfig(
         url: URL,
         token: String? = nil,
-        password: String? = nil) -> GatewayConnectConfig
+        password: String? = nil,
+        allowStoredDeviceAuth: Bool = true,
+        deviceAuthGatewayID: String? = nil) -> GatewayConnectConfig
     {
         GatewayConnectConfig(
             url: url,
@@ -24,17 +27,19 @@ struct TerminalHubScreenTests {
                 permissions: [:],
                 clientId: "ios",
                 clientMode: "node",
-                clientDisplayName: "Phone"))
+                clientDisplayName: "Phone",
+                allowStoredDeviceAuth: allowStoredDeviceAuth,
+                deviceAuthGatewayID: deviceAuthGatewayID))
     }
 
-    @Test func `terminal URL flips scheme and carries only view parameter`() throws {
+    @Test func `terminal URL flips scheme and preserves the Control UI base path`() throws {
         let config = try Self.makeConfig(
-            url: #require(URL(string: "wss://gateway.example.com:8443/ws")),
+            url: #require(URL(string: "wss://gateway.example.com:8443/openclaw")),
             token: "secret-token")
 
         let url = TerminalHubScreen.terminalURL(config: config)
 
-        #expect(url?.absoluteString == "https://gateway.example.com:8443/?view=terminal")
+        #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/?view=terminal")
         // Credentials must never ride in the page URL; they travel via the
         // document-start auth user script instead.
         #expect(url?.absoluteString.contains("secret-token") == false)
@@ -75,6 +80,55 @@ struct TerminalHubScreenTests {
             storedOperatorToken: " stored-token ")
 
         #expect(script?.contains("\"token\":\"stored-token\"") == true)
+    }
+
+    @Test func `auth user script loads the active gateway scoped operator token`() throws {
+        let gatewayID = "manual|terminal-\(UUID().uuidString)|443"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer {
+            DeviceAuthStore.clearToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID)
+        }
+        #expect(DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "scoped-terminal-token",
+            gatewayID: gatewayID).token == "scoped-terminal-token")
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            deviceAuthGatewayID: gatewayID)
+
+        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+
+        #expect(script?.contains("\"token\":\"scoped-terminal-token\"") == true)
+    }
+
+    @Test func `auth user script honors stored device auth suppression`() throws {
+        let gatewayID = "manual|terminal-suppressed-\(UUID().uuidString)|443"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer {
+            DeviceAuthStore.clearToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID)
+        }
+        #expect(DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "stale-terminal-token",
+            gatewayID: gatewayID).token == "stale-terminal-token")
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            password: "replacement-password",
+            allowStoredDeviceAuth: false,
+            deviceAuthGatewayID: gatewayID)
+
+        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+
+        #expect(script?.contains("stale-terminal-token") == false)
+        #expect(script?.contains("\"password\":\"replacement-password\"") == true)
     }
 
     @Test func `web content identity changes with stored operator token`() throws {

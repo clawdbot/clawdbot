@@ -1,15 +1,58 @@
 // Covers gateway TLS loading, fingerprint reporting, generated certificate
 // paths, and error handling for missing or invalid material.
 import { X509Certificate } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { normalizeFingerprint } from "./fingerprint.js";
+
+const { durabilityTestState, resolveSystemBinMock, runExecMock } = vi.hoisted(() => ({
+  durabilityTestState: {
+    syncOutcome: undefined as
+      | { status: "synced" }
+      | { status: "unsupported"; code?: string }
+      | undefined,
+  },
+  resolveSystemBinMock: vi.fn(() => "/usr/bin/openssl"),
+  runExecMock: vi.fn(),
+}));
+
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
+  return {
+    ...actual,
+    syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
+      durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
+  };
+});
+
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runExec: runExecMock,
+}));
+
+vi.mock("../resolve-system-bin.js", () => ({ resolveSystemBin: resolveSystemBinMock }));
+
 import { loadGatewayTlsRuntime } from "./gateway.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-gateway-tls-test-");
+
+function resolveOpenSslOutput(args: string[], flag: "-keyout" | "-out"): string {
+  const outputPath = args.at(args.indexOf(flag) + 1);
+  if (!outputPath) {
+    throw new Error(`missing ${flag} output path`);
+  }
+  return outputPath;
+}
+
+async function writeGeneratedTlsPair(args: string[]): Promise<void> {
+  await Promise.all([
+    fs.writeFile(resolveOpenSslOutput(args, "-out"), CERT_PEM, "utf8"),
+    fs.writeFile(resolveOpenSslOutput(args, "-keyout"), KEY_PEM, "utf8"),
+  ]);
+}
 
 const KEY_PEM = [
   "-----BEGIN PRIVATE KEY-----", // pragma: allowlist secret
@@ -63,6 +106,10 @@ r1USnb+wUdA7Zoj/mQ==
 -----END CERTIFICATE-----`;
 
 afterEach(async () => {
+  durabilityTestState.syncOutcome = undefined;
+  resolveSystemBinMock.mockClear();
+  runExecMock.mockReset();
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
 
@@ -83,9 +130,9 @@ describe("loadGatewayTlsRuntime", () => {
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
     const caPath = path.join(dir, "gateway-ca.pem");
-    await writeFile(certPath, CERT_PEM, "utf8");
-    await writeFile(keyPath, KEY_PEM, "utf8");
-    await writeFile(caPath, CERT_PEM, "utf8");
+    await fs.writeFile(certPath, CERT_PEM, "utf8");
+    await fs.writeFile(keyPath, KEY_PEM, "utf8");
+    await fs.writeFile(caPath, CERT_PEM, "utf8");
 
     const result = await loadGatewayTlsRuntime({
       enabled: true,
@@ -129,12 +176,288 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.error).toBe("gateway tls: cert/key missing");
   });
 
+  it.each(["key", "cert"] as const)(
+    "bounds generation and cleans a partial staged %s",
+    async (partialOutput) => {
+      const dir = await createTempDir();
+      const certPath = path.join(dir, "gateway-cert.pem");
+      const keyPath = path.join(dir, "gateway-key.pem");
+      runExecMock.mockImplementationOnce(async (_command: string, args: string[]) => {
+        const outputPath = resolveOpenSslOutput(args, partialOutput === "key" ? "-keyout" : "-out");
+        await fs.writeFile(outputPath, partialOutput === "key" ? KEY_PEM : CERT_PEM, "utf8");
+        throw new Error("openssl timed out");
+      });
+
+      const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+      expect(runExecMock).toHaveBeenCalledOnce();
+      const [command, args, options] = runExecMock.mock.calls[0] as [
+        string,
+        string[],
+        { logOutput: boolean; timeoutMs: number },
+      ];
+      expect(command).toBe("/usr/bin/openssl");
+      expect(resolveOpenSslOutput(args, "-keyout")).not.toBe(keyPath);
+      expect(resolveOpenSslOutput(args, "-out")).not.toBe(certPath);
+      expect(options).toEqual({ logOutput: false, timeoutMs: 30_000 });
+      expect(result).toMatchObject({ enabled: false, required: true, certPath, keyPath });
+      expect(result.error).toContain("openssl timed out");
+      await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(dir)).resolves.toEqual([]);
+    },
+  );
+
+  it("validates and publishes a generated pair with private modes", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+    expect(result.enabled).toBe(true);
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
+    await expect(fs.readdir(dir).then((entries) => entries.toSorted())).resolves.toEqual([
+      "gateway-cert.pem",
+      "gateway-key.pem",
+    ]);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(certPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(keyPath)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("syncs generated certificate data before linking final paths", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    const events: string[] = [];
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await originalOpen(filePath, flags, mode);
+      if (flags === "r+" && ["cert.pem", "key.pem"].includes(path.basename(String(filePath)))) {
+        const originalSync = handle.sync.bind(handle);
+        vi.spyOn(handle, "sync").mockImplementation(async () => {
+          events.push(`sync:${path.basename(String(filePath))}`);
+          await originalSync();
+        });
+      }
+      return handle;
+    });
+    const originalLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+      events.push(`link:${path.basename(String(source))}`);
+      await originalLink(source, target);
+    });
+
+    try {
+      await expect(
+        loadGatewayTlsRuntime({ enabled: true, certPath, keyPath }),
+      ).resolves.toMatchObject({ enabled: true });
+    } finally {
+      openSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+
+    expect(events).toEqual(
+      expect.arrayContaining(["sync:cert.pem", "link:cert.pem", "sync:key.pem", "link:key.pem"]),
+    );
+    expect(events.indexOf("sync:cert.pem")).toBeLessThan(events.indexOf("link:cert.pem"));
+    expect(events.indexOf("sync:key.pem")).toBeLessThan(events.indexOf("link:key.pem"));
+  });
+
+  it("creates nested TLS directories before publishing generated material", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "nested", "tls", "gateway-cert.pem");
+    const keyPath = path.join(dir, "nested", "tls", "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+    expect(result.enabled).toBe(true);
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
+  });
+
+  it("preserves the published certificate when key publication loses a race", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const originalLink = fs.link.bind(fs);
+    let linkCount = 0;
+    vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+      linkCount += 1;
+      if (linkCount === 2) {
+        await fs.writeFile(keyPath, "foreign key material", "utf8");
+        throw Object.assign(new Error("key destination appeared"), { code: "EEXIST" });
+      }
+      await originalLink(source, target);
+    });
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+    expect(result.enabled).toBe(false);
+    expect(result.error).toContain("key destination appeared");
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("foreign key material");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "publishes through the pinned canonical directory after a symlink retarget",
+    async () => {
+      const root = await createTempDir();
+      const firstDirectory = path.join(root, "first");
+      const secondDirectory = path.join(root, "second");
+      const requestedDirectory = path.join(root, "requested");
+      await fs.mkdir(firstDirectory);
+      await fs.mkdir(secondDirectory);
+      await fs.symlink(firstDirectory, requestedDirectory);
+      const certPath = path.join(requestedDirectory, "gateway-cert.pem");
+      const keyPath = path.join(requestedDirectory, "gateway-key.pem");
+      runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+        await writeGeneratedTlsPair(args);
+      });
+      const originalLink = fs.link.bind(fs);
+      let retargeted = false;
+      vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+        if (!retargeted) {
+          retargeted = true;
+          await fs.unlink(requestedDirectory);
+          await fs.symlink(secondDirectory, requestedDirectory);
+          await originalLink(source, target);
+          await fs.unlink(requestedDirectory);
+          await fs.symlink(firstDirectory, requestedDirectory);
+          return;
+        }
+        await originalLink(source, target);
+      });
+
+      await expect(
+        loadGatewayTlsRuntime({ enabled: true, certPath, keyPath }),
+      ).resolves.toMatchObject({
+        enabled: true,
+      });
+      await expect(
+        fs.readdir(firstDirectory).then((entries) => entries.toSorted()),
+      ).resolves.toEqual(["gateway-cert.pem", "gateway-key.pem"]);
+      await expect(fs.readdir(secondDirectory)).resolves.toEqual([]);
+    },
+  );
+
+  it("publishes best-effort and warns once when hard links are unavailable", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    const warn = vi.fn();
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const linkSpy = vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath }, { warn });
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(true);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("[GATEWAY_TLS_DEGRADED]"), {
+      event: "gateway.tls.degraded",
+      ownerKind: "gateway",
+      ownerId: "tls",
+      reason: "atomic hard-link publication unavailable",
+      state: "best-effort",
+    });
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe(KEY_PEM);
+    await expect(fs.readdir(dir).then((entries) => entries.toSorted())).resolves.toEqual([
+      "gateway-cert.pem",
+      "gateway-key.pem",
+    ]);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(certPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(keyPath)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("reports degraded durability when Windows cannot flush the publication directory", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    const warn = vi.fn();
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    durabilityTestState.syncOutcome = { status: "unsupported", code: "EISDIR" };
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath }, { warn });
+
+    expect(result.enabled).toBe(true);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("[GATEWAY_TLS_DEGRADED]"), {
+      event: "gateway.tls.degraded",
+      ownerKind: "gateway",
+      ownerId: "tls",
+      reason: "directory durability unavailable",
+      state: "best-effort",
+    });
+  });
+
+  it("reports atomic and durability degradations independently", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    const warn = vi.fn();
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    vi.spyOn(fs, "link").mockRejectedValue(
+      Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }),
+    );
+    durabilityTestState.syncOutcome = { status: "unsupported", code: "EISDIR" };
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath }, { warn });
+
+    expect(result.enabled).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.any(String), {
+      event: "gateway.tls.degraded",
+      ownerKind: "gateway",
+      ownerId: "tls",
+      reason: "atomic hard-link publication unavailable",
+      state: "best-effort",
+    });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), {
+      event: "gateway.tls.degraded",
+      ownerKind: "gateway",
+      ownerId: "tls",
+      reason: "directory durability unavailable",
+      state: "best-effort",
+    });
+  });
+
   it("reports load failures for invalid pem files", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
-    await writeFile(certPath, "not a certificate\n", "utf8");
-    await writeFile(keyPath, KEY_PEM, "utf8");
+    await fs.writeFile(certPath, "not a certificate\n", "utf8");
+    await fs.writeFile(keyPath, KEY_PEM, "utf8");
 
     const result = await loadGatewayTlsRuntime({
       enabled: true,

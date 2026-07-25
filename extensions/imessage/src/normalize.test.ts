@@ -9,6 +9,11 @@ describe("normalizeIMessageMessagingTarget", () => {
 
   it("preserves service prefixes for handles", () => {
     expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe("sms:+15552223333");
+    expect(normalizeIMessageMessagingTarget("sms:++1 (555) 222-3333")).toBe("sms:+15552223333");
+  });
+
+  it("preserves non-phone handles instead of collapsing them to a plus sign", () => {
+    expect(normalizeIMessageMessagingTarget("auto:Alice Smith")).toBe("auto:AliceSmith");
   });
 
   it("drops service prefixes for chat targets", () => {

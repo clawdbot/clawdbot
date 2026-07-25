@@ -4,6 +4,10 @@
  * The default path blocks common credential names and suspicious value shapes while allowing
  * ordinary process environment needed for shells and Node-based tools.
  */
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
+import { listKnownSecretEnvVarNames } from "../../secrets/provider-env-vars.js";
+
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^ANTHROPIC_API_KEY$/i,
   /^OPENAI_API_KEY$/i,
@@ -21,6 +25,7 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^AWS_(SECRET_ACCESS_KEY|SECRET_KEY|SESSION_TOKEN)$/i,
   /^(GH|GITHUB)_TOKEN$/i,
   /^(AZURE|AZURE_OPENAI|COHERE|AI_GATEWAY|OPENROUTER)_API_KEY$/i,
+  /_ADMIN_KEY$/i,
   /_?(API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|SECRET)$/i,
 ];
 
@@ -42,18 +47,20 @@ type EnvVarSanitizationResult = {
   warnings: string[];
 };
 
-export type EnvSanitizationOptions = {
+type EnvSanitizationOptions = {
   strictMode?: boolean;
   customBlockedPatterns?: ReadonlyArray<RegExp>;
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
+
+const MAX_ENV_VAR_VALUE_BYTES = 32768;
 
 /** Returns a warning or block reason for environment values that look unsafe to forward. */
 export function validateEnvVarValue(value: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
   }
-  if (value.length > 32768) {
+  if (Buffer.byteLength(value, "utf8") > MAX_ENV_VAR_VALUE_BYTES) {
     return "Value exceeds maximum length";
   }
   if (/^[A-Za-z0-9+/=]{80,}$/.test(value)) {
@@ -77,6 +84,26 @@ export function sanitizeEnvVars(
 
   const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
   const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
+  // Sandbox launches consume the Gateway-owned metadata snapshot so configured
+  // plugin paths cannot bypass manifest-declared credential scrubbing.
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    env: envVars,
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  const activeMetadataSnapshot = metadataSnapshot
+    ? {
+        ...metadataSnapshot,
+        plugins: metadataSnapshot.plugins.filter((plugin) =>
+          isInstalledPluginEnabled(metadataSnapshot.index, plugin.id),
+        ),
+      }
+    : undefined;
+  const knownSecretNames = new Set(
+    listKnownSecretEnvVarNames({ env: envVars, metadataSnapshot: activeMetadataSnapshot }).map(
+      (name) => name.trim().toUpperCase(),
+    ),
+  );
 
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();
@@ -84,7 +111,7 @@ export function sanitizeEnvVars(
       continue;
     }
 
-    if (matchesAnyPattern(key, blockedPatterns)) {
+    if (knownSecretNames.has(key.toUpperCase()) || matchesAnyPattern(key, blockedPatterns)) {
       blocked.push(key);
       continue;
     }

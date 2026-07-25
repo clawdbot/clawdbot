@@ -1,23 +1,20 @@
 // Line plugin module implements group policy behavior.
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
+import {
+  buildChannelGroupsScopeTree,
+  resolveScopeRequireMention,
+} from "openclaw/plugin-sdk/channel-policy";
 import { resolveExactLineGroupConfigKey, type OpenClawConfig } from "./channel-api.js";
 
-type LineGroupContext = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  groupId?: string | null;
-};
+type LineGroupContext = { cfg: OpenClawConfig; accountId?: string | null; groupId?: string | null };
 
 export function resolveLineGroupRequireMention(params: LineGroupContext): boolean {
-  const exactGroupId = resolveExactLineGroupConfigKey({
-    cfg: params.cfg,
-    accountId: params.accountId,
+  const tree = buildChannelGroupsScopeTree(params.cfg, "line", params.accountId);
+  const matchedKey = resolveExactLineGroupConfigKey({
+    groups: tree.scopes,
     groupId: params.groupId,
   });
-  return resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "line",
-    groupId: exactGroupId ?? params.groupId,
-    accountId: params.accountId,
+  return resolveScopeRequireMention({
+    tree,
+    path: matchedKey ? [matchedKey] : [],
   });
 }

@@ -1,14 +1,14 @@
+import {
+  buildChannelInboundEventContext,
+  resolveChannelInboundRouteEnvelope,
+  toInboundMediaFacts,
+} from "openclaw/plugin-sdk/channel-inbound";
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
-import {
-  buildAgentMediaPayload,
-  saveMediaBuffer,
-  saveMediaSource,
-} from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-runtime";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -23,7 +23,7 @@ import {
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
-export function isHttpMediaUrl(value: string): boolean {
+function isHttpMediaUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
     return parsed.protocol === "http:" || parsed.protocol === "https:";
@@ -44,9 +44,9 @@ function decodeAttachmentBase64(value: string): Buffer | null {
   return buffer;
 }
 
-async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachments"]) {
+async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments"]) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
-    return {};
+    return [];
   }
   const mediaList: Array<{ path: string; contentType?: string | null }> = [];
   for (const attachment of attachments) {
@@ -86,7 +86,7 @@ async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachmen
       });
     }
   }
-  return mediaList.length > 0 ? buildAgentMediaPayload(mediaList) : {};
+  return toInboundMediaFacts(mediaList);
 }
 
 function resolveQaGroupConfig(params: {
@@ -219,7 +219,7 @@ export async function handleQaInbound(params: {
     target,
     toolCalls,
   });
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,
@@ -232,8 +232,6 @@ export async function handleQaInbound(params: {
             : "channel",
       id: target,
     },
-    runtime: runtime.channel,
-    sessionStore: params.config.session?.store,
   });
   const isGroup = inbound.conversation.kind !== "direct";
   const wasMentioned = isGroup
@@ -286,13 +284,13 @@ export async function handleQaInbound(params: {
   if (access.ingress.admission !== "dispatch") {
     return;
   }
-  const { storePath, body } = buildEnvelope({
+  const body = buildEnvelope({
     channel: params.channelLabel,
     from: inbound.senderName || inbound.senderId,
     timestamp: inbound.timestamp,
     body: inbound.text,
   });
-  const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
+  const media = await resolveQaInboundMediaFacts(inbound.attachments);
   const nativeCommand = inbound.nativeCommand;
   const commandTargets = nativeCommand
     ? resolveNativeCommandSessionTargets({
@@ -304,65 +302,65 @@ export async function handleQaInbound(params: {
     : undefined;
   const commandBody = nativeCommand ? `/${nativeCommand.name}` : inbound.text;
 
-  const ctxPayload = runtime.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: inbound.text,
-    RawBody: inbound.text,
-    CommandBody: commandBody,
-    From: target,
-    To: target,
-    SessionKey: commandTargets?.sessionKey ?? route.sessionKey,
-    CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
-    AccountId: route.accountId ?? params.account.accountId,
-    ChatType: inbound.conversation.kind === "direct" ? "direct" : "group",
-    WasMentioned: wasMentioned,
-    ConversationLabel:
-      inbound.threadTitle ||
-      inbound.conversation.title ||
-      inbound.senderName ||
-      inbound.conversation.id,
-    GroupSubject: isGroup
-      ? inbound.threadTitle || inbound.conversation.title || inbound.conversation.id
+  const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: params.channelId,
+    accountId: route.accountId ?? params.account.accountId,
+    messageId: inbound.id,
+    messageIdFull: inbound.id,
+    timestamp: inbound.timestamp,
+    from: target,
+    sender: { id: inbound.senderId, name: inbound.senderName },
+    conversation: {
+      kind: inbound.conversation.kind === "direct" ? "direct" : "group",
+      id: inbound.conversation.id,
+      label:
+        inbound.threadTitle ||
+        inbound.conversation.title ||
+        inbound.senderName ||
+        inbound.conversation.id,
+      threadId: inbound.threadId,
+      nativeChannelId: inbound.conversation.id,
+    },
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      accountId: route.accountId,
+      routeSessionKey: sessionKey,
+      dispatchSessionKey: sessionKey,
+    },
+    reply: {
+      to: target,
+      originatingTo: target,
+      replyToId: inbound.replyToId,
+      messageThreadId: inbound.threadId,
+      threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
+    },
+    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody },
+    media,
+    access: {
+      commands: { authorized: true },
+      mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
+    },
+    command: nativeCommand
+      ? { kind: "native", name: nativeCommand.name, body: commandBody, authorized: true }
       : undefined,
-    GroupChannel: inbound.conversation.kind === "channel" ? inbound.conversation.id : undefined,
-    NativeChannelId: inbound.conversation.id,
-    MessageThreadId: inbound.threadId,
-    ThreadLabel: inbound.threadTitle,
-    ThreadParentId: inbound.threadId ? inbound.conversation.id : undefined,
-    SenderName: inbound.senderName,
-    SenderId: inbound.senderId,
-    Provider: params.channelId,
-    Surface: params.channelId,
-    MessageSid: inbound.id,
-    MessageSidFull: inbound.id,
-    ReplyToId: inbound.replyToId,
-    Timestamp: inbound.timestamp,
-    OriginatingChannel: params.channelId,
-    OriginatingTo: target,
-    CommandAuthorized: true,
-    CommandSource: nativeCommand ? "native" : undefined,
-    CommandTurn: nativeCommand
-      ? {
-          kind: "native",
-          source: "native",
-          authorized: true,
-          body: commandBody,
-        }
-      : undefined,
-    ...mediaPayload,
+    extra: {
+      CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
+      GroupSubject: isGroup
+        ? inbound.threadTitle || inbound.conversation.title || inbound.conversation.id
+        : undefined,
+      GroupChannel: inbound.conversation.kind === "channel" ? inbound.conversation.id : undefined,
+      ThreadLabel: inbound.threadTitle,
+    },
   });
 
-  await runtime.channel.inbound.dispatchReply({
+  await runtime.channel.inbound.dispatch({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
-    recordInboundSession: runtime.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       deliver: async (payload, info) => {
         const text =
@@ -384,6 +382,7 @@ export async function handleQaInbound(params: {
       },
     },
     replyOptions: {
+      allowToolLifecycleWhenProgressHidden: true,
       onPartialReply: async (payload) => {
         await preview.update(payload.text ?? "");
       },

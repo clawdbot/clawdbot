@@ -241,7 +241,10 @@ export function parseArgs(argv) {
     "OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS",
     DEFAULT_MAX_WORKSPACE_REG_FDS,
   );
-  options.invokeTimeoutMs ??= readTimerTimeoutNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
+  options.invokeTimeoutMs ??= readTimerTimeoutNumberEnv(
+    "OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS",
+    30_000,
+  );
   options.sampleDelayMs ??= readTimerTimeoutNumberEnv(
     "OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS",
     1_000,
@@ -335,26 +338,27 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
     agents: {
       defaults: {
         workspace: workspaceDir,
-        memorySearch: {
-          provider: "none",
-          model: "",
-          store: {
-            vector: { enabled: false },
-          },
-          sync: {
-            watch: true,
-            onSessionStart: false,
-            onSearch: false,
-          },
-        },
       },
-      list: [
-        {
-          id: "main",
+      entries: {
+        main: {
           default: true,
           tools: { allow: ["memory_search"] },
         },
-      ],
+      },
+    },
+    memory: {
+      search: {
+        provider: "none",
+        model: "",
+        store: {
+          vector: { enabled: false },
+        },
+        sync: {
+          watch: true,
+          onSessionStart: false,
+          onSearch: false,
+        },
+      },
     },
     plugins: { allow: ["memory-core"] },
     gateway: {

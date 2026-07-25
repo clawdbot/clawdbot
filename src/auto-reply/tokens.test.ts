@@ -312,4 +312,30 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
   });
+
+  it("matches custom tokens with digits", () => {
+    expect(isSilentReplyPrefixText("NOREPLY2", "NOREPLY2")).toBe(true);
+    expect(isSilentReplyPrefixText("NOREPLY", "NOREPLY2")).toBe(false);
+    expect(isSilentReplyPrefixText("NORE", "NOREPLY2")).toBe(false);
+    expect(isSilentReplyPrefixText("NOR", "NOREPLY2")).toBe(false);
+  });
+
+  it("matches custom tokens with hyphens", () => {
+    expect(isSilentReplyPrefixText("NO-ANSWER", "NO-ANSWER")).toBe(true);
+    expect(isSilentReplyPrefixText("NO-AN", "NO-ANSWER")).toBe(true);
+    expect(isSilentReplyPrefixText("NO-", "NO-ANSWER")).toBe(true);
+  });
+
+  it("rejects non-matching prefixes for custom tokens", () => {
+    expect(isSilentReplyPrefixText("HE", "NOREPLY2")).toBe(false);
+    expect(isSilentReplyPrefixText("HELLO", "NO-ANSWER")).toBe(false);
+    expect(isSilentReplyPrefixText("NO-", "NOREPLY2")).toBe(false);
+  });
+
+  it("rejects pure-letter prefixes for punctuated tokens to avoid false suppression", () => {
+    expect(isSilentReplyPrefixText("HE", "HELP-QUIET")).toBe(false);
+    expect(isSilentReplyPrefixText("HELP", "HELP-QUIET")).toBe(false);
+    expect(isSilentReplyPrefixText("HELP-", "HELP-QUIET")).toBe(true);
+    expect(isSilentReplyPrefixText("HELP-QUIET", "HELP-QUIET")).toBe(true);
+  });
 });

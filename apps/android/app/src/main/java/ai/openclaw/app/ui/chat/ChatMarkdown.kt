@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
@@ -74,6 +76,7 @@ import org.commonmark.node.Paragraph
 import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.ThematicBreak
+import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.parser.Parser
 import java.net.URI
 import java.util.Locale
@@ -95,6 +98,7 @@ private val markdownParser: Parser by lazy {
   Parser
     .builder()
     .extensions(extensions)
+    .includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES)
     .build()
 }
 
@@ -103,18 +107,29 @@ private val markdownParser: Parser by lazy {
 fun ChatMarkdown(
   text: String,
   textColor: Color,
+  isStreaming: Boolean = false,
 ) {
-  val document = remember(text) { parseChatMarkdown(text) }
+  val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
   val inlineStyles =
     InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    RenderMarkdownBlocks(
-      start = document.firstChild,
-      textColor = textColor,
-      inlineStyles = inlineStyles,
-      listDepth = 0,
-    )
+    for (block in blocks) {
+      when (block) {
+        is ChatMarkdownSourceBlock.Markdown -> {
+          val document = remember(block.source) { parseChatMarkdown(block.source) }
+          RenderMarkdownBlocks(
+            start = document.firstChild,
+            textColor = textColor,
+            inlineStyles = inlineStyles,
+            listDepth = 0,
+            isStreaming = isStreaming,
+          )
+        }
+        is ChatMarkdownSourceBlock.Math -> ChatMathBlock(latex = block.latex, textColor = textColor)
+        is ChatMarkdownSourceBlock.MathFallback -> ChatMathFallback(latex = block.latex)
+      }
+    }
   }
 }
 
@@ -124,6 +139,7 @@ private fun RenderMarkdownBlocks(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   var node = start
   while (node != null) {
@@ -142,7 +158,14 @@ private fun RenderMarkdownBlocks(
       }
       is FencedCodeBlock -> {
         SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-          ChatCodeBlock(code = current.literal.orEmpty(), language = current.info?.trim()?.ifEmpty { null })
+          ChatCodeBlock(
+            code = current.literal.orEmpty(),
+            language = current.info?.trim()?.ifEmpty { null },
+            // Streaming: an unclosed fence grows on every delta, so keep it plain until the
+            // closing marker arrives. Finalized messages may validly end at EOF without a
+            // closing fence (CommonMark), so completeness comes from stream state, not syntax.
+            isComplete = !isStreaming || current.closingFenceLength != null,
+          )
         }
       }
       is IndentedCodeBlock -> {
@@ -176,6 +199,7 @@ private fun RenderMarkdownBlocks(
               textColor = textColor,
               inlineStyles = inlineStyles,
               listDepth = listDepth,
+              isStreaming = isStreaming,
             )
           }
         }
@@ -186,6 +210,7 @@ private fun RenderMarkdownBlocks(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
       }
       is OrderedList -> {
@@ -194,6 +219,7 @@ private fun RenderMarkdownBlocks(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
       }
       is TableBlock -> {
@@ -258,6 +284,7 @@ private fun RenderBulletList(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   Column(
     modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
@@ -272,6 +299,7 @@ private fun RenderBulletList(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
       }
       item = item.next
@@ -285,6 +313,7 @@ private fun RenderOrderedList(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   Column(
     modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
@@ -300,6 +329,7 @@ private fun RenderOrderedList(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
         index += 1
       }
@@ -315,6 +345,7 @@ private fun RenderListItem(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   var contentStart = item.firstChild
   var marker = markerText
@@ -345,6 +376,7 @@ private fun RenderListItem(
         textColor = textColor,
         inlineStyles = inlineStyles,
         listDepth = listDepth + 1,
+        isStreaming = isStreaming,
       )
     }
   }
@@ -573,7 +605,7 @@ private fun AnnotatedString.Builder.appendLinkNode(
   }
 }
 
-private fun isSafeMarkdownLinkDestination(destination: String): Boolean {
+internal fun isSafeMarkdownLinkDestination(destination: String): Boolean {
   val scheme =
     runCatching { URI(destination).scheme?.lowercase(Locale.US) }
       .getOrNull()
@@ -690,13 +722,13 @@ private fun InlineBase64Image(
   if (image != null) {
     Image(
       bitmap = image,
-      contentDescription = mimeType ?: "image",
+      contentDescription = mimeType ?: nativeString("Image"),
       contentScale = ContentScale.Fit,
       modifier = Modifier.fillMaxWidth(),
     )
   } else if (imageState.failed) {
     Text(
-      text = "Image unavailable",
+      text = nativeString("Image unavailable"),
       modifier = Modifier.padding(vertical = 2.dp),
       style = mobileCaption1,
       color = mobileTextSecondary,

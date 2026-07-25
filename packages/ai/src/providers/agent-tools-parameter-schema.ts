@@ -473,8 +473,8 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
     }
     const key = decodeJsonPointerSegment(segment);
     if (Array.isArray(current)) {
-      const index = Number(key);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+      const index = /^(?:0|[1-9]\d*)$/.test(key) ? Number(key) : -1;
+      if (index < 0 || index >= current.length) {
         return undefined;
       }
       current = current[index];
@@ -815,7 +815,7 @@ function normalizeToolParameterSchemaUncached(
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
-  // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
+  // - xAI's documented tool-schema contract rejects contains-count bounds.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
@@ -969,3 +969,4 @@ export function normalizeToolParameterSchema(
     normalizeToolParameterSchemaUncached(schema, options),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

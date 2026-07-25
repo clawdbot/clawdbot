@@ -132,8 +132,15 @@ function buildSelectBlock(
     return null;
   }
   const [first, second] = parts;
+  if (!first || (parts.length >= 2 && !second)) {
+    return null;
+  }
   const placeholder = parts.length >= 2 ? first : "Choose an option";
-  const choices = parseChoices(parts.length >= 2 ? second : first, SLACK_SELECT_MAX_ITEMS);
+  const choicesText = parts.length >= 2 ? second : first;
+  if (!choicesText) {
+    return null;
+  }
+  const choices = parseChoices(choicesText, SLACK_SELECT_MAX_ITEMS);
   if (choices.length === 0) {
     return null;
   }
@@ -220,6 +227,9 @@ export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayl
     const matchText = match[0];
     const directiveType = match[1];
     const body = match[2];
+    if (!directiveType || !body) {
+      continue;
+    }
     const index = match.index ?? 0;
     const precedingText = text.slice(cursor, index);
     visibleTextParts.push(precedingText);

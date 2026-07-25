@@ -33,17 +33,12 @@ export type {
   InstalledPluginIndexRecord,
   InstalledPluginIndexRefreshReason,
   InstalledPluginInstallRecordInfo,
-  InstalledPluginPackageChannelInfo,
-  InstalledPluginStartupInfo,
   LoadInstalledPluginIndexParams,
   RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
 export { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 export { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
-export {
-  CONFIG_PATH_ACTIVATION_COMPAT_CODE,
-  hasMissingConfigPathActivationMetadata,
-} from "./installed-plugin-index-config-path-scope.js";
+export { hasMissingConfigPathActivationMetadata } from "./installed-plugin-index-config-path-scope.js";
 export { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
 function buildInstalledPluginIndex(
@@ -104,22 +99,6 @@ export function refreshInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams,
 ): InstalledPluginIndex {
   return buildInstalledPluginIndex({ ...params, refreshReason: params.reason }).index;
-}
-
-export function listInstalledPluginRecords(
-  index: InstalledPluginIndex,
-): readonly InstalledPluginIndexRecord[] {
-  return index.plugins;
-}
-
-export function listEnabledInstalledPluginRecords(
-  index: InstalledPluginIndex,
-  config?: OpenClawConfig,
-): readonly InstalledPluginIndexRecord[] {
-  if (!config) {
-    return index.plugins.filter((plugin) => plugin.enabled);
-  }
-  return index.plugins.filter((plugin) => isInstalledPluginEnabled(index, plugin.pluginId, config));
 }
 
 export function getInstalledPluginRecord(

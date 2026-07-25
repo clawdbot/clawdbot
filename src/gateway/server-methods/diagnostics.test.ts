@@ -1,6 +1,8 @@
 /**
  * Tests for gateway diagnostics methods and their request-handler responses.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
@@ -41,7 +43,10 @@ describe("diagnostics gateway methods", () => {
     });
 
     const respond = vi.fn();
-    await diagnosticsHandlers["diagnostics.stability"]({
+    await expectDefined(
+      diagnosticsHandlers["diagnostics.stability"],
+      'diagnosticsHandlers["diagnostics.stability"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "diagnostics.stability", params: {} },
       params: { type: "payload.large", limit: 10 },
       client: null,
@@ -102,7 +107,10 @@ describe("diagnostics gateway methods", () => {
 
   it("rejects invalid stability params", async () => {
     const respond = vi.fn();
-    await diagnosticsHandlers["diagnostics.stability"]({
+    await expectDefined(
+      diagnosticsHandlers["diagnostics.stability"],
+      'diagnosticsHandlers["diagnostics.stability"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "diagnostics.stability", params: {} },
       params: { limit: 0 },
       client: null,

@@ -1,0 +1,69 @@
+title: Channel top-level reply shape
+
+scenario:
+  id: channel-top-level-reply-shape
+  surface: channels
+  coverage:
+    primary:
+      - channels.group-final-reply
+    secondary:
+      - channels.automatic-final-reply
+  objective: Verify a top-level group prompt produces a top-level reply without thread or quote relation metadata.
+  successCriteria:
+    - The reply contains the exact marker.
+    - The normalized reply has neither threadId nor replyToId.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/group-messages.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+    - extensions/qa-lab/src/runtime-api.ts
+  execution:
+    profiles:
+      {
+        "matrix:adapter": 5,
+        "matrix:all": 5,
+        "matrix:fast": 3,
+        "matrix:transport": 4,
+        "slack:adapter": 3,
+        "whatsapp:adapter": 4,
+      }
+    kind: flow
+    summary: Assert portable top-level reply shape while native adapters normalize transport relations.
+    transportPolicy:
+      requireGroupMention: true
+      topLevelReplies: true
+    config:
+      conversationId: qa-routing-top-level
+      expectedMarker: QA-TOP-LEVEL-REPLY-OK
+
+flow:
+  steps:
+    - name: keeps the reply top-level
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            textIncludes: { ref: config.expectedMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: outbound
+        - assert:
+            expr: "!outbound.threadId && (transport.id === 'qa-channel' || !outbound.replyToId)"
+            message:
+              expr: "`expected top-level reply, got threadId=${outbound.threadId ?? '<none>'} replyToId=${outbound.replyToId ?? '<none>'}`"
+      detailsExpr: outbound.text

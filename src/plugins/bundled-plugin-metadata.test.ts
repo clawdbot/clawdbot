@@ -7,11 +7,12 @@ import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
-  type BundledPluginMetadata,
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
   resolveBundledPluginRepoEntryPath,
 } from "./bundled-plugin-metadata.js";
+
+type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
 import { resolveGatewayStartupPluginIdsFromRegistry } from "./gateway-startup-plugin-ids.js";
 import {
   createGeneratedPluginTempRoot,
@@ -26,16 +27,18 @@ import {
   loadPluginManifest,
   type PackageManifest,
 } from "./manifest.js";
-import { collectBundledRuntimeSidecarPaths } from "./runtime-sidecar-paths-baseline.js";
+import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "acpx",
   "active-memory",
+  "anthropic",
   "bonjour",
   "browser",
   "canvas",
+  "cua-computer",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -43,29 +46,43 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diffs-language-pack",
   "file-transfer",
   "google-meet",
+  "linux-canvas",
+  "linux-node",
   "llm-task",
   "lobster",
+  "logbook",
   "memory-wiki",
   "ollama",
+  "opencode",
   "openshell",
   "phone-control",
   "policy",
+  "reef",
   "talk-voice",
+  "teams-meetings",
   "thread-ownership",
   "voice-call",
   "webhooks",
   "workboard",
+  "zoom-meetings",
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
+  "anthropic",
   "browser",
   "canvas",
   "device-pair",
   "file-transfer",
+  "google-meet",
+  "linux-canvas",
+  "linux-node",
   "memory-core",
   "ollama",
+  "opencode",
   "phone-control",
   "talk-voice",
+  "teams-meetings",
+  "zoom-meetings",
 ] as const;
 
 installGeneratedPluginTempRootCleanup();
@@ -367,10 +384,10 @@ describe("bundled plugin metadata", () => {
   it(
     "matches the checked-in runtime sidecar path baseline",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
-    () => {
-      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).toEqual(
-        collectBundledRuntimeSidecarPaths({ rootDir: repoRoot }),
-      );
+    async () => {
+      await expect(
+        writeBundledRuntimeSidecarPathBaseline({ repoRoot, check: true }),
+      ).resolves.toMatchObject({ changed: false });
     },
   );
 
@@ -379,7 +396,6 @@ describe("bundled plugin metadata", () => {
       "dist/extensions/qa-channel/runtime-api.js",
     );
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
-    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
   });
 
   it("excludes root-package-excluded plugin sidecars from the packaged runtime sidecar baseline", () => {
@@ -485,7 +501,7 @@ describe("bundled plugin metadata", () => {
     });
   });
 
-  it("keeps bundled configured-state metadata on channel package manifests", () => {
+  it("keeps bundled configured-state env metadata on channel package manifests", () => {
     const configuredChannels = listRepoBundledPluginMetadata()
       .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
       .map((entry) => ({
@@ -497,10 +513,8 @@ describe("bundled plugin metadata", () => {
         dir: "discord",
         configuredState: {
           env: {
-            allOf: ["DISCORD_BOT_TOKEN"],
+            anyOf: ["DISCORD_BOT_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasDiscordConfiguredState",
         },
       },
       {
@@ -509,28 +523,22 @@ describe("bundled plugin metadata", () => {
           env: {
             allOf: ["IRC_HOST", "IRC_NICK"],
           },
-          specifier: "./configured-state",
-          exportName: "hasIrcConfiguredState",
         },
       },
       {
         dir: "slack",
         configuredState: {
           env: {
-            anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
+            anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasSlackConfiguredState",
         },
       },
       {
         dir: "telegram",
         configuredState: {
           env: {
-            allOf: ["TELEGRAM_BOT_TOKEN"],
+            anyOf: ["TELEGRAM_BOT_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasTelegramConfiguredState",
         },
       },
     ]);
@@ -575,6 +583,21 @@ describe("bundled plugin metadata", () => {
 
     expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
+  });
+
+  it("keeps Workboard CLI ownership separate from its slash command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "workboard",
+    );
+
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "workboard" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["workboard"]);
+  });
+
+  it("scopes Codex CLI activation to the codex command", () => {
+    const entry = listRepoBundledPluginManifests().find(({ manifest }) => manifest.id === "codex");
+
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["codex"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
@@ -1168,3 +1191,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

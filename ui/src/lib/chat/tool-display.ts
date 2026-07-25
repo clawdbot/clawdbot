@@ -29,7 +29,7 @@ type SharedToolDisplayConfig = {
   tools?: Record<string, SharedToolDisplaySpec>;
 };
 
-export type ToolDisplay = {
+type ToolDisplay = {
   name: string;
   icon: ChatToolIconName;
   title: string;
@@ -39,7 +39,7 @@ export type ToolDisplay = {
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
-export type ChatToolIconName = string;
+type ChatToolIconName = string;
 
 const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
   "🧩": "puzzle",
@@ -182,6 +182,16 @@ function sanitizeCanvasEntryUrl(
   }
 }
 
+/**
+ * True when the preview entry URL points at a hosted Canvas document rather
+ * than an externally allowed embed URL. Prompt authority (widget sendPrompt)
+ * is granted only to internal Canvas documents.
+ */
+export function isInternalCanvasEntryUrl(entryUrl: string | undefined): boolean {
+  const rawEntryUrl = entryUrl?.trim();
+  return Boolean(rawEntryUrl && sanitizeCanvasEntryUrl(rawEntryUrl, false));
+}
+
 export function resolveCanvasIframeUrl(
   entryUrl: string | undefined,
   canvasPluginSurfaceUrl?: string | null,
@@ -219,7 +229,16 @@ export function resolveCanvasIframeUrl(
   }
 }
 
-export function resolveEmbedSandbox(mode: EmbedSandboxMode | null | undefined): string {
+export function resolveEmbedSandbox(
+  mode: EmbedSandboxMode | null | undefined,
+  ceiling?: "strict" | "scripts",
+): string {
+  if (ceiling === "strict" || (ceiling === "scripts" && mode === "strict")) {
+    return "";
+  }
+  if (ceiling === "scripts") {
+    return "allow-scripts";
+  }
   switch (mode) {
     case "strict":
       return "";

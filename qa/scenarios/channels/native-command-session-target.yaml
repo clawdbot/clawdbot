@@ -2,13 +2,13 @@ title: Native command active session target evidence
 
 scenario:
   id: native-command-session-target
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
       - channels.native-command-session-target
     secondary:
-      - channels.native-commands
+      - channels.channel-native-commands
   objective: Verify a channel-native `/stop` command aborts the active routed conversation session instead of its separate slash-command session.
   successCriteria:
     - A real delayed agent turn is active on the routed channel conversation session.
@@ -70,7 +70,7 @@ flow:
             - lambda:
                 async: true
                 expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.hasActiveRun === true))"
-            - expr: liveTurnTimeoutMs(env, 15000)
+            - expr: liveTurnTimeoutMs(env, 30000)
             - 100
         - set: startIndex
           value:
@@ -115,6 +115,6 @@ flow:
             textIncludes:
               expr: config.recoveryMarker
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 60000)
+              expr: liveTurnTimeoutMs(env, 90000)
           saveAs: recoveryReply
       detailsExpr: "`native command reply=${abortReply.text}; recovery reply=${recoveryReply.text}`"

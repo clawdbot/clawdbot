@@ -25,8 +25,15 @@ export function sha256HexPrefix(input: DigestInput, length: number): string {
 
 export async function sha256File(filePath: string): Promise<string> {
   const digest = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) {
-    digest.update(chunk);
+  try {
+    for await (const chunk of createReadStream(filePath)) {
+      digest.update(chunk);
+    }
+  } catch (err) {
+    throw new Error(
+      `Failed to hash file ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
   }
   return digest.digest("hex");
 }

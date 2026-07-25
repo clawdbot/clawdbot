@@ -21,6 +21,7 @@
     systemPrompt,
     tools,
     renderedTools,
+    warning,
   } = data;
 
   // ============================================================
@@ -639,6 +640,25 @@
     return p;
   }
 
+  function truncateUtf16Safe(s, maxLen) {
+    const limit = Math.max(0, Math.floor(maxLen));
+    if (s.length <= limit) {
+      return s;
+    }
+
+    let end = limit;
+    if (end > 0) {
+      const lastCodeUnit = s.charCodeAt(end - 1);
+      const nextCodeUnit = s.charCodeAt(end);
+      const endsWithHighSurrogate = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff;
+      const continuesWithLowSurrogate = nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff;
+      if (endsWithHighSurrogate && continuesWithLowSurrogate) {
+        end -= 1;
+      }
+    }
+    return s.slice(0, end);
+  }
+
   function formatToolCall(name, args) {
     switch (name) {
       case "read": {
@@ -659,11 +679,8 @@
         return `[edit: ${shortenPath(String(args.path || args.file_path || ""))}]`;
       case "bash": {
         const rawCmd = String(args.command || "");
-        const cmd = rawCmd
-          .replace(/[\n\t]/g, " ")
-          .trim()
-          .slice(0, 50);
-        return `[bash: ${cmd}${rawCmd.length > 50 ? "..." : ""}]`;
+        const cmd = rawCmd.replace(/[\n\t]/g, " ").trim();
+        return `[bash: ${truncateUtf16Safe(cmd, 50)}${rawCmd.length > 50 ? "..." : ""}]`;
       }
       case "grep":
         return `[grep: /${args.pattern || ""}/ in ${shortenPath(String(args.path || "."))}]`;
@@ -672,8 +689,9 @@
       case "ls":
         return `[ls: ${shortenPath(String(args.path || "."))}]`;
       default: {
-        const argsStr = JSON.stringify(args).slice(0, 40);
-        return `[${name}: ${argsStr}${JSON.stringify(args).length > 40 ? "..." : ""}]`;
+        const argsJson = JSON.stringify(args);
+        const argsStr = truncateUtf16Safe(argsJson, 40);
+        return `[${name}: ${argsStr}${argsJson.length > 40 ? "..." : ""}]`;
       }
     }
   }
@@ -725,7 +743,7 @@
     if (s.length <= maxLen) {
       return s;
     }
-    return s.slice(0, maxLen) + "...";
+    return truncateUtf16Safe(s, maxLen) + "...";
   }
 
   /**
@@ -897,7 +915,7 @@
     setTimeout(() => {
       const activeNode = container.querySelector(".tree-node.active");
       if (activeNode) {
-        activeNode.scrollIntoView({ block: "nearest" });
+        activeNode.scrollIntoView?.({ block: "nearest" });
       }
     }, 0);
   }
@@ -1567,7 +1585,11 @@
       msgParts.push(`${globalStats.branchSummaries} branch summaries`);
     }
 
-    let html = `
+    let html = "";
+    if (warning) {
+      html += `<div class="export-warning">${escapeHtml(warning)}</div>`;
+    }
+    html += `
           <div class="header">
             <h1>Session: ${escapeHtml(header?.id || "unknown")}</h1>
             <div class="help-bar">
@@ -1718,7 +1740,7 @@
         const scrollTargetId = scrollToEntryId || targetId;
         const targetEl = document.getElementById(`entry-${scrollTargetId}`);
         if (targetEl) {
-          targetEl.scrollIntoView({ block: "center" });
+          targetEl.scrollIntoView?.({ block: "center" });
           // Briefly highlight the target message
           if (scrollToEntryId) {
             targetEl.classList.add("highlight");

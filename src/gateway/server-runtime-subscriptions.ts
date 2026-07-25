@@ -1,9 +1,21 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
+import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
+import { getRuntimeConfig } from "../config/io.js";
+import {
+  clearAgentRunContext,
+  onAgentAuditEvent,
+  onAgentRuntimeEvent,
+} from "../infra/agent-events.js";
+import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import {
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
@@ -15,9 +27,29 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { createSessionCompanion } from "./session-companion.js";
+import { createSessionObserver } from "./session-observer.js";
+
+function dispatchEventHandler<TEvent>(params: {
+  loadHandler: () => Promise<(event: TEvent) => unknown>;
+  event: TEvent;
+  log: SubsystemLogger;
+  failureMessage: string;
+  context: Record<string, unknown>;
+}) {
+  void params
+    .loadHandler()
+    .then((handler) => handler(params.event))
+    .catch((error: unknown) => {
+      params.log.warn(params.failureMessage, { ...params.context, error });
+    });
+}
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
+  log: SubsystemLogger;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   broadcastToConnIds: (
     event: string,
@@ -34,7 +66,35 @@ export function startGatewayEventSubscriptions(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
 }) {
-  const getAgentEventHandler = createLazyPromise(
+  // The worker always runs retention maintenance. audit.enabled only controls
+  // producer subscriptions, so disabling collection cannot strand expired rows.
+  const runtimeConfig = getRuntimeConfig();
+  const auditEnabled = isAuditLedgerEnabled(runtimeConfig);
+  const auditMessageMode = resolveAuditMessageMode(runtimeConfig);
+  const auditRecorder = createAuditEventRecorder({
+    messageMode: auditEnabled ? auditMessageMode : "off",
+  });
+  const sessionObserver = createSessionObserver({
+    getConfig: getRuntimeConfig,
+    subscribers: params.sessionMessageSubscribers,
+    sessionEventSubscribers: params.sessionEventSubscribers,
+    broadcastToConnIds: params.broadcastToConnIds,
+  });
+  const sessionCompanion = createSessionCompanion({
+    getConfig: getRuntimeConfig,
+    sessionObserver,
+  });
+  const unsubscribePrivateAuditEvents = auditEnabled
+    ? onAgentAuditEvent(auditRecorder.record)
+    : undefined;
+  const unsubscribeToolAuditEvents = auditEnabled
+    ? onTrustedToolExecutionEvent(auditRecorder.recordTool)
+    : undefined;
+  const unsubscribeMessageAuditEvents =
+    auditEnabled && auditMessageMode !== "off"
+      ? onTrustedMessageAuditEvent(auditRecorder.recordMessage)
+      : undefined;
+  const agentEventHandlerLoader = createLazyPromiseLoader(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
       return Promise.all([import("./server-chat.js"), import("./server-session-key.js")]).then(
@@ -50,6 +110,14 @@ export function startGatewayEventSubscriptions(params: {
             toolEventRecipients: params.toolEventRecipients,
             sessionEventSubscribers: params.sessionEventSubscribers,
             sessionMessageSubscribers: params.sessionMessageSubscribers,
+            updateRunToolErrorSummary: ({ runId, clientRunId, summary }) => {
+              for (const candidateRunId of new Set([runId, clientRunId])) {
+                const entry = params.chatAbortControllers.get(candidateRunId);
+                if (entry) {
+                  entry.toolErrorSummary = summary;
+                }
+              }
+            },
             clearTrackedActiveRun: ({ runId, clientRunId }) => {
               const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
               for (const candidateRunId of candidateRunIds) {
@@ -143,11 +211,18 @@ export function startGatewayEventSubscriptions(params: {
             },
             resolveActiveLifecycleGenerationForRun: (runId) =>
               params.chatAbortControllers.get(runId)?.lifecycleGeneration,
+            resolveSessionActiveRunState: (session) =>
+              resolveVisibleActiveSessionRunState({
+                context: params,
+                ...session,
+                defaultAgentId: resolveDefaultAgentId(getRuntimeConfig()),
+              }),
           }),
       );
     },
     { cacheRejections: true },
   );
+  const getAgentEventHandler = agentEventHandlerLoader.load;
 
   const getSessionEventsModule = createLazyPromise(() => import("./server-session-events.js"), {
     cacheRejections: true,
@@ -178,18 +253,25 @@ export function startGatewayEventSubscriptions(params: {
         createLifecycleEventBroadcastHandler({
           broadcastToConnIds: params.broadcastToConnIds,
           sessionEventSubscribers: params.sessionEventSubscribers,
+          chatAbortControllers: params.chatAbortControllers,
         }),
     );
     return lifecycleEventHandlerPromise;
   };
 
-  const agentUnsub = onAgentEvent((evt) => {
+  const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+    sessionObserver.handleEvent(evt);
+    if (auditEnabled) {
+      auditRecorder.record(evt);
+    }
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
         : undefined;
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       for (const candidateRunId of candidateRunIds) {
@@ -209,7 +291,9 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     } else if (lifecyclePhase === "start") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();
@@ -226,25 +310,101 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     }
-    void getAgentEventHandler().then((handler) => handler(evt));
+    dispatchEventHandler({
+      loadHandler: getAgentEventHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Agent event dispatch failed",
+      context: { runId: evt.runId, stream: evt.stream },
+    });
   });
+  const agentUnsub = async () => {
+    unsubscribeAgentEvents();
+    sessionCompanion.dispose();
+    sessionObserver.dispose();
+    unsubscribePrivateAuditEvents?.();
+    unsubscribeToolAuditEvents?.();
+    unsubscribeMessageAuditEvents?.();
+    await agentEventHandlerLoader
+      .peek()
+      ?.then((handler) => handler.dispose())
+      .catch(() => undefined);
+    await auditRecorder.stop();
+  };
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
   });
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    void getTranscriptUpdateHandler().then((handler) => handler(evt));
+    dispatchEventHandler({
+      loadHandler: getTranscriptUpdateHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Transcript update dispatch failed",
+      context: { sessionKey: evt.sessionKey },
+    });
   });
 
   const lifecycleUnsub = onSessionLifecycleEvent((evt) => {
-    void getLifecycleEventHandler().then((handler) => handler(evt));
+    dispatchEventHandler({
+      loadHandler: getLifecycleEventHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Lifecycle event dispatch failed",
+      context: { sessionKey: evt.sessionKey },
+    });
   });
 
+  let taskObserverDisposed = false;
+  const taskObservers = {
+    onEvent: (event: TaskRegistryObserverEvent) => {
+      let payload: TaskEventPayload;
+      switch (event.kind) {
+        case "upserted":
+          payload = { action: "upserted", task: mapTaskSummary(event.task) };
+          break;
+        case "deleted":
+          payload = { action: "deleted", taskId: event.taskId };
+          break;
+        case "restored":
+          payload = { action: "restored" };
+          break;
+      }
+      params.broadcast("task", payload, { dropIfSlow: true });
+    },
+  };
+  const taskObserverRuntimePromise = import("../tasks/task-registry.store.js").then((module) => {
+    if (!taskObserverDisposed) {
+      module.configureTaskRegistryRuntime({ observers: taskObservers });
+    }
+    return module;
+  });
+  void taskObserverRuntimePromise.catch((error: unknown) => {
+    params.log.warn("Task registry observer registration failed", { error });
+  });
+  // The observer slot is a process-wide singleton. Cleanup returns its promise
+  // so shutdown can await it, and only clears the slot when it still holds
+  // this subscription's observer — a replacement gateway may have registered
+  // its own observer before a stale deferred dispose runs.
+  const taskUnsub = () => {
+    taskObserverDisposed = true;
+    return taskObserverRuntimePromise
+      .then((module) => {
+        if (module.getTaskRegistryObservers() === taskObservers) {
+          module.configureTaskRegistryRuntime({ observers: null });
+        }
+      })
+      .catch(() => undefined);
+  };
+
   return {
+    sessionCompanion,
+    sessionObserver,
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
+    taskUnsub,
   };
 }

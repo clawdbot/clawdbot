@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listExplicitlyDisabledChannelIdsForConfig } from "../../../channels/config-presence.js";
+import type { AmbientEnvTriggerPolicy } from "../../../channels/config-presence.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import {
@@ -23,7 +24,7 @@ import { isSafeChannelEnvVarTriggerName } from "../../../secrets/channel-env-var
 
 const CHANNEL_PLUGIN_BLOCKERS_CHECK_ID = "core/doctor/channel-plugin-blockers";
 
-export type ChannelPluginBlockerHit = {
+type ChannelPluginBlockerHit = {
   /** Normalized configured channel id whose backing plugin is unavailable. */
   channelId: string;
   /** Plugin id that would provide the configured channel. */
@@ -41,36 +42,48 @@ export type ChannelPluginBlockerHit = {
     | "not in allowlist";
 };
 
+type ScanConfiguredChannelPluginBlockerOptions = {
+  manifestRecords?: readonly PluginManifestRecord[];
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+};
+
 /** Find configured channel ids whose backing plugins cannot activate. */
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
   activationSourceConfig: OpenClawConfig = cfg,
+  options: ScanConfiguredChannelPluginBlockerOptions = {},
 ): ChannelPluginBlockerHit[] {
   const explicitChannelIds = listExplicitConfiguredChannelIdsForConfig(cfg)
     .map((channelId) => normalizeOptionalLowercaseString(channelId))
     .filter((channelId): channelId is string => Boolean(channelId));
   const sourcePluginsConfig = normalizePluginsConfig(activationSourceConfig.plugins);
   const effectivePluginsConfig = normalizePluginsConfig(cfg.plugins);
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: cfg,
-    env,
-    includeDisabled: true,
-  });
-  const manifestEnvTriggers = listManifestEnvConfiguredChannelTriggers(registry.plugins, env);
+  const manifestRecords =
+    options.manifestRecords ??
+    loadPluginManifestRegistryForPluginRegistry({
+      config: cfg,
+      env,
+      includeDisabled: true,
+    }).plugins;
+  const packageEnvTriggers =
+    options.ambientEnvTriggers === "suppress"
+      ? new Map<string, Map<string, Set<string>>>()
+      : listPackageEnvConfiguredChannelTriggers(manifestRecords, env);
   const policyEntries = resolveConfiguredChannelPresencePolicy({
     config: cfg,
     activationSourceConfig,
     env,
     includePersistedAuthState: false,
-    manifestRecords: registry.plugins,
+    ambientEnvTriggers: options.ambientEnvTriggers,
+    manifestRecords,
   });
-  // A manifest env match identifies one owner. Do not widen the same ambient env signal to
+  // A package env match identifies one owner. Do not widen the same ambient env signal to
   // sibling owners that cannot consume that credential.
   const policyChannelIds = policyEntries
     .filter(
       (entry) =>
-        !manifestEnvTriggers.has(entry.channelId) ||
+        !packageEnvTriggers.has(entry.channelId) ||
         entry.sources.some((source) => source !== "env" && source !== "manifest-env"),
     )
     .map((entry) => entry.channelId);
@@ -81,9 +94,9 @@ export function scanConfiguredChannelPluginBlockers(
   for (const channelId of listExplicitlyDisabledChannelIdsForConfig(cfg)) {
     const normalizedChannelId = normalizeOptionalLowercaseString(channelId) ?? channelId;
     genericChannelIds.delete(normalizedChannelId);
-    manifestEnvTriggers.delete(normalizedChannelId);
+    packageEnvTriggers.delete(normalizedChannelId);
   }
-  if (genericChannelIds.size === 0 && manifestEnvTriggers.size === 0) {
+  if (genericChannelIds.size === 0 && packageEnvTriggers.size === 0) {
     return [];
   }
   const hits: ChannelPluginBlockerHit[] = [];
@@ -122,7 +135,7 @@ export function scanConfiguredChannelPluginBlockers(
   };
 
   for (const channelId of genericChannelIds) {
-    const owners = registry.plugins.filter((plugin) =>
+    const owners = manifestRecords.filter((plugin) =>
       plugin.channels.some(
         (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
       ),
@@ -143,8 +156,8 @@ export function scanConfiguredChannelPluginBlockers(
     addHits(channelId, ownerStates);
   }
 
-  for (const [channelId, triggers] of manifestEnvTriggers) {
-    const channelOwnerStates = registry.plugins
+  for (const [channelId, triggers] of packageEnvTriggers) {
+    const channelOwnerStates = manifestRecords
       .filter((plugin) =>
         plugin.channels.some(
           (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
@@ -173,7 +186,7 @@ export function scanConfiguredChannelPluginBlockers(
   return hits;
 }
 
-function listManifestEnvConfiguredChannelTriggers(
+function listPackageEnvConfiguredChannelTriggers(
   plugins: readonly PluginManifestRecord[],
   env: NodeJS.ProcessEnv,
 ): Map<string, Map<string, Set<string>>> {
@@ -184,32 +197,39 @@ function listManifestEnvConfiguredChannelTriggers(
         .map((channelId) => normalizeOptionalLowercaseString(channelId))
         .filter((channelId): channelId is string => Boolean(channelId)),
     );
-    for (const [rawChannelId, envVars] of Object.entries(plugin.channelEnvVars ?? {})) {
-      const channelId = normalizeOptionalLowercaseString(rawChannelId);
-      if (!channelId || !ownedChannelIds.has(channelId)) {
-        continue;
+    const channelId = normalizeOptionalLowercaseString(plugin.packageChannel?.id);
+    if (!channelId || !ownedChannelIds.has(channelId)) {
+      continue;
+    }
+    const channelEnv = plugin.packageChannel?.configuredState?.env;
+    const allOf = channelEnv?.allOf ?? [];
+    const anyOf = channelEnv?.anyOf ?? [];
+    if (allOf.length === 0 && anyOf.length === 0) {
+      continue;
+    }
+    let triggers = triggersByChannelId.get(channelId);
+    if (!triggers) {
+      triggers = new Map();
+      triggersByChannelId.set(channelId, triggers);
+    }
+    const hasEnvValue = (envVar: string) => {
+      if (!isSafeChannelEnvVarTriggerName(envVar)) {
+        return false;
       }
-      for (const envVar of envVars) {
-        if (!isSafeChannelEnvVarTriggerName(envVar)) {
-          continue;
-        }
-        const value = env[envVar] ?? env[envVar.toUpperCase()];
-        if (typeof value !== "string" || value.trim().length === 0) {
-          continue;
-        }
-        let triggers = triggersByChannelId.get(channelId);
-        if (!triggers) {
-          triggers = new Map();
-          triggersByChannelId.set(channelId, triggers);
-        }
-        const trigger = envVar.trim().toUpperCase();
-        let ownerIds = triggers.get(trigger);
-        if (!ownerIds) {
-          ownerIds = new Set();
-          triggers.set(trigger, ownerIds);
-        }
-        ownerIds.add(plugin.id);
+      const value = env[envVar] ?? env[envVar.toUpperCase()];
+      return typeof value === "string" && value.trim().length > 0;
+    };
+    if (!allOf.every(hasEnvValue) || (anyOf.length > 0 && !anyOf.some(hasEnvValue))) {
+      continue;
+    }
+    for (const envVar of [...allOf, ...anyOf].filter(hasEnvValue)) {
+      const trigger = envVar.trim().toUpperCase();
+      let ownerIds = triggers.get(trigger);
+      if (!ownerIds) {
+        ownerIds = new Set();
+        triggers.set(trigger, ownerIds);
       }
+      ownerIds.add(plugin.id);
     }
   }
   return triggersByChannelId;

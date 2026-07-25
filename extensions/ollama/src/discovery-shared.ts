@@ -5,10 +5,7 @@ import type {
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
-/**
- * Provider config input type — partial config without required `models`.
- * Replaces the deprecated `openclaw/plugin-sdk/config-types` import.
- */
+/** Provider config input type — partial config without required `models`. */
 type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
   models?: ModelDefinitionConfig[];
 };
@@ -132,6 +129,9 @@ function isIpv4PrivateRange(host: string): boolean {
     return false;
   }
   const [a, b] = octets;
+  if (a === undefined || b === undefined) {
+    return false;
+  }
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
@@ -165,7 +165,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
 
 const HOSTED_OLLAMA_CLOUD_HOSTNAMES = new Set(["ollama.com", "api.ollama.com"]);
 
-export function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
+function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
   if (!baseUrl) {
     return false;
   }

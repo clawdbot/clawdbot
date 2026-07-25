@@ -21,6 +21,7 @@ type ProcessController = {
 
 const LOCAL_TUI_SUBCOMMANDS = new Set(["chat", "terminal", "tui"]);
 const WHATSAPP_RESPONSIVENESS_CHECK_ID = "core/doctor/whatsapp-responsiveness";
+const LOCAL_TUI_PROCESS_PROBE_TIMEOUT_MS = 1_000;
 
 function tokenizeCommandLine(command: string): string[] {
   return command.trim().split(/\s+/u).filter(Boolean);
@@ -56,13 +57,14 @@ function parsePsPidLine(line: string): LocalTuiProcess | null {
 }
 
 /** Lists local OpenClaw TUI processes that can contend with gateway responsiveness. */
-export function listLocalTuiProcesses(): LocalTuiProcess[] {
+function listLocalTuiProcesses(): LocalTuiProcess[] {
   if (process.platform === "win32") {
     return [];
   }
   const ps = spawnSync("ps", ["-axo", "pid=,command="], {
     encoding: "utf8",
-    timeout: 1000,
+    killSignal: "SIGKILL",
+    timeout: LOCAL_TUI_PROCESS_PROBE_TIMEOUT_MS,
   });
   if (ps.error || ps.status !== 0 || typeof ps.stdout !== "string") {
     return [];
@@ -143,7 +145,7 @@ function isProcessAlive(controller: ProcessController, pid: number): boolean {
 }
 
 /** Terminates local TUI processes with SIGTERM, then SIGKILL for remaining pids. */
-export async function terminateLocalTuiProcesses(params: {
+async function terminateLocalTuiProcesses(params: {
   processes: LocalTuiProcess[];
   controller?: ProcessController;
   graceMs?: number;
@@ -180,6 +182,15 @@ export async function terminateLocalTuiProcesses(params: {
     }
   }
   return { stopped, failed };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorWhatsappResponsivenessTestApi")
+  ] = {
+    listLocalTuiProcesses,
+    terminateLocalTuiProcesses,
+  };
 }
 
 /** Emits WhatsApp responsiveness warnings and optionally stops contending local TUI clients. */

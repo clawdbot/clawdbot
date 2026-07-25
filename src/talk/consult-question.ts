@@ -5,6 +5,7 @@
  * pulling human-readable questions/results out of provider-owned payloads.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
 
 const REALTIME_VOICE_CONSULT_QUESTION_STOPWORDS = new Set([
@@ -166,5 +167,5 @@ function limitSpeakableRealtimeVoiceToolResult(
   }
   // Reserve space for the marker so callers can keep audio replies under a
   // provider or UX limit without losing the truncation signal.
-  return `${trimmed.slice(0, Math.max(0, maxChars - 16)).trimEnd()} [truncated]`;
+  return `${truncateUtf16Safe(trimmed, Math.max(0, maxChars - 16)).trimEnd()} [truncated]`;
 }

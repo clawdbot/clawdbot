@@ -1,9 +1,9 @@
 // Stuck session recovery runtime tests cover recovery inspection and event output.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { saveCronStore } from "../cron/store.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const mocks = vi.hoisted(() => ({
   abortEmbeddedAgentRun: vi.fn(),
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn(),
   resolveActiveEmbeddedRunHandleSessionId: vi.fn(),
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile: vi.fn(),
+  resolveEmbeddedAgentReplyRunPhase: vi.fn(),
   resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
   waitForEmbeddedAgentRunEnd: vi.fn(),
   getDiagnosticSessionActivitySnapshot: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
   resolveActiveEmbeddedRunHandleSessionId: mocks.resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile:
     mocks.resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
+  resolveEmbeddedAgentReplyRunPhase: mocks.resolveEmbeddedAgentReplyRunPhase,
   waitForEmbeddedAgentRunEnd: mocks.waitForEmbeddedAgentRunEnd,
 }));
 
@@ -102,6 +104,7 @@ function resetMocks() {
   mocks.resolveActiveEmbeddedRunSessionIdBySessionFile.mockReset();
   mocks.resolveActiveEmbeddedRunHandleSessionId.mockReset();
   mocks.resolveActiveEmbeddedRunHandleSessionIdBySessionFile.mockReset();
+  mocks.resolveEmbeddedAgentReplyRunPhase.mockReset();
   mocks.resolveEmbeddedSessionLane.mockClear();
   mocks.waitForEmbeddedAgentRunEnd.mockReset();
   mocks.getDiagnosticSessionActivitySnapshot.mockReset();
@@ -286,10 +289,12 @@ describe("stuck session recovery", () => {
   });
 
   it("logs stopped cron context when aborting an active embedded run", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-recovery-context-",
+    });
+    const tempDir = openClawState.stateDir;
     try {
-      process.env.OPENCLAW_STATE_DIR = tempDir;
       await saveCronStore(path.join(tempDir, "cron", "jobs.json"), {
         version: 1,
         jobs: [
@@ -327,12 +332,7 @@ describe("stuck session recovery", () => {
         allowActiveAbort: true,
       });
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
 
     expect(warnLogMessages()).toEqual([
@@ -445,6 +445,35 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it("keeps the lane while reply work waits for deferred maintenance", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("waiting_for_deferred_maintenance");
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 928_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "deferred_maintenance_wait",
+      activeSessionId: "queued-reply-session",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session reason=deferred_maintenance_wait",
+    ]);
+  });
+
   it("releases the session lane when abort+drain succeeds but queued messages remain (ghost run + queued messages)", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("ghost-run-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
@@ -544,6 +573,109 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
+    ]);
+  });
+
+  it("releases stale unregistered lane work after the diagnostic abort floor", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 1,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "unregistered-work-session",
+      sessionKey: "agent:main:main",
+      ageMs: 300_000,
+      queueDepth: 0,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=released action=release_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=stale_lane_task released=1 queuedCount=1",
+    ]);
+  });
+
+  it("does not release stale unregistered lane work when a fresh task appeared", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 1,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+    mocks.getCommandLaneActiveTaskIds.mockReturnValueOnce([101]).mockReturnValueOnce([202]);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "unregistered-work-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 0,
+    });
+
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
+    ]);
+  });
+
+  it("waits for the compaction safety window before releasing unregistered lane work", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 1,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "unregistered-work-session",
+      sessionKey: "agent:main:main",
+      ageMs: 300_000,
+      queueDepth: 0,
+      compactionSafetyTimeoutMs: 600_000,
+    });
+
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
+    ]);
+
+    mocks.diag.warn.mockClear();
+    mocks.resetCommandLane.mockClear();
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "unregistered-work-session",
+      sessionKey: "agent:main:main",
+      ageMs: 615_000,
+      queueDepth: 0,
+      compactionSafetyTimeoutMs: 600_000,
+    });
+
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=released action=release_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=stale_lane_task released=1 queuedCount=1",
     ]);
   });
 

@@ -1,6 +1,6 @@
 // Memory Host SDK module implements batch http behavior.
+import { retryAsync } from "@openclaw/retry";
 import { postJson } from "./post-json.js";
-import { retryAsync } from "./retry-utils.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
 // JSON POST helper for batch APIs with provider-style transient retry.

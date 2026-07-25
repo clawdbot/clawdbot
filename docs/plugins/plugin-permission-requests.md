@@ -63,7 +63,6 @@ export default definePluginEntry({
               ? ["allow-once", "deny"]
               : ["allow-once", "allow-always", "deny"],
           timeoutMs: 120_000,
-          timeoutBehavior: "deny",
           onResolution(decision) {
             console.log(`deploy approval resolved: ${decision}`);
           },
@@ -77,7 +76,7 @@ export default definePluginEntry({
 Write prompt text for the person who will approve the action:
 
 - Keep `title` short and action-focused; the Gateway caps it at 80 characters.
-- Keep `description` specific and bounded; the Gateway caps it at 256
+- Keep `description` specific and bounded; the Gateway caps it at 512
   characters.
 - Include the action, target, and risk. Do not include secrets, tokens, or
   private payloads that should not appear in chat approval surfaces.
@@ -99,9 +98,14 @@ available approval surfaces, and waits for a decision.
 | `allow-once`      | The current call continues.                                               |
 | `allow-always`    | The current call continues and the decision is passed to the plugin.      |
 | `deny`            | The call is blocked with a denied tool result.                            |
-| Timeout           | The call is blocked unless `timeoutBehavior` is `"allow"`.                |
+| Timeout           | The call is blocked.                                                      |
 | Cancellation      | The call is blocked when the run is aborted.                              |
 | No approval route | The call is blocked because no connected approval surface can resolve it. |
+
+Only the exact `allow-once` and `allow-always` decisions permitted by the
+request allow execution. Unknown, malformed, mismatched, missing, and timed-out
+decisions fail closed. The legacy `timeoutBehavior` field remains accepted for
+plugin compatibility but is deprecated and ignored; do not set it in new hooks.
 
 `allow-always` is only durable when the requesting plugin or runtime implements
 that persistence. For ordinary `before_tool_call.requireApproval` hooks,

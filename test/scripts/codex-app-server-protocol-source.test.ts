@@ -2,14 +2,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { stageCodexAppServerProtocolArtifacts } from "../../scripts/lib/codex-app-server-protocol-artifacts.js";
 import {
   buildCodexProtocolExportArgs,
   canonicalizeCodexAppServerProtocolJson,
   formatCodexAppServerProtocolJsonText,
+  readCargoWorkspacePackageVersion,
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
   resolveCodexProtocolPnpmCommand,
+  validateCodexProtocolSourceVersion,
   validateCodexProtocolGenerationHeadroom,
 } from "../../scripts/lib/codex-app-server-protocol-source.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -25,7 +28,87 @@ afterEach(() => {
   }
 });
 
+describe("Codex app-server generated artifact staging", () => {
+  it("copies JSON bytes and normalizes nested TypeScript files in one pass", async () => {
+    const sourceRoot = createTempDir("openclaw-protocol-artifacts-source-");
+    const targetRoot = createTempDir("openclaw-protocol-artifacts-target-");
+    const typescriptRoot = path.join(targetRoot, "typescript");
+    const jsonRoot = path.join(targetRoot, "json");
+    const rootTypeScript = [
+      'import type { Root } from "./Root";',
+      "export type { Parent } from '../Parent.js';",
+      'export * as v2 from "./v2.js";',
+      "export type Nullable = string | null | null;",
+      "",
+    ].join("\n");
+    const nestedTypeScript = 'export type { Shared } from "../Shared";\n';
+    const json = '{\n  "z": 1,\n  "a": 2\n}\n';
+    fs.mkdirSync(path.join(sourceRoot, "v2"), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, "index.ts"), rootTypeScript);
+    fs.writeFileSync(path.join(sourceRoot, "v2/Thing.ts"), nestedTypeScript);
+    fs.writeFileSync(path.join(sourceRoot, "v2/Thing.json"), json);
+    fs.writeFileSync(path.join(sourceRoot, "README.md"), "ignored\n");
+
+    await stageCodexAppServerProtocolArtifacts(sourceRoot, { jsonRoot, typescriptRoot });
+
+    expect(fs.readFileSync(path.join(typescriptRoot, "index.ts"), "utf8")).toBe(
+      [
+        'import type { Root } from "./Root.js";',
+        "export type { Parent } from '../Parent.js';",
+        'export * as v2 from "./v2/index.js";',
+        "export type Nullable = string | null;",
+        "",
+      ].join("\n"),
+    );
+    expect(fs.readFileSync(path.join(typescriptRoot, "v2/Thing.ts"), "utf8")).toBe(
+      'export type { Shared } from "../Shared.js";\n',
+    );
+    expect(fs.readFileSync(path.join(jsonRoot, "v2/Thing.json"), "utf8")).toBe(json);
+    expect(fs.existsSync(path.join(typescriptRoot, "README.md"))).toBe(false);
+    expect(fs.existsSync(path.join(jsonRoot, "README.md"))).toBe(false);
+    expect(fs.readFileSync(path.join(sourceRoot, "index.ts"), "utf8")).toBe(rootTypeScript);
+  });
+});
+
 describe("codex app-server protocol source resolver", () => {
+  it("reads the Cargo workspace package version without matching sibling sections", () => {
+    expect(
+      readCargoWorkspacePackageVersion(`
+[workspace]
+members = []
+
+[workspace.package] # shared crate metadata
+version = "0.142.5"
+edition = "2024"
+
+[workspace.dependencies]
+version = "9.9.9"
+`),
+    ).toBe("0.142.5");
+    expect(readCargoWorkspacePackageVersion('[workspace.dependencies]\nversion = "9.9.9"\n')).toBe(
+      undefined,
+    );
+  });
+
+  it("rejects a Codex checkout that differs from the pinned package version", async () => {
+    const repoRoot = createTempDir("openclaw-protocol-version-root-");
+    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
+    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
+    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "extensions/codex/package.json"),
+      JSON.stringify({ dependencies: { "@openai/codex": "0.142.5" } }),
+    );
+    fs.writeFileSync(
+      path.join(codexRepo, "codex-rs/Cargo.toml"),
+      '[workspace.package]\nversion = "0.142.4"\n',
+    );
+
+    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
+      /0\.142\.4 does not match @openai\/codex 0\.142\.5/,
+    );
+  });
+
   it("uses the app-server protocol export binary instead of compiling the full codex cli", () => {
     expect(buildCodexProtocolExportArgs("/codex/codex-rs/Cargo.toml", "/tmp/protocol")).toEqual([
       "run",

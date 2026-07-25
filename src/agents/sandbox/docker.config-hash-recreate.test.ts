@@ -1,15 +1,14 @@
 // Docker sandbox recreation tests cover config-hash labels, bind ordering, and
 // mount labels used to decide when shared containers must be rebuilt.
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
 } from "./config-hash.js";
+import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -17,13 +16,6 @@ import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 type SpawnCall = {
   command: string;
   args: string[];
-};
-
-type MockDockerChild = EventEmitter & {
-  stdout: Readable;
-  stderr: Readable;
-  stdin: { end: (input?: string | Buffer) => void };
-  kill: (signal?: NodeJS.Signals) => void;
 };
 
 const spawnState = vi.hoisted(() => ({
@@ -35,6 +27,10 @@ const spawnState = vi.hoisted(() => ({
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
+}));
+
+const runtimeMocks = vi.hoisted(() => ({
+  log: vi.fn(),
 }));
 
 const tmpDirs: string[] = [];
@@ -50,20 +46,15 @@ vi.mock("./registry.js", () => ({
   updateRegistry: registryMocks.updateRegistry,
 }));
 
-function createMockDockerChild(): MockDockerChild {
-  const child = new EventEmitter() as MockDockerChild;
-  child.stdout = new Readable({ read() {} });
-  child.stderr = new Readable({ read() {} });
-  child.stdin = { end: () => undefined };
-  child.kill = () => undefined;
-  return child;
-}
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: runtimeMocks,
+}));
 
-function spawnDockerProcess(command: string, args: string[]) {
+async function spawnDockerProcess(commandAndArgs: string[]) {
+  const [command = "", ...args] = commandAndArgs;
   // The tests assert docker CLI arguments without requiring Docker; this mock
   // implements only the inspect/create/start/rm calls used by ensureSandboxContainer.
   spawnState.calls.push({ command, args });
-  const child = createMockDockerChild();
 
   let code = 0;
   let stdout = "";
@@ -90,30 +81,22 @@ function spawnDockerProcess(command: string, args: string[]) {
     code = 1;
     stderr = `unexpected docker args: ${args.join(" ")}`;
   }
-
-  queueMicrotask(() => {
-    if (stdout) {
-      child.stdout.emit("data", Buffer.from(stdout));
-    }
-    if (stderr) {
-      child.stderr.emit("data", Buffer.from(stderr));
-    }
-    child.emit("close", code);
-  });
-  return child;
-}
-
-async function createChildProcessMock() {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
-    ...actual,
-    spawn: spawnDockerProcess,
+    failed: code !== 0,
+    isCanceled: false,
+    exitCode: code,
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.from(stderr),
   };
 }
 
-vi.mock("node:child_process", async () => createChildProcessMock());
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  spawnCommand: spawnDockerProcess,
+}));
 
 let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
+let resolveDockerEnvPolicyEpoch: typeof import("./docker.js").resolveDockerEnvPolicyEpoch;
 
 async function loadFreshDockerModuleForTest() {
   vi.resetModules();
@@ -121,8 +104,11 @@ async function loadFreshDockerModuleForTest() {
     readRegistryEntry: registryMocks.readRegistryEntry,
     updateRegistry: registryMocks.updateRegistry,
   }));
-  vi.doMock("node:child_process", async () => createChildProcessMock());
-  ({ ensureSandboxContainer } = await import("./docker.js"));
+  vi.doMock("../../process/exec.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../process/exec.js")>()),
+    spawnCommand: spawnDockerProcess,
+  }));
+  ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch } = await import("./docker.js"));
 }
 
 function createSandboxConfig(
@@ -166,7 +152,7 @@ function createSandboxConfig(
       vncPort: 5900,
       noVncPort: 6080,
       headless: true,
-      enableNoVnc: false,
+      noVncEnabled: false,
       allowHostControl: false,
       autoStart: false,
       autoStartTimeoutMs: 5000,
@@ -212,6 +198,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.readRegistryEntry.mockClear();
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
+    runtimeMocks.log.mockClear();
     await loadFreshDockerModuleForTest();
   });
 
@@ -228,6 +215,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
       readOnlyWorkspaceSkillMounts: [],
     });
     const newHash = computeSandboxConfigHash({
@@ -236,6 +224,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
       readOnlyWorkspaceSkillMounts: [],
     });
     expect(newHash).not.toBe(oldHash);
@@ -275,6 +264,112 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(registryUpdate?.configHash).toBe(newHash);
   });
 
+  it("recreates a cold container when the shared Docker create-args epoch changes", async () => {
+    const workspaceDir = makeTempDir();
+    // Keep the create-args epoch as the only hash delta in this scenario.
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
+    const hashInput = {
+      docker: cfg.docker,
+      dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(cfg.docker.env),
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      readOnlyWorkspaceSkillMounts: [],
+    };
+    const oldHash = computeSandboxConfigHash({
+      ...hashInput,
+      createArgsEpoch: "pre-init",
+    });
+    const newHash = computeSandboxConfigHash({
+      ...hashInput,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+    });
+
+    spawnState.labelHash = oldHash;
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: 0,
+      image: cfg.docker.image,
+      configHash: oldHash,
+    });
+
+    const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(true);
+    expect(createCall.args.filter((arg) => arg === "--init")).toHaveLength(1);
+    expect(createCall.args).toContain(
+      `openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`,
+    );
+    expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
+  });
+
+  it("keeps a hot pre-init container running and emits the recreate hint", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
+    const oldHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(cfg.docker.env),
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: "pre-init",
+      readOnlyWorkspaceSkillMounts: [],
+    });
+    spawnState.labelHash = oldHash;
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: Date.now(),
+      image: cfg.docker.image,
+      configHash: oldHash,
+    });
+
+    await ensureSandboxContainer({
+      sessionKey: "agent:main:session-1",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    });
+
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
+    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
+    expect(runtimeMocks.log).toHaveBeenCalledWith(
+      expect.stringContaining("Recreate to apply: openclaw sandbox recreate --all"),
+    );
+    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]?.configHash).toBe(oldHash);
+  });
+
+  it("rejects a hot stale container when current config is required", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
+    spawnState.labelHash = "stale-hash";
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: Date.now(),
+      image: cfg.docker.image,
+      configHash: "stale-hash",
+    });
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+        requireCurrentConfig: true,
+      }),
+    ).rejects.toThrow("restricted dispatch requires the current container config");
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
+    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
+    expect(registryMocks.updateRegistry).not.toHaveBeenCalled();
+  });
+
   it("recreates shared container when previously filtered explicit env becomes allowed", async () => {
     const workspaceDir = makeTempDir();
     const cfg = createSandboxConfig(["1.1.1.1"], undefined, "rw", {
@@ -289,6 +384,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
       readOnlyWorkspaceSkillMounts: [],
     });
     const newHash = computeSandboxConfigHash({
@@ -298,6 +394,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
       readOnlyWorkspaceSkillMounts: [],
     });
     expect(newHash).not.toBe(oldHash);
@@ -334,6 +431,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
       readOnlyWorkspaceSkillMounts: [],
     });
 

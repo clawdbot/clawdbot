@@ -9,7 +9,9 @@ import {
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
+  formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
+  formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
   formatModelPricingHealthLine,
   healthCommand,
@@ -182,6 +184,71 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+  });
+
+  it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.deliveryQueues = {
+      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: Date.now() - 7_200_000 }],
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toContain(
+      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago)",
+    );
+  });
+
+  it("surfaces a disabled config hot-reload watcher in JSON output", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.configReload = { hotReloadStatus: "disabled" };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
+    expect(parsed.configReload).toEqual({ hotReloadStatus: "disabled" });
+  });
+
+  it("prints the config hot-reload disabled line in text output", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.configReload = { hotReloadStatus: "disabled" };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toContain("Config hot reload: disabled");
+  });
+
+  it("omits the config hot-reload line in text output when the reloader is active", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.configReload = { hotReloadStatus: "active" };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).not.toContain("Config hot reload");
   });
 
   it("prints the rich text summary and verbose gateway details", async () => {
@@ -483,6 +550,91 @@ describe("formatContextEngineHealthLine", () => {
     expect(formatContextEngineHealthLine(summary)).toBe(
       "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
     );
+  });
+});
+
+describe("formatDeliveryQueueHealthLine", () => {
+  it("summarizes dead-lettered delivery queue entries with the oldest age", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [
+        { queueName: "outbound", count: 3, oldestFailedAt: 90_000 },
+        { queueName: "session", count: 1 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead-lettered ingress entries per channel account", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [],
+      ingressFailed: [
+        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
+        { channelId: "telegram", accountId: "ops", count: 2 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
+    );
+  });
+
+  it("returns null when no dead-lettered entries are reported", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+
+    expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
+  });
+});
+
+describe("formatConfigReloadHealthLine", () => {
+  it("reports a disabled config hot-reload watcher", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.configReload = { hotReloadStatus: "disabled" };
+
+    expect(formatConfigReloadHealthLine(summary)).toBe(
+      "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
+    );
+  });
+
+  it("stays silent while the config hot-reload watcher is active", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.configReload = { hotReloadStatus: "active" };
+
+    expect(formatConfigReloadHealthLine(summary)).toBeNull();
+  });
+
+  it("stays silent when no config reloader is running", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+
+    expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });
 });
 

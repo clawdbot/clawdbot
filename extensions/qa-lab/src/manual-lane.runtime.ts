@@ -35,12 +35,25 @@ function normalizeManualLaneCleanupError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 
-async function stopManualLaneResources(resources: {
-  gateway?: { stop: () => Promise<void> | void };
+async function stopManualLaneResource(
+  resource: { stop: () => Promise<void> | void } | null | undefined,
+): Promise<Error | undefined> {
+  if (!resource) {
+    return undefined;
+  }
+  try {
+    await resource.stop();
+    return undefined;
+  } catch (error) {
+    return normalizeManualLaneCleanupError(error);
+  }
+}
+
+async function stopManualLaneAuxiliaryResources(resources: {
   lab?: { stop: () => Promise<void> | void };
   mock?: { stop: () => Promise<void> | void } | null;
 }): Promise<Error | undefined> {
-  const stopTasks = [resources.gateway, resources.mock, resources.lab]
+  const stopTasks = [resources.mock, resources.lab]
     .filter((resource): resource is { stop: () => Promise<void> | void } => Boolean(resource))
     .map((resource) => Promise.resolve().then(() => resource.stop()));
   const results = await Promise.allSettled(stopTasks);
@@ -77,7 +90,8 @@ export async function runQaManualLane(params: QaManualLaneParams) {
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   let lab: Awaited<ReturnType<typeof startQaLabServer>> | undefined;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
-  let transportCleanup: (() => Promise<void>) | undefined;
+  let transportCleanupBeforeGatewayStop: (() => Promise<void>) | undefined;
+  let transportCleanupAfterGatewayStop: (() => Promise<void>) | undefined;
   let result: ManualLaneResult | undefined;
   let cleanupError: Error | undefined;
   let runError: unknown;
@@ -94,8 +108,11 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       state: lab.state,
     });
     const transport = transportFactoryResult.adapter;
-    transportCleanup = transportFactoryResult.cleanup;
-    mock = await startQaProviderServer(params.providerMode);
+    transportCleanupBeforeGatewayStop = transportFactoryResult.cleanupBeforeGatewayStop;
+    transportCleanupAfterGatewayStop = transportFactoryResult.cleanupAfterGatewayStop;
+    mock = await startQaProviderServer(params.providerMode, {
+      modelRefs: [params.primaryModel, params.alternateModel],
+    });
     gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
@@ -169,12 +186,23 @@ export async function runQaManualLane(params: QaManualLaneParams) {
   } catch (error) {
     runError = error;
   } finally {
-    let transportCleanupError: Error | undefined;
-    await transportCleanup?.().catch((error: unknown) => {
-      transportCleanupError = normalizeManualLaneCleanupError(error);
+    let transportCleanupBeforeError: Error | undefined;
+    await transportCleanupBeforeGatewayStop?.().catch((error: unknown) => {
+      transportCleanupBeforeError = normalizeManualLaneCleanupError(error);
     });
-    const resourceCleanupError = await stopManualLaneResources({ gateway, lab, mock });
-    cleanupError = transportCleanupError ?? resourceCleanupError;
+    const gatewayCleanupError = await stopManualLaneResource(gateway);
+    let transportCleanupAfterError: Error | undefined;
+    if (!gatewayCleanupError) {
+      await transportCleanupAfterGatewayStop?.().catch((error: unknown) => {
+        transportCleanupAfterError = normalizeManualLaneCleanupError(error);
+      });
+    }
+    const auxiliaryCleanupError = await stopManualLaneAuxiliaryResources({ lab, mock });
+    cleanupError =
+      transportCleanupBeforeError ??
+      gatewayCleanupError ??
+      transportCleanupAfterError ??
+      auxiliaryCleanupError;
   }
   if (runError) {
     throw new Error(formatErrorMessage(runError), { cause: runError });

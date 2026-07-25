@@ -6,13 +6,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isHeartbeatContentEffectivelyEmpty } from "../auto-reply/heartbeat.js";
-import {
-  resetWorkspaceTemplateDirCache,
-  resolveWorkspaceTemplateDir,
-  resolveWorkspaceTemplateSearchDirs,
-} from "./workspace-templates.js";
 
 const tempDirs: string[] = [];
 
@@ -22,15 +17,20 @@ async function makeTempRoot(): Promise<string> {
   return root;
 }
 
-describe("resolveWorkspaceTemplateDir", () => {
+async function loadWorkspaceTemplateResolvers() {
+  vi.resetModules();
+  return import("./workspace-templates.js");
+}
+
+describe("resolveWorkspaceTemplateSearchDirs", () => {
   afterEach(async () => {
-    resetWorkspaceTemplateDirCache();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 
   it("resolves templates from package root when module url is dist-rooted", async () => {
+    const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = await makeTempRoot();
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
@@ -42,11 +42,13 @@ describe("resolveWorkspaceTemplateDir", () => {
     await fs.mkdir(distDir, { recursive: true });
     const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
 
-    const resolved = await resolveWorkspaceTemplateDir({ cwd: distDir, moduleUrl });
+    // The primary template dir is the first search root of the public resolver.
+    const [resolved] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
     expect(resolved).toBe(templatesDir);
   });
 
   it("falls back to package-root runtime path when templates directory is missing", async () => {
+    const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = await makeTempRoot();
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
@@ -54,11 +56,12 @@ describe("resolveWorkspaceTemplateDir", () => {
     await fs.mkdir(distDir, { recursive: true });
     const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
 
-    const resolved = await resolveWorkspaceTemplateDir({ cwd: distDir, moduleUrl });
+    const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
     expect(path.normalize(resolved)).toBe(path.resolve("src", "agents", "templates"));
   });
 
   it("includes docs templates as secondary search roots", async () => {
+    const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = await makeTempRoot();
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 

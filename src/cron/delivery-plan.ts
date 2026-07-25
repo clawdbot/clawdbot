@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
+import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 /** Normalized routing plan for a cron job's primary delivery behavior. */
@@ -103,15 +104,15 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     };
   }
 
-  const isDetachedOutputJob =
-    (job.payload.kind === "agentTurn" || job.payload.kind === "command") &&
-    typeof job.sessionTarget === "string" &&
-    (job.sessionTarget === "isolated" ||
-      job.sessionTarget === "current" ||
-      job.sessionTarget.startsWith("session:"));
   // Isolated/current/session output jobs default to announce delivery so their
-  // result reaches the initiating session unless the job opts out.
-  const resolvedMode = isDetachedOutputJob ? "announce" : "none";
+  // result reaches the initiating session unless the job opts out. Keep this
+  // aligned with create-time normalization and direct service callers.
+  const resolvedMode = shouldDefaultCronDeliveryToAnnounce({
+    payloadKind: job.payload.kind,
+    sessionTarget: job.sessionTarget,
+  })
+    ? "announce"
+    : "none";
 
   return {
     mode: resolvedMode,
@@ -124,7 +125,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
 }
 
 /** Normalized destination for notifying about cron execution failures. */
-export type CronFailureDeliveryPlan = {
+type CronFailureDeliveryPlan = {
   mode: "announce" | "webhook";
   channel?: CronMessageChannel;
   to?: string;
@@ -132,7 +133,7 @@ export type CronFailureDeliveryPlan = {
 };
 
 /** Job-level failure destination override fields before global defaults are merged. */
-export type CronFailureDestinationInput = {
+type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -189,14 +190,18 @@ export function resolveFailureDestination(
     if (hasJobAccountIdField) {
       accountId = jobAccountId;
     }
-    if (hasJobModeField) {
-      const globalMode = globalConfig?.mode ?? "announce";
-      const resolvedJobMode = jobMode ?? "announce";
+    // Naming a channel makes this an announce route even when mode is omitted;
+    // inheriting webhook here would reinterpret the chat target as a URL.
+    const jobImpliesAnnounce = !hasJobModeField && jobChannel !== undefined;
+    if (hasJobModeField || jobImpliesAnnounce) {
+      const effectiveJobMode = jobImpliesAnnounce ? "announce" : jobMode;
+      const globalMode = mode ?? "announce";
+      const resolvedJobMode = effectiveJobMode ?? "announce";
       if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
         // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
         to = undefined;
       }
-      mode = jobMode;
+      mode = effectiveJobMode;
     }
   }
 

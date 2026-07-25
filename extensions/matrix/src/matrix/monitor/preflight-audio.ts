@@ -12,7 +12,9 @@ export function formatMatrixAudioTranscript(transcript: string): string {
 }
 
 function formatMatrixAudioTranscriptEcho(transcript: string, format: string): string {
-  return format.replace("{transcript}", transcript);
+  // Function replacer keeps `$` sequences in the transcript literal instead of
+  // being parsed as String.prototype.replace substitution patterns.
+  return format.replace("{transcript}", () => transcript);
 }
 
 function suppressMatrixPreflightAudioEcho(cfg: OpenClawConfig): OpenClawConfig {
@@ -66,8 +68,7 @@ export async function resolveMatrixPreflightAudioTranscript(params: {
     }
     const transcript = await transcribeFirstAudio({
       ctx: {
-        MediaPaths: [params.mediaPath],
-        MediaTypes: params.mediaContentType ? [params.mediaContentType] : undefined,
+        media: [{ path: params.mediaPath, contentType: params.mediaContentType }],
         Provider: "matrix",
         Surface: "matrix",
         OriginatingChannel: "matrix",

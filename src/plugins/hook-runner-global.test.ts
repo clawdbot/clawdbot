@@ -1,13 +1,13 @@
 /** Verifies global hook runner sequencing, mutation, and error behavior. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");

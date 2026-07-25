@@ -28,7 +28,7 @@ export function isPathWithinRoot(candidatePath: string, rootPath: string): boole
   );
 }
 
-export function resolvePathInsideWorkspace(
+function resolvePathInsideWorkspace(
   workspaceDir: string,
   pathWithinWorkspace: string,
 ): string | null {

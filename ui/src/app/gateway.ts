@@ -1,19 +1,31 @@
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
+import type { AuthenticatedUser } from "./user-profile.ts";
+
+export type ApplicationGatewayPhase =
+  | "stopped"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "offline";
 
 export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
+  offlineStable: boolean;
   hello: GatewayHelloOk | null;
   assistantAgentId: string | null;
   sessionKey: string;
   lastError: string | null;
   lastErrorCode: string | null;
+  /** Identity projected from this browser connection's own presence entry. */
+  selfUser?: AuthenticatedUser | null;
 };
 
 export type ApplicationGatewayConnection = {
   gatewayUrl: string;
   token: string;
+  bootstrapToken: string;
   password: string;
 };
 
@@ -32,4 +44,5 @@ export type ApplicationGateway = {
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
   subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
+  updateSelfUser?: (patch: Partial<Omit<AuthenticatedUser, "id">>) => void;
 };

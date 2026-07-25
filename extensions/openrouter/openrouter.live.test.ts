@@ -1,6 +1,7 @@
 // Openrouter tests cover openrouter plugin behavior.
 import OpenAI from "openai";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -155,6 +156,51 @@ describeLive("openrouter plugin live", () => {
     expect(autoModel.id).toBe("openrouter/auto");
     await expectWeatherToolCall(client, autoModel.id);
     await expectWeatherToolCall(client, normalized.id);
+  }, 30_000);
+
+  it("preserves a billed zero from the live free route", async () => {
+    const { providers } = await registerOpenRouterPlugin();
+    const provider = requireRegisteredProvider(providers, "openrouter");
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "openrouter",
+      modelId: "openrouter/free",
+      modelRegistry: new ModelRegistryCtor(AuthStorage.inMemory()),
+    });
+    if (!resolved) {
+      throw new Error("openrouter provider did not resolve openrouter/free");
+    }
+    const model =
+      provider.normalizeResolvedModel?.({
+        provider: "openrouter",
+        modelId: resolved.id,
+        model: resolved,
+      }) ?? resolved;
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: model.id,
+      streamFn: streamSimple,
+    } as never);
+    if (!wrapped) {
+      throw new Error("openrouter provider did not expose its stream wrapper");
+    }
+
+    const stream = await wrapped(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: "Reply with exactly OK.",
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      { apiKey: OPENROUTER_API_KEY, maxTokens: 16 },
+    );
+    const message = await stream.result();
+
+    expect(message.usage.cost.total).toBe(0);
+    expect(message.usage.cost.totalOrigin).toBe("provider-billed");
   }, 30_000);
 });
 

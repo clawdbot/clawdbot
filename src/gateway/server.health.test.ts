@@ -2,12 +2,18 @@
  * Gateway health endpoint integration tests.
  */
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage } from "./test-helpers.js";
+
+// Health/presence coverage does not exercise post-restart delivery recovery.
+// Keep that auto-reply graph in the dedicated restart-sentinel suite.
+vi.mock("./server-restart-sentinel.js", () => ({
+  recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 const HEALTH_E2E_TIMEOUT_MS = 20_000;
@@ -135,6 +141,27 @@ describe("gateway server health/presence", () => {
       ws.close();
     },
   );
+
+  test("system-event accepts exact-session routing fields", async () => {
+    const { ws } = await harness.openClient();
+    const responseP = onceMessage(ws, (o) => o.type === "res" && o.id === "targeted-event");
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "targeted-event",
+        method: "system-event",
+        params: {
+          text: "post-update welcome",
+          sessionKey: "agent:main:main",
+          wake: false,
+        },
+      }),
+    );
+
+    expect(await responseP).toMatchObject({ ok: true, payload: { ok: true } });
+    ws.close();
+  });
 
   test("agent events stream with seq", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
     const { ws } = await harness.openClient();

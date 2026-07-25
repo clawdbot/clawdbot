@@ -6,11 +6,11 @@ import { gunzipSync } from "node:zlib";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 
-export type LegacyDebugProxyCaptureDetection = {
+type LegacyDebugProxyCaptureDetection = {
   sourcePath: string;
   blobDir: string;
   hasLegacy: boolean;
@@ -88,17 +88,14 @@ function dirExists(dirPath: string): boolean {
   }
 }
 
-function resolveLegacyDebugProxyCapturePaths(
-  stateDir: string,
-  env: NodeJS.ProcessEnv,
-): {
+function resolveLegacyDebugProxyCapturePaths(stateDir: string): {
   sourcePath: string;
   blobDir: string;
 } {
   const rootDir = path.join(stateDir, "debug-proxy");
   return {
-    sourcePath: env.OPENCLAW_DEBUG_PROXY_DB_PATH?.trim() || path.join(rootDir, "capture.sqlite"),
-    blobDir: env.OPENCLAW_DEBUG_PROXY_BLOB_DIR?.trim() || path.join(rootDir, "blobs"),
+    sourcePath: path.join(rootDir, "capture.sqlite"),
+    blobDir: path.join(rootDir, "blobs"),
   };
 }
 
@@ -116,7 +113,7 @@ export function detectLegacyDebugProxyCaptureSidecar(
   stateDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): LegacyDebugProxyCaptureDetection {
-  const paths = resolveLegacyDebugProxyCapturePaths(stateDir, env);
+  const paths = resolveLegacyDebugProxyCapturePaths(stateDir);
   if (
     path.resolve(paths.sourcePath) ===
     path.resolve(resolveOpenClawStateSqlitePath({ ...env, OPENCLAW_STATE_DIR: stateDir }))
@@ -156,8 +153,9 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
   blobs: LegacyCaptureBlobRow[];
   blobDirs: string[];
 } {
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(params.sourcePath, { readOnly: true });
+  const db = openNodeSqliteDatabase(params.sourcePath, {
+    readOnly: true,
+  });
   try {
     assertTableColumns(db, "capture_sessions", [
       "id",
@@ -320,18 +318,27 @@ function archiveLegacyDebugProxySqlite(params: {
   if (existingSources.length === 0) {
     return;
   }
-  const existingArchives = existingSources
-    .map((sourcePath) => `${sourcePath}.migrated`)
-    .filter(fileExists);
-  if (existingArchives.length > 0) {
-    params.warnings.push(
-      `Left migrated debug proxy capture sidecar in place because archive already exists: ${existingArchives[0]}`,
-    );
-    return;
-  }
+  const resolutions: Array<{ sourcePath: string; targetPath: string; removed: boolean }> = [];
   for (const sourcePath of existingSources) {
+    const archivedPath = `${sourcePath}.migrated`;
     try {
-      fs.renameSync(sourcePath, `${sourcePath}.migrated`);
+      if (fileExists(archivedPath)) {
+        if (fs.readFileSync(sourcePath).equals(fs.readFileSync(archivedPath))) {
+          fs.rmSync(sourcePath, { force: true });
+          resolutions.push({ sourcePath, targetPath: archivedPath, removed: true });
+          continue;
+        }
+        let index = 2;
+        while (fs.existsSync(`${sourcePath}.migrated.${index}`)) {
+          index++;
+        }
+        const nextArchivePath = `${sourcePath}.migrated.${index}`;
+        fs.renameSync(sourcePath, nextArchivePath);
+        resolutions.push({ sourcePath, targetPath: nextArchivePath, removed: false });
+        continue;
+      }
+      fs.renameSync(sourcePath, archivedPath);
+      resolutions.push({ sourcePath, targetPath: archivedPath, removed: false });
     } catch (err) {
       params.warnings.push(
         `Failed archiving debug proxy capture sidecar ${sourcePath}: ${String(err)}`,
@@ -339,9 +346,24 @@ function archiveLegacyDebugProxySqlite(params: {
       return;
     }
   }
-  params.changes.push(
-    `Archived debug proxy capture sidecar legacy source → ${params.sourcePath}.migrated`,
-  );
+  if (
+    resolutions.every(
+      (resolution) =>
+        !resolution.removed && resolution.targetPath === `${resolution.sourcePath}.migrated`,
+    )
+  ) {
+    params.changes.push(
+      `Archived debug proxy capture sidecar legacy source → ${params.sourcePath}.migrated`,
+    );
+    return;
+  }
+  for (const resolution of resolutions) {
+    params.changes.push(
+      resolution.removed
+        ? `Removed already-archived debug proxy capture sidecar legacy source ${resolution.sourcePath}`
+        : `Archived debug proxy capture sidecar legacy source → ${resolution.targetPath}`,
+    );
+  }
 }
 
 function archiveLegacyDebugProxyBlobs(params: {
@@ -353,15 +375,17 @@ function archiveLegacyDebugProxyBlobs(params: {
     return;
   }
   const archivePath = `${params.blobDir}.migrated`;
-  if (dirExists(archivePath)) {
-    params.warnings.push(
-      `Left migrated debug proxy capture blobs in place because archive already exists: ${archivePath}`,
-    );
-    return;
-  }
   try {
-    fs.renameSync(params.blobDir, archivePath);
-    params.changes.push(`Archived debug proxy capture blobs → ${archivePath}`);
+    let targetPath = archivePath;
+    if (dirExists(archivePath)) {
+      let index = 2;
+      while (fs.existsSync(`${params.blobDir}.migrated.${index}`)) {
+        index++;
+      }
+      targetPath = `${params.blobDir}.migrated.${index}`;
+    }
+    fs.renameSync(params.blobDir, targetPath);
+    params.changes.push(`Archived debug proxy capture blobs → ${targetPath}`);
   } catch (err) {
     params.warnings.push(
       `Failed archiving debug proxy capture blobs ${params.blobDir}: ${String(err)}`,

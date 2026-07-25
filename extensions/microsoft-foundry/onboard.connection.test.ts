@@ -70,4 +70,40 @@ describe("testFoundryConnection", () => {
       "Connection Test",
     );
   });
+
+  it.each([
+    {
+      status: 400,
+      expectedPrefix:
+        "Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n",
+      expectedSuffix: "",
+    },
+    {
+      status: 503,
+      expectedPrefix: "Warning: test request returned 503. ",
+      expectedSuffix: "\nProceeding anyway - you can fix the endpoint later.",
+    },
+  ])(
+    "keeps $status error-body previews UTF-16 safe",
+    async ({ status, expectedPrefix, expectedSuffix }) => {
+      const note = vi.fn();
+      const prefix = "x".repeat(199);
+      hoisted.fetchWithSsrFGuard.mockResolvedValue({
+        response: new Response(`${prefix}😀tail`, { status }),
+        release: async () => {},
+      });
+
+      await testFoundryConnection({
+        ctx: { prompter: { note } } as never,
+        endpoint: "https://example.openai.azure.com",
+        modelId: "gpt-4o",
+        api: DEFAULT_API,
+      });
+
+      expect(note).toHaveBeenCalledExactlyOnceWith(
+        `${expectedPrefix}${prefix}${expectedSuffix}`,
+        "Connection Test",
+      );
+    },
+  );
 });

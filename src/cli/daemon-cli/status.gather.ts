@@ -16,6 +16,7 @@ import type {
 } from "../../config/types.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
+import { inspectGatewayHeapLimit, type GatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
@@ -295,6 +296,7 @@ export type DaemonStatus = {
     } | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
+    gatewayHeap?: GatewayHeapLimitReport;
     restartHandoff?: GatewayRestartHandoff;
     staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
@@ -581,7 +583,7 @@ export async function gatherDaemonStatus(
       .catch((err: unknown) => ({ status: "unknown", detail: String(err) })),
   ]);
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
-  const configAudit = command
+  const configAudit: ServiceConfigAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
         auditGatewayServiceConfig({
           env: process.env,
@@ -642,9 +644,7 @@ export async function gatherDaemonStatus(
           .catch(() => [])
       : [];
 
-  const timeoutMs =
-    parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
-    Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
+  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ?? 10_000;
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
@@ -702,7 +702,6 @@ export async function gatherDaemonStatus(
             shouldUseLocalTlsRuntime && tlsRuntime?.enabled
               ? tlsRuntime.fingerprintSha256
               : undefined,
-          preauthHandshakeTimeoutMs: daemonCfg.gateway?.handshakeTimeoutMs,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
@@ -733,8 +732,17 @@ export async function gatherDaemonStatus(
     : undefined;
 
   let lastError: string | undefined;
-  if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
-    lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
+  if (
+    shouldInspectLocalGateway &&
+    loaded &&
+    runtime?.status === "running" &&
+    portStatus &&
+    (portStatus.status !== "busy" || rpc?.ok === false)
+  ) {
+    lastError =
+      (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv, {
+        requirePatternMatch: portStatus.status === "busy",
+      })) ?? undefined;
   }
 
   // Plugin version drift detection.
@@ -772,6 +780,9 @@ export async function gatherDaemonStatus(
       command,
       runtime,
       configAudit,
+      ...(command
+        ? { gatewayHeap: inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS) }
+        : {}),
       ...(restartHandoff ? { restartHandoff } : {}),
       ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
     },
@@ -837,3 +848,4 @@ export function resolvePortListeningAddresses(status: DaemonStatus): string[] {
   );
   return addrs;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

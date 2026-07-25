@@ -35,13 +35,12 @@ export function getCompletionScript(shell: CompletionShell, program: Command): s
   return generateFishCompletion(program);
 }
 
-function splitOptionFlags(flags: string): string[] {
-  return flags.split(/[ ,|]+/u).filter(Boolean);
+function completionFlags(option: Option): string[] {
+  return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
 }
 
-function preferredCompletionFlag(flags: string): string {
-  const parts = splitOptionFlags(flags);
-  return parts.find((flag) => flag.startsWith("--")) ?? parts[0] ?? flags;
+function preferredCompletionFlag(option: Option): string {
+  return option.long ?? option.short ?? option.flags;
 }
 
 function fishWords(values: readonly string[]): string {
@@ -53,7 +52,7 @@ function completionOptionFlags(options: Command["options"], wantsValue: boolean)
     if ((option.required || option.optional) !== wantsValue) {
       return [];
     }
-    return splitOptionFlags(option.flags).filter((flag) => flag.startsWith("-"));
+    return completionFlags(option);
   });
 }
 
@@ -307,12 +306,12 @@ fi
 function generateZshArgs(cmd: Command): string {
   return (cmd.options || [])
     .map((opt) => {
-      const flags = opt.flags.split(/[ ,|]+/);
-      const name = flags.find((f) => f.startsWith("--")) || flags[0];
-      const short = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
+      const flags = completionFlags(opt);
+      const name = preferredCompletionFlag(opt);
+      const alternate = flags.find((flag) => flag !== name);
       const desc = escapeZshDoubleQuotedDescription(opt.description);
-      if (short) {
-        return `"(${name} ${short})"{${name},${short}}"[${desc}]"`;
+      if (alternate) {
+        return `"(${name} ${alternate})"{${name},${alternate}}"[${desc}]"`;
       }
       return `"${name}[${desc}]"`;
     })
@@ -396,7 +395,7 @@ function generateBashCompletion(program: Command): string {
   const rootCmd = program.name();
   const rootCompletions = [
     ...program.commands.flatMap((command) => commandNameVariants(command)),
-    ...program.options.map((option) => preferredCompletionFlag(option.flags)),
+    ...program.options.map((option) => preferredCompletionFlag(option)),
   ];
   const rootValueOptions = completionOptionFlags(program.options, true);
   const contexts = collectBashCompletionContexts(program, rootValueOptions);
@@ -451,7 +450,7 @@ function collectBashCompletionContexts(
   const visit = (cmd: Command, pathVariants: string[][], inheritedValueOptions: string[]) => {
     const completions = [
       ...cmd.commands.flatMap((command) => commandNameVariants(command)),
-      ...cmd.options.map((option) => preferredCompletionFlag(option.flags)),
+      ...cmd.options.map((option) => preferredCompletionFlag(option)),
     ];
     const valueOptions = [
       ...new Set([...inheritedValueOptions, ...completionOptionFlags(cmd.options, true)]),
@@ -510,7 +509,7 @@ function generatePowerShellCompletion(program: Command): string {
   const visit = (cmd: Command, pathVariants: string[][]) => {
     // Command completion for this level
     const subCommands = cmd.commands.flatMap((c) => commandNameVariants(c));
-    const options = cmd.options.map((o) => preferredCompletionFlag(o.flags));
+    const options = cmd.options.map((option) => preferredCompletionFlag(option));
     const allCompletions = formatPowerShellArray([...subCommands, ...options]);
 
     if ([...subCommands, ...options].length > 0) {
@@ -559,7 +558,7 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     if ($commandPath -eq "") {
          $completions = ${formatPowerShellArray([
            ...program.commands.flatMap((command) => commandNameVariants(command)),
-           ...program.options.map((option) => preferredCompletionFlag(option.flags)),
+           ...program.options.map((option) => preferredCompletionFlag(option)),
          ])}
          $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
@@ -603,7 +602,7 @@ function generateFishCompletion(program: Command): string {
           buildFishOptionCompletionLine({
             rootCmd,
             condition,
-            flags: opt.flags,
+            flags: completionFlags(opt),
             description: opt.description,
           }),
         );

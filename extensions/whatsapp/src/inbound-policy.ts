@@ -19,7 +19,7 @@ import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
-export type ResolvedWhatsAppInboundPolicy = {
+type ResolvedWhatsAppInboundPolicy = {
   account: ResolvedWhatsAppAccount;
   dmPolicy: DmPolicy;
   groupPolicy: GroupPolicy;
@@ -175,7 +175,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   policy?: ResolvedWhatsAppInboundPolicy;
   authDir?: string;
 }): Promise<boolean> {
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   if (!useAccessGroups) {
     return true;
   }

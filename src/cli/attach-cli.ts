@@ -9,6 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { callGateway } from "../gateway/call.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
 
 type AttachGrant = {
@@ -34,7 +35,10 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
     .command("attach")
     .description("Attach Claude Code to a gateway session with scoped MCP tools")
     .option("--session <key>", "Gateway session key to bind (default: main session)")
-    .option("--ttl <ms>", "Grant TTL in milliseconds (default: gateway policy)")
+    .option(
+      "--ttl <ms>",
+      "Grant TTL in positive base-10 integer milliseconds (default: gateway policy)",
+    )
     .option("--bin <path>", "Claude Code binary to spawn", "claude")
     .option(
       "--print-config",
@@ -48,10 +52,10 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
     .action(async (opts: { session?: string; ttl?: string; bin: string; printConfig: boolean }) => {
       let ttlMs: number | undefined;
       if (opts.ttl !== undefined) {
-        ttlMs = Number(opts.ttl);
-        if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+        ttlMs = parseStrictPositiveInteger(opts.ttl);
+        if (ttlMs === undefined) {
           defaultRuntime.error(
-            `--ttl must be a positive number of milliseconds. Got: ${JSON.stringify(opts.ttl)}`,
+            `--ttl must be a positive integer of milliseconds. Got: ${JSON.stringify(opts.ttl)}`,
           );
           defaultRuntime.exit(1);
           return;

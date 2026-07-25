@@ -1,26 +1,41 @@
 // Telegram plugin module implements token behavior.
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/routing";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
+type CredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
+
 type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
 export type TelegramTokenResolution = BaseTokenResolution & {
   source: TelegramTokenSource;
+  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
 };
+
+export function resolveTelegramBotUserIdFromToken(token?: string): number | undefined {
+  const rawBotId = token?.trim().split(":", 1)[0];
+  if (!rawBotId || !/^\d+$/.test(rawBotId)) {
+    return undefined;
+  }
+  return parseStrictPositiveInteger(rawBotId);
+}
 
 type RuntimeTokenValueResolution =
   | { status: "available"; value: string }
@@ -154,18 +169,23 @@ export function resolveTelegramToken(
 
   const accountTokenFile = accountCfg?.tokenFile?.trim();
   if (accountTokenFile) {
-    const token = tryReadSecretFileSync(
+    const result = tryReadSecretFileSync(
       accountTokenFile,
-      `channels.telegram.accounts.${accountId}.tokenFile`,
+      "Telegram bot token",
       { rejectSymlink: true },
+      { configPath: `channels.telegram.accounts.${accountId}.tokenFile` },
     );
-    if (token) {
-      return { token, source: "tokenFile" };
+    if (result.status === "available") {
+      return { token: result.value, source: "tokenFile" };
     }
     opts.logMissingFile?.(
-      `channels.telegram.accounts.${accountId}.tokenFile not found or unreadable: ${accountTokenFile}`,
+      `channels.telegram.accounts.${accountId}.tokenFile is configured but unavailable`,
     );
-    return { token: "", source: "none" };
+    return {
+      token: "",
+      source: "tokenFile",
+      credentialDiagnostics: [result.diagnostic],
+    };
   }
 
   const accountToken = resolveRuntimeTokenValue({
@@ -183,14 +203,23 @@ export function resolveTelegramToken(
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const tokenFile = telegramCfg?.tokenFile?.trim();
   if (tokenFile) {
-    const token = tryReadSecretFileSync(tokenFile, "channels.telegram.tokenFile", {
-      rejectSymlink: true,
-    });
-    if (token) {
-      return { token, source: "tokenFile" };
+    const result = tryReadSecretFileSync(
+      tokenFile,
+      "Telegram bot token",
+      {
+        rejectSymlink: true,
+      },
+      { configPath: "channels.telegram.tokenFile" },
+    );
+    if (result.status === "available") {
+      return { token: result.value, source: "tokenFile" };
     }
-    opts.logMissingFile?.(`channels.telegram.tokenFile not found or unreadable: ${tokenFile}`);
-    return { token: "", source: "none" };
+    opts.logMissingFile?.("channels.telegram.tokenFile is configured but unavailable");
+    return {
+      token: "",
+      source: "tokenFile",
+      credentialDiagnostics: [result.diagnostic],
+    };
   }
 
   const configToken = resolveRuntimeTokenValue({

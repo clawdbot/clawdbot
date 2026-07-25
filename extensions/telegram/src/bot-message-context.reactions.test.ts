@@ -1,7 +1,10 @@
 // Telegram tests cover bot message context.reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+
+type ResolveTelegramInboundBody =
+  typeof import("./bot-message-context.body.js").resolveTelegramInboundBody;
+type TelegramInboundBodyResult = NonNullable<Awaited<ReturnType<ResolveTelegramInboundBody>>>;
 
 type InboundBodyMock = (arg: unknown) => Promise<TelegramInboundBodyResult>;
 
@@ -20,7 +23,6 @@ const { createInboundBodyResult, inboundBodyMock } = vi.hoisted(() => {
       wasMentioned: false,
       effectiveWasMentioned: false,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: true,
     shouldBypassMention: false,
@@ -70,7 +72,54 @@ describe("buildTelegramMessageContext reactions", () => {
     inboundBodyMock.mockClear();
   });
 
-  it("does not create ack or status reactions for room events", async () => {
+  it("does not create ack or status reactions for room events when scope does not force all messages", async () => {
+    const setMessageReaction = vi.fn(async () => undefined);
+    const { createStatusReactionController } = createStatusReactionControllerStub();
+    inboundBodyMock.mockResolvedValueOnce(createInboundBodyResult("room_event"));
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 12,
+        chat: { id: -1001234567890, type: "group", title: "Ops" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      cfg: {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] },
+          statusReactions: { enabled: true },
+        },
+      },
+      ackReactionScope: "group-all",
+      botApi: { setMessageReaction },
+      runtime: { createStatusReactionController },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(ctx?.ackReactionPromise).toBeNull();
+    expect(ctx?.statusReactionController).toBeNull();
+    expect(createStatusReactionController).not.toHaveBeenCalled();
+    expect(setMessageReaction).not.toHaveBeenCalled();
+  });
+
+  it("sends Telegram ack reactions for room events when ack scope is all", async () => {
     const setMessageReaction = vi.fn(async () => undefined);
     const { createStatusReactionController } = createStatusReactionControllerStub();
     inboundBodyMock.mockResolvedValueOnce(createInboundBodyResult("room_event"));
@@ -111,10 +160,12 @@ describe("buildTelegramMessageContext reactions", () => {
     });
 
     expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
-    expect(ctx?.ackReactionPromise).toBeNull();
+    await expect(ctx?.ackReactionPromise).resolves.toBe(true);
     expect(ctx?.statusReactionController).toBeNull();
     expect(createStatusReactionController).not.toHaveBeenCalled();
-    expect(setMessageReaction).not.toHaveBeenCalled();
+    expect(setMessageReaction).toHaveBeenCalledWith(-1001234567890, 12, [
+      { type: "emoji", emoji: "👀" },
+    ]);
   });
 
   it("does not create status reactions when the ack gate blocks an unmentioned group message", async () => {

@@ -34,6 +34,10 @@ type BridgeInternals = {
     event: string;
     payload?: Record<string, unknown>;
   }) => Promise<void>;
+  dispatchGatewayEvent: (event: {
+    event: string;
+    payload?: Record<string, unknown>;
+  }) => Promise<void>;
   handleSessionMessageEvent: (payload: {
     sessionKey: string;
     senderIsOwner?: boolean;
@@ -298,6 +302,52 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
       expect(writes).toHaveLength(1);
       expect(writes[0]).toBe("openclaw mcp: notification channel/event failed\n");
       expect(writes[0]).not.toContain("transport closed");
+    } finally {
+      writeSpy.mockRestore();
+      await bridge.close();
+    }
+  });
+
+  test("a rejected gateway event still emits exactly one diagnostic record with verbose off", async () => {
+    const bridge = makeBridge(false);
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        writes.push(String(chunk));
+        return true;
+      });
+    vi.spyOn(bridge, "handleGatewayEvent").mockRejectedValue(new Error("handler boom"));
+    try {
+      await bridge.dispatchGatewayEvent({ event: "exec.approval.requested", payload: {} });
+
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toBe("openclaw mcp: gateway event exec.approval.requested failed\n");
+      expect(writes[0]).not.toContain("handler boom");
+    } finally {
+      writeSpy.mockRestore();
+      await bridge.close();
+    }
+  });
+
+  test("a rejected gateway event includes error detail with verbose on", async () => {
+    const bridge = makeBridge(true);
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        writes.push(String(chunk));
+        return true;
+      });
+    vi.spyOn(bridge, "handleGatewayEvent").mockRejectedValue(new Error("handler boom"));
+    try {
+      await bridge.dispatchGatewayEvent({ event: "exec.approval.requested", payload: {} });
+
+      expect(writes).toHaveLength(2);
+      expect(writes[0]).toBe("openclaw mcp: gateway event exec.approval.requested failed\n");
+      expect(writes[1]).toBe(
+        "openclaw mcp: gateway event exec.approval.requested error: Error: handler boom\n",
+      );
     } finally {
       writeSpy.mockRestore();
       await bridge.close();

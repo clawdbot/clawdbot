@@ -8,18 +8,17 @@ import {
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
-  toAgentModelListLike,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
-  resolveAgentModelFallbacksOverride,
-} from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
 export {
   resolveThinkingDefault,
   resolveThinkingDefaultWithRuntimeCatalog,
@@ -28,14 +27,13 @@ import {
   type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
-  findNormalizedProviderValue,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import {
   buildAllowedModelSetWithFallbacks,
   buildConfiguredAllowlistKeys,
@@ -58,15 +56,9 @@ import {
 
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
 
-export type ThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+export type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+
+export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
 
 export {
   buildConfiguredAllowlistKeys,
@@ -222,41 +214,6 @@ export function resolveAllowlistModelKey(
   return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
 
-export function resolveDefaultModelForAgent(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): ModelRef {
-  const agentModelOverride = params.agentId
-    ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
-    : undefined;
-  const cfg =
-    agentModelOverride && agentModelOverride.length > 0
-      ? {
-          ...params.cfg,
-          agents: {
-            ...params.cfg.agents,
-            defaults: {
-              ...params.cfg.agents?.defaults,
-              model: {
-                ...toAgentModelListLike(params.cfg.agents?.defaults?.model),
-                primary: agentModelOverride,
-              },
-            },
-          },
-        }
-      : params.cfg;
-  return resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   raw: string | undefined;
   cfg?: OpenClawConfig;
@@ -329,19 +286,6 @@ function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string
     }
   }
   return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-export function resolveSubagentConfiguredModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  includeAgentPrimary?: boolean;
-}): string | undefined {
-  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
-  return (
-    normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
-    (params.includeAgentPrimary === false ? undefined : normalizeModelSelection(agentConfig?.model))
-  );
 }
 
 /**
@@ -434,12 +378,14 @@ export function buildAllowedModelSet(
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  automaticFallbackKeys: Set<string>;
 } {
   return buildAllowedModelSetWithFallbacks({
     cfg: params.cfg,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -455,6 +401,7 @@ export function getModelRefStatus(
     ref: ModelRef;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
@@ -463,8 +410,10 @@ export function getModelRefStatus(
     ref: params.ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
+      agentId: params.agentId,
     }),
     manifestPlugins: params.manifestPlugins,
   });
@@ -476,6 +425,7 @@ function getModelRefStatusForResolve(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
   ref: ModelRef,
 ): ModelRefStatus {
@@ -485,6 +435,7 @@ function getModelRefStatusForResolve(
     ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     manifestPlugins: params.manifestPlugins,
   });
 }
@@ -496,6 +447,7 @@ export function resolveAllowedModelRef(
     raw: string;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
@@ -510,6 +462,7 @@ export function resolveAllowedModelRef(
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
     manifestPlugins: params.manifestPlugins,
   });
 

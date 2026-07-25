@@ -4,7 +4,6 @@ import {
   findNormalizedProviderValue,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
-  resolveDefaultAgentDir,
   resolveProfileUnusableUntilForDisplay,
   type AuthProfileCredential,
   type AuthProfileFailureReason,
@@ -14,7 +13,6 @@ import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
-import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
@@ -33,7 +31,7 @@ type SafeCodexControlRequest = (
   options?: CodexControlRequestOptions,
 ) => Promise<SafeValue<JsonValue | undefined>>;
 
-export type CodexAccountAuthRow = {
+type CodexAccountAuthRow = {
   profileId: string;
   label: string;
   kind: string;
@@ -53,13 +51,14 @@ export type CodexAccountAuthOverview = {
 
 export async function readCodexAccountAuthOverview(params: {
   ctx: PluginCommandContext;
+  agentDir: string;
   pluginConfig: unknown;
   safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
   const config = params.ctx.config;
-  const agentDir = resolveDefaultAgentDir(config);
+  const agentDir = params.agentDir;
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
     config,
@@ -92,6 +91,7 @@ export async function readCodexAccountAuthOverview(params: {
     subscriptionProfileId && (!activeIsSubscription || subscriptionProfileId !== activeProfileId)
       ? await readSubscriptionUsage({
           ...params,
+          agentDir,
           config,
           subscriptionProfileId,
           now,
@@ -290,7 +290,7 @@ function resolveLiveAccountProfileId(params: {
     return (
       params.order.find((profileId) => {
         const credential = params.store.profiles[profileId];
-        if (!isChatGptSubscriptionProfile(credential)) {
+        if (!credential || !isChatGptSubscriptionProfile(credential)) {
           return false;
         }
         const profileEmail =
@@ -314,6 +314,7 @@ function shouldInferApiKeyActiveFromRateLimitProbe(
 async function readSubscriptionUsage(params: {
   pluginConfig: unknown;
   safeCodexControlRequest: SafeCodexControlRequest;
+  agentDir: string;
   config: AuthProfileOrderConfig;
   subscriptionProfileId: string;
   now: number;
@@ -324,6 +325,7 @@ async function readSubscriptionUsage(params: {
     undefined,
     {
       config: params.config,
+      agentDir: params.agentDir,
       authProfileId: params.subscriptionProfileId,
       isolated: true,
     },
@@ -331,7 +333,6 @@ async function readSubscriptionUsage(params: {
   if (!limits.ok) {
     return undefined;
   }
-  rememberCodexRateLimits(limits.value);
   return summarizeCodexAccountUsage(limits.value, params.now);
 }
 

@@ -6,7 +6,8 @@ Android release builds use pinned app metadata instead of auto-bumping `build.gr
 
 - `apps/android/version.json` is the source of truth.
 - `version` is the Play `versionName` and uses CalVer: `YYYY.M.D`.
-- `versionCode` uses `YYYYMMDDNN`, where `NN` is a two-digit build number for that pinned app version.
+- `versionCode` uses `YYYYMMDDNN`, where phone build number `NN` is `01` through `49`.
+- The matching Wear APK reserves `51` through `99` by adding `50` to the pinned phone `versionCode`; Play requires a unique code per form factor under the shared application ID.
 - `apps/android/Config/Version.properties` is generated from `version.json` and read by Gradle.
 - `apps/android/CHANGELOG.md` is the Android-only changelog and release-note source.
 - `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is generated from the changelog.
@@ -15,6 +16,7 @@ Examples:
 
 - `version = 2026.6.2`
 - `versionCode = 2026060201`
+- matching Wear `versionCode = 2026060251`
 - another upload on the same release train: `versionCode = 2026060202`
 
 ## Commands
@@ -49,10 +51,13 @@ Recommended workflow:
 3. Update `apps/android/CHANGELOG.md`, then run `pnpm android:version:sync` again if needed.
 4. Run `MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull` to materialize encrypted Android signing assets from `apps-signing`.
 5. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
-6. Run `ANDROID_SCREENSHOT_AVD=<avd-name> pnpm android:screenshots` to refresh raw Google Play screenshots with a script-managed emulator, or run `pnpm android:screenshots` when exactly one ADB device is already connected.
-7. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
-8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to the configured Google Play track.
-9. Complete production rollout manually in Google Play Console when needed.
+6. Run `pnpm android:screenshots` to refresh phone and Wear OS Google Play
+   screenshots with the script-managed Pixel 2 and Wear OS Large Round
+   emulators.
+7. Run `pnpm android:release:archive` to produce the signed phone Play AAB, Wear AAB, and third-party APK.
+8. Run `pnpm android:release:upload` to upload metadata, screenshots, the phone AAB, and the Wear AAB to their phone and `wear:` tracks in one atomic Google Play edit.
+9. For a regular final or correction OpenClaw release, let `OpenClaw Release Publish` dispatch the protected `Android Release` workflow. It builds the signed third-party APK from the exact tag and attaches the verified APK, checksum manifest, and GitHub provenance before the release draft can publish. Before tagging a correction with its own package version, increment the pinned `versionCode`; the workflow verifies it is higher than the preceding final or correction APK. A same-commit fallback correction reuses the base release's verified APK and adds provenance for the correction tag.
+10. Complete production rollout manually in Google Play Console when needed.
 
 If `pnpm android:release:upload` fails, stop at that failure. Do not continue by
 uploading archived artifacts through `pnpm android:release:archive`,
@@ -60,7 +65,7 @@ uploading archived artifacts through `pnpm android:release:archive`,
 Google Play API mutation commands, or Play Console mutation commands. Fix the
 failing release-lane step, then rerun `pnpm android:release:upload`.
 
-The third-party flavor is archived as a signed APK for non-Play distribution. It is not uploaded by the Play release lane.
+The third-party flavor is archived as a signed APK for non-Play distribution. The Play release lane never uploads it. Official GitHub distribution is owned only by `.github/workflows/android-release.yml`, which publishes regular final and correction tags through the protected `android-release` environment as `OpenClaw-Android.apk`.
 
 ## Release SHA tracking
 
@@ -82,7 +87,7 @@ not appear on GitHub release or tag pages, and they do not participate in the
 core OpenClaw release machinery.
 
 `pnpm android:release:upload` checks the ref before uploading the Play build and
-records it only after `upload_to_play_store` succeeds. Existing refs are
+records it only after the atomic phone and Wear Play edit commits. Existing refs are
 immutable: the same ref at the same SHA is accepted, while the same ref at a
 different SHA fails. `GOOGLE_PLAY_VALIDATE_ONLY=1` still checks the ref but does
 not record it because no Play build is published.

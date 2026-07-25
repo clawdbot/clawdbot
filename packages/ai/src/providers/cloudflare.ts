@@ -1,6 +1,8 @@
 // Cloudflare provider metadata describes Cloudflare-hosted model capabilities.
 import type { Model } from "../types.js";
 
+// This module owns URL metadata only; Anthropic/OpenAI adapters inject guarded fetch.
+
 export function isCloudflareProvider(provider: string): boolean {
   return provider === "cloudflare-workers-ai" || provider === "cloudflare-ai-gateway";
 }

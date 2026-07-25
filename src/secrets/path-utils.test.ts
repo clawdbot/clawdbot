@@ -20,6 +20,9 @@ function createAgentListConfig(): OpenClawConfig {
   });
 }
 
+const BLOCKED_PATH_SEGMENTS = ["__proto__", "constructor", "prototype"];
+const POLLUTION_PROBE = "openclawPathPollutionProbe";
+
 describe("secrets path utils", () => {
   it("deletePathStrict compacts arrays via splice", () => {
     const config = asConfig({});
@@ -54,6 +57,37 @@ describe("secrets path utils", () => {
     expect(() => setPathCreateStrict(config, ["agents", "list", "+0", "id"], "b")).toThrow(
       /Invalid path shape/,
     );
+  });
+
+  it.each(BLOCKED_PATH_SEGMENTS)(
+    "setPathCreateStrict rejects %s before creating partial containers",
+    (blockedSegment) => {
+      const config = asConfig({});
+
+      expect(() =>
+        setPathCreateStrict(config, ["safe", blockedSegment, POLLUTION_PROBE], "yes"),
+      ).toThrow(/prototype-polluting/);
+      expect(config).toEqual({});
+      expect(Object.hasOwn(Object.prototype, POLLUTION_PROBE)).toBe(false);
+    },
+  );
+
+  it.each([
+    ["leading", (blockedSegment: string) => [blockedSegment, POLLUTION_PROBE]],
+    ["middle", (blockedSegment: string) => ["safe", blockedSegment, POLLUTION_PROBE]],
+    ["leaf", (blockedSegment: string) => ["safe", "value", blockedSegment]],
+  ] as const)("all mutation helpers reject blocked segments at the %s", (_position, pathFor) => {
+    for (const blockedSegment of BLOCKED_PATH_SEGMENTS) {
+      const segments = pathFor(blockedSegment);
+      const config = asConfig({ safe: { value: "kept" } });
+
+      expect(() => setPathCreateStrict(config, segments, "changed")).toThrow(/prototype-polluting/);
+      expect(() => setPathExistingStrict(config, segments, "changed")).toThrow(
+        /prototype-polluting/,
+      );
+      expect(() => deletePathStrict(config, segments)).toThrow(/prototype-polluting/);
+      expect(config).toEqual({ safe: { value: "kept" } });
+    }
   });
 
   it("setPathExistingStrict throws when path does not already exist", () => {

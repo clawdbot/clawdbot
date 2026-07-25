@@ -65,6 +65,22 @@ run_logged_print() {
   rm -f "$log_file"
 }
 
+docker_e2e_maybe_print_log_heartbeat() {
+  local label="$1"
+  local elapsed_seconds="$2"
+  local next_heartbeat="$3"
+  local log_file="$4"
+  if [ "$elapsed_seconds" -lt "$next_heartbeat" ]; then
+    return 1
+  fi
+  local log_bytes="0"
+  if [ -f "$log_file" ]; then
+    log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+    log_bytes="${log_bytes//[[:space:]]/}"
+  fi
+  echo "still running $label (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)"
+}
+
 run_logged_print_heartbeat() {
   local label="$1"
   local interval_seconds="$2"
@@ -143,15 +159,11 @@ run_logged_print_heartbeat() {
   local next_heartbeat=$interval_seconds
   local status=0
   while kill -0 "$command_pid" 2>/dev/null; do
-    /bin/sleep 1
+    # Poll promptly so short commands do not pay a one-second wrapper tax.
+    /bin/sleep 0.1
     local elapsed_seconds=$((SECONDS - started_at))
-    if [ "$elapsed_seconds" -ge "$next_heartbeat" ] && kill -0 "$command_pid" 2>/dev/null; then
-      local log_bytes="0"
-      if [ -f "$log_file" ]; then
-        log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
-        log_bytes="${log_bytes//[[:space:]]/}"
-      fi
-      echo "still running $label (${elapsed_seconds}s elapsed, ${log_bytes} log bytes captured)"
+    if kill -0 "$command_pid" 2>/dev/null && \
+      docker_e2e_maybe_print_log_heartbeat "$label" "$elapsed_seconds" "$next_heartbeat" "$log_file"; then
       next_heartbeat=$((elapsed_seconds + interval_seconds))
     fi
   done

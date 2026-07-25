@@ -129,10 +129,6 @@ enum OpenClawType {
         scaledMono(name: Mono.regular, size: 13, relativeTo: .footnote)
     }
 
-    static var monoHeadline: Font {
-        scaledMono(name: Mono.medium, size: 17, relativeTo: .headline)
-    }
-
     /// PostScript names for bundled fonts. Keep aligned with `UIAppFonts` in `project.yml`.
     static let registeredPostScriptNames: [String] = [
         Display.postScriptName,

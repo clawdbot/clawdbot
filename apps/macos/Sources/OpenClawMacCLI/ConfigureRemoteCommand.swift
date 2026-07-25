@@ -141,7 +141,7 @@ private func configureSSHRemote(
             userInfo: [NSLocalizedDescriptionKey: "SSH target must look like user@host[:port]"])
     }
 
-    let configURL = openClawConfigURL()
+    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
@@ -195,11 +195,13 @@ private func configureDirectRemote(
             domain: "ConfigureRemote",
             code: 2,
             userInfo: [
-                NSLocalizedDescriptionKey: "Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts",
+                NSLocalizedDescriptionKey: """
+                Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts
+                """,
             ])
     }
 
-    let configURL = openClawConfigURL()
+    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
@@ -230,15 +232,6 @@ private func configureDirectRemote(
         remotePort: defaultPort(for: directURL) ?? opts.remotePort,
         sshHostKeyPolicy: nil,
         onboardingSkipped: true)
-}
-
-private func openClawConfigURL() -> URL {
-    if let raw = ProcessInfo.processInfo.environment["OPENCLAW_CONFIG_PATH"],
-       !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    {
-        return URL(fileURLWithPath: NSString(string: raw).expandingTildeInPath)
-    }
-    return FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw/openclaw.json")
 }
 
 private func loadConfigRoot(from url: URL) throws -> [String: Any] {

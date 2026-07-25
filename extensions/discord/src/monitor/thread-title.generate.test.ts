@@ -1,25 +1,47 @@
 // Discord tests cover thread title.generate plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as agentRuntimeModule from "openclaw/plugin-sdk/simple-completion-runtime";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  extractAssistantText,
+  prepareSimpleCompletionModelForAgent,
+} from "openclaw/plugin-sdk/simple-completion-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
+vi.mock("openclaw/plugin-sdk/simple-completion-runtime", { spy: true });
+
 const completeWithPreparedSimpleCompletionModelMock =
-  vi.fn<typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel>();
+  vi.fn<typeof completeWithPreparedSimpleCompletionModel>();
 const prepareSimpleCompletionModelForAgentMock =
-  vi.fn<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>();
-const extractAssistantTextMock = vi.fn<typeof agentRuntimeModule.extractAssistantText>();
+  vi.fn<typeof prepareSimpleCompletionModelForAgent>();
+const extractAssistantTextMock = vi.fn<typeof extractAssistantText>();
 
 let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
 
-function firstCompletionArgs(): Parameters<
-  typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel
->[0] {
+function firstCompletionArgs(): Parameters<typeof completeWithPreparedSimpleCompletionModel>[0] {
   const firstCall = completeWithPreparedSimpleCompletionModelMock.mock.calls.at(0);
   if (!firstCall) {
     throw new Error("expected completion call");
   }
   return firstCall[0];
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 beforeAll(async () => {
@@ -48,23 +70,47 @@ beforeEach(() => {
       source: "env:TEST_API_KEY",
       mode: "api-key",
     },
-  } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
+  } as Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>);
   completeWithPreparedSimpleCompletionModelMock.mockResolvedValue(
-    {} as Awaited<ReturnType<typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel>>,
+    {} as Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModel>>,
   );
   extractAssistantTextMock.mockReturnValue("Generated title");
-  vi.spyOn(agentRuntimeModule, "prepareSimpleCompletionModelForAgent").mockImplementation(
-    (...args) => prepareSimpleCompletionModelForAgentMock(...args),
+  vi.mocked(prepareSimpleCompletionModelForAgent).mockImplementation((...args) =>
+    prepareSimpleCompletionModelForAgentMock(...args),
   );
-  vi.spyOn(agentRuntimeModule, "completeWithPreparedSimpleCompletionModel").mockImplementation(
-    (...args) => completeWithPreparedSimpleCompletionModelMock(...args),
+  vi.mocked(completeWithPreparedSimpleCompletionModel).mockImplementation((...args) =>
+    completeWithPreparedSimpleCompletionModelMock(...args),
   );
-  vi.spyOn(agentRuntimeModule, "extractAssistantText").mockImplementation((...args) =>
+  vi.mocked(extractAssistantText).mockImplementation((...args) =>
     extractAssistantTextMock(...args),
   );
 });
 
 describe("generateThreadTitle", () => {
+  it.each([
+    [' "Weekly Release Summary"\nExtra text', "Weekly Release Summary"],
+    ['\n\n "Weekly Release Summary"\nExtra text', "Weekly Release Summary"],
+    ["```markdown\nWeekly Release Summary\n```", "Weekly Release Summary"],
+    ["**Scaling ArcherScore Development Roadmap**", "Scaling ArcherScore Development Roadmap"],
+    ['"__Weekly Release Summary__"', "Weekly Release Summary"],
+    ["*Plan* for *project*", "*Plan* for *project*"],
+    ["**Bold** vs **Strong**", "**Bold** vs **Strong**"],
+    ["_intro_ and _outro_", "_intro_ and _outro_"],
+    ["**Release *plan***", "Release *plan*"],
+    ["***Release plan***", "Release plan"],
+    ["__Release _plan___", "Release _plan_"],
+  ])("normalizes generated title %j", async (generated, expected) => {
+    extractAssistantTextMock.mockReturnValueOnce(generated);
+
+    await expect(
+      generateThreadTitle({
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
+        agentId: "main",
+        messageText: "Need a generated title.",
+      }),
+    ).resolves.toBe(expected);
+  });
+
   it("calls shared one-shot model prep with aws-sdk allowance", async () => {
     prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
       selection: {
@@ -83,7 +129,7 @@ describe("generateThreadTitle", () => {
         source: "profile:work",
         mode: "api-key",
       },
-    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
+    } as Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>);
     const cfg = {
       agents: {
         defaults: {
@@ -127,7 +173,7 @@ describe("generateThreadTitle", () => {
   it("returns null when shared model prep cannot resolve selection", async () => {
     prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
       error: "No model configured for agent main.",
-    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
+    } as Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
       cfg: EMPTY_DISCORD_TEST_CONFIG,
@@ -147,7 +193,7 @@ describe("generateThreadTitle", () => {
         modelId: "claude-sonnet-4-6",
         agentDir: "/tmp/openclaw-agent",
       },
-    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
+    } as Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
       cfg: EMPTY_DISCORD_TEST_CONFIG,
@@ -200,6 +246,24 @@ describe("generateThreadTitle", () => {
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
   });
 
+  it("keeps truncated prompt fields on UTF-16 boundaries", async () => {
+    await generateThreadTitle({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      agentId: "main",
+      messageText: `${"m".repeat(599)}😀tail`,
+      channelName: `${"n".repeat(119)}😀tail`,
+      channelDescription: `${"d".repeat(319)}😀tail`,
+    });
+
+    const message = firstCompletionArgs().context.messages.at(0);
+    const content = typeof message?.content === "string" ? message.content : "";
+
+    expect(hasLoneSurrogate(content)).toBe(false);
+    expect(content).toContain(`${"m".repeat(599)}...`);
+    expect(content).toContain(`${"n".repeat(119)}...`);
+    expect(content).toContain(`${"d".repeat(319)}...`);
+  });
+
   it("clamps completion budget to the selected model output cap", async () => {
     prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
       selection: {
@@ -217,7 +281,7 @@ describe("generateThreadTitle", () => {
         source: "env:TEST_API_KEY",
         mode: "api-key",
       },
-    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
+    } as Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>);
 
     await generateThreadTitle({
       cfg: EMPTY_DISCORD_TEST_CONFIG,

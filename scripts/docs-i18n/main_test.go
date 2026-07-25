@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,6 +339,47 @@ func TestClassifyDocOutputKeepsEnglishTargetsHashOnly(t *testing.T) {
 	}
 }
 
+func TestClassifyDocOutputRequiresCurrentPromptVersion(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	sourcePath := filepath.Join(docsRoot, "gateway", "index.md")
+	writeFile(t, sourcePath, "# Gateway\n")
+	outputPath := filepath.Join(docsRoot, "zh-CN", "gateway", "index.md")
+	sourceHash := hashBytes([]byte(mustReadFile(t, sourcePath)))
+	writeOutput := func(version int) {
+		writeFile(t, outputPath, stringsJoin(
+			"---",
+			"title: 网关",
+			"x-i18n:",
+			"  source_hash: "+sourceHash,
+			fmt.Sprintf("  prompt_version: %d", version),
+			"  postprocess_version: "+localizedLinkPostprocessVersion,
+			"---",
+			"",
+			"正文。",
+		))
+	}
+
+	writeOutput(promptVersion - 1)
+	status, err := classifyDocOutput(outputPath, sourceHash, "zh-CN")
+	if err != nil {
+		t.Fatalf("classifyDocOutput with stale prompt failed: %v", err)
+	}
+	if status != docOutputNeedsTranslation {
+		t.Fatalf("expected stale prompt output to need translation, got %v", status)
+	}
+
+	writeOutput(promptVersion)
+	status, err = classifyDocOutput(outputPath, sourceHash, "zh-CN")
+	if err != nil {
+		t.Fatalf("classifyDocOutput with current prompt failed: %v", err)
+	}
+	if status != docOutputReady {
+		t.Fatalf("expected current prompt output to be ready, got %v", status)
+	}
+}
+
 func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
 	t.Parallel()
 
@@ -350,6 +392,7 @@ func TestFilterDocQueueSchedulesLegacyOutputsForPostprocessOnly(t *testing.T) {
 		"title: 网关",
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, sourcePath))),
+		fmt.Sprintf("  prompt_version: %d", promptVersion),
 		"---",
 		"",
 		"See [Troubleshooting](/gateway/troubleshooting).",
@@ -385,6 +428,7 @@ func TestFilterDocQueueHonorsMaxAcrossPostprocessOutputs(t *testing.T) {
 		"title: 网关",
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, firstSource))),
+		fmt.Sprintf("  prompt_version: %d", promptVersion),
 		"---",
 		"",
 		"# 网关",
@@ -394,6 +438,7 @@ func TestFilterDocQueueHonorsMaxAcrossPostprocessOutputs(t *testing.T) {
 		"title: 示例 provider",
 		"x-i18n:",
 		"  source_hash: "+hashBytes([]byte(mustReadFile(t, secondSource))),
+		fmt.Sprintf("  prompt_version: %d", promptVersion),
 		"---",
 		"",
 		"# 示例 provider",

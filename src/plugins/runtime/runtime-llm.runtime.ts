@@ -352,7 +352,9 @@ function assertAllowedModelOverride(params: {
 /**
  * Create the host-owned generic LLM completion runtime for trusted plugin callers.
  */
-export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginRuntimeCore["llm"] {
+export function createRuntimeLlm(
+  options: CreateRuntimeLlmOptions = {},
+): Pick<PluginRuntimeCore["llm"], "complete"> {
   const logger = options.logger ?? toRuntimeLogger(defaultLogger);
   return {
     complete: async (params: LlmCompleteParams): Promise<LlmCompleteResult> => {
@@ -445,6 +447,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         options: {
           maxTokens: finiteOption(params.maxTokens),
           temperature: finiteOption(params.temperature),
+          ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
         },
       });

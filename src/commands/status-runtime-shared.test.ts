@@ -3,8 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
-  resolveStatusLastHeartbeat,
-  resolveStatusRuntimeDetails,
   resolveStatusRuntimeSnapshot,
   resolveStatusSecurityAudit,
   resolveStatusServiceSummaries,
@@ -374,114 +372,11 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("returns null for heartbeat when the gateway is unreachable", async () => {
-    expect(
-      await resolveStatusLastHeartbeat({
-        config: { gateway: {} },
-        timeoutMs: 1000,
-        gatewayReachable: false,
-      }),
-    ).toBeNull();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("catches heartbeat gateway errors and returns null", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("boom"));
-
-    expect(
-      await resolveStatusLastHeartbeat({
-        config: { gateway: {} },
-        timeoutMs: 1000,
-        gatewayReachable: true,
-      }),
-    ).toBeNull();
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "last-heartbeat",
-      params: {},
-      timeoutMs: 1000,
-      config: { gateway: {} },
-    });
-  });
-
   it("resolves daemon summaries together", async () => {
     await expect(resolveStatusServiceSummaries()).resolves.toEqual([
       { label: "LaunchAgent" },
       { label: "node" },
     ]);
-  });
-
-  it("resolves shared runtime details with optional usage and deep fields", async () => {
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        usage: true,
-        deep: true,
-        gatewayReachable: true,
-      }),
-    ).resolves.toEqual({
-      usage: { providers: [] },
-      health: { ok: true },
-      lastHeartbeat: { ok: true },
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
-    const usageCall = requireProviderUsageCall();
-    expect(usageCall.timeoutMs).toBe(1234);
-    expect(usageCall.config).toEqual({ gateway: {} });
-    expect(usageCall.agentDir).toContain("main");
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
-      method: "health",
-      params: { probe: true },
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
-      method: "last-heartbeat",
-      params: {},
-      timeoutMs: 1234,
-      config: { gateway: {} },
-    });
-  });
-
-  it("skips optional runtime details when flags are off", async () => {
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        usage: false,
-        deep: false,
-        gatewayReachable: true,
-      }),
-    ).resolves.toEqual({
-      usage: undefined,
-      health: undefined,
-      lastHeartbeat: null,
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
-    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("suppresses health failures inside shared runtime details", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("boom"));
-
-    await expect(
-      resolveStatusRuntimeDetails({
-        config: { gateway: {} },
-        timeoutMs: 1234,
-        deep: true,
-        gatewayReachable: false,
-        suppressHealthErrors: true,
-      }),
-    ).resolves.toEqual({
-      usage: undefined,
-      health: undefined,
-      lastHeartbeat: null,
-      gatewayService: { label: "LaunchAgent" },
-      nodeService: { label: "node" },
-    });
   });
 
   it("resolves the shared runtime snapshot with security audit and runtime details", async () => {

@@ -1,33 +1,15 @@
 // Exec policy CLI tests cover execution policy command behavior and persistence.
-import crypto from "node:crypto";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { registerExecPolicyCli } from "./exec-policy-cli.js";
 
-function hashApprovalsFile(file: ExecApprovalsFile): string {
-  return crypto
-    .createHash("sha256")
-    .update(`${JSON.stringify(file, null, 2)}\n`)
-    .digest("hex");
-}
-
-function createCurrentApprovalsSnapshot(path: string): ExecApprovalsSnapshot {
-  return {
-    path,
-    exists: true,
-    raw: JSON.stringify(mocks.getApprovals(), null, 2),
-    hash: hashApprovalsFile(mocks.getApprovals()),
-    file: structuredClone(mocks.getApprovals()),
-  };
-}
-
 function mockRollbackApprovalSnapshots(originalSnapshot: ExecApprovalsSnapshot) {
-  mocks.readExecApprovalsSnapshot
-    .mockImplementationOnce(() => originalSnapshot)
-    .mockImplementationOnce(() => createCurrentApprovalsSnapshot(originalSnapshot.path));
+  mocks.setApprovalsHash(originalSnapshot.hash);
+  mocks.readExecApprovalsSnapshot.mockImplementationOnce(() => originalSnapshot);
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -79,8 +61,7 @@ const mocks = vi.hoisted(() => {
     tools: {
       exec: {
         host: "auto",
-        security: "allowlist",
-        ask: "on-miss",
+        mode: "ask",
       },
     },
   };
@@ -93,6 +74,7 @@ const mocks = vi.hoisted(() => {
     },
     agents: {},
   };
+  let approvalsHash = "approvals-hash";
   const defaultRuntime = {
     log: vi.fn(),
     error: vi.fn((...args: unknown[]) => {
@@ -113,6 +95,9 @@ const mocks = vi.hoisted(() => {
     getApprovals: () => approvalsState,
     setApprovals: (next: ExecApprovalsFile) => {
       approvalsState = next;
+    },
+    setApprovalsHash: (next: string) => {
+      approvalsHash = next;
     },
     defaultRuntime,
     runtimeErrors,
@@ -152,13 +137,44 @@ const mocks = vi.hoisted(() => {
       path: "/tmp/exec-approvals.json",
       exists: true,
       raw: "{}",
-      hash: "approvals-hash",
+      hash: approvalsHash,
       file: approvalsState,
     })),
-    restoreExecApprovalsSnapshot: vi.fn(),
-    saveExecApprovals: vi.fn((file: ExecApprovalsFile) => {
-      approvalsState = file;
-    }),
+    restoreExecApprovalsSnapshot: vi.fn(
+      async (snapshot: ExecApprovalsSnapshot, baseHash: string) => {
+        if (baseHash !== approvalsHash) {
+          return false;
+        }
+        approvalsState = snapshot.file;
+        approvalsHash = snapshot.hash;
+        return true;
+      },
+    ),
+    updateExecApprovals: vi.fn(
+      async ({
+        baseHash,
+        update,
+      }: {
+        baseHash?: string;
+        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
+      }) => {
+        if (baseHash !== undefined && baseHash !== approvalsHash) {
+          return null;
+        }
+        const next = update(structuredClone(approvalsState));
+        if (next !== null) {
+          approvalsState = next;
+          approvalsHash = "written-approvals-hash";
+        }
+        return {
+          path: "/tmp/exec-approvals.json",
+          exists: true,
+          raw: JSON.stringify(approvalsState),
+          hash: approvalsHash,
+          file: approvalsState,
+        } satisfies ExecApprovalsSnapshot;
+      },
+    ),
   };
 });
 
@@ -182,8 +198,8 @@ vi.mock("../infra/exec-approvals.js", async () => {
   return {
     ...actual,
     readExecApprovalsSnapshot: mocks.readExecApprovalsSnapshot,
-    restoreExecApprovalsSnapshot: mocks.restoreExecApprovalsSnapshot,
-    saveExecApprovals: mocks.saveExecApprovals,
+    restoreExecApprovalsSnapshotLocked: mocks.restoreExecApprovalsSnapshot,
+    updateExecApprovals: mocks.updateExecApprovals,
   };
 });
 
@@ -209,8 +225,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "auto",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -223,6 +238,7 @@ describe("exec-policy CLI", () => {
       },
       agents: {},
     });
+    mocks.setApprovalsHash("approvals-hash");
     mocks.runtimeErrors.length = 0;
     mocks.defaultRuntime.log.mockClear();
     mocks.defaultRuntime.error.mockClear();
@@ -272,11 +288,17 @@ describe("exec-policy CLI", () => {
       file: mocks.getApprovals(),
     }));
     mocks.restoreExecApprovalsSnapshot.mockReset();
-    mocks.restoreExecApprovalsSnapshot.mockImplementation((_snapshot: ExecApprovalsSnapshot) => {});
-    mocks.saveExecApprovals.mockReset();
-    mocks.saveExecApprovals.mockImplementation((file: ExecApprovalsFile) => {
-      mocks.setApprovals(file);
-    });
+    mocks.restoreExecApprovalsSnapshot.mockImplementation(
+      async (snapshot: ExecApprovalsSnapshot, baseHash: string) => {
+        if (baseHash !== "written-approvals-hash") {
+          return false;
+        }
+        mocks.setApprovals(structuredClone(snapshot.file));
+        mocks.setApprovalsHash(snapshot.hash);
+        return true;
+      },
+    );
+    mocks.updateExecApprovals.mockClear();
   });
 
   it("shows the local merged exec policy as json", async () => {
@@ -284,6 +306,8 @@ describe("exec-policy CLI", () => {
 
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
     const payload = readLastJsonWrite();
+    const effectivePolicy = payload.effectivePolicy as { note?: unknown } | undefined;
+    expect(String(effectivePolicy?.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     expectFields(payload, {
       configPath: "/tmp/openclaw.json",
       approvalsPath: "/tmp/exec-approvals.json",
@@ -307,8 +331,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "node",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -348,8 +371,7 @@ describe("exec-policy CLI", () => {
 
     expect(mocks.getConfig().tools?.exec).toEqual({
       host: "gateway",
-      security: "full",
-      ask: "off",
+      mode: "full",
     });
     expect(mocks.getApprovals().defaults).toEqual({
       security: "full",
@@ -358,7 +380,7 @@ describe("exec-policy CLI", () => {
     });
     const replaceConfigArg = readFirstReplaceConfigArg();
     expectFields(replaceConfigArg, { baseHash: "config-hash-1" });
-    expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
+    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(1);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
   });
 
@@ -379,8 +401,7 @@ describe("exec-policy CLI", () => {
 
     expect(mocks.getConfig().tools?.exec).toEqual({
       host: "gateway",
-      security: "full",
-      ask: "off",
+      mode: "full",
     });
     expect(mocks.getApprovals().defaults).toEqual({
       security: "full",
@@ -389,13 +410,28 @@ describe("exec-policy CLI", () => {
     });
   });
 
+  it("derives partial updates from retained legacy config policy", async () => {
+    mocks.setConfig({ tools: { exec: { security: "deny", ask: "always" } } });
+
+    await runExecPolicyCommand(["exec-policy", "set", "--ask", "off", "--json"]);
+
+    expect(mocks.getConfig().tools?.exec).toEqual({ mode: "deny" });
+  });
+
+  it("retains nonrepresentable always-ask policy updates", async () => {
+    mocks.setConfig({ tools: { exec: { mode: "full" } } });
+
+    await runExecPolicyCommand(["exec-policy", "set", "--ask", "always", "--json"]);
+
+    expect(mocks.getConfig().tools?.exec).toEqual({ security: "full", ask: "always" });
+  });
+
   it("sanitizes terminal control content before rendering the text table", async () => {
     mocks.setConfig({
       tools: {
         exec: {
           host: "auto",
-          security: "allowlist\u001B[31m" as unknown as "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -437,6 +473,7 @@ describe("exec-policy CLI", () => {
     expect(output).toContain("host=auto");
     expect(output).toContain("tools.exec.");
     expect(output).toContain("host)");
+    expect(output).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     expect(output).toContain("\\nforged");
     expect(output).not.toContain("/tmp/openclaw.json\nforged");
     expect(output).not.toContain("\u001B[2J");
@@ -462,7 +499,7 @@ describe("exec-policy CLI", () => {
       "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
     ]);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    expect(mocks.saveExecApprovals).not.toHaveBeenCalled();
+    expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
   });
 
   it("rejects sync when the resulting requested host remains node", async () => {
@@ -470,8 +507,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "node",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -484,7 +520,7 @@ describe("exec-policy CLI", () => {
       "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
     ]);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    expect(mocks.saveExecApprovals).not.toHaveBeenCalled();
+    expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
   });
 
   it("rolls back approvals if the config write fails after approvals save", async () => {
@@ -506,8 +542,12 @@ describe("exec-policy CLI", () => {
       runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
-    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(originalSnapshot);
+    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(1);
+    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
+      originalSnapshot,
+      "written-approvals-hash",
+    );
+    expect(mocks.getApprovals()).toEqual(originalApprovals);
     expect(mocks.runtimeErrors).toEqual(["config write failed"]);
   });
 
@@ -528,10 +568,13 @@ describe("exec-policy CLI", () => {
       runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(missingSnapshot);
+    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
+      missingSnapshot,
+      "written-approvals-hash",
+    );
   });
 
-  it("does not clobber a newer approvals write during rollback", async () => {
+  it("rebases rollback over a newer approvals write", async () => {
     const originalApprovals = structuredClone(mocks.getApprovals());
     const originalRaw = JSON.stringify(originalApprovals, null, 2);
     const originalSnapshot = {
@@ -541,26 +584,151 @@ describe("exec-policy CLI", () => {
       hash: "original-hash",
       file: originalApprovals,
     };
-    const concurrentFile: ExecApprovalsFile = {
+    mockRollbackApprovalSnapshots(originalSnapshot);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      const concurrentFile = structuredClone(mocks.getApprovals());
+      concurrentFile.defaults = {
+        ...concurrentFile.defaults,
+        security: "deny",
+      };
+      concurrentFile.agents = {
+        ...concurrentFile.agents,
+        worker: { security: "deny" },
+      };
+      mocks.setApprovals(concurrentFile);
+      mocks.setApprovalsHash("concurrent-write-hash");
+      return false;
+    });
+    mocks.replaceConfigFile.mockImplementationOnce(async () => {
+      throw new Error("config write failed");
+    });
+
+    await expect(runExecPolicyCommand(["exec-policy", "preset", "yolo"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
+      originalSnapshot,
+      "written-approvals-hash",
+    );
+    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(2);
+    expect(mocks.getApprovals()).toEqual({
+      ...originalApprovals,
+      defaults: {
+        ...originalApprovals.defaults,
+        security: "deny",
+      },
+      agents: {
+        ...originalApprovals.agents,
+        worker: { security: "deny" },
+      },
+    });
+    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+  });
+
+  it("does not loosen a same-valued concurrent policy after rollback loses provenance", async () => {
+    const originalApprovals: ExecApprovalsFile = {
       version: 1,
       defaults: {
-        security: "deny",
+        security: "full",
         ask: "off",
-        askFallback: "deny",
+        askFallback: "full",
       },
       agents: {},
     };
-    const concurrentSnapshot: ExecApprovalsSnapshot = {
+    mocks.setApprovals(originalApprovals);
+    const originalSnapshot = {
       path: "/tmp/exec-approvals.json",
       exists: true,
-      raw: JSON.stringify(concurrentFile, null, 2),
-      hash: "concurrent-write-hash",
-      file: concurrentFile,
+      raw: JSON.stringify(originalApprovals, null, 2),
+      hash: "original-hash",
+      file: originalApprovals,
     };
-    let snapshotReadCount = 0;
-    mocks.readExecApprovalsSnapshot.mockImplementation(() => {
-      snapshotReadCount += 1;
-      return snapshotReadCount === 1 ? originalSnapshot : concurrentSnapshot;
+    mockRollbackApprovalSnapshots(originalSnapshot);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      const concurrentFile = structuredClone(mocks.getApprovals());
+      concurrentFile.agents = { worker: { security: "deny" } };
+      mocks.setApprovals(concurrentFile);
+      mocks.setApprovalsHash("concurrent-write-hash");
+      return false;
+    });
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config write failed"));
+
+    await expect(runExecPolicyCommand(["exec-policy", "preset", "cautious"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(2);
+    expect(mocks.getApprovals()).toEqual({
+      version: 1,
+      defaults: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+      },
+      agents: { worker: { security: "deny" } },
+    });
+    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+  });
+
+  it("clears an applied default that was originally unset during rebased rollback", async () => {
+    const originalApprovals: ExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+      agents: {},
+    };
+    mocks.setApprovals(originalApprovals);
+    const originalSnapshot = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      raw: JSON.stringify(originalApprovals, null, 2),
+      hash: "original-hash",
+      file: originalApprovals,
+    };
+    mockRollbackApprovalSnapshots(originalSnapshot);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      const concurrentFile = structuredClone(mocks.getApprovals());
+      concurrentFile.defaults = {
+        ...concurrentFile.defaults,
+        autoAllowSkills: true,
+      };
+      mocks.setApprovals(concurrentFile);
+      mocks.setApprovalsHash("concurrent-write-hash");
+      return false;
+    });
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config write failed"));
+
+    await expect(
+      runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.getApprovals().defaults).toEqual({
+      ask: "on-miss",
+      askFallback: "deny",
+      autoAllowSkills: true,
+      security: undefined,
+    });
+    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+  });
+
+  it("reports when field-level rollback cannot be persisted", async () => {
+    const originalApprovals = structuredClone(mocks.getApprovals());
+    const originalSnapshot = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      raw: JSON.stringify(originalApprovals, null, 2),
+      hash: "original-hash",
+      file: originalApprovals,
+    };
+    mockRollbackApprovalSnapshots(originalSnapshot);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      mocks.setApprovalsHash("concurrent-write-hash");
+      mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval rollback failed"));
+      return false;
     });
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
@@ -570,8 +738,8 @@ describe("exec-policy CLI", () => {
       runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(mocks.restoreExecApprovalsSnapshot).not.toHaveBeenCalled();
-    expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
-    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+    expect(mocks.runtimeErrors).toEqual([
+      "Config update failed: config write failed; exec approvals rollback failed: approval rollback failed",
+    ]);
   });
 });

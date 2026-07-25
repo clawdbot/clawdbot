@@ -61,7 +61,28 @@ describe("handleSteerCommand", () => {
       "keep going",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
+      },
+    );
+  });
+
+  it("passes the initiating surface task capability into steering", async () => {
+    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
+    const params = buildParams("/steer keep going");
+    params.opts = { taskSuggestionDeliveryMode: "gateway" };
+
+    await handleSteerCommand(params, true);
+
+    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
+      "session-active",
+      "keep going",
+      {
+        steeringMode: "all",
+        isInboundUserMessage: true,
+        debounceMs: 0,
+        taskSuggestionDeliveryMode: "gateway",
       },
     );
   });
@@ -84,7 +105,9 @@ describe("handleSteerCommand", () => {
       "check the target",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });
@@ -106,7 +129,9 @@ describe("handleSteerCommand", () => {
       "continue from state",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });
@@ -144,7 +169,9 @@ describe("handleSteerCommand", () => {
       "check the active file",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });
@@ -172,7 +199,9 @@ describe("handleSteerCommand", () => {
       "use the active direct lane",
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });

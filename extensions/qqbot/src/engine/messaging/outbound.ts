@@ -33,6 +33,7 @@ export {
   sendVoice,
 } from "./outbound-media-send.js";
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -59,11 +60,6 @@ import {
   sendVideoMsg,
   sendVoice,
 } from "./outbound-media-send.js";
-import {
-  checkMessageReplyLimit,
-  MESSAGE_REPLY_LIMIT,
-  recordMessageReply,
-} from "./outbound-reply.js";
 import type {
   MediaOutboundContext,
   MediaTargetContext,
@@ -93,45 +89,19 @@ const mediaPathDecodeLog = {
  */
 export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   const { to, account } = ctx;
-  let { text, replyToId } = ctx;
-  let fallbackToProactive = false;
+  const { replyToId } = ctx;
+  let { text } = ctx;
 
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   debugLog(
     "[qqbot] sendText ctx:",
     JSON.stringify(
-      { to, text: text?.slice(0, 50), replyToId, accountId: account.accountId },
+      { to, text: truncateUtf16Safe(text, 50), replyToId, accountId: account.accountId },
       null,
       2,
     ),
   );
-
-  if (replyToId) {
-    const limitCheck = checkMessageReplyLimit(replyToId);
-
-    if (!limitCheck.allowed) {
-      if (limitCheck.shouldFallbackToProactive) {
-        debugWarn(
-          `[qqbot] sendText: passive reply unavailable, falling back to proactive send - ${limitCheck.message}`,
-        );
-        fallbackToProactive = true;
-        replyToId = null;
-      } else {
-        debugError(
-          `[qqbot] sendText: passive reply was blocked without a fallback path - ${limitCheck.message}`,
-        );
-        return {
-          channel: "qqbot",
-          error: limitCheck.message,
-        };
-      }
-    } else {
-      debugLog(
-        `[qqbot] sendText: remaining passive replies for ${replyToId}: ${limitCheck.remaining}/${MESSAGE_REPLY_LIMIT}`,
-      );
-    }
-  }
 
   text = normalizeMediaTags(text);
 
@@ -222,16 +192,13 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           const result = await senderSendText(deliveryTarget, item.content, creds, {
             msgId: replyToId ?? undefined,
           });
-          if (replyToId) {
-            recordMessageReply(replyToId);
-          }
           lastResult = {
             channel: "qqbot",
             messageId: result.id,
             timestamp: result.timestamp,
             refIdx: result.ext_info?.ref_idx,
           };
-          debugLog(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
+          debugLog(`[qqbot] sendText: Sent text part: ${truncateUtf16Safe(item.content, 30)}...`);
         } else if (item.type === "image") {
           lastResult = await sendPhoto(mediaTarget, item.content);
         } else if (item.type === "voice") {
@@ -276,13 +243,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         error: "Proactive messages require non-empty content (--message cannot be empty)",
       };
     }
-    if (fallbackToProactive) {
-      debugLog(
-        `[qqbot] sendText: [fallback] sending proactive message to ${to}, length=${text.length}`,
-      );
-    } else {
-      debugLog(`[qqbot] sendText: sending proactive message to ${to}, length=${text.length}`);
-    }
+    debugLog(`[qqbot] sendText: sending proactive message to ${to}, length=${text.length}`);
   }
 
   if (!account.appId || !account.clientSecret) {
@@ -301,9 +262,6 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     const result = await senderSendText(deliveryTarget, text, creds, {
       msgId: replyToId ?? undefined,
     });
-    if (replyToId) {
-      recordMessageReply(replyToId);
-    }
     return {
       channel: "qqbot",
       messageId: result.id,

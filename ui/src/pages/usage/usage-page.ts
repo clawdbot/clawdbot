@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -7,12 +7,16 @@ import type {
   SessionsUsageResult,
   SessionUsageTimeSeries,
 } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -24,14 +28,31 @@ import {
   requestSessionUsageTimeSeries,
 } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
-import { selectUsageSessionKeys, toggleUsageRangeSelection } from "./helpers.ts";
-import type { SessionLogEntry, SessionLogRole, UsageColumnId, UsageProps } from "./types.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
+import { failUsageDetailRefresh } from "./detail-refresh.ts";
+import {
+  currentLocalDate,
+  selectUsageSessionKeys,
+  toggleUsageRangeSelection,
+  toUsageErrorMessage,
+} from "./helpers.ts";
+import { renderUsagePageShell } from "./page-shell.ts";
+import {
+  DEFAULT_VISIBLE_COLUMNS,
+  type SessionLogEntry,
+  type SessionLogRole,
+  type UsageProps,
+} from "./types.ts";
+import { UsageRefreshRuntime } from "./usage-refresh-runtime.ts";
 import { renderUsage } from "./view.ts";
 
 export type UsageRouteData = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
   query: {
     startDate: string;
     endDate: string;
@@ -41,48 +62,13 @@ export type UsageRouteData = {
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
+  providerUsageSummary: ProviderUsageSummary | null;
+  loadedAtMs: number | null;
   error: string | null;
 };
 
-const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
-  "channel",
-  "agent",
-  "provider",
-  "model",
-  "messages",
-  "tools",
-  "errors",
-  "duration",
-];
-
-function currentLocalDate(): string {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function toErrorMessage(error: unknown): string {
-  if (typeof error === "string") {
-    return error;
-  }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  if (error && typeof error === "object") {
-    try {
-      return JSON.stringify(error) || "request failed";
-    } catch {
-      // Fall through to the stable generic message.
-    }
-  }
-  return "request failed";
-}
-
-export class UsagePage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class UsagePage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: UsageRouteData;
@@ -90,6 +76,7 @@ export class UsagePage extends LitElement {
   @state() private usageLoading = true;
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
+  @state() private providerUsageSummary: ProviderUsageSummary | null = null;
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -103,11 +90,15 @@ export class UsagePage extends LitElement {
   @state() private usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
   @state() private usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() private usageTimeSeries: SessionUsageTimeSeries | null = null;
+  private usageTimeSeriesSessionKey: string | null = null;
   @state() private usageTimeSeriesLoading = false;
+  @state() private usageTimeSeriesStatus = createPanelRefreshStatus();
   @state() private usageTimeSeriesCursorStart: number | null = null;
   @state() private usageTimeSeriesCursorEnd: number | null = null;
   @state() private usageSessionLogs: SessionLogEntry[] | null = null;
+  private usageSessionLogsSessionKey: string | null = null;
   @state() private usageSessionLogsLoading = false;
+  @state() private usageSessionLogsStatus = createPanelRefreshStatus();
   @state() private usageSessionLogsExpanded = false;
   @state() private usageQuery = "";
   @state() private usageQueryDraft = "";
@@ -125,69 +116,66 @@ export class UsagePage extends LitElement {
   @state() private usageLogFilterHasTools = false;
   @state() private usageLogFilterQuery = "";
 
-  private client: GatewayBrowserClient | null = null;
-  private connected = false;
   private usageRequestId = 0;
   private timeSeriesRequestId = 0;
   private logsRequestId = 0;
   private dateDebounceTimer: number | null = null;
   private queryDebounceTimer: number | null = null;
-  private subscriptions: Array<() => void> = [];
   private routeDataInitialized = false;
   private routeDataEnabled = true;
+  private observedAgentScopeId: string | null | undefined;
+  private readonly refreshRuntime = new UsageRefreshRuntime(this, {
+    getGateway: () => this.context?.gateway,
+    isLoading: () => this.usageLoading,
+    isRouteDataInitialized: () => this.routeDataInitialized,
+    ensureAgents: () => void this.context.agents.ensureList(),
+    invalidateRequests: () => this.invalidateRequests(),
+    resetForClientChange: () => this.resetForClientChange(),
+    reload: () => this.performUsageReload(),
+  });
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => {
+        const sync = () => {
+          const nextScopeId = selection.state.scopeId;
+          const changed = this.observedAgentScopeId !== nextScopeId;
+          this.observedAgentScopeId = nextScopeId;
+          if (changed && this.routeDataInitialized && this.usageAgentId !== nextScopeId) {
+            this.usageAgentId = nextScopeId;
+            this.clearSelectionsAndDetails();
+            this.refreshRuntime.reload();
+          }
+          this.requestUpdate();
+        };
+        sync();
+        return selection.subscribe(sync);
+      },
+    )
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.subscriptions = [
-      this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
-      this.context.agents.subscribe(() => this.requestUpdate()),
-    ];
-    this.applyGatewaySnapshot(this.context.gateway.snapshot, true);
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
-    }
-  }
-
-  override updated(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("routeData")) {
       this.ensureInitialData();
     }
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    this.refreshRuntime.connect();
+  }
+
   override disconnectedCallback() {
-    for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
-    }
-    this.subscriptions = [];
+    this.refreshRuntime.disconnect();
+    this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
     this.invalidateRequests();
-    this.client = null;
-    this.connected = false;
     super.disconnectedCallback();
-  }
-
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, initial = false) {
-    const clientChanged = snapshot.client !== this.client;
-    const becameConnected = snapshot.connected && !this.connected;
-    this.client = snapshot.client;
-    this.connected = snapshot.connected;
-
-    if (clientChanged && !initial) {
-      this.resetForClientChange();
-    }
-    if (!snapshot.connected || !snapshot.client) {
-      this.invalidateRequests();
-      return;
-    }
-
-    void this.context.agents.ensureList();
-    if (this.routeDataInitialized && (clientChanged || becameConnected)) {
-      void this.loadUsage();
-    }
   }
 
   private applyRouteData() {
@@ -199,10 +187,21 @@ export class UsagePage extends LitElement {
     if (!this.routeDataEnabled) {
       return;
     }
-    const gateway = this.context.gateway.snapshot;
-    if (data.client !== gateway.client || data.connected !== gateway.connected) {
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    this.refreshRuntime.adoptGatewaySnapshot(snapshot);
+    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.routeDataEnabled = false;
       this.usageLoading = false;
+      return;
+    }
+    const currentAgentId = this.context.agentSelection.state.scopeId;
+    if (data.query.agentId !== currentAgentId) {
+      // Route loaders may finish after the page scope changes. Ignore their
+      // stale result and restart from the current scope in one operation.
+      this.usageAgentId = currentAgentId;
+      this.clearSelectionsAndDetails();
+      this.refreshRuntime.reload();
       return;
     }
 
@@ -213,6 +212,8 @@ export class UsagePage extends LitElement {
     this.usageAgentId = data.query.agentId;
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
+    this.providerUsageSummary = data.providerUsageSummary;
+    this.refreshRuntime.setLastLoadedAtMs(data.loadedAtMs);
     this.usageError = data.error;
     this.usageLoading = false;
   }
@@ -221,8 +222,8 @@ export class UsagePage extends LitElement {
     if (
       this.routeDataEnabled ||
       !this.routeDataInitialized ||
-      !this.client ||
-      !this.connected ||
+      !this.refreshRuntime.client ||
+      !this.refreshRuntime.connected ||
       this.usageLoading
     ) {
       return;
@@ -233,11 +234,15 @@ export class UsagePage extends LitElement {
   private resetForClientChange() {
     this.clearDateDebounce();
     this.invalidateRequests();
-    this.routeDataEnabled = false;
+    if (this.routeDataInitialized) {
+      this.routeDataEnabled = false;
+    }
     this.usageResult = null;
     this.usageCostSummary = null;
+    this.providerUsageSummary = null;
+    this.refreshRuntime.resetPayload();
     this.usageError = null;
-    this.usageAgentId = null;
+    this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
   }
 
@@ -285,11 +290,16 @@ export class UsagePage extends LitElement {
   }
 
   private async loadUsage() {
-    const client = this.client;
-    if (!client || !this.connected || this.usageLoading) {
+    const client = this.refreshRuntime.client;
+    if (!client || !this.refreshRuntime.connected) {
+      this.refreshRuntime.markLoadDeferred();
+      return;
+    }
+    if (this.usageLoading) {
       return;
     }
 
+    this.refreshRuntime.beginLoad();
     this.routeDataEnabled = false;
     const requestId = ++this.usageRequestId;
     const startDate = this.usageStartDate;
@@ -301,7 +311,7 @@ export class UsagePage extends LitElement {
     this.usageError = null;
     try {
       const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
-      const [sessionsResult, costSummary] = await Promise.all([
+      const [sessionsResult, costSummary, providerUsageSummary] = await Promise.all([
         requestSessionUsage(client, { startDate, endDate, agentId, scope, timeZone }),
         client.request<CostUsageSummary>("usage.cost", {
           startDate,
@@ -309,12 +319,15 @@ export class UsagePage extends LitElement {
           ...agentScopeParams,
           ...buildSessionUsageDateParams(timeZone),
         }),
+        client.request<ProviderUsageSummary>("usage.status").catch(() => null),
       ]);
       if (!this.isCurrentRequest(requestId, client)) {
         return;
       }
       this.usageResult = sessionsResult;
       this.usageCostSummary = costSummary;
+      this.providerUsageSummary = providerUsageSummary;
+      this.refreshRuntime.markLoaded();
     } catch (error) {
       if (!this.isCurrentRequest(requestId, client)) {
         return;
@@ -324,29 +337,46 @@ export class UsagePage extends LitElement {
         this.usageCostSummary = null;
         this.usageError = formatMissingOperatorReadScopeMessage("usage");
       } else {
-        this.usageError = toErrorMessage(error);
+        this.usageError = toUsageErrorMessage(error);
       }
     } finally {
       if (this.isCurrentRequest(requestId, client)) {
         this.usageLoading = false;
+        this.refreshRuntime.flushPending();
       }
     }
   }
 
   private async loadSessionTimeSeries(sessionKey: string) {
-    const client = this.client;
-    if (!client || !this.connected) {
+    const client = this.refreshRuntime.client;
+    if (!client || !this.refreshRuntime.connected) {
       return;
+    }
+    // Never render another session's retained timeline as stale.
+    if (this.usageTimeSeriesSessionKey !== sessionKey) {
+      this.usageTimeSeries = null;
+      this.usageTimeSeriesSessionKey = null;
+      this.usageTimeSeriesStatus = createPanelRefreshStatus();
     }
     const requestId = ++this.timeSeriesRequestId;
     this.usageTimeSeriesLoading = true;
+    this.usageTimeSeriesStatus = beginPanelRefresh(this.usageTimeSeriesStatus);
     try {
       const result = await requestSessionUsageTimeSeries(client, sessionKey);
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
         this.usageTimeSeries = result;
+        this.usageTimeSeriesSessionKey = sessionKey;
+        this.usageTimeSeriesStatus = completePanelRefresh();
       }
-    } catch {
-      // Optional detail endpoint.
+    } catch (error) {
+      if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
+        const failure = failUsageDetailRefresh(this.usageTimeSeriesStatus, error);
+        this.usageTimeSeriesStatus = failure.status;
+        if (failure.clearData) {
+          this.usageTimeSeries = null;
+          this.usageTimeSeriesSessionKey = null;
+        }
+      }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
         this.usageTimeSeriesLoading = false;
@@ -355,12 +385,19 @@ export class UsagePage extends LitElement {
   }
 
   private async loadSessionLogs(sessionKey: string) {
-    const client = this.client;
-    if (!client || !this.connected) {
+    const client = this.refreshRuntime.client;
+    if (!client || !this.refreshRuntime.connected) {
       return;
+    }
+    // Never render another session's retained conversation as stale.
+    if (this.usageSessionLogsSessionKey !== sessionKey) {
+      this.usageSessionLogs = null;
+      this.usageSessionLogsSessionKey = null;
+      this.usageSessionLogsStatus = createPanelRefreshStatus();
     }
     const requestId = ++this.logsRequestId;
     this.usageSessionLogsLoading = true;
+    this.usageSessionLogsStatus = beginPanelRefresh(this.usageSessionLogsStatus);
     try {
       const payload = await requestSessionUsageLogs(client, sessionKey);
       if (!this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
@@ -369,8 +406,17 @@ export class UsagePage extends LitElement {
       this.usageSessionLogs = Array.isArray(payload.logs)
         ? (payload.logs as SessionLogEntry[])
         : null;
-    } catch {
-      // Optional detail endpoint.
+      this.usageSessionLogsSessionKey = sessionKey;
+      this.usageSessionLogsStatus = completePanelRefresh();
+    } catch (error) {
+      if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
+        const failure = failUsageDetailRefresh(this.usageSessionLogsStatus, error);
+        this.usageSessionLogsStatus = failure.status;
+        if (failure.clearData) {
+          this.usageSessionLogs = null;
+          this.usageSessionLogsSessionKey = null;
+        }
+      }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
         this.usageSessionLogsLoading = false;
@@ -387,7 +433,11 @@ export class UsagePage extends LitElement {
   private clearDetails() {
     this.invalidateDetailRequests();
     this.usageTimeSeries = null;
+    this.usageTimeSeriesSessionKey = null;
+    this.usageTimeSeriesStatus = createPanelRefreshStatus();
     this.usageSessionLogs = null;
+    this.usageSessionLogsSessionKey = null;
+    this.usageSessionLogsStatus = createPanelRefreshStatus();
     this.usageTimeSeriesCursorStart = null;
     this.usageTimeSeriesCursorEnd = null;
   }
@@ -413,7 +463,7 @@ export class UsagePage extends LitElement {
     }, 400);
   }
 
-  private reloadUsage() {
+  private performUsageReload() {
     this.clearDateDebounce();
     this.invalidateUsageRequest();
     void this.loadUsage();
@@ -443,8 +493,10 @@ export class UsagePage extends LitElement {
 
     if (this.usageSelectedSessions.length === 1) {
       const sessionKey = this.usageSelectedSessions[0];
-      void this.loadSessionTimeSeries(sessionKey);
-      void this.loadSessionLogs(sessionKey);
+      if (sessionKey) {
+        void this.loadSessionTimeSeries(sessionKey);
+        void this.loadSessionLogs(sessionKey);
+      }
     }
   }
 
@@ -465,6 +517,7 @@ export class UsagePage extends LitElement {
           this.usageResult?.cacheStatus,
           this.usageCostSummary?.cacheStatus,
         ),
+        providerUsage: this.providerUsageSummary?.providers ?? [],
       },
       filters: {
         startDate: this.usageStartDate,
@@ -494,10 +547,12 @@ export class UsagePage extends LitElement {
         timeSeriesBreakdownMode: this.usageTimeSeriesBreakdownMode,
         timeSeries: this.usageTimeSeries,
         timeSeriesLoading: this.usageTimeSeriesLoading,
+        timeSeriesStatus: this.usageTimeSeriesStatus,
         timeSeriesCursorStart: this.usageTimeSeriesCursorStart,
         timeSeriesCursorEnd: this.usageTimeSeriesCursorEnd,
         sessionLogs: this.usageSessionLogs,
         sessionLogsLoading: this.usageSessionLogsLoading,
+        sessionLogsStatus: this.usageSessionLogsStatus,
         sessionLogsExpanded: this.usageSessionLogsExpanded,
         logFilters: {
           roles: this.usageLogFilterRoles,
@@ -521,18 +576,16 @@ export class UsagePage extends LitElement {
           onScopeChange: (scope) => {
             this.usageScope = scope;
             this.clearSelectionsAndDetails();
-            this.reloadUsage();
+            this.refreshRuntime.reload();
           },
           onAgentChange: (agentId) => {
-            this.usageAgentId = agentId;
-            this.clearSelectionsAndDetails();
-            this.reloadUsage();
+            this.context.agentSelection.setScope(agentId);
           },
-          onRefresh: () => this.reloadUsage(),
+          onRefresh: () => this.refreshRuntime.request("manual"),
           onTimeZoneChange: (timeZone) => {
             this.usageTimeZone = timeZone;
             this.clearSelectionsAndDetails();
-            this.reloadUsage();
+            this.refreshRuntime.reload();
           },
           onToggleHeaderPinned: () => {
             this.usageHeaderPinned = !this.usageHeaderPinned;
@@ -642,20 +695,26 @@ export class UsagePage extends LitElement {
             this.usageTimeSeriesCursorStart = start;
             this.usageTimeSeriesCursorEnd = end;
           },
+          onRetryTimeSeries: () => {
+            const sessionKey = this.usageSelectedSessions[0];
+            if (sessionKey) {
+              void this.loadSessionTimeSeries(sessionKey);
+            }
+          },
+          onRetrySessionLogs: () => {
+            const sessionKey = this.usageSelectedSessions[0];
+            if (sessionKey) {
+              void this.loadSessionLogs(sessionKey);
+            }
+          },
         },
       },
     };
 
-    return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("usage")}</div>
-          <div class="page-sub">${subtitleForRoute("usage")}</div>
-        </div>
-      </section>
-      ${renderUsage(props)}
-    `;
+    return renderUsagePageShell(this.context, this.usageResult, renderUsage(props));
   }
 }
 
-customElements.define("openclaw-usage-page", UsagePage);
+if (!customElements.get("openclaw-usage-page")) {
+  customElements.define("openclaw-usage-page", UsagePage);
+}

@@ -52,7 +52,7 @@ function resolveProviderDiscoveryDependencyRoot(rootDir: string): string {
   return rootDir;
 }
 
-export function clearProviderDiscoveryModuleLoaders(): void {
+function clearProviderDiscoveryModuleLoaders(): void {
   providerDiscoveryModuleLoaders.clear();
   for (const [modulePath, rootDir] of providerDiscoveryModuleRoots) {
     clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: rootDir });
@@ -109,9 +109,7 @@ function loadProviderDiscoveryModule(params: {
 }
 
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
-  return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
-  );
+  return typeof provider.catalog?.run === "function";
 }
 
 function hasProviderCatalogHook(provider: ProviderPlugin): boolean {
@@ -124,10 +122,7 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const envVars = [
-    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
-  ];
+  const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
   return envVars.some((name) => {
     const value = env[name]?.trim();
     return value !== undefined && value !== "";

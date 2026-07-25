@@ -1,8 +1,11 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import {
+  releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientOptions,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 async function readConfiguredProviderWebSearchSupport(params: {
@@ -47,7 +50,8 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
 export async function resolveCodexProviderWebSearchSupport(params: {
   clientFactory: CodexAppServerClientFactory;
   appServer: CodexAppServerRuntimeOptions;
-  authProfileId: string | undefined;
+  authProfileId: string | null | undefined;
+  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   modelProviderOverride: string | undefined;
@@ -55,13 +59,15 @@ export async function resolveCodexProviderWebSearchSupport(params: {
 }): Promise<CodexNativeWebSearchSupport> {
   let client: CodexAppServerClient | undefined;
   try {
-    client = await params.clientFactory(
-      params.appServer.start,
-      params.authProfileId,
-      params.agentDir,
-      params.config,
-      { timeoutMs: params.appServer.requestTimeoutMs },
-    );
+    client = await params.clientFactory({
+      startOptions: params.appServer.start,
+      ...(params.preparedAuth
+        ? { preparedAuth: params.preparedAuth }
+        : { authProfileId: params.authProfileId }),
+      agentDir: params.agentDir,
+      config: params.config,
+      timeoutMs: params.appServer.requestTimeoutMs,
+    });
     return await resolveCodexProviderWebSearchSupportForClient({
       client,
       timeoutMs: params.appServer.requestTimeoutMs,

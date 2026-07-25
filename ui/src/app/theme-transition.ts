@@ -7,7 +7,7 @@ export type ThemeTransitionContext = {
   pointerClientY?: number;
 };
 
-export type ThemeTransitionOptions = {
+type ThemeTransitionOptions = {
   nextTheme: ResolvedTheme;
   applyTheme: () => void;
   // Retained so callers from stacked slices can keep passing pointer metadata

@@ -64,7 +64,7 @@ async function createSignedDevice(params: {
   signedAtMs?: number;
 }) {
   const identity = params.identityPath
-    ? loadOrCreateDeviceIdentity(params.identityPath)
+    ? loadOrCreateDeviceIdentity({ path: params.identityPath })
     : loadOrCreateDeviceIdentity();
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
@@ -169,7 +169,7 @@ async function createSignedBrowserDevice(
     scopes: ["operator.admin"],
     clientId: client.id,
     clientMode: client.mode,
-    identityPath: path.join(os.tmpdir(), `openclaw-${identityName}-device-${randomUUID()}.json`),
+    identityPath: path.join(os.tmpdir(), `openclaw-${identityName}-device-${randomUUID()}.sqlite`),
     nonce: nonce ?? "",
   });
 }
@@ -302,6 +302,28 @@ describe("gateway auth browser hardening", () => {
         } else {
           expectOriginNotAllowed(res);
         }
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("accepts an exactly allowlisted Tauri origin", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    const origin = "tauri://localhost";
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await writeConfigFile({ gateway: { controlUi: { allowedOrigins: [origin] } } });
+
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
       } finally {
         ws.close();
       }

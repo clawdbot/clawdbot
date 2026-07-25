@@ -1,0 +1,116 @@
+title: Active goal context on the next turn
+
+scenario:
+  id: goal-context-next-turn
+  surface: goals
+  category: session-memory.context-engine
+  coverage:
+    primary:
+      - session-memory.goal-continuance-context-injection
+    secondary:
+      - session-memory.goal-continuance-continuance
+  objective: Verify an active session goal is injected into the next unrelated turn sent to the model.
+  successCriteria:
+    - An authorized channel turn starts a session goal through the public `/goal start` command.
+    - A later unrelated inbound message reaches the mock model in the same session.
+    - The later request contains the exact active-goal context line and objective.
+    - The assertion reads the captured provider request rather than inferring context from the visible reply.
+  docsRefs:
+    - docs/tools/goal.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/auto-reply/reply/inbound-meta.ts
+    - src/config/sessions/goals.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    summary: Start a goal, send an unrelated next turn, and inspect the exact mock-provider request payload.
+    channel: qa-channel
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: goal-context-next-turn
+      senderId: qa-goal-operator
+      goalObjective: Compile the QA release evidence bundle
+      expectedGoalContext: "Active goal: Compile the QA release evidence bundle — advance it or update its status (get_goal/update_goal)."
+      secondMessage: GOAL-CONTEXT-NEXT-TURN unrelated weather question
+
+flow:
+  steps:
+    - name: injects active goal context into the next unrelated turn
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this request-payload assertion requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: conversationId
+          value:
+            expr: "`${config.conversationId}-${randomUUID().slice(0, 8)}`"
+        - set: firstOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text:
+              expr: "`/goal start ${config.goalObjective}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: firstOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: goalStartReply
+        - set: requestCursorBeforeSecondTurn
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: secondOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text:
+              ref: config.secondMessage
+        - call: waitForCondition
+          saveAs: secondTurnRequest
+          args:
+            - lambda:
+                async: true
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeSecondTurn}`)).find((request) => String(request.prompt ?? '').includes(config.secondMessage))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: secondOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: secondReply
+        - assert:
+            expr: "String(secondTurnRequest.allInputText ?? '').includes(config.expectedGoalContext)"
+            message: second-turn provider request input missed active goal context
+      detailsExpr: "`goal start reply=${goalStartReply.text}; second reply=${secondReply.text}`"

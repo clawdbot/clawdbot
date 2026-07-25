@@ -37,12 +37,6 @@ action. Behavior varies by channel.
 
   </Accordion>
 
-  <Accordion title="Google Chat">
-    - Empty `emoji` (or `remove: true`) removes the bot's own reactions on the message, filtered to `emoji` when set.
-    - `remove: true` removes just the specified emoji.
-
-  </Accordion>
-
   <Accordion title="Nextcloud Talk">
     - Adding reactions only: `emoji` is required and must be non-empty.
     - Reaction removal is not wired to a delete call yet; `remove: true` is rejected with an explicit error instead of silently no-oping.

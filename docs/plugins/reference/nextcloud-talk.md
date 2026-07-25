@@ -16,7 +16,7 @@ OpenClaw Nextcloud Talk channel plugin for conversations.
 
 ## Surface
 
-channels: nextcloud-talk
+channels: `nextcloud-talk`
 
 ## Related docs
 

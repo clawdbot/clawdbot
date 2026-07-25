@@ -4,9 +4,12 @@ import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./j
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
+  loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
+  patchSessionEntryMock,
   resolveCronSessionMock,
   runCliAgentMock,
   runEmbeddedAgentMock,
@@ -23,7 +26,7 @@ function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: stri
 }
 
 describe("runCronIsolatedAgentTurn isolated session identity", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("uses a run-scoped key for embedded isolated cron execution", async () => {
     resolveCronSessionMock.mockReturnValue(
@@ -73,6 +76,25 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).not.toContain("daily-monitor");
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    const embeddedRunOrder = runEmbeddedAgentMock.mock.invocationCallOrder[0];
+    if (embeddedRunOrder === undefined) {
+      throw new Error("Expected embedded cron execution order");
+    }
+    const requiredSessionKeys = [
+      "agent:default:cron:daily-monitor",
+      "agent:default:cron:daily-monitor:run:isolated-run-1",
+    ];
+    for (const sessionKey of requiredSessionKeys) {
+      const persistIndex = patchSessionEntryMock.mock.calls.findIndex(
+        ([scope]) => (scope as { sessionKey: string }).sessionKey === sessionKey,
+      );
+      expect(persistIndex).toBeGreaterThanOrEqual(0);
+      const persistOrder = patchSessionEntryMock.mock.invocationCallOrder[persistIndex];
+      if (persistOrder === undefined) {
+        throw new Error(`Expected persistence order for ${sessionKey}`);
+      }
+      expect(persistOrder).toBeLessThan(embeddedRunOrder);
+    }
   });
 
   it("keeps embedded isolated cron prompt-cache affinity stable across run sessions", async () => {
@@ -158,6 +180,110 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBeUndefined();
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+  });
+
+  it.each([
+    "harness:codex:supervision:native-thread",
+    "agent:default:harness:codex:supervision:native-thread",
+  ])("rejects detached execution for a missing reserved harness key %s", async (sessionKey) => {
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          sessionKey,
+          job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+        }),
+      ),
+    ).rejects.toThrow(/reserved for agent harness-owned sessions/i);
+
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("continues a pre-existing unlocked harness-prefixed session as an ordinary session", async () => {
+    const sessionKey = "agent:default:harness:legacy-notes";
+    const legacyEntry = makeCronSessionEntry({
+      agentHarnessId: "codex",
+      sessionId: "legacy-session",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        initialSessionEntry: legacyEntry,
+        isNewSession: false,
+        sessionEntry: { ...legacyEntry },
+        store: { [sessionKey]: { ...legacyEntry } },
+      }),
+    );
+    loadSessionEntryMock.mockReturnValue(legacyEntry);
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        sessionKey,
+        job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).toBe(sessionKey);
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects detached execution for an existing locked harness session", async () => {
+    const sessionKey = "agent:default:harness:codex:supervision:native-thread";
+    const protectedEntry = makeCronSessionEntry({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "native-session",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        initialSessionEntry: protectedEntry,
+        isNewSession: false,
+        sessionEntry: protectedEntry,
+        store: { [sessionKey]: protectedEntry },
+      }),
+    );
+
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          sessionKey,
+          job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+        }),
+      ),
+    ).rejects.toThrow(/reserved for agent harness-owned sessions/i);
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects detached execution for an existing locked ordinary session", async () => {
+    const sessionKey = "agent:default:project-native-session";
+    const protectedEntry = makeCronSessionEntry({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "native-session",
+    });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        initialSessionEntry: protectedEntry,
+        isNewSession: false,
+        sessionEntry: protectedEntry,
+        store: { [sessionKey]: protectedEntry },
+      }),
+    );
+
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          sessionKey,
+          job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
+        }),
+      ),
+    ).rejects.toThrow(/identity is locked and cannot be replaced or shared/i);
+
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("uses a run-scoped key for CLI isolated cron execution", async () => {

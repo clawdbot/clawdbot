@@ -79,6 +79,21 @@ describe("oauth.http fetchWithTimeout body byte cap", () => {
     expect(await res.json()).toEqual({ access_token: "abc", expires_in: 3600 });
     expect(releaseMock).toHaveBeenCalledOnce();
   });
+
+  it("passes caller cancellation to the guarded fetch timeout composer", async () => {
+    const controller = new AbortController();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("{}"),
+      finalUrl: TOKEN_URL,
+      release: releaseMock,
+    });
+
+    await fetchWithTimeout(TOKEN_URL, { method: "POST", signal: controller.signal });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
 });
 
 // Real-wire loopback proof. These tests bypass `fetchWithSsrFGuard` (which

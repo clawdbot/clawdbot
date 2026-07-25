@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleChatDraftChange as applyDraftChange,
-  navigateChatInputHistory,
+  handleChatInputHistoryKey,
   type ChatInputHistoryState,
 } from "../pages/chat/input-history.ts";
-import { createNativeChatDrafts, isWebView2, sendToNative } from "./native-bridge.ts";
+import { createNativeChatDrafts } from "./native-bridge.ts";
 
 type FakeBridge = {
   postMessage: ReturnType<typeof vi.fn>;
@@ -46,14 +46,6 @@ afterEach(() => {
 });
 
 describe("native chat drafts", () => {
-  it("detects WebView2 and sends native messages", () => {
-    expect(isWebView2()).toBe(false);
-    const bridge = makeBridge();
-    expect(isWebView2()).toBe(true);
-    sendToNative({ type: "ready" });
-    expect(bridge.posted).toEqual([{ type: "ready" }]);
-  });
-
   it("registers the listener before the ready handshake", () => {
     const callOrder: string[] = [];
     vi.stubGlobal("chrome", {
@@ -111,7 +103,18 @@ describe("native chat drafts", () => {
       chatInputHistoryIndex: -1,
       chatDraftBeforeHistory: null,
     };
-    navigateChatInputHistory(state, "up");
+    handleChatInputHistoryKey(state, {
+      key: "ArrowUp",
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 38,
+    });
     const drafts = createNativeChatDrafts();
     drafts.subscribe((text) => applyDraftChange(state, text));
 

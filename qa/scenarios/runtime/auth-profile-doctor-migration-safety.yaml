@@ -3,75 +3,23 @@ title: Codex doctor migration safety matrix
 scenario:
   id: auth-profile-doctor-migration-safety
   surface: runtime
-  runtimeParityTier: standard
   coverage:
     primary:
-      - runtime.doctor-repair
+      - openai.codex-oauth-profiles-doctor-repair
     secondary:
-      - runtime.codex-plugin.auth
-  objective: Reproduce the doctor-migration auth cells as an automated fixture matrix for Codex OAuth selection.
+      - observability.doctor-codex-plugin-auth
+  objective: Prove that the real doctor command migrates legacy Codex OAuth stores into canonical per-agent SQLite state.
   successCriteria:
-    - OAuth-only hosts select the openai OAuth profile and use the Codex harness.
-    - Mixed-profile hosts still select openai OAuth when an openai API-key profile exists.
+    - OAuth-only legacy stores become canonical openai OAuth profiles in per-agent SQLite.
+    - Mixed legacy stores keep the migrated OAuth profile ahead of an existing openai API-key profile.
+    - The obsolete JSON auth store is removed after each successful migration.
   docsRefs:
     - docs/cli/doctor.md
   codeRefs:
-    - extensions/qa-lab/src/auth-profile.fixture.ts
-    - extensions/qa-lab/src/codex-plugin.fixture.ts
-    - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
+    - src/commands/doctor-auth-flat-profiles.ts
+    - src/agents/auth-profiles/persisted.ts
+    - test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts
   execution:
-    kind: flow
-    summary: Exercise the doctor migration matrix against Codex auth routing.
-    config:
-      matrixCells:
-        - oauth-only
-        - mixed-no-pin
-
-flow:
-  steps:
-    - name: validates doctor migration safety matrix
-      actions:
-        - set: auth
-          value:
-            expr: await qaImport("./auth-profile.fixture.js")
-        - set: plugin
-          value:
-            expr: await qaImport("./codex-plugin.fixture.js")
-        - forEach:
-            items:
-              ref: config.matrixCells
-            item: cell
-            actions:
-              - set: tmpRoot
-                value:
-                  expr: await fs.mkdtemp(path.join(env.gateway?.workspaceDir ?? "/tmp", `qa-codex-doctor-${cell}-`))
-              - set: profileShape
-                value:
-                  expr: "cell === 'oauth-only' ? 'oauth-only' : 'mixed'"
-              - try:
-                  actions:
-                    - call: plugin.seedCodexPluginAt
-                      args:
-                        - current
-                        - ref: tmpRoot
-                    - call: auth.seedAuthProfiles
-                      args:
-                        - ref: profileShape
-                        - ref: tmpRoot
-                    - set: result
-                      value:
-                        expr: "plugin.evaluateCodexPluginLifecycle({ plugin: await plugin.snapshotCodexPluginState(tmpRoot), auth: await auth.snapshotAuthProfiles(tmpRoot), hostVersion: plugin.CODEX_PLUGIN_CURRENT_VERSION, doctorFix: true })"
-                    - assert:
-                        expr: "result.status === 'ready' && result.selectedAuthProfileId === auth.QA_CODEX_OAUTH_PROFILE_ID && result.tokenRoute === 'codex-oauth'"
-                        message:
-                          expr: "`doctor matrix cell ${cell} failed Codex auth routing: ${JSON.stringify(result)}`"
-                  finally:
-                    - call: fs.rm
-                      args:
-                        - ref: tmpRoot
-                        - recursive: true
-                          force: true
-        - assert:
-            expr: "config.matrixCells.length === 2"
-            message: "expected two doctor migration cells"
-      detailsExpr: "`cells=${config.matrixCells.join(',')}`"
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts
+    summary: Run the real doctor migration over OAuth-only and mixed legacy stores, then inspect canonical SQLite state.

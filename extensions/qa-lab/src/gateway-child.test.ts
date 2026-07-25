@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 // Qa Lab tests cover gateway child plugin behavior.
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -115,6 +116,140 @@ async function expectPathMissing(filePath: string): Promise<void> {
   throw new Error(`expected ${filePath} to be missing`);
 }
 
+describe("runQaGatewayCliCommand", () => {
+  it("runs CLI commands with the Gateway fixture environment", async () => {
+    const output = await testing.runQaGatewayCliCommand({
+      executablePath: process.execPath,
+      argsPrefix: [
+        "--eval",
+        'process.stdout.write(`${process.env.OPENCLAW_CLI}:${process.env.QA_VALUE}:${process.argv.slice(1).join(",")}`)',
+      ],
+      args: ["voicecall", "start"],
+      cwd: process.cwd(),
+      env: { ...process.env, QA_VALUE: "fixture" },
+    });
+
+    expect(output).toBe("1:fixture:voicecall,start");
+  });
+
+  it("reports CLI stderr when a fixture command fails", async () => {
+    await expect(
+      testing.runQaGatewayCliCommand({
+        executablePath: process.execPath,
+        argsPrefix: ["--eval", 'process.stderr.write("fixture failure"); process.exit(7)'],
+        args: [],
+        cwd: process.cwd(),
+        env: process.env,
+      }),
+    ).rejects.toThrow("OpenClaw CLI exited 7: fixture failure");
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects and stops the CLI child when its %s pipe fails",
+    async (streamName) => {
+      const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const close = once(child, "close");
+      const result = testing.readQaGatewayCliCommand(child);
+      const message = `synthetic ${streamName} read failure`;
+
+      child[streamName]?.destroy(new Error(message));
+
+      await expect(result).rejects.toThrow(
+        `qa gateway cli ${streamName} stream failed: ${message}`,
+      );
+      await close;
+    },
+  );
+});
+
+describe("monitorQaGatewayChildFailure", () => {
+  it("records the first pipe failure and stops the detached Gateway child", async () => {
+    const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const close = once(child, "close");
+    const output = testing.createQaGatewayChildLogCollector();
+    const getFailure = testing.monitorQaGatewayChildFailure(child, output);
+    const error = new Error("synthetic gateway stdout read failure");
+
+    child.stdout?.destroy(error);
+    child.stderr?.destroy(new Error("later stderr read failure"));
+
+    await vi.waitFor(() => expect(getFailure()).toEqual({ source: "stdout", error }));
+    await close;
+    expect(output.text()).toContain(
+      "gateway child stdout stream failed: synthetic gateway stdout read failure",
+    );
+    expect(output.text()).not.toContain("later stderr read failure");
+    expect(() => testing.throwQaGatewayChildFailure(getFailure, () => output.text())).toThrow(
+      "gateway child stdout stream failed: synthetic gateway stdout read failure",
+    );
+  });
+});
+
+describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
+  it("includes only a bounded, redacted launcher log tail", () => {
+    const prefix = "x".repeat(9_000);
+    const longSecret = "s".repeat(9_000);
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `${prefix}\nAuthorization: Bearer ${longSecret}\nlauncher stage=mount-proc`,
+    );
+
+    expect(message).toContain("launcher exited before identity");
+    expect(message).toContain("Gateway logs:");
+    expect(message).toContain("Authorization: Bearer <redacted>");
+    expect(message).toContain("launcher stage=mount-proc");
+    expect(message).not.toContain("s".repeat(100));
+    expect(message).not.toContain(prefix);
+  });
+
+  it("preserves complete Unicode code points at the retained log-tail boundary", () => {
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `P😀${"z".repeat(8_191)}`,
+    );
+
+    expect(message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(Buffer.from(message, "utf8").toString("utf8")).not.toContain("�");
+  });
+});
+
+describe("Gateway child fixture helpers", () => {
+  it("creates an empty transport config seam", () => {
+    expect(testing.createQaGatewayEmptyTransport()).toEqual({
+      requiredPluginIds: [],
+      createGatewayConfig: expect.any(Function),
+    });
+  });
+
+  it("resolves source and built Gateway CLI commands", async () => {
+    const repoRoot = await tempDirs.makeTempDir("qa-gateway-command-");
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src", "entry.ts"), "export {};\n", "utf8");
+
+    expect(testing.resolveQaGatewayChildCommand(repoRoot)).toEqual({
+      executablePath: process.execPath,
+      argsPrefix: ["--import", "tsx", path.join(repoRoot, "src", "entry.ts")],
+      cwd: repoRoot,
+    });
+
+    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await writeFile(path.join(repoRoot, "dist", "index.js"), "export {};\n", "utf8");
+    expect(testing.resolveQaGatewayChildCommand(repoRoot)).toEqual({
+      executablePath: process.execPath,
+      argsPrefix: [path.join(repoRoot, "dist", "index.js")],
+      cwd: repoRoot,
+      usePackagedPlugins: true,
+    });
+  });
+});
+
 describe("buildQaRuntimeEnv", () => {
   it("cleans up temp QA gateway roots when node path resolution fails before startup", async () => {
     const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-node-exec-fail-"));
@@ -139,18 +274,25 @@ describe("buildQaRuntimeEnv", () => {
   });
 
   it("reports command spawn errors instead of leaking unhandled child errors", async () => {
-    const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-spawn-fail-"));
+    const preferredTempParent = await mkdtemp(
+      path.join(os.tmpdir(), "qa-gateway-default-spawn-fail-"),
+    );
+    const commandTempParent = await mkdtemp(
+      path.join(os.tmpdir(), "qa-gateway-command-spawn-fail-"),
+    );
     cleanups.push(async () => {
-      await rm(tempParent, { recursive: true, force: true });
+      await rm(preferredTempParent, { recursive: true, force: true });
+      await rm(commandTempParent, { recursive: true, force: true });
     });
-    qaTempPathState.preferredTmpDir = tempParent;
-    const missingExecutable = path.join(tempParent, "missing-openclaw-node");
+    qaTempPathState.preferredTmpDir = preferredTempParent;
+    const missingExecutable = path.join(commandTempParent, "missing-openclaw-node");
 
     await expect(
       startQaGatewayChild({
         repoRoot: process.cwd(),
         command: {
           executablePath: missingExecutable,
+          tempParentDir: commandTempParent,
           usePackagedPlugins: true,
         },
         transport: {
@@ -161,7 +303,8 @@ describe("buildQaRuntimeEnv", () => {
       }),
     ).rejects.toThrow(/gateway failed to spawn: .*ENOENT/u);
 
-    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+    await expect(readdir(preferredTempParent)).resolves.toStrictEqual([]);
+    await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
   });
 
   it("keeps the slow-reply QA opt-out enabled under fast mode", () => {
@@ -172,7 +315,6 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
     expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
-    expect(env.OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM).toBe("1");
     expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
     expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
     expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
@@ -332,17 +474,103 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
   });
 
-  it("does not pass Convex credential broker secrets to the gateway child env", () => {
+  it("does not pass credential broker or Telegram harness secrets to the gateway child env", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
         OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
+        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
+        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
+        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
       }),
       providerMode: "live-frontier",
     });
 
     expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
     expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
+    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
+  });
+
+  it("re-scrubs blocked credentials after runtime env patches", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({ SAFE_VALUE: "base" }),
+      runtimeEnvPatch: {
+        SAFE_VALUE: "patched",
+        OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
+        OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
+        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
+        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
+        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+      },
+    });
+
+    expect(env.SAFE_VALUE).toBe("patched");
+    expect(env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE).toBeUndefined();
+    expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
+    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
+  });
+
+  it("re-scrubs blocked credentials in the spawned gateway child env", async () => {
+    const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-env-scrub-"));
+    cleanups.push(async () => {
+      await rm(tempParent, { recursive: true, force: true });
+    });
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-env.json");
+    const captureScript = [
+      'const fs = require("node:fs");',
+      "const env = {",
+      "SAFE_VALUE: process.env.SAFE_VALUE,",
+      "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
+      "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: process.env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN,",
+      "OPENCLAW_QA_CONVEX_SECRET_CI: process.env.OPENCLAW_QA_CONVEX_SECRET_CI,",
+      "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: process.env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL,",
+      "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
+      "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
+      "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
+      "};",
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
+    ].join("\n");
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["--eval", captureScript],
+          usePackagedPlugins: true,
+        },
+        runtimeEnvPatch: {
+          SAFE_VALUE: "patched",
+          OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
+          OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
+          OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
+          OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
+          OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
+          OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+          OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(
+      JSON.stringify({ SAFE_VALUE: "patched" }),
+    );
   });
 
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {
@@ -989,6 +1217,9 @@ describe("buildQaRuntimeEnv", () => {
         child.signalCode = "SIGKILL";
         queueMicrotask(() => child.emit("exit"));
       }
+      if (signal === 0 && child.signalCode) {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      }
       return true;
     });
 
@@ -1008,6 +1239,59 @@ describe("buildQaRuntimeEnv", () => {
       expect(processKill).toHaveBeenCalledWith(-12345, "SIGKILL");
     }
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
+  });
+
+  it("lets the gateway finish its bounded shutdown before process-tree escalation", () => {
+    expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
+      gracefulTimeoutMs: 30_000,
+      forceTimeoutMs: 10_000,
+    });
+    expect(
+      testing.resolveQaGatewayChildStopTimeouts({
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 2,
+      }),
+    ).toEqual({
+      gracefulTimeoutMs: 1,
+      forceTimeoutMs: 2,
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when forced gateway process-group shutdown times out",
+    async () => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345,
+        exitCode: null as number | null,
+        signalCode: null as string | null,
+        kill: vi.fn(() => true),
+      });
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      await expect(
+        testing.stopQaGatewayChildProcessTree(child as never, {
+          gracefulTimeoutMs: 1,
+          forceTimeoutMs: 1,
+        }),
+      ).rejects.toThrow("qa gateway process tree remained alive after forced shutdown");
+    },
+  );
+
+  it("treats Linux process groups with only dead members as stopped", () => {
+    const stats = [
+      "123 (gateway child) Z 1 123 123 0 -1 0",
+      "124 (helper (worker)) X 1 123 123 0 -1 0",
+      "125 (unrelated) S 1 999 999 0 -1 0",
+    ];
+
+    expect(testing.classifyLinuxProcessGroupStats(123, stats)).toBe(false);
+    expect(
+      testing.classifyLinuxProcessGroupStats(123, [
+        ...stats,
+        "126 (live helper) D 1 123 123 0 -1 0",
+      ]),
+    ).toBe(true);
+    expect(testing.classifyLinuxProcessGroupStats(456, stats)).toBeNull();
   });
 
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
@@ -1039,10 +1323,12 @@ describe("buildQaRuntimeEnv", () => {
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
@@ -1448,7 +1734,9 @@ describe("qa bundled plugin dir", () => {
     );
     await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
-    await mkdir(path.join(repoRoot, "dist", "extensions", "speech-core"), { recursive: true });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "image-generation-core"), {
+      recursive: true,
+    });
     await mkdir(path.join(repoRoot, "dist", "extensions", "unused-plugin"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
     await writeFile(
@@ -1470,6 +1758,15 @@ describe("qa bundled plugin dir", () => {
       ].join("\n"),
       "utf8",
     );
+    await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "extensions", "qa-channel", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "qa-channel",
+        toolMetadata: { qa_read: { replaySafe: true } },
+      }),
+      "utf8",
+    );
     await writeFile(path.join(repoRoot, "dist", "shared-chunk-abc123.js"), "export {};\n", "utf8");
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-target-"));
     cleanups.push(async () => {
@@ -1483,9 +1780,9 @@ describe("qa bundled plugin dir", () => {
     });
 
     expect((await readdir(bundledPluginsDir)).toSorted()).toEqual([
+      "image-generation-core",
       "memory-core",
       "qa-channel",
-      "speech-core",
     ]);
     expect(bundledPluginsDir).toBe(
       path.join(
@@ -1507,9 +1804,14 @@ describe("qa bundled plugin dir", () => {
       `${pathToFileURL(path.join(bundledPluginsDir, "qa-channel", "index.js")).href}?t=${Date.now()}`
     )) as { accountId: string };
     expect(qaChannel.accountId).toBe("qa");
+    await expect(
+      readFile(path.join(bundledPluginsDir, "qa-channel", "openclaw.plugin.json"), "utf8"),
+    ).resolves.toContain('"replaySafe":true');
     expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
-    expect((await lstat(path.join(bundledPluginsDir, "speech-core"))).isDirectory()).toBe(true);
+    expect((await lstat(path.join(bundledPluginsDir, "image-generation-core"))).isDirectory()).toBe(
+      true,
+    );
     const sharedChunkStat = await lstat(
       path.join(
         repoRoot,
@@ -1890,12 +2192,45 @@ describe("qa bundled plugin dir", () => {
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
     expect(Object.keys(overrides)).toEqual(["openai"]);
-    expect(overrides["openai"]?.baseUrl).toBe("");
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
     expect(overrides["openai"]?.models).toEqual([]);
     expect(overrides["openai"]?.apiKey).toEqual({
       source: "env",
       id: "OPENCLAW_LIVE_CODEX_API_KEY",
     });
+  });
+
+  it("omits empty base URLs without dropping provider configs that inherit auth", async () => {
+    const configPath = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
+      "openclaw.json",
+    );
+    cleanups.push(async () => {
+      await rm(path.dirname(configPath), { recursive: true, force: true });
+    });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
+      providerIds: ["openai"],
+      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
+    });
+    expect(Object.keys(overrides)).toEqual(["openai"]);
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
+    expect(overrides["openai"]?.api).toBe("openai-responses");
   });
 
   it("does not copy OpenAI provider configs for custom OpenAI-compatible runs", async () => {
@@ -1983,9 +2318,9 @@ describe("qa bundled plugin dir", () => {
       JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.8" } } }),
       "utf8",
     );
-    await mkdir(path.join(bundledRoot, "speech-core"), { recursive: true });
+    await mkdir(path.join(bundledRoot, "image-generation-core"), { recursive: true });
     await writeFile(
-      path.join(bundledRoot, "speech-core", "package.json"),
+      path.join(bundledRoot, "image-generation-core", "package.json"),
       JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.9" } } }),
       "utf8",
     );
@@ -1998,3 +2333,4 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBe("2026.4.9");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

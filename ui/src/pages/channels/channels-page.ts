@@ -1,48 +1,53 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
-import type { NostrProfile } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type {
+  ChannelsPairingListResult,
+  ChannelsPairingRequest,
+  NostrProfile,
+} from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
+import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
+import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
+import type { ChannelPairingPrompt } from "./view.types.ts";
+import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 
-function parseValidationErrors(details: unknown): Record<string, string> {
-  if (!Array.isArray(details)) {
-    return {};
-  }
-  const errors: Record<string, string> = {};
-  for (const entry of details) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const [rawField, ...rest] = entry.split(":");
-    if (!rawField || rest.length === 0) {
-      continue;
-    }
-    const field = rawField.trim();
-    const message = rest.join(":").trim();
-    if (field && message) {
-      errors[field] = message;
-    }
-  }
-  return errors;
+const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
+
+const NOSTR_PROFILE_TIMEOUT_ERROR =
+  "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.";
+
+type NostrOperation = {
+  generation: number;
+  gateway: ApplicationContext["gateway"];
+  channels: ApplicationContext["channels"];
+  client: GatewayBrowserClient;
+  formAccountId: string | null;
+  accountId: string;
+  headers: Record<string, string>;
+};
+
+function formatNostrProfileOperationError(error: unknown, prefix: string): string {
+  return error instanceof DOMException && error.name === "TimeoutError"
+    ? NOSTR_PROFILE_TIMEOUT_ERROR
+    : `${prefix}: ${String(error)}`;
 }
 
-function buildNostrProfileUrl(accountId: string, suffix = ""): string {
-  return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
-}
-
-export class ChannelsPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class ChannelsPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state()
@@ -51,43 +56,166 @@ export class ChannelsPage extends LitElement {
   @state()
   private nostrProfileAccountId: string | null = null;
 
-  private stopChannelsSubscription?: () => void;
-  private stopConfigSubscription?: () => void;
-  private stopGatewaySubscription?: () => void;
+  @state()
+  private selectedChannel: string | null = null;
+
+  @state()
+  private pairingChannelFilter: string | null = null;
+
+  @state()
+  private pairingAccountFilter: string | null = null;
+
+  @state()
+  private pairingPrompt: ChannelPairingPrompt | null = null;
+
+  @state()
+  private pairingNotice: string | null = null;
+
+  private readonly wizardHost = new ChannelWizardHost({
+    getContext: () => this.context,
+    requestUpdate: () => this.requestUpdate(),
+    clearSelection: () => {
+      this.selectedChannel = null;
+    },
+  });
+
   private schemaLoadStarted = false;
+  private gatewaySource?: ApplicationContext["gateway"];
+  private channelsSource?: ApplicationContext["channels"];
+  private gatewayClient: GatewayBrowserClient | null = null;
+  private gatewayConnected = false;
+  private gatewayPairingAuthSignature: string | null = null;
+  private hasGatewaySnapshot = false;
+  private nostrOperationGeneration = 0;
+  private readonly pairingPolling = new PollController(
+    this,
+    CHANNEL_PAIRING_POLL_INTERVAL_MS,
+    () => {
+      const gateway = this.context?.gateway.snapshot;
+      if (gateway?.phase === "connected" && hasOperatorPairingAccess(gateway.hello?.auth ?? null)) {
+        void this.context.channels.refreshPairing();
+      }
+    },
+    false,
+  );
 
-  private readonly requestPageUpdate = () => this.requestUpdate();
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.channels,
+      (channels) => {
+        const sourceChanged = this.channelsSource !== undefined && this.channelsSource !== channels;
+        this.channelsSource = channels;
+        if (sourceChanged) {
+          this.invalidateNostrForm();
+        }
+        const handleChange = () => {
+          if (this.channelsSource === channels) {
+            this.reconcilePairingFilter(channels.state.pairingSnapshot);
+            this.requestUpdate();
+          }
+        };
+        handleChange();
+        return channels.subscribe(handleChange);
+      },
+    )
+    .effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        this.schemaLoadStarted = false;
+        const handleChange = () => {
+          if (this.context.runtimeConfig !== runtimeConfig) {
+            return;
+          }
+          this.requestUpdate();
+          this.ensureInitialData();
+        };
+        handleChange();
+        const unsubscribe = runtimeConfig.subscribe(handleChange);
+        return () => {
+          unsubscribe();
+          this.schemaLoadStarted = false;
+        };
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
+        this.gatewaySource = gateway;
+        this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
+        return gateway.subscribe((snapshot) => {
+          if (this.gatewaySource !== gateway) {
+            return;
+          }
+          this.applyGatewaySnapshot(snapshot, false);
+        });
+      },
+    );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.ensureSubscriptions();
-    this.ensureInitialData();
+  private applyGatewaySnapshot(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+    sourceChanged: boolean,
+  ) {
+    const clientChanged = this.hasGatewaySnapshot && this.gatewayClient !== snapshot.client;
+    const connectionChanged =
+      this.hasGatewaySnapshot && this.gatewayConnected !== (snapshot.phase === "connected");
+    const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
+    const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
+    const pairingAuthChanged =
+      this.hasGatewaySnapshot && this.gatewayPairingAuthSignature !== pairingAuthSignature;
+    if (!this.hasGatewaySnapshot || sourceChanged || clientChanged || connectionChanged) {
+      this.nostrOperationGeneration += 1;
+    }
+    if (sourceChanged || clientChanged || snapshot.phase !== "connected") {
+      this.clearNostrForm();
+    }
+    if (
+      sourceChanged ||
+      clientChanged ||
+      pairingAuthChanged ||
+      snapshot.phase !== "connected" ||
+      !pairingAccess
+    ) {
+      this.pairingPrompt = null;
+      this.pairingChannelFilter = null;
+      this.pairingAccountFilter = null;
+      this.pairingNotice = null;
+    }
+    this.hasGatewaySnapshot = true;
+    this.gatewayClient = snapshot.client;
+    this.gatewayConnected = snapshot.phase === "connected";
+    this.gatewayPairingAuthSignature = pairingAuthSignature;
+    this.syncPairingPolling(snapshot);
+    if (snapshot.phase === "connected" && snapshot.client) {
+      this.ensureInitialData();
+      if (
+        (sourceChanged || clientChanged || connectionChanged || pairingAuthChanged) &&
+        pairingAccess
+      ) {
+        void this.context.channels.refreshPairing();
+      }
+    } else {
+      this.schemaLoadStarted = false;
+    }
   }
 
-  private ensureSubscriptions() {
-    const context = this.context;
-    if (!context || this.stopChannelsSubscription) {
+  private syncPairingPolling(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    if (
+      snapshot.phase === "connected" &&
+      snapshot.client &&
+      hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
+    ) {
+      this.pairingPolling.start();
       return;
     }
-    this.stopChannelsSubscription = context.channels.subscribe(this.requestPageUpdate);
-    this.stopConfigSubscription = context.runtimeConfig.subscribe(() => {
-      this.requestPageUpdate();
-      this.ensureInitialData();
-    });
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      if (snapshot.connected && snapshot.client) {
-        this.ensureInitialData();
-      } else {
-        this.schemaLoadStarted = false;
-      }
-    });
+    this.pairingPolling.stop();
   }
 
   private ensureInitialData() {
     const context = this.context;
     const gateway = context.gateway.snapshot;
     const client = gateway.client;
-    if (!gateway.connected || !client) {
+    if (gateway.phase !== "connected" || !client) {
       return;
     }
 
@@ -95,6 +223,13 @@ export class ChannelsPage extends LitElement {
     const config = context.runtimeConfig.state;
     if (!channels.channelsSnapshot && !channels.channelsLoading) {
       void context.channels.refresh(false);
+    }
+    if (
+      hasOperatorPairingAccess(gateway.hello?.auth ?? null) &&
+      !channels.pairingSnapshot &&
+      !channels.pairingLoading
+    ) {
+      void context.channels.refreshPairing();
     }
     if (!config.configSnapshot && !config.configLoading) {
       void context.runtimeConfig.ensureLoaded();
@@ -106,12 +241,21 @@ export class ChannelsPage extends LitElement {
   }
 
   override disconnectedCallback() {
-    this.stopChannelsSubscription?.();
-    this.stopChannelsSubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
+    this.wizardHost.cancelOnDisconnect();
+    this.selectedChannel = null;
+    this.gatewaySource = undefined;
+    this.channelsSource = undefined;
+    this.gatewayClient = null;
+    this.gatewayConnected = false;
+    this.gatewayPairingAuthSignature = null;
+    this.hasGatewaySnapshot = false;
+    this.pairingPrompt = null;
+    this.pairingChannelFilter = null;
+    this.pairingAccountFilter = null;
+    this.pairingNotice = null;
+    this.pairingPolling.stop();
+    this.invalidateNostrForm();
+    this.subscriptions.clear();
     this.schemaLoadStarted = false;
     super.disconnectedCallback();
   }
@@ -145,30 +289,79 @@ export class ChannelsPage extends LitElement {
 
   private resolveNostrAccountId(): string {
     const accounts = this.context?.channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
-    return accounts[0]?.accountId ?? this.nostrProfileAccountId ?? "default";
+    return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
   }
 
-  private buildGatewayHttpHeaders(): Record<string, string> {
-    const context = this.context;
-    if (!context) {
-      return {};
-    }
+  private buildGatewayHttpHeaders(gateway: ApplicationContext["gateway"]): Record<string, string> {
     const authorization = resolveControlUiAuthHeader({
-      hello: context.gateway.snapshot.hello,
-      settings: { token: context.gateway.connection.token },
-      password: context.gateway.connection.password,
+      hello: gateway.snapshot.hello,
+      settings: { token: gateway.connection.token },
+      password: gateway.connection.password,
     });
     return authorization ? { Authorization: authorization } : {};
   }
 
+  private clearNostrForm() {
+    this.nostrProfileFormState = null;
+    this.nostrProfileAccountId = null;
+  }
+
+  private invalidateNostrForm() {
+    this.nostrOperationGeneration += 1;
+    this.clearNostrForm();
+  }
+
+  private beginNostrOperation(): NostrOperation | null {
+    const gateway = this.context.gateway;
+    const channels = this.context.channels;
+    const client = gateway.snapshot.client;
+    if (
+      !this.isConnected ||
+      this.gatewaySource !== gateway ||
+      this.channelsSource !== channels ||
+      gateway.snapshot.phase !== "connected" ||
+      !client
+    ) {
+      return null;
+    }
+    const generation = this.nostrOperationGeneration + 1;
+    this.nostrOperationGeneration = generation;
+    return {
+      generation,
+      gateway,
+      channels,
+      client,
+      formAccountId: this.nostrProfileAccountId,
+      accountId: this.resolveNostrAccountId(),
+      headers: this.buildGatewayHttpHeaders(gateway),
+    };
+  }
+
+  private currentNostrForm(operation: NostrOperation): NonNullable<NostrProfileFormState> | null {
+    const form = this.nostrProfileFormState;
+    if (
+      !form ||
+      !this.isConnected ||
+      this.nostrOperationGeneration !== operation.generation ||
+      this.nostrProfileAccountId !== operation.formAccountId ||
+      this.context.gateway !== operation.gateway ||
+      this.context.channels !== operation.channels ||
+      operation.gateway.snapshot.client !== operation.client ||
+      operation.gateway.snapshot.phase !== "connected"
+    ) {
+      return null;
+    }
+    return form;
+  }
+
   private editNostrProfile(accountId: string, profile: NostrProfile | null) {
+    this.nostrOperationGeneration += 1;
     this.nostrProfileAccountId = accountId;
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
 
   private cancelNostrProfile() {
-    this.nostrProfileFormState = null;
-    this.nostrProfileAccountId = null;
+    this.invalidateNostrForm();
   }
 
   private changeNostrProfileField(field: keyof NostrProfile, value: string) {
@@ -193,37 +386,35 @@ export class ChannelsPage extends LitElement {
 
   private async saveNostrProfile() {
     const form = this.nostrProfileFormState;
-    if (!form || form.saving) {
+    if (!form || form.saving || form.importing) {
       return;
     }
-    const accountId = this.resolveNostrAccountId();
-    this.nostrProfileFormState = {
+    const operation = this.beginNostrOperation();
+    if (!operation) {
+      return;
+    }
+    const pendingForm = {
       ...form,
       saving: true,
       error: null,
       success: null,
       fieldErrors: {},
     };
+    this.nostrProfileFormState = pendingForm;
 
     try {
-      const response = await fetch(buildNostrProfileUrl(accountId), {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.buildGatewayHttpHeaders(),
-        },
-        body: JSON.stringify(form.values),
+      const { data, response } = await putNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
+        values: form.values,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        details?: unknown;
-        persisted?: boolean;
-      } | null;
-
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       if (!response.ok || data?.ok === false || !data) {
         this.nostrProfileFormState = {
-          ...form,
+          ...currentForm,
           saving: false,
           error: data?.error ?? `Profile update failed (${response.status})`,
           success: null,
@@ -234,7 +425,7 @@ export class ChannelsPage extends LitElement {
 
       if (!data.persisted) {
         this.nostrProfileFormState = {
-          ...form,
+          ...currentForm,
           saving: false,
           error: "Profile publish failed on all relays.",
           success: null,
@@ -243,19 +434,23 @@ export class ChannelsPage extends LitElement {
       }
 
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         saving: false,
         error: null,
         success: "Profile published to relays.",
         fieldErrors: {},
         original: { ...form.values },
       };
-      await this.context?.channels.refresh(true);
+      await operation.channels.refresh(true);
     } catch (err) {
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         saving: false,
-        error: `Profile update failed: ${String(err)}`,
+        error: formatNostrProfileOperationError(err, "Profile update failed"),
         success: null,
       };
     }
@@ -263,10 +458,13 @@ export class ChannelsPage extends LitElement {
 
   private async importNostrProfile() {
     const form = this.nostrProfileFormState;
-    if (!form || form.importing) {
+    if (!form || form.importing || form.saving) {
       return;
     }
-    const accountId = this.resolveNostrAccountId();
+    const operation = this.beginNostrOperation();
+    if (!operation) {
+      return;
+    }
     this.nostrProfileFormState = {
       ...form,
       importing: true,
@@ -275,25 +473,17 @@ export class ChannelsPage extends LitElement {
     };
 
     try {
-      const response = await fetch(buildNostrProfileUrl(accountId, "/import"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.buildGatewayHttpHeaders(),
-        },
-        body: JSON.stringify({ autoMerge: true }),
+      const { data, response } = await importNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        imported?: NostrProfile;
-        merged?: NostrProfile;
-        saved?: boolean;
-      } | null;
-
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       if (!response.ok || data?.ok === false || !data) {
         this.nostrProfileFormState = {
-          ...form,
+          ...currentForm,
           importing: false,
           error: data?.error ?? `Profile import failed (${response.status})`,
           success: null,
@@ -302,9 +492,9 @@ export class ChannelsPage extends LitElement {
       }
 
       const merged = data.merged ?? data.imported ?? null;
-      const values = merged ? { ...form.values, ...merged } : form.values;
+      const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         importing: false,
         values,
         error: null,
@@ -315,15 +505,119 @@ export class ChannelsPage extends LitElement {
       };
 
       if (data.saved) {
-        await this.context?.channels.refresh(true);
+        await operation.channels.refresh(true);
       }
     } catch (err) {
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         importing: false,
-        error: `Profile import failed: ${String(err)}`,
+        error: formatNostrProfileOperationError(err, "Profile import failed"),
         success: null,
       };
+    }
+  }
+
+  private reconcilePairingFilter(snapshot: ChannelsPairingListResult | null) {
+    if (!snapshot || !this.pairingChannelFilter) {
+      return;
+    }
+    const channelAccounts = snapshot.accounts.filter(
+      (account) => account.channel === this.pairingChannelFilter,
+    );
+    if (channelAccounts.length === 0) {
+      this.pairingChannelFilter = null;
+      this.pairingAccountFilter = null;
+      return;
+    }
+    if (
+      this.pairingAccountFilter &&
+      !channelAccounts.some((account) => account.accountId === this.pairingAccountFilter)
+    ) {
+      this.pairingAccountFilter = null;
+    }
+  }
+
+  private setPairingFilter(channel: string | null, accountId: string | null) {
+    this.pairingChannelFilter = channel;
+    this.pairingAccountFilter = channel ? accountId : null;
+  }
+
+  private reviewPairingAccount(channel: string, accountId: string) {
+    this.selectedChannel = null;
+    this.setPairingFilter(channel, accountId);
+    void this.updateComplete.then(() => {
+      this.renderRoot.querySelector("#channels-pairing-requests")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
+  private openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
+    if (this.context.channels.state.pairingBusyRequestId) {
+      return;
+    }
+    this.pairingNotice = null;
+    this.pairingPrompt = {
+      kind,
+      request,
+      notify: false,
+      bootstrapCommandOwner: false,
+    };
+  }
+
+  private patchPairingPrompt(
+    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
+  ) {
+    if (!this.pairingPrompt) {
+      return;
+    }
+    this.pairingPrompt = { ...this.pairingPrompt, ...patch };
+  }
+
+  private async confirmPairingPrompt() {
+    const prompt = this.pairingPrompt;
+    if (!prompt) {
+      return;
+    }
+    if (prompt.kind === "dismiss") {
+      const dismissed = await this.context.channels.dismissPairing({
+        channel: prompt.request.channel,
+        accountId: prompt.request.accountId,
+        requestId: prompt.request.requestId,
+      });
+      if (dismissed && this.pairingPrompt === prompt) {
+        this.pairingPrompt = null;
+        this.pairingNotice = t("channels.pairing.dismissedNotice");
+      }
+      return;
+    }
+
+    const result = await this.context.channels.approvePairing({
+      channel: prompt.request.channel,
+      accountId: prompt.request.accountId,
+      requestId: prompt.request.requestId,
+      notify: prompt.notify,
+      bootstrapCommandOwner: prompt.bootstrapCommandOwner,
+    });
+    if (!result || this.pairingPrompt !== prompt) {
+      return;
+    }
+    this.pairingPrompt = null;
+    if (result.notification === "failed" && result.commandOwnerBootstrap === "unavailable") {
+      this.pairingNotice = t("channels.pairing.approvedFollowupsFailedNotice");
+    } else if (result.commandOwnerBootstrap === "unavailable") {
+      this.pairingNotice = t("channels.pairing.approvedOwnerFailedNotice");
+    } else if (result.notification === "failed") {
+      this.pairingNotice = t("channels.pairing.approvedNotificationFailedNotice");
+    } else if (result.commandOwnerBootstrap === "configured") {
+      this.pairingNotice = t("channels.pairing.approvedOwnerNotice");
+    } else {
+      this.pairingNotice = t("channels.pairing.approvedNotice");
     }
   }
 
@@ -331,21 +625,33 @@ export class ChannelsPage extends LitElement {
     const context = this.context;
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
+    const auth = context.gateway.snapshot.hello?.auth ?? null;
+    const canManagePairing = hasOperatorPairingAccess(auth);
+    const canAdmin = hasOperatorAdminAccess(auth);
     return html`
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
-          <div class="page-sub">${subtitleForRoute("channels")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(
-        context.basePath,
         renderChannels({
           connected: channels.connected,
           loading: channels.channelsLoading,
           snapshot: channels.channelsSnapshot,
           lastError: channels.channelsError,
           lastSuccessAt: channels.channelsLastSuccess,
+          pairingLoading: channels.pairingLoading,
+          pairingSnapshot: channels.pairingSnapshot,
+          pairingError: channels.pairingError,
+          pairingLastSuccessAt: channels.pairingLastSuccess,
+          pairingBusyRequestId: channels.pairingBusyRequestId,
+          pairingChannelFilter: this.pairingChannelFilter,
+          pairingAccountFilter: this.pairingAccountFilter,
+          pairingPrompt: this.pairingPrompt,
+          pairingNotice: this.pairingNotice,
+          canManagePairing,
+          canAdmin,
           whatsappMessage: channels.whatsappLoginMessage,
           whatsappQrDataUrl: channels.whatsappLoginQrDataUrl,
           whatsappConnected: channels.whatsappLoginConnected,
@@ -358,10 +664,38 @@ export class ChannelsPage extends LitElement {
           configFormDirty: config.configFormDirty,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
+          selectedChannel: this.selectedChannel,
+          wizard: this.wizardHost.state,
+          wizardMultiselect: this.wizardHost.multiselect,
+          setupBlockedByDirtyConfig: this.wizardHost.blockedByDirtyConfig,
+          onShowDetail: (channelId) => {
+            this.selectedChannel = channelId;
+          },
+          onCloseDetail: () => {
+            this.selectedChannel = null;
+          },
+          onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
+          onWizardAnswer: (value) => this.wizardHost.answer(value),
+          onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
+          onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
-          onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
-          onWhatsAppWait: () => void context.channels.waitWhatsApp(),
-          onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
+          onPairingRefresh: () => void context.channels.refreshPairing(),
+          onPairingFilterChange: (channel, accountId) => this.setPairingFilter(channel, accountId),
+          onPairingReviewAccount: (channel, accountId) =>
+            this.reviewPairingAccount(channel, accountId),
+          onPairingApprove: (request) => this.openPairingPrompt("approve", request),
+          onPairingDismiss: (request) => this.openPairingPrompt("dismiss", request),
+          onPairingPromptChange: (patch) => this.patchPairingPrompt(patch),
+          onPairingPromptCancel: () => {
+            this.pairingPrompt = null;
+          },
+          onPairingPromptConfirm: () => void this.confirmPairingPrompt(),
+          onWhatsAppStart: (force) =>
+            void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
+          onWhatsAppWait: () =>
+            void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
+          onWhatsAppLogout: () =>
+            void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),
@@ -372,9 +706,6 @@ export class ChannelsPage extends LitElement {
           onNostrProfileImport: () => void this.importNostrProfile(),
           onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
         }),
-        "channels",
-        (routeId) => context.navigate(routeId),
-        (routeId) => context.preload(routeId),
       )}
     `;
   }

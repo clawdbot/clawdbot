@@ -364,6 +364,10 @@ describe("isTransientUnhandledRejectionError", () => {
     const wrappedWsPreHandshakeClose = Object.assign(new Error("feishu reconnect failed"), {
       cause: wsPreHandshakeClose,
     });
+    const undiciTerminated = new TypeError("terminated");
+    const wrappedUndiciTerminated = Object.assign(new Error("model fetch failed"), {
+      cause: undiciTerminated,
+    });
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
@@ -380,6 +384,10 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
     expect(isBenignUncaughtExceptionError(wsPreHandshakeClose)).toBe(true);
     expect(isBenignUncaughtExceptionError(wrappedWsPreHandshakeClose)).toBe(true);
+    expect(isBenignUncaughtExceptionError(undiciTerminated)).toBe(true);
+    expect(isBenignUncaughtExceptionError(wrappedUndiciTerminated)).toBe(true);
+    expect(isBenignUncaughtExceptionError(new Error("terminated"))).toBe(false);
+    expect(isBenignUncaughtExceptionError(new TypeError("terminated unexpectedly"))).toBe(false);
     expect(
       isBenignUncaughtExceptionError(
         new Error("WebSocket error: WebSocket was closed before the connection was established"),

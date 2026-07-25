@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
@@ -26,6 +27,7 @@ import {
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -52,6 +54,7 @@ type ModelCallDiagnosticContext = {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   onStarted?: () => void;
+  suppressPluginHooks?: boolean;
 };
 
 type ModelCallEventBase = Omit<
@@ -93,12 +96,14 @@ type ModelCallObservationState = {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
   terminalEventEmitted?: boolean;
+  suppressPluginHooks?: boolean;
 };
 
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
 const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
+const TIMELINE_ATTRIBUTE_MAX_LENGTH = 256;
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
 
 function utf8JsonByteLength(value: unknown): number | undefined {
@@ -389,6 +394,7 @@ function baseModelCallEvent(
     model: ctx.model,
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
+    observationUnit: "request",
     ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
     ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
     ...(ctx.contextWindowReferenceTokens
@@ -415,6 +421,38 @@ function modelCallCompletedContent(state: ModelCallObservationState) {
 
 function modelCallUsageField(state: ModelCallObservationState) {
   return state.usage ? { usage: state.usage } : {};
+}
+
+function boundedTimelineAttribute(value: string | undefined): string | undefined {
+  return truncateUtf16Safe(value?.trim() ?? "", TIMELINE_ATTRIBUTE_MAX_LENGTH) || undefined;
+}
+
+function emitProviderRequestTimelineEvent(
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  durationMs: number,
+  ok: boolean,
+): void {
+  const provider = boundedTimelineAttribute(eventBase.provider);
+  const model = boundedTimelineAttribute(eventBase.model);
+  const api = boundedTimelineAttribute(eventBase.api);
+  const transport = boundedTimelineAttribute(eventBase.transport);
+  emitDiagnosticsTimelineEvent({
+    type: "provider.request",
+    name: "provider.request",
+    timestamp: new Date(startedAt).toISOString(),
+    runId: eventBase.runId,
+    spanId: eventBase.callId,
+    durationMs,
+    provider,
+    operation: api ?? transport ?? "model.call",
+    ok,
+    attributes: {
+      ...(model ? { model } : {}),
+      ...(api ? { api } : {}),
+      ...(transport ? { transport } : {}),
+    },
+  });
 }
 
 function modelCallErrorFields(err: unknown): ModelCallErrorFields {
@@ -515,6 +553,7 @@ function dispatchModelCallEndedHook(
 function emitModelCallStarted(
   eventBase: ModelCallEventBase,
   modelContent: DiagnosticModelCallContent | undefined,
+  suppressPluginHooks: boolean,
 ): void {
   emitTrustedDiagnosticEventWithPrivateData(
     {
@@ -523,7 +562,9 @@ function emitModelCallStarted(
     },
     modelContentPrivateData(modelContent),
   );
-  dispatchModelCallStartedHook(eventBase);
+  if (!suppressPluginHooks) {
+    dispatchModelCallStartedHook(eventBase);
+  }
 }
 
 function emitModelCallCompleted(
@@ -537,6 +578,7 @@ function emitModelCallCompleted(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, true);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.completed",
@@ -547,11 +589,13 @@ function emitModelCallCompleted(
     },
     modelContentPrivateData(modelCallCompletedContent(state)),
   );
-  dispatchModelCallEndedHook(eventBase, {
-    durationMs,
-    outcome: "completed",
-    ...sizeTimingFields,
-  });
+  if (!state.suppressPluginHooks) {
+    dispatchModelCallEndedHook(eventBase, {
+      durationMs,
+      outcome: "completed",
+      ...sizeTimingFields,
+    });
+  }
 }
 
 function emitModelCallError(
@@ -566,6 +610,7 @@ function emitModelCallError(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.error",
@@ -577,18 +622,21 @@ function emitModelCallError(
     },
     modelContentPrivateData(modelCallCompletedContent(state)),
   );
-  dispatchModelCallEndedHook(eventBase, {
-    durationMs,
-    outcome: "error",
-    ...sizeTimingFields,
-    ...fields,
-  });
+  if (!state.suppressPluginHooks) {
+    dispatchModelCallEndedHook(eventBase, {
+      durationMs,
+      outcome: "error",
+      ...sizeTimingFields,
+      ...fields,
+    });
+  }
 }
 
-function withDiagnosticTraceparentHeader(
+function withDiagnosticRequestContext(
   options: ModelCallStreamOptions,
   trace: DiagnosticTraceContext,
   state: ModelCallObservationState,
+  callId: string,
 ): ModelCallStreamOptions {
   const traceparent = formatDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
@@ -611,6 +659,7 @@ function withDiagnosticTraceparentHeader(
   if (!traceparent) {
     return {
       ...options,
+      requestId: callId,
       onPayload,
     };
   }
@@ -625,6 +674,7 @@ function withDiagnosticTraceparentHeader(
   headers[TRACEPARENT_HEADER_NAME] = traceparent;
   return {
     ...options,
+    requestId: callId,
     headers,
     onPayload,
   };
@@ -822,15 +872,18 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       : undefined;
     const eventBase = baseModelCallEvent(ctx, callId, trace, promptStats);
     const modelContent = streamContextModelContentFields(ctx.contentCapture, streamContext);
-    emitModelCallStarted(eventBase, modelContent);
+    emitModelCallStarted(eventBase, modelContent, ctx.suppressPluginHooks === true);
     ctx.onStarted?.();
     const startedAt = Date.now();
     const state: ModelCallObservationState = {
       responseStreamBytes: 0,
       modelContent,
       contentCapture: ctx.contentCapture,
+      suppressPluginHooks: ctx.suppressPluginHooks,
     };
-    const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
+    // Provider wrappers consume this same call id for transport correlation,
+    // keeping external request evidence joined to the emitted diagnostics.
+    const propagatedOptions = withDiagnosticRequestContext(options, trace, state, callId);
 
     try {
       const result = streamFn(model, streamContext, propagatedOptions);
@@ -850,3 +903,4 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     }
   }) as StreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

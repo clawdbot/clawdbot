@@ -232,6 +232,71 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("renders typed URL actions and omits unresolved approval actions", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            {
+              label: "Review",
+              action: { type: "url" as const, url: "https://example.com/review" },
+            },
+            {
+              label: "Open app",
+              action: { type: "web-app" as const, url: "https://example.com/app" },
+            },
+            {
+              label: "Hosted widget",
+              action: {
+                type: "web-app" as const,
+                widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+              },
+            },
+            {
+              label: "Allow",
+              action: {
+                type: "approval" as const,
+                approvalId: "approval-1",
+                approvalKind: "exec" as const,
+                decision: "allow-once" as const,
+              },
+              value: "/approve approval-1 allow-once",
+            },
+          ],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await requireRenderPresentation()({
+      payload,
+      presentation,
+      ctx: {
+        cfg,
+        to: "conversation:abc",
+        text: "",
+        payload,
+      },
+    });
+
+    const card = (rendered?.channelData?.msteams as { presentationCard?: unknown } | undefined)
+      ?.presentationCard as { actions?: unknown[] } | undefined;
+    expect(card?.actions).toEqual([
+      {
+        type: "Action.OpenUrl",
+        title: "Review",
+        url: "https://example.com/review",
+      },
+      {
+        type: "Action.OpenUrl",
+        title: "Open app",
+        url: "https://example.com/app",
+      },
+    ]);
+    expect(JSON.stringify(card)).not.toContain("approval-1");
+    expect(JSON.stringify(card)).not.toContain("/approve");
+  });
+
   it("falls back to text/media delivery when payload rendering did not produce a card", async () => {
     const result = await requireSendPayload()({
       cfg,

@@ -107,15 +107,14 @@ wait_for_log "Continue?" 60
 send $'y\r' 0.4
 wait_for_log "to search" 60
 send $'ollama\r' 0.4
-wait_for_log "Enable hooks?" 60
-send $' \r' 0.4
-send $'\r' 0.4
 
 wait "$wizard_pid"
 wizard_pid=""
 exec 3>&-
 rm -rf "$input_fifo_dir"
 input_fifo_dir=""
+
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-session-memory-hook-enabled
 
 openclaw onboard \
   --non-interactive \

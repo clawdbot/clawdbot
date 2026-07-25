@@ -7,15 +7,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
 import {
   collectPackageDistImports,
   collectPackageDistImportErrors,
   expandPackageDistImportClosure,
 } from "./lib/package-dist-imports.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
 
 function usage() {
-  return "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>";
+  return "Usage: node scripts/check-openclaw-package-tarball.mjs [--require-bundled-workspace-deps] <openclaw.tgz>";
 }
 
 function fail(message) {
@@ -25,21 +27,29 @@ function fail(message) {
 
 function parseArgs(argv) {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
-  const tarball = args[0]?.trim() ?? "";
-  if (tarball === "--help" || tarball === "-h") {
-    return { help: true, tarball: "" };
+  let requireBundledWorkspaceDeps = false;
+  let tarball = "";
+  for (const rawArg of args) {
+    const arg = rawArg?.trim() ?? "";
+    if (arg === "--help" || arg === "-h") {
+      return { help: true, requireBundledWorkspaceDeps: false, tarball: "" };
+    }
+    if (arg === "--require-bundled-workspace-deps") {
+      requireBundledWorkspaceDeps = true;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown OpenClaw package tarball check option: ${arg}`);
+    }
+    if (tarball) {
+      throw new Error(`Unexpected OpenClaw package tarball check argument: ${arg}`);
+    }
+    tarball = arg;
   }
   if (!tarball) {
     throw new Error(usage());
   }
-  if (tarball.startsWith("-")) {
-    throw new Error(`Unknown OpenClaw package tarball check option: ${tarball}`);
-  }
-  const extraArg = args[1]?.trim();
-  if (extraArg) {
-    throw new Error(`Unexpected OpenClaw package tarball check argument: ${extraArg}`);
-  }
-  return { help: false, tarball };
+  return { help: false, requireBundledWorkspaceDeps, tarball };
 }
 
 let cliArgs;
@@ -58,7 +68,213 @@ if (!fs.existsSync(tarball)) {
   fail(`OpenClaw package tarball does not exist: ${tarball}`);
 }
 
+const PACKAGE_DEPENDENCY_SECTIONS = [
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "devDependencies",
+];
+const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
+// Strict Docker artifacts bundle this private runtime rather than resolving it
+// from npm. Keep the concrete load-bearing entries explicit instead of
+// reimplementing Node's conditional package-exports resolver here.
+const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
+  [
+    "@openclaw/ai",
+    [
+      { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
+      { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
+      {
+        specifier: "@openclaw/ai/transports",
+        entry: "dist/transports.mjs",
+        whenExported: "./transports",
+      },
+      {
+        specifier: "@openclaw/ai/internal/runtime",
+        entry: "dist/internal/runtime.mjs",
+      },
+    ],
+  ],
+]);
+
+function collectWorkspaceProtocolDependencyErrors(packageJson, label) {
+  const errors = [];
+  if (!packageJson || typeof packageJson !== "object") {
+    return errors;
+  }
+
+  for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
+    const dependencies = packageJson[section];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+      continue;
+    }
+
+    for (const [name, spec] of Object.entries(dependencies)) {
+      if (typeof spec === "string" && spec.startsWith("workspace:")) {
+        errors.push(`${label} ${section}.${name} must not use workspace protocol ${spec}`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+function listBundleDependencies(packageJson) {
+  if (!packageJson || typeof packageJson !== "object") {
+    return [];
+  }
+  if (packageJson.bundleDependencies === true) {
+    return Object.keys(packageJson.dependencies ?? {});
+  }
+  const bundleDependencies = Array.isArray(packageJson.bundleDependencies)
+    ? packageJson.bundleDependencies
+    : packageJson.bundledDependencies;
+  return Array.isArray(bundleDependencies)
+    ? bundleDependencies.filter((name) => typeof name === "string")
+    : [];
+}
+
+function resolveBundledPackageSpecifiers(packageRoot, specifiers) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `const resolutions = {};
+for (const specifier of JSON.parse(process.argv[1])) {
+  try {
+    resolutions[specifier] = import.meta.resolve(specifier);
+  } catch {
+    resolutions[specifier] = "";
+  }
+}
+process.stdout.write(JSON.stringify(resolutions));`,
+      JSON.stringify(specifiers),
+    ],
+    { cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+function collectBundledPackageRuntimeErrors({ name, entries, files, packageRoot, readText }) {
+  const errors = [];
+  const packagePrefix = `node_modules/${name}/`;
+  const manifestPath = `${packagePrefix}package.json`;
+  let bundledPackageJson;
+  try {
+    bundledPackageJson = JSON.parse(readText(manifestPath));
+  } catch (error) {
+    errors.push(
+      `unreadable bundled ${name} package.json: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return errors;
+  }
+  if (bundledPackageJson.name !== name) {
+    errors.push(`bundled ${name} package.json must name ${name}`);
+  }
+  const packageExports =
+    bundledPackageJson.exports &&
+    typeof bundledPackageJson.exports === "object" &&
+    !Array.isArray(bundledPackageJson.exports)
+      ? bundledPackageJson.exports
+      : {};
+  // Trusted current-main harnesses validate frozen release targets. Require
+  // post-cut runtime subpaths only when the candidate manifest owns them.
+  const runtimeEntries = (REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? []).filter(
+    ({ whenExported }) => !whenExported || Object.hasOwn(packageExports, whenExported),
+  );
+  const resolutions = resolveBundledPackageSpecifiers(
+    packageRoot,
+    runtimeEntries.map(({ specifier }) => specifier),
+  );
+  if (!resolutions) {
+    errors.push(`bundled ${name} runtime specifier resolution failed`);
+  }
+  for (const { entry, specifier } of runtimeEntries) {
+    if (!entries.has(`${packagePrefix}${entry}`)) {
+      errors.push(`bundled ${name} is missing required runtime entry ${entry}`);
+    }
+    const resolvedUrl = resolutions?.[specifier] ?? "";
+    if (!resolvedUrl) {
+      errors.push(`bundled ${name} runtime specifier ${specifier} is not resolvable`);
+      continue;
+    }
+    const expectedUrl = pathToFileURL(path.join(packageRoot, packagePrefix, entry)).href;
+    if (resolvedUrl !== expectedUrl) {
+      errors.push(
+        `bundled ${name} runtime specifier ${specifier} resolves to ${resolvedUrl} instead of ${expectedUrl}`,
+      );
+    }
+  }
+  const bundledFiles = files
+    .filter((file) => file.startsWith(packagePrefix))
+    .map((file) => file.slice(packagePrefix.length));
+  errors.push(
+    ...collectPackageDistImportErrors({
+      files: bundledFiles,
+      readText: (file) => readText(`${packagePrefix}${file}`),
+    }).map((error) => `bundled ${name} ${error}`),
+  );
+  return errors;
+}
+
+function collectRequiredBundledWorkspaceDependencyErrors(
+  packageJson,
+  entrySet,
+  files,
+  packageRoot,
+  readText,
+) {
+  const errors = [];
+  if (!packageJson || typeof packageJson !== "object") {
+    return errors;
+  }
+
+  const dependencies = packageJson.dependencies;
+  if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+    return errors;
+  }
+
+  const bundledDependencies = new Set(listBundleDependencies(packageJson));
+  for (const name of REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES) {
+    if (typeof dependencies[name] !== "string") {
+      continue;
+    }
+    if (!bundledDependencies.has(name)) {
+      errors.push(
+        `package.json dependencies.${name} must be listed in bundleDependencies because it is private to the OpenClaw workspace`,
+      );
+    }
+    if (!entrySet.has(`node_modules/${name}/package.json`)) {
+      errors.push(`package.json dependencies.${name} must be bundled in node_modules/${name}`);
+      continue;
+    }
+    errors.push(
+      ...collectBundledPackageRuntimeErrors({
+        name,
+        entries: entrySet,
+        files,
+        packageRoot,
+        readText,
+      }),
+    );
+  }
+
+  return errors;
+}
+
 const phaseTimingsEnabled = process.env.OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS !== "0";
+// Self-contained artifacts can exceed Node's 1 MiB spawnSync output default.
+const TAR_LIST_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 function runPhase(label, action) {
   const startedAt = performance.now();
   try {
@@ -74,11 +290,12 @@ function runPhase(label, action) {
 const list = runPhase("tar list", () =>
   spawnSync("tar", ["-tf", tarball], {
     encoding: "utf8",
+    maxBuffer: TAR_LIST_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   }),
 );
 if (list.status !== 0) {
-  fail(`tar -tf failed for ${tarball}: ${list.stderr || list.status}`);
+  fail(`tar -tf failed for ${tarball}: ${list.stderr || list.error?.message || list.status}`);
 }
 
 const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
@@ -106,11 +323,14 @@ const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
 const entrySet = new Set(normalized);
 const errors = [];
 const warnings = [];
-const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html"];
+const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
+const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
+// 2026.7.1 shipped before the guard existed. Historical inspection may still check it.
+const LEGACY_INSTALL_GUARD_COMPAT_MAX = { year: 2026, month: 7, day: 1 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
@@ -178,6 +398,11 @@ function isLegacyShrinkwrapCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_COMPAT_MAX) <= 0 : false;
 }
 
+function isLegacyInstallGuardCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_INSTALL_GUARD_COMPAT_MAX) <= 0 : false;
+}
+
 function readTarEntry(entryPath) {
   const candidates = [
     path.join(extractDir, entryPath),
@@ -190,6 +415,12 @@ function readTarEntry(entryPath) {
   }
   return "";
 }
+
+const extractedPackageRoot = fs.realpathSync(
+  fs.existsSync(path.join(extractDir, "package", "package.json"))
+    ? path.join(extractDir, "package")
+    : extractDir,
+);
 
 for (const entry of normalized) {
   if (entry.startsWith("/") || entry.split("/").includes("..")) {
@@ -218,12 +449,31 @@ if (entrySet.has("package.json")) {
   try {
     const packageJson = JSON.parse(readTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
+    errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
+    if (cliArgs.requireBundledWorkspaceDeps) {
+      errors.push(
+        ...collectRequiredBundledWorkspaceDependencyErrors(
+          packageJson,
+          entrySet,
+          normalized,
+          extractedPackageRoot,
+          readTarEntry,
+        ),
+      );
+    }
   } catch {
     packageVersion = "";
   }
 }
 if (entrySet.has("package-lock.json")) {
   errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
+}
+if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+  if (isLegacyInstallGuardCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits the preinstall completion guard");
+  } else {
+    errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
+  }
 }
 if (!entrySet.has("npm-shrinkwrap.json")) {
   if (isLegacyShrinkwrapCompatVersion(packageVersion)) {
@@ -254,6 +504,9 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
     if (rootPackage?.devDependencies) {
       errors.push("npm-shrinkwrap.json must not lock root devDependencies");
     }
+    errors.push(
+      ...collectWorkspaceProtocolDependencyErrors(rootPackage, "npm-shrinkwrap.json packages root"),
+    );
     const devLockedPackages = Object.entries(shrinkwrap.packages ?? {})
       .filter(([, packageMetadata]) => packageMetadata?.dev === true)
       .map(([packagePath]) => packagePath);
@@ -291,6 +544,11 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
     } else {
       const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
+      if (normalizedInventorySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+        errors.push(
+          `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
+        );
+      }
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({
           files: normalized,

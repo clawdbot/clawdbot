@@ -28,4 +28,14 @@ describe("readFields", () => {
       "fields[0] must include ref",
     );
   });
+
+  it("throws descriptive error on malformed JSON", async () => {
+    await expect(readFields({ fields: "NOT JSON {{{" })).rejects.toThrow(
+      "fields must be valid JSON.",
+    );
+  });
+
+  it("throws descriptive error on empty fields", async () => {
+    await expect(readFields({ fields: "" })).rejects.toThrow("fields are required");
+  });
 });

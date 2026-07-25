@@ -4,7 +4,6 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
-import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 export {
   getSessionEntry,
   listSessionEntries,
@@ -13,14 +12,6 @@ export {
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "./session-store-runtime.js";
-
-/**
- * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
- * kept only during the transition before SQLite migration. Callers must
- * migrate away from reading sessions.json directly.
- */
-export const loadSessionStore = loadSessionStoreImpl;
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
@@ -83,11 +74,6 @@ export {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-export {
-  TELEGRAM_COMMAND_NAME_PATTERN,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
@@ -145,27 +131,15 @@ export type {
   TtsModelOverrideConfig,
   TtsPersonaConfig,
   TtsPersonaFallbackPolicy,
-  TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+// SDK-facing names are a shipped plugin contract; internals route through the
+// session accessor so the storage backend can change beneath them.
 export {
-  clearSessionStoreCacheForTest,
-  recordSessionMetaFromInbound,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from writing sessions.json directly.
-   */
-  saveSessionStore,
-  updateLastRoute,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from updating sessions.json directly.
-   */
-  updateSessionStore,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
+  recordInboundSessionMeta as recordSessionMetaFromInbound,
+  updateSessionLastRoute as updateLastRoute,
+} from "../config/sessions/session-accessor.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";

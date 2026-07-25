@@ -7,16 +7,18 @@
 
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+  stripChannelTargetPrefix,
+} from "openclaw/plugin-sdk/channel-core";
+import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  buildPassiveProbedChannelStatusSummary,
-  runStoppablePassiveMonitor,
-} from "openclaw/plugin-sdk/extension-shared";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -35,7 +37,7 @@ import {
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
-import { twitchSetupAdapter, twitchSetupWizard } from "./setup-surface.js";
+import { twitchSetupAdapter, twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type {
   ChannelLogSink,
@@ -44,9 +46,20 @@ import type {
   ChannelResolveResult,
   TwitchAccountConfig,
 } from "./types.js";
-import { isAccountConfigured } from "./utils/twitch.js";
+import { isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
 
 type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
+
+function normalizeTwitchMessagingTarget(target: string): string {
+  const providerTarget = stripChannelTargetPrefix(target, "twitch", "twitch-chat");
+  const kindMatch = /^(user|dm|channel|group|conversation|room):/i.exec(providerTarget);
+  const kind = kindMatch?.[1]?.toLowerCase();
+  if (kind === "user" || kind === "dm") {
+    return "";
+  }
+  const channelTarget = kindMatch ? providerTarget.slice(kindMatch[0].length) : providerTarget;
+  return normalizeTwitchChannel(channelTarget);
+}
 
 /**
  * Twitch channel plugin.
@@ -77,9 +90,29 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         aliases: ["twitch-chat"],
       },
       setup: twitchSetupAdapter,
+      setupContract: twitchSetupContract,
       setupWizard: twitchSetupWizard,
       capabilities: {
         chatTypes: ["group"],
+      },
+      messaging: {
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const channel = normalizeTwitchMessagingTarget(target);
+          if (!channel) {
+            return null;
+          }
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "twitch",
+            accountId,
+            recipientSessionExact: true,
+            peer: { kind: "group", id: channel },
+            chatType: "group",
+            from: `twitch:channel:${channel}`,
+            to: channel,
+          });
+        },
       },
       message: twitchMessageAdapter,
       configSchema: buildChannelConfigSchema(TwitchConfigSchema),
@@ -187,7 +220,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
           // supervisor reads the settled task as `channel exited without an
           // error` and triggers a restart loop. See #60071.
           try {
-            await runStoppablePassiveMonitor({
+            await runPassiveAccountLifecycle({
               abortSignal: ctx.abortSignal,
               start: async () => {
                 // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
@@ -199,6 +232,9 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
                   runtime: ctx.runtime,
                   abortSignal: ctx.abortSignal,
                 });
+              },
+              stop: async (monitor) => {
+                await monitor.stop();
               },
             });
           } catch (error) {

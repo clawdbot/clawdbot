@@ -511,6 +511,32 @@ describe("getApiKeyForModel", () => {
     ).rejects.toThrow(/requires an OpenAI API key profile/);
   });
 
+  it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:api-key": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "direct-openai-key",
+        },
+      },
+    };
+
+    await expect(
+      getApiKeyForModel({
+        model: {
+          id: "gpt-5.5",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+        } as Model,
+        profileId: "openai:api-key",
+        lockedProfile: true,
+        store,
+      }),
+    ).rejects.toThrow(/requires a ChatGPT subscription \(OAuth or token\) profile/);
+  });
+
   it("uses the config default agent dir when resolving provider profiles", async () => {
     await withOpenClawTestState(
       {
@@ -1961,3 +1987,4 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     ).rejects.toThrow(/matched a stored profile but failed to resolve/);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,6 +5,7 @@
  * 拆分、路径编码修复，以及统一的发送队列执行器。
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { normalizePath } from "../utils/platform.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
@@ -18,6 +19,7 @@ import {
   resolveUserFacingMediaError,
   type MediaTargetContext,
 } from "./outbound.js";
+import { raceWithTimeout } from "./race-with-timeout.js";
 
 function formatStreamSendErr(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -102,7 +104,7 @@ function fixPathEncoding(
         if (code <= 0xff) {
           bytes.push(code);
         } else {
-          const charBytes = Buffer.from(decoded[i], "utf8");
+          const charBytes = Buffer.from(decoded.charAt(i), "utf8");
           bytes.push(...charBytes);
         }
       }
@@ -140,7 +142,11 @@ function isInsideCodeBlock(text: string, position: number): boolean {
   let openFence: { pos: number; ticks: number } | null = null;
 
   while ((fenceMatch = fenceRegex.exec(text)) !== null) {
-    const ticks = fenceMatch[1].length;
+    const ticksText = fenceMatch[1];
+    if (ticksText === undefined) {
+      continue;
+    }
+    const ticks = ticksText.length;
     if (!openFence) {
       openFence = { pos: fenceMatch.index, ticks };
     } else if (ticks >= openFence.ticks) {
@@ -205,7 +211,11 @@ export function findFirstClosedMediaTag(
     }
 
     const textBefore = text.slice(0, match.index);
-    const tagName = match[1].toLowerCase();
+    const rawTagName = match[1];
+    if (rawTagName === undefined) {
+      continue;
+    }
+    const tagName = rawTagName.toLowerCase();
     let mediaPath = match[2]?.trim() ?? "";
 
     mediaPath = normalizePath(mediaPath);
@@ -295,7 +305,7 @@ export async function executeSendQueue(
       }
 
       log?.info(
-        `${prefix} executeSendQueue: sending ${item.type}: ${item.content.slice(0, 80)}...`,
+        `${prefix} executeSendQueue: sending ${item.type}: ${truncateUtf16Safe(item.content, 80)}...`,
       );
 
       if (item.type === "image") {
@@ -309,17 +319,13 @@ export async function executeSendQueue(
           account.config?.audioFormatPolicy?.uploadDirectFormats ??
           account.config?.voiceDirectUploadFormats;
         const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
-        const voiceTimeout = 45000; // 45s
+        const voiceTimeout = 45_000;
         try {
-          const result = await Promise.race([
-            sendVoice(mediaTarget, item.content, uploadFormats, transcodeEnabled),
-            new Promise<{ channel: string; error: string }>((resolve) => {
-              setTimeout(
-                () => resolve({ channel: "qqbot", error: "语音发送超时，已跳过" }),
-                voiceTimeout,
-              );
-            }),
-          ]);
+          const result = await raceWithTimeout(
+            () => sendVoice(mediaTarget, item.content, uploadFormats, transcodeEnabled),
+            voiceTimeout,
+            () => ({ channel: "qqbot", error: "语音发送超时，已跳过" }),
+          );
           if (result.error) {
             log?.error(`${prefix} sendVoice error: ${result.error}`);
             await sendFallbackText(resolveUserFacingMediaError(result));
@@ -445,7 +451,7 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
   let fallbackPos = -1; // 最右边触发回溯的 < 的位置
 
   for (let i = lastLine.length - 1; i >= 0; i--) {
-    const ch = lastLine[i];
+    const ch = lastLine.charAt(i);
     if (ch !== "<" && ch !== "\uFF1C") {
       continue;
     }
@@ -460,7 +466,11 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
       if (!nameMatch || isClosing) {
         continue;
       }
-      const cand = nameMatch[1].toLowerCase();
+      const candidateName = nameMatch[1];
+      if (candidateName === undefined) {
+        continue;
+      }
+      const cand = candidateName.toLowerCase();
       if (!isMedia(cand)) {
         continue;
       }
@@ -504,6 +514,9 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
     }
 
     const tag = nameMatch[1];
+    if (tag === undefined) {
+      continue;
+    }
     const restAfterName = nameStr.slice(tag.length);
     const hasGT = /[>＞]/.test(restAfterName);
 

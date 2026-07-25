@@ -16,6 +16,7 @@ type ListThinkingLevels = (
   provider?: string | null,
   model?: string | null,
   catalog?: CommandArgChoiceContext["catalog"],
+  agentRuntime?: string | null,
 ) => string[];
 
 const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
@@ -43,6 +44,17 @@ type DefineChatCommandInput = {
   /** Progressive disclosure tier. Defaults to "standard". */
   tier?: CommandTier;
 };
+
+/**
+ * Keep simple model selections on fast client-side patch paths. Multi-token
+ * forms can carry runtime selectors or a prompt, so the server directive parser
+ * must own the full atomic transaction.
+ */
+export function shouldForwardModelCommandToServer(rawArgs: string): boolean {
+  const args = rawArgs.trim();
+  const normalized = args.toLowerCase();
+  return normalized === "list" || normalized === "status" || /\s/u.test(args);
+}
 
 /** Defines one command with normalized aliases, scope, and argument parsing defaults. */
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
@@ -161,8 +173,8 @@ export function buildBuiltinChatCommands(
 ): ChatCommandDefinition[] {
   const configuredThinkingLevels =
     params.listThinkingLevels ?? (() => BROWSER_SAFE_THINKING_LEVELS);
-  const listThinkingLevelChoices: ListThinkingLevels = (provider, model, catalog) => {
-    const levels = configuredThinkingLevels(provider, model, catalog);
+  const listThinkingLevelChoices: ListThinkingLevels = (provider, model, catalog, agentRuntime) => {
+    const levels = configuredThinkingLevels(provider, model, catalog, agentRuntime);
     return ["default", ...levels.filter((level) => level !== "default")];
   };
   const commands: ChatCommandDefinition[] = [
@@ -222,6 +234,23 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+      key: "learn",
+      nativeName: "learn",
+      description: "Draft a reusable skill from recent work or named sources.",
+      textAlias: "/learn",
+      category: "tools",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "request",
+          description: "Sources and requirements for the skill draft",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",
@@ -241,9 +270,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "action",
-          description: "status, start, pause, resume, complete, block, clear",
+          description: "status, start, edit, pause, resume, complete, block, clear",
           type: "string",
-          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+          choices: ["status", "start", "edit", "pause", "resume", "complete", "block", "clear"],
         },
         {
           name: "text",
@@ -273,7 +302,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "login",
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       description: "Pair Codex login.",
       textAlias: "/login",
       category: "management",
@@ -288,9 +317,9 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
-      key: "crestodian",
-      description: "Run the Crestodian setup and repair helper.",
-      textAlias: "/crestodian",
+      key: "openclaw",
+      description: "Run the OpenClaw setup and repair helper.",
+      textAlias: "/openclaw",
       acceptsArgs: true,
       scope: "text",
       category: "management",
@@ -344,7 +373,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "export-session",
       nativeName: "export-session",
-      description: "Export current session to HTML file with full system prompt.",
+      description: "Export current session to an owner-only HTML file in the workspace.",
       textAliases: ["/export-session", "/export"],
       acceptsArgs: true,
       category: "status",
@@ -352,7 +381,7 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "path",
-          description: "Output path (default: workspace)",
+          description: "Output path inside workspace (default: workspace)",
           type: "string",
           required: false,
         },
@@ -808,8 +837,8 @@ export function buildBuiltinChatCommands(
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model, catalog }) =>
-            listThinkingLevelChoices(provider, model, catalog),
+          choices: ({ provider, model, catalog, agentRuntime }) =>
+            listThinkingLevelChoices(provider, model, catalog, agentRuntime),
         },
       ],
       argsMenu: "auto",
@@ -1030,3 +1059,4 @@ export function buildBuiltinChatCommands(
   assertCommandRegistry(commands);
   return commands;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -22,6 +22,7 @@ export type AckReactionHandle = {
  */
 export type AckReactionGateParams = {
   scope: AckReactionScope | undefined;
+  inboundEventKind?: "user_request" | "room_event";
   isDirect: boolean;
   isGroup: boolean;
   isMentionableGroup: boolean;
@@ -35,6 +36,11 @@ export type AckReactionGateParams = {
 export function shouldAckReaction(params: AckReactionGateParams): boolean {
   const scope = params.scope ?? "group-mentions";
   if (scope === "off" || scope === "none") {
+    return false;
+  }
+  // Ambient room events stay silent unless the operator explicitly chose the
+  // unconditional scope. This keeps every channel on the same `all` contract.
+  if (params.inboundEventKind === "room_event" && scope !== "all") {
     return false;
   }
   if (scope === "all") {

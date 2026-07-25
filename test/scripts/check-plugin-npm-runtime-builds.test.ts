@@ -102,4 +102,33 @@ describe("plugin npm runtime build checks", () => {
       },
     ]);
   });
+
+  it("builds top-level public policy surfaces as standalone package artifacts", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-runtime-check-"));
+    tempDirs.push(repoRoot);
+    writePackage(repoRoot, "provider-plugin", { publishToNpm: true }, ["./index.ts"]);
+    const packageDir = join(repoRoot, "extensions", "provider-plugin");
+    writeFileSync(join(packageDir, "index.ts"), "export default {};\n");
+    writeFileSync(
+      join(packageDir, "provider-policy-api.ts"),
+      "export function resolveThinkingProfile() { return { levels: [] }; }\n",
+    );
+
+    await expect(
+      checkPluginNpmRuntimeBuilds({
+        repoRoot,
+        packageDirs: ["extensions/provider-plugin"],
+      }),
+    ).resolves.toEqual([
+      {
+        pluginDir: "provider-plugin",
+        status: "built",
+        entryCount: 2,
+        copiedStaticAssets: [],
+      },
+    ]);
+    expect(await import(join(packageDir, "dist", "provider-policy-api.js"))).toHaveProperty(
+      "resolveThinkingProfile",
+    );
+  });
 });

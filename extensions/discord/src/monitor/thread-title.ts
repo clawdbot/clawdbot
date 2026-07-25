@@ -6,6 +6,7 @@ import {
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withAbortTimeout } from "./timeouts.js";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
@@ -51,9 +52,8 @@ export async function generateThreadTitle(params: {
   }
 
   try {
-    const promptText = truncateThreadTitleSourceText(sourceText);
-    const userMessage = buildThreadTitleUserMessage({
-      sourceText: promptText,
+    const userMessage = buildThreadTitleCompletionUserMessage({
+      sourceText,
       channelName: params.channelName,
       channelDescription: params.channelDescription,
     });
@@ -104,11 +104,12 @@ async function completeThreadTitle(params: {
   });
 }
 
-function buildThreadTitleUserMessage(params: {
+function buildThreadTitleCompletionUserMessage(params: {
   sourceText: string;
   channelName?: string;
   channelDescription?: string;
 }): string {
+  const sourceText = truncateThreadTitleSourceText(params.sourceText);
   const channelName = normalizeTitleContextField(
     params.channelName,
     MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
@@ -124,7 +125,7 @@ function buildThreadTitleUserMessage(params: {
   if (channelDescription) {
     messageLines.push(`Channel description: ${channelDescription}`);
   }
-  messageLines.push(`Message:\n${params.sourceText}`);
+  messageLines.push(`Message:\n${sourceText}`);
   return messageLines.join("\n\n");
 }
 
@@ -132,14 +133,14 @@ function truncateThreadTitleSourceText(sourceText: string): string {
   if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
     return sourceText;
   }
-  return `${sourceText.slice(0, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
 }
 
 function resolveThreadTitleTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(100, Math.floor(timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS));
 }
 
-export function normalizeGeneratedThreadTitle(raw: string): string {
+function normalizeGeneratedThreadTitle(raw: string): string {
   const lines = raw.replace(/\r/g, "").split("\n");
   let firstLine = "";
   for (const line of lines) {
@@ -201,5 +202,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (singleLine.length <= maxChars) {
     return singleLine;
   }
-  return `${singleLine.slice(0, maxChars)}...`;
+  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
 }

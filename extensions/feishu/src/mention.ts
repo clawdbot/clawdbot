@@ -28,7 +28,7 @@ export function isFeishuBroadcastMention(mention: FeishuMentionLike): boolean {
  */
 export function extractMentionTargets(
   event: FeishuMessageEvent,
-  botOpenId?: string,
+  botOpenId: string,
 ): MentionTarget[] {
   const mentions = event.message.mentions ?? [];
 
@@ -38,7 +38,7 @@ export function extractMentionTargets(
         return false;
       }
       // Exclude the bot itself
-      if (botOpenId && m.id.open_id === botOpenId) {
+      if (m.id.open_id === botOpenId) {
         return false;
       }
       // Must have open_id
@@ -62,17 +62,21 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
   if (mentions.length === 0) {
     return false;
   }
+  const normalizedBotOpenId = botOpenId?.trim();
+  if (!normalizedBotOpenId) {
+    return false;
+  }
 
   const isDirectMessage = !isFeishuGroupChatType(event.message.chat_type);
   const userMentions = mentions.filter((m) => !isFeishuBroadcastMention(m));
-  const hasOtherMention = userMentions.some((m) => m.id.open_id !== botOpenId);
+  const hasOtherMention = userMentions.some((m) => m.id.open_id !== normalizedBotOpenId);
 
   if (isDirectMessage) {
     // DM: trigger if any non-bot user is mentioned
     return hasOtherMention;
   }
   // Group: need to mention both bot and other users
-  const hasBotMention = userMentions.some((m) => m.id.open_id === botOpenId);
+  const hasBotMention = userMentions.some((m) => m.id.open_id === normalizedBotOpenId);
   return hasBotMention && hasOtherMention;
 }
 

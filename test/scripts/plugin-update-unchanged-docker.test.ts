@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
@@ -93,9 +94,13 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
-    expect(script).toContain('registry_port_file=/tmp/openclaw-e2e-registry.port');
-    expect(script).toContain('node scripts/e2e/lib/plugin-update/registry-server.mjs "$registry_port_file"');
-    expect(script).toContain('export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"');
+    expect(script).toContain("registry_port_file=/tmp/openclaw-e2e-registry.port");
+    expect(script).toContain(
+      'node scripts/e2e/lib/plugin-update/registry-server.mjs "$registry_port_file"',
+    );
+    expect(script).toContain(
+      'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"',
+    );
     expect(script).toContain('export npm_config_registry="$NPM_CONFIG_REGISTRY"');
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS 180",
@@ -196,9 +201,15 @@ describe("plugin update unchanged Docker E2E", () => {
   it("bounds corrupt plugin update commands and prints diagnostics on hangs", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
 
+    expect(script).toContain('plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force');
+    expect(script).toContain("config set plugins.allow '[\"demo-corrupt-plugin\"]'");
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
+    );
+    expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_STEP_TIMEOUT_SECONDS");
+    expect(script).toContain(
+      "default_update_step_timeout_seconds=$((10#$update_timeout_seconds - 30))",
     );
     expect(script).not.toContain(
       'update_timeout_seconds="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS:-900}"',
@@ -207,6 +218,7 @@ describe("plugin update unchanged Docker E2E", () => {
       script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
     ).toBe(2);
     expect(script).toContain("--channel beta");
+    expect(script.match(/--timeout "\$update_step_timeout_seconds"/g)).toHaveLength(2);
     expect(script).toContain("OPENCLAW_UPDATE_POST_CORE=1");
     expect(script).not.toContain(
       'node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ',
@@ -219,6 +231,26 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(8);
     expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
+    expect(script.match(/assert-disabled-policy-preserved/g)).toHaveLength(2);
+  });
+
+  it("requires corrupt update failures to preserve the explicit allow policy", () => {
+    expect(() =>
+      runProbe("assert-disabled-policy-preserved", {
+        plugins: {
+          allow: [CORRUPT_PLUGIN_ID],
+          entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+        },
+      }),
+    ).not.toThrow();
+
+    const revokedPolicy = runProbeStatus("assert-disabled-policy-preserved", {
+      plugins: {
+        entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+      },
+    });
+    expect(revokedPolicy.status).not.toBe(0);
+    expect(revokedPolicy.stderr).toContain("expected plugins.allow to preserve");
   });
 
   it("requires disabled-after-failure corrupt plugin updates to stay warnings", () => {
@@ -248,7 +280,10 @@ describe("plugin update unchanged Docker E2E", () => {
             pluginId: CORRUPT_PLUGIN_ID,
             message:
               `Plugin "${CORRUPT_PLUGIN_ID}" could not be processed after the core update: ` +
-              disabledAfterFailure.npm.outcomes[0].message +
+              expectDefined(
+                disabledAfterFailure.npm.outcomes[0],
+                "corrupt plugin update failure outcome",
+              ).message +
               " Run openclaw update repair to retry post-update plugin repair. " +
               `Run openclaw plugins inspect ${CORRUPT_PLUGIN_ID} --runtime --json for details.`,
           },

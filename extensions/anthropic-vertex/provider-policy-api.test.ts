@@ -32,16 +32,19 @@ describe("anthropic-vertex provider-policy-api", () => {
     expect(profile?.levels.map((level) => level.id)).not.toContain("xhigh");
   });
 
-  it("inherits Claude Fable 5's provider-agnostic thinking contract", () => {
-    const profile = resolveThinkingProfile({
-      provider: "anthropic-vertex",
-      modelId: "claude-fable-5",
-    });
+  it.each(["claude-fable-5", "claude-mythos-5"])(
+    "inherits %s's provider-agnostic thinking contract",
+    (modelId) => {
+      const profile = resolveThinkingProfile({
+        provider: "anthropic-vertex",
+        modelId,
+      });
 
-    expect(profile?.defaultLevel).toBe("high");
-    expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
-    expect(profile?.levels.map((level) => level.id)).toContain("max");
-  });
+      expect(profile?.defaultLevel).toBe("high");
+      expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
+      expect(profile?.levels.map((level) => level.id)).toContain("max");
+    },
+  );
 
   it("resolves deployment aliases from canonical model metadata", () => {
     const profile = resolveThinkingProfile({

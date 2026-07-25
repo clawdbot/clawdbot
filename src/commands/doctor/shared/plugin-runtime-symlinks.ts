@@ -29,7 +29,7 @@ interface StatsLike {
   isSymbolicLink(): boolean;
 }
 
-export interface StalePluginRuntimeSymlink {
+interface StalePluginRuntimeSymlink {
   /** Package or scoped package name for the stale symlink. */
   readonly name: string;
   /** Symlink path under the containing node_modules directory. */
@@ -38,7 +38,7 @@ export interface StalePluginRuntimeSymlink {
   readonly target: string;
 }
 
-export interface PluginRuntimeSymlinkOptions {
+interface PluginRuntimeSymlinkOptions {
   /** Filesystem adapter for tests and doctor cleanup callers. */
   readonly fs?: FsLike;
   /** Roots already classified as stale by plugin dependency cleanup. */
@@ -55,7 +55,7 @@ const DEFAULT_FS: FsLike = {
 };
 
 /** Find global node_modules symlinks that still point at stale plugin-runtime deps. */
-export async function collectStalePluginRuntimeSymlinks(
+async function collectStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
   options: PluginRuntimeSymlinkOptions = {},
 ): Promise<StalePluginRuntimeSymlink[]> {
@@ -101,9 +101,7 @@ export async function collectStalePluginRuntimeSymlinks(
   return stale.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export function stalePluginRuntimeSymlinkToHealthFinding(
-  item: StalePluginRuntimeSymlink,
-): HealthFinding {
+function stalePluginRuntimeSymlinkToHealthFinding(item: StalePluginRuntimeSymlink): HealthFinding {
   return {
     checkId: "core/doctor/stale-plugin-runtime-symlinks",
     severity: "warning",

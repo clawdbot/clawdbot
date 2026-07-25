@@ -18,6 +18,8 @@ OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the age
 - A separate browser profile named **openclaw** (orange accent by default).
 - Deterministic tab control (list/open/focus/close).
 - Agent actions (click/type/drag/select), snapshots, screenshots, PDFs.
+- Playwright-backed profiles save direct attachment navigations under the managed downloads directory and return `{ url, suggestedFilename, path }` metadata after final-URL policy validation.
+- Playwright-backed agent actions return a `downloads` array with the same managed metadata when the action immediately starts one or more downloads.
 - A bundled `browser-automation` skill that teaches agents the snapshot,
   stable-tab, stale-ref, and manual-blocker recovery loop when the browser
   plugin is enabled.
@@ -25,6 +27,8 @@ OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the age
 
 This browser is **not** your daily driver. It is a safe, isolated surface for
 agent automation and verification.
+
+On macOS, you can explicitly copy cookies from a Chrome-family system profile into a separate managed profile. The managed browser still uses its own user data directory; only the selected cookies are copied, and local storage and IndexedDB stay behind. See [Profiles](#profiles-multi-browser) or the [`openclaw browser` CLI reference](/cli/browser) for import commands and limitations.
 
 ## Quick start
 
@@ -79,7 +83,7 @@ stage:
 }
 ```
 
-For a single agent, use `agents.list[].tools.alsoAllow: ["browser"]`.
+For a single agent, use `agents.entries.*.tools.alsoAllow: ["browser"]`.
 `tools.subagents.tools.allow: ["browser"]` alone is not enough because sub-agent
 policy is applied after profile filtering.
 
@@ -116,17 +120,24 @@ channel config behavior. `plugins.entries.browser.enabled=true` and
 `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership by
 themselves. Removing `plugins.allow` entirely also restores the default.
 
-## Profiles: `openclaw` vs `user`
+## Profiles: `openclaw`, `user`, `chrome`
 
 - `openclaw`: managed, isolated browser (no extension required).
 - `user`: built-in Chrome DevTools MCP attach profile for your **real
-  signed-in Chrome** session.
+  signed-in Chrome** session. Chrome shows a blocking "Allow remote debugging?"
+  prompt the first time OpenClaw attaches, so someone must be at the computer.
+- `chrome`: built-in [Chrome extension](/tools/chrome-extension) profile for
+  your **real signed-in Chrome** session. Works from a phone with nobody at the
+  desk because it drives tabs through the OpenClaw browser extension instead of
+  the remote-debugging port, so there is no "Allow remote debugging?" prompt.
 
 For agent browser tool calls:
 
 - Default: use the isolated `openclaw` browser.
-- Prefer `profile="user"` when existing logged-in sessions matter and the user
-  is at the computer to click/approve any attach prompt.
+- Prefer `profile="chrome"` (extension) when existing logged-in sessions matter
+  and the user is **away from the computer** (Telegram, WhatsApp, etc.).
+- Prefer `profile="user"` (Chrome MCP) when existing logged-in sessions matter
+  and the user is **at the computer** to approve the attach prompt.
 - `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
@@ -146,16 +157,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
       // allowedHostnames: ["localhost"],
     },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
-    remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
-    remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
-    localLaunchTimeoutMs: 15000, // local managed Chrome discovery timeout (ms)
-    localCdpReadyTimeoutMs: 8000, // local managed post-launch CDP readiness timeout (ms)
-    actionTimeoutMs: 60000, // default browser act timeout (ms)
     tabCleanup: {
       enabled: true, // default: true
-      idleMinutes: 120, // set 0 to disable idle cleanup
-      maxTabsPerSession: 8, // set 0 to disable the per-session cap
-      sweepMinutes: 5,
     },
     // snapshotDefaults: { mode: "efficient" }, // default snapshot mode when the caller omits one
     defaultProfile: "openclaw",
@@ -193,6 +196,47 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 extraction mode when a caller does not pass an explicit `snapshotFormat` or
 `mode`; see [Browser control API](/tools/browser-control) for per-call
 snapshot options.
+
+On drivers with stable document identity, repeated AI or role snapshots of the
+same tab, document, and option family mark newly appeared ref-bearing elements
+with `[new]`. The first snapshot—and the first snapshot after navigation—sets
+an unmarked baseline. Existing-session snapshots omit deltas.
+
+### Tab cleanup ownership
+
+Session tab cleanup applies only to tabs created by the OpenClaw browser tool
+with `action: "open"`. OpenClaw does not adopt tabs that were already open,
+opened by the user, or otherwise have unknown ownership. The
+`browser.tabCleanup` block controls periodic idle and cap sweeps for primary
+sessions; disabling it does not disable explicit session lifecycle cleanup.
+
+For host-local opens, ownership with a stable native CDP target and browser
+identity is stored in the shared SQLite state. Those records survive a Gateway
+restart and remain eligible for `/new` and other session lifecycle cleanup;
+session lifecycle cleanup includes subagent, cron, and ACP session endings.
+Records whose tool-facing target is the native CDP target also remain eligible
+for idle and per-session cap sweeps after restart. Chrome MCP target handles are
+process-local, so cold existing-session records wait for lifecycle cleanup
+rather than risking an idle sweep against activity that cannot be attributed
+safely after restart. This durable path can cover OpenClaw-managed profiles,
+regular remote CDP profiles, and existing-session profiles with an explicit
+`cdpUrl`, provided OpenClaw can resolve both the native target and a stable
+browser identity. Before closing a durable record, OpenClaw verifies that the
+configured profile and browser instance still match.
+
+Chrome MCP `--autoConnect`, CDP endpoints whose `/json/version` response lacks
+a stable browser identity, and opens whose native target cannot be resolved
+remain process-local best-effort tracking. They can be cleaned up while that
+Gateway process is running, but they are not automatically closed after a
+Gateway restart. Tabs left open before durable tracking was available are not
+retroactively adopted; close those tabs manually.
+
+Cleanup is best-effort, not a guarantee that every eligible tab closes
+immediately. A transient ownership check or close failure leaves durable
+cleanup pending for a later retry. Retries are not unbounded: when the browser
+stays unreachable and the tab has gone unused for over a day, the tracking row
+is retired so the durable store cannot fill up with tabs that can never be
+verified again.
 
 ### Screenshot vision (text-only model support)
 
@@ -238,6 +282,10 @@ browser-specific model settings.
 4. If image understanding is unavailable, skipped, or fails, the browser falls
    back to returning the original image block.
 
+Screenshot image blocks are private tool results: the agent can inspect them,
+but OpenClaw does not automatically attach them to channel replies. To share a
+screenshot, ask the agent to send it explicitly with the message tool.
+
 Use the existing `tools.media.image` / `tools.media.models` fields for model
 fallbacks, timeouts, byte limits, profiles, and provider request settings.
 
@@ -253,28 +301,20 @@ main model can read the screenshot directly.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` from a range starting 9 ports above the control port (default `18800`-`18899`); set those only for
   remote CDP profiles or existing-session endpoint attach. `cdpUrl` defaults to
   the managed local CDP port when unset.
-- `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
-  checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
-  their CDP WebSocket handshakes.
-- `localLaunchTimeoutMs` is the budget for a locally launched managed Chrome
-  process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
-  follow-up budget for CDP websocket readiness after the process is discovered.
-  Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
-  starts slowly. Values must be positive integers up to `120000` ms; invalid
-  config values are rejected.
+- Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
+  managed-Chrome startup use built-in deadlines.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
   profile. After several consecutive failures, OpenClaw pauses new launch
   attempts briefly instead of spawning Chromium on every browser tool call. Fix
   the startup problem, disable the browser if it is not needed, or restart the
   Gateway after repair.
-- `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
-- `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
 </Accordion>
 
 <Accordion title="SSRF policy">
 
-- Browser navigation and open-tab are SSRF-guarded before navigation and best-effort re-checked on the final `http(s)` URL afterwards.
+- Browser navigation and open-tab requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
+- Before each fresh OpenClaw-managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Playwright routing is still not a network firewall and does not intercept redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, or every background/subresource path. Complete egress isolation requires owner-side isolation or a policy-enforcing proxy.
 - In strict SSRF mode, remote CDP endpoint discovery and `/json/version` probes (`cdpUrl`) are checked too.
 - Gateway/provider `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables do not automatically proxy the OpenClaw-managed browser. Managed Chrome launches direct by default so provider proxy settings do not weaken browser SSRF checks.
 - OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
@@ -295,18 +335,36 @@ main model can read the screenshot directly.
   browser processes.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
   default to headless automatically when neither the environment nor profile/global
-  config explicitly chooses headed mode. `openclaw browser status --json`
-  reports `headlessSource` as `env`, `profile`, `config`,
+  config explicitly chooses headed mode. Use the unambiguous browser-level form
+  `openclaw browser --json status`; trailing `openclaw browser status --json`
+  also works because `status` does not define its own `--json`. The command reports
+  `headlessSource` as `env`, `profile`, `config`,
   `request`, `linux-display-fallback`, or `default`.
 - `OPENCLAW_BROWSER_HEADLESS=1` forces local managed launches headless for the
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
   starts and returns an actionable error on Linux hosts without a display server;
   an explicit `start --headless` request still wins for that one launch.
+- The browser-control route and programmatic client keep the no-display error's
+  human-readable `error` and expose the stable reason
+  `no_display_for_headed_profile`. Its `details` contain only `profile`,
+  `requestedHeadless`, `headlessSource`, and `displayPresent`, so API clients can
+  choose the correct remediation without matching message text.
+- For a running local managed profile, status and doctor query Chrome's
+  browser-level CDP endpoint for renderer, backend, device/driver, feature
+  status, driver workarounds, and accelerated video capabilities. The result is
+  cached for that browser process and exposed in full by
+  `openclaw browser --json status`. A passive status call does not launch Chrome.
+  Existing-session, extension, remote CDP, and sandbox browsers remain separate
+  and are not inspected through this managed-host path.
+- Headless managed Chrome still uses the conservative `--disable-gpu` default.
+  The diagnostics do not enable acceleration, add a global acceleration setting,
+  or grant sandbox browser device access.
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome, Brave, Edge, Chromium, Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. It can attach through Chrome MCP auto-connect, or through `cdpUrl` when you already have a DevTools endpoint for the running browser.
+- `driver: "extension"` drives your signed-in Chrome through the [OpenClaw Chrome extension](/tools/chrome-extension). The relay owns its loopback endpoint, so these profiles do not accept `cdpUrl`. This is the only signed-in-browser mode that works with nobody at the computer.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>
@@ -424,8 +482,6 @@ Example:
   browser: {
     enabled: true,
     defaultProfile: "browserless",
-    remoteCdpTimeoutMs: 2000,
-    remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
         cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
@@ -518,8 +574,6 @@ proxies.
   browser: {
     enabled: true,
     defaultProfile: "browserbase",
-    remoteCdpTimeoutMs: 3000,
-    remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       browserbase: {
         cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
@@ -552,8 +606,6 @@ WebSocket gateway.
   browser: {
     enabled: true,
     defaultProfile: "notte",
-    remoteCdpTimeoutMs: 3000,
-    remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       notte: {
         cdpUrl: "wss://us-prod.notte.cc/sessions/connect?token=<NOTTE_API_KEY>",
@@ -715,6 +767,16 @@ Notes:
 - Existing-session can attach on the selected host or through a connected
   browser node. If Chrome lives elsewhere and no browser node is connected, use
   remote CDP or a node host instead.
+- Chrome MCP targets and snapshot refs are scoped to one MCP subprocess. After
+  that process restarts, run `browser tabs` again, explicitly select a fresh
+  target before target-specific work, and take a new snapshot before using refs.
+  Each ref is valid only for its target and latest snapshot. Old aliases are not
+  transferred to a replacement tab, even when its URL matches.
+- Chrome DevTools MCP currently routes page tools by a process-local numeric page
+  ID. Process-scoped handles prevent reuse across subprocess replacement, but an
+  in-process browser-context replacement between adjacent tool calls can still
+  retarget an action. Fully atomic routing requires upstream page-tool support
+  for stable target IDs.
 
 ### Custom Chrome MCP launch
 
@@ -743,7 +805,7 @@ directory.
 Compared to the managed `openclaw` profile, existing-session drivers are more constrained:
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. Playwright is not required for page or ref-based element screenshots. (`--full-page` cannot combine with `--ref` or `--element` on any profile, not just existing-session.)
-- **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call `timeoutMs` overrides. `select` accepts a single value. `batch` is not supported; send actions individually.
+- **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill` do not support per-call `timeoutMs` overrides; `evaluate` does. `select` accepts a single value. `batch` is not supported; send actions individually.
 - **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Managed-only features** - PDF export, download interception, and `responsebody` still require the managed browser path.

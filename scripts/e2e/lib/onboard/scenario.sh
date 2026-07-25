@@ -43,6 +43,17 @@ send() {
   printf "%b" "$payload" >&3 2>/dev/null || true
 }
 
+log_contains() {
+  local needle="$1"
+  if [ -z "${WIZARD_LOG_PATH:-}" ] || [ ! -f "$WIZARD_LOG_PATH" ]; then
+    return 1
+  fi
+  if grep -a -F -q "$needle" "$WIZARD_LOG_PATH"; then
+    return 0
+  fi
+  node scripts/e2e/lib/onboard/log-contains.mjs "$WIZARD_LOG_PATH" "$needle"
+}
+
 wait_for_log() {
   local needle="$1"
   local timeout_s="${2:-45}"
@@ -50,19 +61,36 @@ wait_for_log() {
   local start_s
   start_s="$(date +%s)"
   while true; do
-    if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
-      if grep -a -F -q "$needle" "$WIZARD_LOG_PATH"; then
-        return 0
-      fi
-      if node scripts/e2e/lib/onboard/log-contains.mjs "$WIZARD_LOG_PATH" "$needle"; then
-        return 0
-      fi
+    if log_contains "$needle"; then
+      return 0
     fi
     if [ $(($(date +%s) - start_s)) -ge "$timeout_s" ]; then
       if [ "$quiet_on_timeout" = "true" ]; then
         return 1
       fi
       echo "Timeout waiting for log: $needle"
+      if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
+        tail -n 140 "$WIZARD_LOG_PATH" || true
+      fi
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
+wait_for_skills_prompt_or_ready() {
+  local timeout_s="${1:-45}"
+  local start_s
+  start_s="$(date +%s)"
+  while true; do
+    if log_contains "Configure skills now?"; then
+      return 0
+    fi
+    if log_contains "All skills ready"; then
+      return 2
+    fi
+    if [ $(($(date +%s) - start_s)) -ge "$timeout_s" ]; then
+      echo "Timeout waiting for skills prompt or ready state"
       if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
         tail -n 140 "$WIZARD_LOG_PATH" || true
       fi
@@ -202,8 +230,14 @@ send_channels_flow() {
 send_skills_flow() {
   # configure --section skills still runs the configure wizard, without the
   # gateway run-mode prompt used by the full wizard.
-  wait_for_log "Configure skills now?" 120
-  send $'n\r' 0.8
+  if wait_for_skills_prompt_or_ready 120; then
+    send $'n\r' 0.8
+  else
+    local status="$?"
+    if [ "$status" -ne 2 ]; then
+      return "$status"
+    fi
+  fi
   send "" 2.0
 }
 

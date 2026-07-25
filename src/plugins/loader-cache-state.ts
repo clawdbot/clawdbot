@@ -2,7 +2,7 @@
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 /** Error thrown when one plugin registry cache key attempts nested loading. */
-export class PluginLoadReentryError extends Error {
+class PluginLoadReentryError extends Error {
   readonly cacheKey: string;
 
   constructor(cacheKey: string) {

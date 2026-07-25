@@ -5,15 +5,15 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveSignalAccount } from "./accounts.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 
-export type SignalResolvedTargetKind = "user" | "group";
+type SignalResolvedTargetKind = "user" | "group";
 
-export type ResolvedSignalAliasTarget = {
+type ResolvedSignalAliasTarget = {
   to: string;
   kind: SignalResolvedTargetKind;
   alias: string;
 };
 
-export type ResolvedSignalTarget =
+type ResolvedSignalTarget =
   | (ResolvedSignalAliasTarget & { source: "alias" })
   | {
       to: string;
@@ -111,7 +111,7 @@ function resolveSignalAliasTargetFromMap(params: {
   }
 }
 
-export function resolveSignalAliasTarget(params: {
+function resolveSignalAliasTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   input: string;

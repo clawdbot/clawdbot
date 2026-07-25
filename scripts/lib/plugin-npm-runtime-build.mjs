@@ -22,7 +22,7 @@ function readJsonFile(filePath) {
 }
 
 /** Return whether a plugin package publishes through an artifact release workflow. */
-export function isPublishablePluginPackage(packageJson) {
+function isPublishablePluginPackage(packageJson) {
   return (
     packageJson.openclaw?.release?.publishToNpm === true ||
     packageJson.openclaw?.release?.publishToClawHub === true
@@ -37,9 +37,17 @@ function isTypeScriptEntry(entry) {
   return /\.(?:c|m)?ts$/u.test(entry);
 }
 
-function toPackageRuntimeEntry(entry) {
+function resolveRuntimeBuildFormat(packageJson) {
+  return packageJson.openclaw?.build?.runtimeFormat === "cjs" ? "cjs" : "esm";
+}
+
+function runtimeBuildExtension(runtimeFormat) {
+  return runtimeFormat === "cjs" ? ".cjs" : ".js";
+}
+
+function toPackageRuntimeEntry(entry, runtimeFormat = "esm") {
   const normalized = normalizePackageEntry(entry).replace(/^\.\//u, "");
-  return `./dist/${normalized.replace(/\.[^.]+$/u, ".js")}`;
+  return `./dist/${normalized.replace(/\.[^.]+$/u, runtimeBuildExtension(runtimeFormat))}`;
 }
 
 function collectExternalDependencyNames(packageJson) {
@@ -82,6 +90,51 @@ function createNeverBundleDependencyMatcher(packageJson) {
   };
 }
 
+const HOST_PLUGIN_SDK_IMPORT_RE =
+  /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\b(?:require|_+require\d*)\(\s*)["'](openclaw\/plugin-sdk\/[^"']+)["']/gu;
+
+function listRuntimeJavaScriptFiles(rootDir) {
+  if (!fs.existsSync(rootDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(rootDir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const entryPath = path.join(rootDir, entry.name);
+      if (entry.isDirectory()) {
+        return listRuntimeJavaScriptFiles(entryPath);
+      }
+      return /\.(?:c|m)?js$/u.test(entry.name) ? [entryPath] : [];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+/**
+ * List host SDK imports emitted by a built plugin runtime but absent from package exports.
+ * @param {{ repoRoot: string; outDir: string }} plan
+ */
+export function listMissingPluginNpmRuntimeHostExports(plan) {
+  const hostImports = new Set();
+  for (const runtimePath of listRuntimeJavaScriptFiles(plan.outDir)) {
+    const source = fs.readFileSync(runtimePath, "utf8");
+    for (const match of source.matchAll(HOST_PLUGIN_SDK_IMPORT_RE)) {
+      const specifier = match[1];
+      if (specifier) {
+        hostImports.add(specifier);
+      }
+    }
+  }
+  if (hostImports.size === 0) {
+    return [];
+  }
+
+  const hostPackageJson = readJsonFile(path.join(plan.repoRoot, "package.json"));
+  const hostExports = new Set(Object.keys(hostPackageJson.exports ?? {}));
+  return [...hostImports]
+    .filter((specifier) => !hostExports.has(specifier.replace(/^openclaw/u, ".")))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function packageEntryKey(entry) {
   return normalizePackageEntry(entry)
     .replace(/^\.\//u, "")
@@ -96,7 +149,10 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
-/** List extension package dirs whose package metadata enables artifact publishing. */
+/**
+ * List extension package dirs whose package metadata enables artifact publishing.
+ * @internal Shared repository-script contract.
+ */
 export function listPublishablePluginPackageDirs(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -115,13 +171,43 @@ export function listPublishablePluginPackageDirs(params = {}) {
 
 /** List package-local runtime output files expected from a runtime build plan. */
 export function listPluginNpmRuntimeBuildOutputs(plan) {
+  const extension = runtimeBuildExtension(plan.runtimeFormat);
   return Object.keys(plan.entry)
-    .map((entryKey) => `./dist/${entryKey}.js`)
+    .map((entryKey) => `./dist/${entryKey}${extension}`)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function rewriteCommonJsRuntimeSpecifiers(plan) {
+  if (plan.runtimeFormat !== "cjs") {
+    return;
+  }
+  const specifierRewrites = new Map(
+    plan.runtimeBuildOutputs.map((output) => {
+      const cjsSpecifier = output.replace(/^\.\/dist\//u, "./");
+      return [cjsSpecifier.replace(/\.cjs$/u, ".js"), cjsSpecifier];
+    }),
+  );
+
+  for (const output of plan.runtimeBuildOutputs) {
+    const outputPath = path.join(plan.packageDir, output.replace(/^\.\//u, ""));
+    let text = fs.readFileSync(outputPath, "utf8");
+    const original = text;
+    // Source entries stay .js for the root bundled build; package-local CJS
+    // artifacts must point at their generated .cjs sidecars instead.
+    for (const [fromSpecifier, toSpecifier] of specifierRewrites) {
+      text = text.replaceAll(
+        `specifier: ${JSON.stringify(fromSpecifier)}`,
+        `specifier: ${JSON.stringify(toSpecifier)}`,
+      );
+    }
+    if (text !== original) {
+      fs.writeFileSync(outputPath, text, "utf8");
+    }
+  }
+}
+
 /** Resolve package `files` entries needed for runtime build outputs and plugin metadata. */
-export function resolvePluginNpmRuntimePackageFiles(plan) {
+function resolvePluginNpmRuntimePackageFiles(plan) {
   const merged = new Set(
     Array.isArray(plan.packageJson.files)
       ? plan.packageJson.files.filter((entry) => typeof entry === "string")
@@ -167,7 +253,7 @@ function resolveOpenClawPeerRange(packageJson, rootPackageJson) {
 }
 
 /** Resolve package peer dependency metadata for the OpenClaw plugin API. */
-export function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
+function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
   const openclawPeerRange = resolveOpenClawPeerRange(plan.packageJson, plan.rootPackageJson);
   if (!openclawPeerRange) {
     throw new Error(
@@ -209,6 +295,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     return null;
   }
 
+  const runtimeFormat = resolveRuntimeBuildFormat(packageJson);
   const packageEntries = collectPluginSourceEntries(packageJson).map(normalizePackageEntry);
   const requiresRuntimeBuild = packageEntries.some(isTypeScriptEntry);
   if (!requiresRuntimeBuild) {
@@ -238,15 +325,16 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
     sourceEntries,
     entry,
     outDir: path.join(packageDir, "dist"),
+    runtimeFormat,
     runtimeExtensions: (Array.isArray(packageJson.openclaw?.extensions)
       ? packageJson.openclaw.extensions
       : []
     )
       .map(normalizePackageEntry)
       .filter(Boolean)
-      .map(toPackageRuntimeEntry),
+      .map((runtimeEntry) => toPackageRuntimeEntry(runtimeEntry, runtimeFormat)),
     runtimeSetupEntry: normalizePackageEntry(packageJson.openclaw?.setupEntry)
-      ? toPackageRuntimeEntry(packageJson.openclaw.setupEntry)
+      ? toPackageRuntimeEntry(packageJson.openclaw.setupEntry, runtimeFormat)
       : undefined,
   };
   return {
@@ -257,7 +345,10 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
   };
 }
 
-/** Build package-local runtime files and static assets for one plugin package. */
+/**
+ * Build package-local runtime files and static assets for one plugin package.
+ * @internal Shared repository-script contract.
+ */
 export async function buildPluginNpmRuntime(params) {
   const plan = resolvePluginNpmRuntimeBuildPlan(params);
   if (!plan) {
@@ -274,11 +365,19 @@ export async function buildPluginNpmRuntime(params) {
     },
     entry: plan.entry,
     env,
-    fixedExtension: false,
+    fixedExtension: plan.runtimeFormat === "cjs",
+    format: plan.runtimeFormat,
     logLevel: params.logLevel ?? "info",
     outDir: plan.outDir,
     platform: "node",
   });
+  const missingHostExports = listMissingPluginNpmRuntimeHostExports(plan);
+  if (missingHostExports.length > 0) {
+    throw new Error(
+      `${plan.pluginDir} runtime imports missing OpenClaw host exports: ${missingHostExports.join(", ")}`,
+    );
+  }
+  rewriteCommonJsRuntimeSpecifiers(plan);
   const assetBuildCommand = runPackageAssetBuild(plan);
   const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
   if (missingStaticAssets.length > 0) {
@@ -317,6 +416,7 @@ function readPackageDirArg(argv) {
   return { packageDir };
 }
 
+/** @internal Directly tested script implementation detail. */
 export function parseArgs(argv) {
   return readPackageDirArg(argv);
 }

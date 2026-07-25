@@ -1,12 +1,15 @@
 // Covers isolated heartbeat outbound session routing and base-session bookkeeping.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
+  seedSessionStore,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 
 const deliverOutboundPayloadsInternal = vi.hoisted(() =>
   vi.fn().mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]),
@@ -59,21 +62,15 @@ function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenCl
 }
 
 describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => {
-  it("uses the isolated run key for outbound delivery while base session owns target and state", async () => {
+  it("uses the isolated run key for outbound delivery while the base session owns delivery state", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
       const baseSessionKey = resolveMainSessionKey(cfg);
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
       const nowMs = Date.now();
-      await fs.writeFile(
-        path.join(tmpDir, "HEARTBEAT.md"),
-        `tasks:
-  - name: check-in
-    interval: 5m
-    prompt: "Check whether the user needs a status update."
-`,
-        "utf-8",
-      );
+      await seedHeartbeatScratchForTest({
+        content: "Check whether the user needs a status update.",
+      });
       await seedSessionStore(storePath, baseSessionKey, {
         sessionId: "base-session",
         updatedAt: nowMs - 1_000,
@@ -106,24 +103,18 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
         },
       });
 
-      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        {
-          heartbeatTaskState?: Record<string, number>;
-          lastHeartbeatText?: string;
-          lastHeartbeatSentAt?: number;
-          heartbeatIsolatedBaseSessionKey?: string;
-        }
-      >;
+      const store = readSessionStoreForTest<{
+        lastHeartbeatText?: string;
+        lastHeartbeatSentAt?: number;
+        heartbeatIsolatedBaseSessionKey?: string;
+      }>(storePath);
       expect(store[baseSessionKey]).toMatchObject({
-        heartbeatTaskState: { "check-in": nowMs },
         lastHeartbeatText: "Status needs attention.",
         lastHeartbeatSentAt: nowMs,
       });
       expect(store[isolatedSessionKey]).toMatchObject({
         heartbeatIsolatedBaseSessionKey: baseSessionKey,
       });
-      expect(store[isolatedSessionKey]?.heartbeatTaskState).toBeUndefined();
       expect(store[isolatedSessionKey]?.lastHeartbeatText).toBeUndefined();
     });
   });
@@ -135,20 +126,14 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
       const nowMs = Date.now();
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [isolatedSessionKey]: {
-            sessionId: "isolated-session",
-            updatedAt: nowMs - 1_000,
-            lastChannel: "whatsapp",
-            lastProvider: "whatsapp",
-            lastTo: "+15551234567",
-            heartbeatIsolatedBaseSessionKey: baseSessionKey,
-          },
-        }),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, isolatedSessionKey, {
+        sessionId: "isolated-session",
+        updatedAt: nowMs - 1_000,
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+15551234567",
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
       replySpy.mockResolvedValueOnce({ text: "Wake result needs attention." });
 
       const result = await runHeartbeatOnce({

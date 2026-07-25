@@ -49,6 +49,15 @@ describe("xai onboard", () => {
         contextWindow: 1000,
         maxTokens: 100,
       },
+      {
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Custom Moving Grok 4.20",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+        contextWindow: 2_000_000,
+        maxTokens: 30_000,
+      },
     );
 
     const cfg = applyXaiProviderConfig(legacy);
@@ -58,11 +67,20 @@ describe("xai onboard", () => {
     expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
       "custom-model",
+      "grok-3",
+      "grok-code-fast-1",
+      "grok-4.20-beta-latest-reasoning",
+      "grok-4.5",
       "grok-build-0.1",
       "grok-4.3",
-      "grok-4.20-beta-latest-reasoning",
-      "grok-4.20-beta-latest-non-reasoning",
+      "grok-4.20-0309-reasoning",
+      "grok-4.20-0309-non-reasoning",
     ]);
+    expect(
+      cfg.models?.providers?.xai?.models.find(
+        (model) => model.id === "grok-4.20-beta-latest-reasoning",
+      )?.name,
+    ).toBe("Custom Moving Grok 4.20");
   });
 
   it("publishes current xAI models newest first for fresh setup", () => {
@@ -71,10 +89,11 @@ describe("xai onboard", () => {
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+      "grok-4.5",
       "grok-build-0.1",
       "grok-4.3",
-      "grok-4.20-beta-latest-reasoning",
-      "grok-4.20-beta-latest-non-reasoning",
+      "grok-4.20-0309-reasoning",
+      "grok-4.20-0309-non-reasoning",
     ]);
   });
 

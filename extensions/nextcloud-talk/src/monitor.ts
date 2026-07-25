@@ -1,6 +1,5 @@
 // Nextcloud Talk plugin module implements monitor behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
@@ -8,50 +7,15 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { z } from "zod";
-import type { NextcloudTalkReplayGuard } from "./replay-guard.js";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
-import type {
-  NextcloudTalkInboundMessage,
-  NextcloudTalkWebhookHeaders,
-  NextcloudTalkWebhookPayload,
-  NextcloudTalkWebhookServerOptions,
-} from "./types.js";
+import type { NextcloudTalkWebhookHeaders, NextcloudTalkWebhookServerOptions } from "./types.js";
+import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
 
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_AUTH_RATE_LIMIT_SCOPE = "nextcloud-talk-webhook-auth";
-const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
-  type: z.enum(["Create", "Update", "Delete"]),
-  actor: z.object({
-    type: z.literal("Person"),
-    id: z.string().min(1),
-    name: z.string(),
-  }),
-  object: z.object({
-    type: z.literal("Note"),
-    id: z.string().min(1),
-    name: z.string(),
-    content: z.string(),
-    mediaType: z.string(),
-  }),
-  target: z.object({
-    type: z.literal("Collection"),
-    id: z.string().min(1),
-    name: z.string(),
-  }),
-});
-const NextcloudTalkWebhookEnvelopeSchema = z.object({
-  type: z.string().min(1),
-  object: z
-    .object({
-      type: z.string().min(1).optional(),
-    })
-    .passthrough()
-    .optional(),
-});
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -61,66 +25,11 @@ const WEBHOOK_ERRORS = {
   internalServerError: "Internal server error",
 } as const;
 
-export class NextcloudTalkRetryableWebhookError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "NextcloudTalkRetryableWebhookError";
-  }
-}
-
-export async function processNextcloudTalkReplayGuardedMessage(params: {
-  replayGuard: NextcloudTalkReplayGuard;
-  accountId: string;
-  message: NextcloudTalkInboundMessage;
-  handleMessage: () => Promise<void>;
-}): Promise<"processed" | "duplicate"> {
-  const claim = await params.replayGuard.claimMessage({
-    accountId: params.accountId,
-    roomToken: params.message.roomToken,
-    messageId: params.message.messageId,
-  });
-  if (claim !== "claimed") {
-    return "duplicate";
-  }
-
-  try {
-    await params.handleMessage();
-    await params.replayGuard.commitMessage({
-      accountId: params.accountId,
-      roomToken: params.message.roomToken,
-      messageId: params.message.messageId,
-    });
-    return "processed";
-  } catch (error) {
-    if (error instanceof NextcloudTalkRetryableWebhookError) {
-      params.replayGuard.releaseMessage({
-        accountId: params.accountId,
-        roomToken: params.message.roomToken,
-        messageId: params.message.messageId,
-        error,
-      });
-    } else {
-      // Generic failures are treated as non-retryable because the handler may already
-      // have produced a visible side effect, and replaying the webhook would duplicate it.
-      await params.replayGuard.commitMessage({
-        accountId: params.accountId,
-        roomToken: params.message.roomToken,
-        messageId: params.message.messageId,
-      });
-    }
-    throw error;
-  }
-}
-
 function formatError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
   }
   return typeof err === "string" ? err : JSON.stringify(err);
-}
-
-function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
 }
 
 function writeJsonResponse(
@@ -186,55 +95,7 @@ function verifyWebhookSignature(params: {
   return true;
 }
 
-function decodeWebhookCreateMessage(params: {
-  body: string;
-  res: ServerResponse;
-}):
-  | { kind: "message"; message: NextcloudTalkInboundMessage }
-  | { kind: "ignore" }
-  | { kind: "invalid" } {
-  const envelope = safeParseJsonWithSchema(NextcloudTalkWebhookEnvelopeSchema, params.body);
-  if (!envelope) {
-    writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
-    return { kind: "invalid" };
-  }
-  if (envelope.type !== "Create") {
-    return { kind: "ignore" };
-  }
-  if (envelope.object?.type && envelope.object.type !== "Note") {
-    return { kind: "ignore" };
-  }
-  const payload = parseWebhookPayload(params.body);
-  if (!payload) {
-    writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
-    return { kind: "invalid" };
-  }
-  return { kind: "message", message: payloadToInboundMessage(payload) };
-}
-
-function payloadToInboundMessage(
-  payload: NextcloudTalkWebhookPayload,
-): NextcloudTalkInboundMessage {
-  // Payload doesn't indicate DM vs room; mark as group and let inbound handler refine.
-  const isGroupChat = true;
-
-  return {
-    messageId: payload.object.id,
-    roomToken: payload.target.id,
-    roomName: payload.target.name,
-    senderId: payload.actor.id,
-    senderName: payload.actor.name ?? "",
-    text: payload.object.content || payload.object.name || "",
-    mediaType: payload.object.mediaType || "text/plain",
-    timestamp: Date.now(),
-    isGroupChat,
-  };
-}
-
-export function readNextcloudTalkWebhookBody(
-  req: IncomingMessage,
-  maxBodyBytes: number,
-): Promise<string> {
+function readNextcloudTalkWebhookBody(req: IncomingMessage, maxBodyBytes: number): Promise<string> {
   return readRequestBodyWithLimit(req, {
     // This read happens before signature verification, so keep the unauthenticated
     // body budget bounded even if the operator-configured post-parse limit is larger.
@@ -246,9 +107,9 @@ export function readNextcloudTalkWebhookBody(
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
   server: Server;
   start: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
 } {
-  const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
+  const { port, host, path, secret, onWebhook, onError, abortSignal } = opts;
   const maxBodyBytes =
     typeof opts.maxBodyBytes === "number" &&
     Number.isFinite(opts.maxBodyBytes) &&
@@ -257,8 +118,6 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       : DEFAULT_WEBHOOK_MAX_BODY_BYTES;
   const readBody = opts.readBody ?? readNextcloudTalkWebhookBody;
   const isBackendAllowed = opts.isBackendAllowed;
-  const shouldProcessMessage = opts.shouldProcessMessage;
-  const processMessage = opts.processMessage;
   const authRateLimitMaxRequests =
     typeof opts.authRateLimit?.maxRequests === "number"
       ? opts.authRateLimit.maxRequests
@@ -320,44 +179,10 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
           return;
         }
 
-        const decoded = decodeWebhookCreateMessage({
-          body,
-          res,
-        });
-        if (decoded.kind === "invalid") {
-          return;
-        }
-        if (decoded.kind === "ignore") {
-          writeJsonResponse(res, 200);
-          return;
-        }
-
-        const message = decoded.message;
-        if (processMessage) {
-          writeJsonResponse(res, 200);
-          try {
-            await processMessage(message);
-          } catch (err) {
-            onError?.(err instanceof Error ? err : new Error(formatError(err)));
-          }
-          return;
-        }
-
-        if (shouldProcessMessage) {
-          const shouldProcess = await shouldProcessMessage(message);
-          if (!shouldProcess) {
-            writeJsonResponse(res, 200);
-            return;
-          }
-        }
-
+        // Nextcloud retries only a few times. Acknowledge only after the raw
+        // envelope is durably admitted; append failure must remain retryable.
+        await onWebhook(body);
         writeJsonResponse(res, 200);
-
-        try {
-          await onMessage(message);
-        } catch (err) {
-          onError?.(err instanceof Error ? err : new Error(formatError(err)));
-        }
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
           writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
@@ -367,6 +192,10 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
           writeWebhookError(res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
           return;
         }
+        if (err instanceof NextcloudTalkWebhookPayloadError) {
+          writeWebhookError(res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+          return;
+        }
         const error = err instanceof Error ? err : new Error(formatError(err));
         onError?.(error);
         writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
@@ -374,30 +203,53 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     })();
   });
 
-  const start = (): Promise<void> => {
-    return new Promise((resolve) => {
-      server.listen(port, host, () => resolve());
+  let stopRequested = false;
+  let closePromise: Promise<void> | undefined;
+  const closeIfListening = (): Promise<void> => {
+    if (closePromise) {
+      return closePromise;
+    }
+    if (!server.listening) {
+      return Promise.resolve();
+    }
+    closePromise = new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    }).finally(() => {
+      closePromise = undefined;
     });
+    return closePromise;
+  };
+  const stop = async () => {
+    stopRequested = true;
+    await closeIfListening();
   };
 
-  let stopped = false;
-  const stop = () => {
-    if (stopped) {
-      return;
+  const start = (): Promise<void> => {
+    if (stopRequested) {
+      return Promise.resolve();
     }
-    stopped = true;
-    try {
-      server.close();
-    } catch {
-      // ignore close races while shutting down
-    }
+    return new Promise((resolve, reject) => {
+      const onListenError = (error: Error) => reject(error);
+      server.once("error", onListenError);
+      server.listen(port, host, () => {
+        server.off("error", onListenError);
+        void (async () => {
+          // Abort can land between listen() and its callback. Close after the
+          // listener becomes visible so a stopped monitor never retains the port.
+          if (stopRequested) {
+            await closeIfListening();
+          }
+          resolve();
+        })().catch(reject);
+      });
+    });
   };
 
   if (abortSignal) {
     if (abortSignal.aborted) {
-      stop();
+      void stop();
     } else {
-      abortSignal.addEventListener("abort", stop, { once: true });
+      abortSignal.addEventListener("abort", () => void stop(), { once: true });
     }
   }
 

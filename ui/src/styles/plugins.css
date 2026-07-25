@@ -1,0 +1,675 @@
+/* Plugins hub page-specifics layered on the settings design language
+ * (styles/settings.css): art tiles, row messages, the detail overlay, and the
+ * MCP inline form. Structural layout comes from .settings-page/.settings-row. */
+
+.plugins-content-header .page-title {
+  margin: 0;
+}
+
+/* Hub tab strip aligned with the settings page column below it
+   (1120px matches .settings-page--wide). */
+.plugins-hub-tabs-row {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+/* ---------- toolbar ---------- */
+
+.plugins-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Toolbars mixing labelled fields with buttons align on the control row. */
+.plugins-toolbar--fields {
+  align-items: flex-end;
+}
+
+.plugins-toolbar--fields > .settings-segmented,
+.plugins-toolbar--fields > .btn,
+.plugins-toolbar--fields > .plugins-toolbar__hint {
+  margin-bottom: 3px;
+}
+
+.plugins-toolbar__search {
+  flex: 1 1 260px;
+  min-width: 180px;
+}
+
+.plugins-toolbar__hint {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.plugins-refresh {
+  flex: 0 0 auto;
+}
+
+/* Labelled control in a toolbar (label text over a settings input/select). */
+.plugins-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugins-field > span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+}
+
+.skills-toolbar__agent {
+  min-width: 180px;
+}
+
+.skills-toolbar__search {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+/* Full-width input rendered directly inside a group row (ClawHub search). */
+.plugins-row-input {
+  flex: 1 1 auto;
+}
+
+/* ---------- collapsible skill groups ---------- */
+
+/* <details> shell keeps the settings-section look while restoring the native
+ * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
+.skills-group__summary {
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.skills-group__summary::-webkit-details-marker {
+  display: none;
+}
+
+.skills-group__chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.6;
+  transition: transform var(--duration-fast) ease;
+}
+
+.skills-group__chevron svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+}
+
+.skills-group[open] > .skills-group__summary .skills-group__chevron {
+  transform: rotate(180deg);
+}
+
+/* ---------- panel + notices ---------- */
+
+/* Sections inside the tabpanel keep the settings-page rhythm. wa-tab-panel's
+   shadow slot (part=base) owns the slotted children's layout, so the column
+   flex + gap must live on the part — host-level gap never reaches them. */
+.plugins-panel {
+  min-width: 0;
+}
+
+.plugins-panel::part(base) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.plugins-readonly {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--warn-subtle);
+  color: var(--warn);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.plugins-readonly svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plugins-readonly > span:first-child {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.plugins-page-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* ---------- rows ---------- */
+
+/* Entity row inside a settings group: leading art tile, wrapping so
+   row-local messages can break onto a full-width line below the controls. */
+.plugins-item {
+  flex-wrap: wrap;
+}
+
+.plugins-item--clickable {
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.plugins-item--clickable:hover {
+  background: var(--bg-hover);
+}
+
+/* Keyboard-accessible detail opener: the row text is a real button so the
+   row's primary action is focusable instead of a div click handler. */
+.plugins-item__detail-button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugins-item__detail-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.plugins-version {
+  margin-left: var(--space-1);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+}
+
+.plugins-meta,
+.plugins-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugins-meta__mono {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugins-downloads {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.plugins-downloads svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Item titles/subheadings are semantic <h3>s for AT heading navigation; the
+ * shared classes own the look, so only the UA heading margin needs a reset. */
+h3.settings-row__title,
+h3.plugins-subheader {
+  margin: 0;
+}
+
+/* Use-case subheading between connector rows inside one group surface. */
+.plugins-subheader {
+  padding: var(--space-3) var(--space-4) 0;
+  color: var(--muted-strong);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.plugins-subheader ~ .plugins-subheader {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* ---------- art tiles ---------- */
+
+.plugins-tile {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+.plugins-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.plugins-tile img.plugins-icon {
+  object-fit: contain;
+  padding: 6px;
+}
+
+.plugins-tile--fallback {
+  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
+  border-color: transparent;
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+}
+
+.plugins-tile--fallback svg,
+.plugins-cover--fallback svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- actions ---------- */
+
+.plugins-install {
+  min-width: 78px;
+}
+
+.plugins-action-note {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugins-remove {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 7px;
+  color: var(--muted);
+}
+
+.plugins-remove svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plugins-remove:hover:not(:disabled) {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.plugins-remove-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.plugins-remove-confirm .btn.danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.plugins-group__link {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.plugins-group__link:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+}
+
+.plugins-group__link-icon {
+  display: inline-flex;
+  width: 11px;
+  height: 11px;
+  margin-left: 3px;
+  vertical-align: -1px;
+}
+
+.plugins-group__link-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- messages / empty / loading ---------- */
+
+.plugins-row-message {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  background: var(--ok-subtle);
+  color: var(--ok);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* Row-local message: full-width line under the row's text + controls. */
+.plugins-item > .plugins-row-message {
+  flex: 1 1 100%;
+}
+
+/* Section-level message rendered directly inside a group surface. */
+.plugins-group-message {
+  margin: var(--space-3) var(--space-4);
+}
+
+.plugins-row-message--error {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.plugins-row-message .btn {
+  flex: 0 0 auto;
+  color: var(--text-strong);
+}
+
+.plugins-empty,
+.plugins-search-state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  padding: var(--space-8) var(--space-5);
+  color: var(--muted);
+  text-align: center;
+}
+
+.plugins-empty__icon,
+.plugins-empty__mascot {
+  margin-bottom: var(--space-3);
+}
+
+.plugins-empty__icon {
+  width: 32px;
+  height: 32px;
+  color: var(--border-hover);
+}
+
+.plugins-empty__icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plugins-empty h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 620;
+}
+
+.plugins-empty p {
+  max-width: 420px;
+  margin: var(--space-2) 0 0;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.55;
+}
+
+.plugins-search-state {
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugins-search-state--error {
+  color: var(--danger);
+}
+
+/* ---------- detail overlay ---------- */
+
+.plugins-detail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.plugins-detail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: min(85vh, 860px);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.plugins-cover {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.plugins-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.plugins-cover img.plugins-icon {
+  width: min(180px, 48%);
+  height: min(180px, 48%);
+  object-fit: contain;
+}
+
+.plugins-cover--fallback {
+  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+}
+
+.plugins-detail__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.plugins-detail__close svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plugins-detail__body {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-5) var(--space-6);
+}
+
+.plugins-detail__title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.plugins-detail__title h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 20px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.plugins-detail__description {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.6;
+}
+
+.plugins-detail__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.plugins-detail__remove {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--danger);
+}
+
+.plugins-detail__remove span {
+  width: 14px;
+  height: 14px;
+}
+
+.plugins-detail__remove svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plugins-detail__remove:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: var(--danger-subtle);
+}
+
+.plugins-detail__meta {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+
+.plugins-detail__meta-row {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-2) 2px;
+}
+
+.plugins-detail__meta-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugins-detail__meta-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  text-overflow: ellipsis;
+}
+
+.plugins-detail__meta-value code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 768px) {
+  .plugins-content-header {
+    display: flex;
+  }
+}
+
+@media (max-width: 560px) {
+  .plugins-detail-backdrop {
+    padding: 10px;
+  }
+
+  .plugins-remove-confirm {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .plugins-row-message {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

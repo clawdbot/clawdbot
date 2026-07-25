@@ -1,0 +1,44 @@
+title: WhatsApp new-session command
+
+scenario:
+  id: whatsapp-native-new-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify WhatsApp `/new` starts a new session through native command dispatch.
+  successCriteria:
+    - The `/new` command is accepted in a WhatsApp DM.
+    - The reply confirms a new session.
+  codeRefs:
+    - src/auto-reply/reply/commands-core.ts
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+  execution:
+    profiles: { "whatsapp:mock-default": 38 }
+    kind: flow
+    channel: whatsapp
+    config:
+      requiredProviderMode: mock-openai
+    summary: Run `/new` through WhatsApp and verify the new-session acknowledgement.
+
+flow:
+  steps:
+    - name: new starts a session
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /new
+        - waitForOutbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            textIncludes: session
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "reply.text.toLowerCase().includes('new')"
+            message:
+              expr: "`new-session reply missing confirmation: ${reply.text}`"
+      detailsExpr: reply.text

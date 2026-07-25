@@ -28,6 +28,7 @@ describe("probeZalouser", () => {
     await expect(probeZalouser("default")).resolves.toEqual({
       ok: true,
       user: { userId: "123", displayName: "Alice" },
+      elapsedMs: expect.any(Number),
     });
   });
 
@@ -36,6 +37,7 @@ describe("probeZalouser", () => {
     await expect(probeZalouser("default")).resolves.toEqual({
       ok: false,
       error: "Not authenticated",
+      elapsedMs: expect.any(Number),
     });
   });
 
@@ -44,6 +46,7 @@ describe("probeZalouser", () => {
     await expect(probeZalouser("default")).resolves.toEqual({
       ok: false,
       error: "network down",
+      elapsedMs: expect.any(Number),
     });
   });
 
@@ -57,7 +60,26 @@ describe("probeZalouser", () => {
     await expect(pending).resolves.toEqual({
       ok: false,
       error: "Not authenticated",
+      elapsedMs: expect.any(Number),
     });
+  });
+
+  it("clears the probe timeout after auth resolves", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    mockGetUserInfo.mockResolvedValueOnce({
+      userId: "123",
+      displayName: "Alice",
+    });
+
+    await expect(probeZalouser("default", 10)).resolves.toEqual({
+      ok: true,
+      user: { userId: "123", displayName: "Alice" },
+      elapsedMs: expect.any(Number),
+    });
+
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("caps oversized lookup timeout before scheduling", async () => {

@@ -47,7 +47,6 @@ Injected workspace files:
 - TOOLS.md: TRUNCATED | raw 54,210 chars (~13,553 tok) | injected 20,962 chars (~5,241 tok)
 - IDENTITY.md: OK | raw 211 chars (~53 tok) | injected 211 chars (~53 tok)
 - USER.md: OK | raw 388 chars (~97 tok) | injected 388 chars (~97 tok)
-- HEARTBEAT.md: MISSING | raw 0 | injected 0
 - BOOTSTRAP.md: OK | raw 0 chars (~0 tok) | injected 0 chars (~0 tok)
 
 Skills list (system prompt text): 2,184 chars (~546 tok) (12 skills)
@@ -77,12 +76,15 @@ Top tools (schema size):
 
 ### `/context map`
 
-Sends an image generated from the latest cached run report. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
+Sends an image generated from the latest cached run report plus the session transcript. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
 
+- conversation transcript (user messages, assistant replies, tool results, compaction summaries), plus per-turn runtime context and hook prompt additions that reach only the model
 - injected workspace files
 - base system prompt text
 - skill prompt entries
 - tool JSON schemas
+
+The conversation group grows as the session does, so the map changes turn over turn; after compaction it collapses into a summaries tile.
 
 `/context list`, `/context detail`, and `/context json` can still inspect an on-demand estimate when no run report is cached.
 
@@ -119,7 +121,6 @@ By default, OpenClaw injects a fixed set of workspace files (if present):
 - `TOOLS.md`
 - `IDENTITY.md`
 - `USER.md`
-- `HEARTBEAT.md`
 - `BOOTSTRAP.md` (first-run only)
 
 Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `60000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.

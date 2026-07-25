@@ -1,16 +1,7 @@
 // Control UI tests cover markdown behavior.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { i18n } from "../i18n/index.ts";
-import { renderMarkdownSidebar } from "../pages/chat/components/chat-sidebar.ts";
-import {
-  blockArtCodeBlockCopyPayloadEncoding,
-  decodeCodeBlockCopyPayload,
-  md,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownHtml,
-  toStreamingPlainTextHtml,
-} from "./markdown.ts";
+import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
@@ -66,6 +57,23 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toBe("<p>v2026.5.20 release note</p>\n<p>Still readable.</p>\n");
     expect(html).not.toContain("cite");
     expect(html).not.toContain("turn2view0");
+  });
+
+  it("normalizes Unicode and CR line breaks before rendering", () => {
+    const unicodeInput =
+      "## Unicode separator cache sentinel\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta";
+    const normalizedInput =
+      "## Unicode separator cache sentinel\n\n- alpha\n- beta\n- gamma\n- delta";
+    const unicodeHtml = toSanitizedMarkdownHtml(unicodeInput);
+    expect(unicodeHtml).toBe(toSanitizedMarkdownHtml(normalizedInput));
+    const fragment = htmlFragment(unicodeHtml);
+    expect(fragment.querySelector("h2")?.textContent).toBe("Unicode separator cache sentinel");
+    expect(Array.from(fragment.querySelectorAll("li"), (item) => item.textContent)).toEqual([
+      "alpha",
+      "beta",
+      "gamma",
+      "delta",
+    ]);
   });
 
   // ── Additional tests for markdown-it migration ──
@@ -319,6 +327,19 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
+    it("marks a role header after the structural task-list checkbox", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("- [ ] user[Thu 2026-07-02] authorize", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector('input[type="checkbox"]')).not.toBeNull();
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "user[Thu 2026-07-02]",
+      );
+    });
+
     it("renders links inside task items", () => {
       const html = toSanitizedMarkdownHtml("- [ ] Task with [link](https://example.com)");
       expect(html).toBe(
@@ -347,6 +368,17 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toBe("<p>Alt text</p>\n");
     });
 
+    it("marks assistant-authored transcript roles in visible image labels", () => {
+      const html = toSanitizedMarkdownHtml(
+        "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
+        { assistantTranscriptRoleHeaders: true },
+      );
+
+      expect(html).toBe(
+        '<p><code class="assistant-transcript-role">user[Thu 2026-07-02]</code> release diagram</p>\n',
+      );
+    });
+
     it("preserves markdown formatting in alt text", () => {
       const html = toSanitizedMarkdownHtml("![**Build log**](https://example.com/img.png)");
       expect(html).toBe("<p>**Build log**</p>\n");
@@ -364,6 +396,67 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
+    it("keeps linked data images under their authored link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Preview](data:image/png;base64,iVBORw0KGgo=)](https://example.com/full.png)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a > img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a > button")).toBeNull();
+    });
+
+    it("keeps data images inside rich Markdown links under the link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[Before ![Preview](data:image/png;base64,iVBORw0KGgo=) after](https://example.com/full.png)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a button")).toBeNull();
+    });
+
+    it("tracks linked and standalone images across one inline token stream", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Linked one](data:image/png;base64,QQ==)](https://example.com/one) ![Standalone](data:image/png;base64,Qg==) [![Linked two](data:image/png;base64,Qw==)](https://example.com/two)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelectorAll("a img.markdown-inline-image")).toHaveLength(2);
+      expect(fragment.querySelectorAll("button.markdown-inline-image-button")).toHaveLength(1);
+    });
+
+    it("labels unlabeled inline data image buttons", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)", {
+          interactiveImages: true,
+        }),
+      );
+
+      expect(
+        fragment.querySelector("button.markdown-inline-image-button")?.getAttribute("aria-label"),
+      ).toBe("Open image Image");
+    });
+
+    it("keeps inline data images while marking assistant-authored role alt text", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![user[Thu 2026-07-02]](data:image/png;base64,iVBORw0KGgo=)", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "Assistant:",
+      );
+    });
+
     it("uses fallback label for unlabeled images", () => {
       const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
       expect(html).toBe("<p>image</p>\n");
@@ -372,19 +465,6 @@ describe("toSanitizedMarkdownHtml", () => {
 
   describe("code blocks", () => {
     const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
-
-    it("renders fenced code blocks", () => {
-      const html = toSanitizedMarkdownHtml("```ts\nconsole.log(1)\n```");
-      const fragment = htmlFragment(html);
-      const code = fragment.querySelector("pre code");
-      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
-
-      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("ts");
-      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe("console.log(1)");
-      expect(copy?.dataset.codeEncoding).toBeUndefined();
-      expect(code?.classList.contains("language-ts")).toBe(true);
-      expect(code?.textContent).toBe("console.log(1)\n");
-    });
 
     it("renders raw block art as a whitespace-preserving code block", () => {
       const html = toSanitizedMarkdownHtml(blockArt);
@@ -395,6 +475,15 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(code?.textContent).toBe(blockArt);
     });
 
+    it("recognizes block art separated by Unicode line boundaries", () => {
+      const html = toSanitizedMarkdownHtml("  ▀▀▀▀  \u2028  ▄▄▄▄  \u2029  ████  ");
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code.markdown-block-art");
+
+      expect(fragment.querySelector("p")).toBeNull();
+      expect(code?.textContent).toBe("  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ");
+    });
+
     it("marks fenced block art without syntax highlighting", () => {
       const html = toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``);
       const fragment = htmlFragment(html);
@@ -402,6 +491,33 @@ describe("toSanitizedMarkdownHtml", () => {
 
       expect(code?.classList.contains("hljs")).toBe(false);
       expect(code?.textContent).toBe(`${blockArt}\n`);
+    });
+
+    it("copies fenced block art with its quiet-zone whitespace intact", async () => {
+      const writeText = vi.fn(async () => undefined);
+      const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      try {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``));
+        const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+        if (!button) {
+          throw new Error("expected code copy button");
+        }
+
+        fragment.addEventListener("click", handleMarkdownCodeBlockCopy);
+        button.click();
+
+        await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(blockArt));
+      } finally {
+        if (originalClipboard) {
+          Object.defineProperty(navigator, "clipboard", originalClipboard);
+        } else {
+          Reflect.deleteProperty(navigator, "clipboard");
+        }
+      }
     });
 
     it("renders indented code blocks", () => {
@@ -451,50 +567,6 @@ PY
       );
     });
 
-    it("highlights fenced code blocks while preserving copy text", () => {
-      const source = 'const answer = "yes";\nconsole.log(answer);\n';
-      const html = toSanitizedMarkdownHtml(`\`\`\`js\n${source}\`\`\``);
-      const fragment = htmlFragment(html);
-      const code = fragment.querySelector("pre code");
-      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
-
-      expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("js");
-      expect(copy?.dataset.code).toBe(source.trimEnd());
-      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe(source.trimEnd());
-      expect(copy?.dataset.codeEncoding).toBeUndefined();
-      expect(code?.textContent).toBe(source);
-      expect(code?.querySelector(".hljs-keyword")?.textContent).toBe("const");
-      expect(code?.querySelector(".hljs-string")?.textContent).toBe('"yes"');
-    });
-
-    it("keeps ordinary code blocks raw when they start with the block-art prefix", () => {
-      const source = 'openclaw:block-art-code:"literal"\n';
-      const html = toSanitizedMarkdownHtml(`\`\`\`txt\n${source}\`\`\``);
-      const fragment = htmlFragment(html);
-      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
-
-      expect(copy?.dataset.code).toBe(source.trimEnd());
-      expect(copy?.dataset.codeEncoding).toBeUndefined();
-      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
-        source.trimEnd(),
-      );
-    });
-
-    it("keeps boundary spaces in encoded copy payloads after sanitization", () => {
-      const source = "  ▀▀▀▀  \n  ▄▄▄▄  ";
-      const html = toSanitizedMarkdownHtml(`\`\`\`\n${source}\n\`\`\``);
-      const fragment = htmlFragment(html);
-      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
-
-      expect(copy?.dataset.code).not.toMatch(/^\s|\s$/);
-      expect(copy?.dataset.code).toContain("openclaw:block-art-code:");
-      expect(copy?.dataset.codeEncoding).toBe(blockArtCodeBlockCopyPayloadEncoding);
-      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
-        source,
-      );
-      expect(fragment.querySelector("pre code")?.textContent).toBe(`${source}\n`);
-    });
-
     it("highlights collapsed JSON code blocks", () => {
       const html = toSanitizedMarkdownHtml('```json\n{"ok": true}\n```');
       const fragment = htmlFragment(html);
@@ -525,60 +597,6 @@ PY
       expect(code?.querySelector("script")).toBeNull();
       expect(code?.textContent).toBe("<script>alert(1)</script>\n");
       expect(code?.innerHTML).not.toContain("<script>");
-    });
-
-    it("keeps localized copy labels fresh after locale changes", async () => {
-      const markdown = "```ts\nconst localizedCopy = true;\n```";
-      await i18n.setLocale("en");
-      const english = toSanitizedMarkdownHtml(markdown);
-
-      try {
-        await i18n.setLocale("zh-CN");
-        const chinese = toSanitizedMarkdownHtml(markdown);
-        const englishFragment = htmlFragment(english);
-        const chineseFragment = htmlFragment(chinese);
-        const englishCopy = englishFragment.querySelector<HTMLButtonElement>(".code-block-copy");
-        const chineseCopy = chineseFragment.querySelector<HTMLButtonElement>(".code-block-copy");
-
-        expect(englishCopy?.dataset.code).toBe("const localizedCopy = true;");
-        expect(decodeCodeBlockCopyPayload(englishCopy?.dataset.code ?? "")).toBe(
-          "const localizedCopy = true;",
-        );
-        expect(englishCopy?.getAttribute("aria-label")).toBe("Copy code");
-        expect(englishCopy?.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
-        expect(englishCopy?.querySelector(".code-block-copy__done")?.textContent).toBe("Copied!");
-        expect(englishFragment.querySelector("pre code")?.textContent).toBe(
-          "const localizedCopy = true;\n",
-        );
-
-        expect(chineseCopy?.dataset.code).toBe("const localizedCopy = true;");
-        expect(decodeCodeBlockCopyPayload(chineseCopy?.dataset.code ?? "")).toBe(
-          "const localizedCopy = true;",
-        );
-        expect(chineseCopy?.getAttribute("aria-label")).toBe("复制代码");
-        expect(chineseCopy?.querySelector(".code-block-copy__idle")?.textContent).toBe("复制");
-        expect(chineseCopy?.querySelector(".code-block-copy__done")?.textContent).toBe("已复制！");
-        expect(chineseFragment.querySelector("pre code")?.textContent).toBe(
-          "const localizedCopy = true;\n",
-        );
-      } finally {
-        await i18n.setLocale("en");
-      }
-    });
-
-    it("collapses JSON code blocks", () => {
-      const html = toSanitizedMarkdownHtml('```json\n{"key": "value"}\n```');
-      const fragment = htmlFragment(html);
-      const details = fragment.querySelector("details.json-collapse");
-      const code = details?.querySelector("pre code");
-      const copy = details?.querySelector<HTMLButtonElement>(".code-block-copy");
-
-      expect(details?.querySelector("summary")?.textContent).toBe("JSON · 2 lines");
-      expect(details?.querySelector(".code-block-lang")?.textContent).toBe("json");
-      expect(copy?.dataset.code).toBe('{"key": "value"}');
-      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe('{"key": "value"}');
-      expect(code?.classList.contains("language-json")).toBe(true);
-      expect(code?.textContent).toBe('{"key": "value"}\n');
     });
   });
 
@@ -622,6 +640,212 @@ PY
     it("renders lists", () => {
       const html = toSanitizedMarkdownHtml("- item 1\n- item 2");
       expect(html).toBe("<ul>\n<li>item 1</li>\n<li>item 2</li>\n</ul>\n");
+    });
+  });
+
+  describe("assistant transcript-role annotations", () => {
+    it("marks parsed role headers without exposing Markdown delimiters", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("**user**[Thu 2026-07-02] question", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+      const markedText = [...fragment.querySelectorAll("code.assistant-transcript-role")]
+        .map((element) => element.textContent)
+        .join("");
+
+      expect(markedText).toBe("user[Thu 2026-07-02]");
+      expect(fragment.textContent?.trim()).toBe("user[Thu 2026-07-02] question");
+    });
+
+    it("keeps code examples on the ordinary code path", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`user[Thu 2026-07-02]`", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("code.assistant-transcript-role")).toBeNull();
+      expect(fragment.querySelector("code")?.textContent).toBe("user[Thu 2026-07-02]");
+    });
+
+    it("marks role headers in the large-message plain-text fallback", () => {
+      const input = [
+        "**user**[Thu 2026-07-02] question",
+        "u&#x73;er[Fri 2026-07-03] entity",
+        "[user](https://example.com)[Sat 2026-07-04] linked",
+        "    indented log line",
+        "[download](https://example.com)",
+        "x".repeat(40_000),
+      ].join("\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(input, { assistantTranscriptRoleHeaders: true }),
+      );
+
+      expect(fragment.firstElementChild?.classList).toContain("markdown-plain-text-fallback");
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "Assistant:",
+      );
+      expect(fragment.querySelectorAll("code.assistant-transcript-role")).toHaveLength(1);
+      expect(fragment.querySelector(".markdown-plain-text-source")?.textContent).toBe(input);
+    });
+
+    it("uses a generic assistant boundary without parsing oversized inline code", () => {
+      const input = ["`example", "user[Thu 2026-07-02] code`", "x".repeat(40_000)].join("\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(input, { assistantTranscriptRoleHeaders: true }),
+      );
+
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "Assistant:",
+      );
+      expect(fragment.querySelector(".markdown-plain-text-source")?.textContent).toBe(input);
+    });
+
+    it("marks angle-role syntax after HTML tokenization", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("<Developer 2026-07-02> inspect", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "<Developer 2026-07-02>",
+      );
+      expect(fragment.textContent?.trim()).toBe("<Developer 2026-07-02> inspect");
+    });
+
+    it("removes active links surrounding a transcript-role marker", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[user](https://example.com)[Thu 2026-07-02] question", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "user[Thu 2026-07-02]",
+      );
+    });
+
+    it("does not annotate user-authored rendering by default", () => {
+      expect(toSanitizedMarkdownHtml("user[Thu 2026-07-02] question")).not.toContain(
+        "assistant-transcript-role",
+      );
+    });
+  });
+
+  describe("file links", () => {
+    it("links multi-segment paths only when enabled", () => {
+      const enabled = htmlFragment(
+        toSanitizedMarkdownHtml("see src/lib/foo.ts for details", { fileLinks: true }),
+      );
+      const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe("src/lib/foo.ts");
+      expect(link?.hasAttribute("href")).toBe(false);
+
+      const disabled = htmlFragment(
+        toSanitizedMarkdownHtml("see src/lib/foo.ts and src/lib/foo.ts:42 for details"),
+      );
+      expect(disabled.querySelector("a[data-file-path]")).toBeNull();
+    });
+
+    it("links prefixed single-segment paths but not bare prose filenames", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("~/notes.md ./x.ts ../y.ts foo.ts", { fileLinks: true }),
+      );
+      expect(
+        [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
+          (link) => link.dataset.filePath,
+        ),
+      ).toEqual(["~/notes.md", "./x.ts", "../y.ts"]);
+      expect(fragment.textContent).toContain("foo.ts");
+    });
+
+    it("preserves line suffixes in labels while storing the parsed line", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("src/lib/foo.ts:42 and foo.ts:7:3", { fileLinks: true }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links[0]?.dataset.filePath).toBe("src/lib/foo.ts");
+      expect(links[0]?.dataset.fileLine).toBe("42");
+      expect(links[0]?.textContent).toBe("src/lib/foo.ts:42");
+      expect(links[1]?.dataset.filePath).toBe("foo.ts");
+      expect(links[1]?.dataset.fileLine).toBe("7");
+      expect(links[1]?.textContent).toBe("foo.ts:7:3");
+    });
+
+    it("links Windows absolute paths", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual([
+        "C:/repo/src/foo.ts",
+        "D:\\work\\bar.ts",
+      ]);
+      expect(links[0]?.dataset.fileLine).toBe("42");
+    });
+
+    it("links inline-code paths and conservative bare filenames", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`src/lib/foo.ts` `navigation.ts` `foo.bar()` `notes.xyz123`", {
+          fileLinks: true,
+        }),
+      );
+      expect(
+        [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
+          (link) => link.dataset.filePath,
+        ),
+      ).toEqual(["src/lib/foo.ts", "navigation.ts"]);
+      expect(fragment.textContent).toContain("foo.bar()");
+      expect(fragment.textContent).toContain("notes.xyz123");
+    });
+
+    it("converts explicit relative and absolute local file links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links).toHaveLength(2);
+      expect(links[0]?.dataset).toMatchObject({
+        filePath: "src/utils/foo.ts",
+        fileLine: "42",
+      });
+      expect(links[1]?.dataset.filePath).toBe("/Users/a/b.ts");
+      expect(links.every((link) => !link.hasAttribute("href"))).toBe(true);
+
+      const disabled = htmlFragment(toSanitizedMarkdownHtml("[x](/Users/a/b.ts)"));
+      expect(disabled.querySelector("a")?.hasAttribute("href")).toBe(false);
+      expect(disabled.querySelector("a")?.hasAttribute("data-file-path")).toBe(false);
+    });
+
+    it("leaves http links as normal links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("https://example.com/a/b.ts", { fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.href).toBe("https://example.com/a/b.ts");
+      expect(link?.hasAttribute("data-file-path")).toBe(false);
+    });
+
+    it("does not link paths inside fenced code blocks", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("```ts\nsrc/lib/foo.ts:42\n```", { fileLinks: true }),
+      );
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+      expect(fragment.querySelector("code")?.textContent).toContain("src/lib/foo.ts:42");
+    });
+
+    it("guards common prose false positives", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("Node.js, e.g. version 1.2.3", { fileLinks: true }),
+      );
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
     });
   });
 
@@ -675,10 +899,10 @@ PY
 
     it("rewrites docs-root links to the public docs host", () => {
       const html = toSanitizedMarkdownHtml(
-        "[workspace](/concepts/agent-workspace) [hooks](/automation/hooks#session-memory) [telegram](/channels/telegram?tab=setup) [shortlink](/telegram) [openai](/openai) [images](/images) [groups](/groups) [camera](/nodes/camera) [macOS](/platforms/macos) [cliSessions](/cli/sessions) [toolSkills](/tools/skills) [pluginDocs](/plugins/reference/diffs) [prose](/prose) [refactor](/refactor/ingress-core)",
+        "[workspace](/concepts/agent-workspace) [hooks](/automation/hooks#session-memory) [telegram](/channels/telegram?tab=setup) [shortlink](/telegram) [openai](/openai) [images](/images) [groups](/groups) [camera](/nodes/camera) [macOS](/platforms/macos) [cliSessions](/cli/sessions) [toolSkills](/tools/skills) [pluginDocs](/plugins/reference/diffs) [prose](/prose) [access](/channels/access-groups)",
       );
       expect(html).toBe(
-        '<p><a href="https://docs.openclaw.ai/concepts/agent-workspace" rel="noreferrer noopener" target="_blank">workspace</a> <a href="https://docs.openclaw.ai/automation/hooks#session-memory" rel="noreferrer noopener" target="_blank">hooks</a> <a href="https://docs.openclaw.ai/channels/telegram?tab=setup" rel="noreferrer noopener" target="_blank">telegram</a> <a href="https://docs.openclaw.ai/telegram" rel="noreferrer noopener" target="_blank">shortlink</a> <a href="https://docs.openclaw.ai/openai" rel="noreferrer noopener" target="_blank">openai</a> <a href="https://docs.openclaw.ai/images" rel="noreferrer noopener" target="_blank">images</a> <a href="https://docs.openclaw.ai/groups" rel="noreferrer noopener" target="_blank">groups</a> <a href="https://docs.openclaw.ai/nodes/camera" rel="noreferrer noopener" target="_blank">camera</a> <a href="https://docs.openclaw.ai/platforms/macos" rel="noreferrer noopener" target="_blank">macOS</a> <a href="https://docs.openclaw.ai/cli/sessions" rel="noreferrer noopener" target="_blank">cliSessions</a> <a href="https://docs.openclaw.ai/tools/skills" rel="noreferrer noopener" target="_blank">toolSkills</a> <a href="https://docs.openclaw.ai/plugins/reference/diffs" rel="noreferrer noopener" target="_blank">pluginDocs</a> <a href="https://docs.openclaw.ai/prose" rel="noreferrer noopener" target="_blank">prose</a> <a href="https://docs.openclaw.ai/refactor/ingress-core" rel="noreferrer noopener" target="_blank">refactor</a></p>\n',
+        '<p><a href="https://docs.openclaw.ai/concepts/agent-workspace" rel="noreferrer noopener" target="_blank">workspace</a> <a href="https://docs.openclaw.ai/automation/hooks#session-memory" rel="noreferrer noopener" target="_blank">hooks</a> <a href="https://docs.openclaw.ai/channels/telegram?tab=setup" rel="noreferrer noopener" target="_blank">telegram</a> <a href="https://docs.openclaw.ai/telegram" rel="noreferrer noopener" target="_blank">shortlink</a> <a href="https://docs.openclaw.ai/openai" rel="noreferrer noopener" target="_blank">openai</a> <a href="https://docs.openclaw.ai/images" rel="noreferrer noopener" target="_blank">images</a> <a href="https://docs.openclaw.ai/groups" rel="noreferrer noopener" target="_blank">groups</a> <a href="https://docs.openclaw.ai/nodes/camera" rel="noreferrer noopener" target="_blank">camera</a> <a href="https://docs.openclaw.ai/platforms/macos" rel="noreferrer noopener" target="_blank">macOS</a> <a href="https://docs.openclaw.ai/cli/sessions" rel="noreferrer noopener" target="_blank">cliSessions</a> <a href="https://docs.openclaw.ai/tools/skills" rel="noreferrer noopener" target="_blank">toolSkills</a> <a href="https://docs.openclaw.ai/plugins/reference/diffs" rel="noreferrer noopener" target="_blank">pluginDocs</a> <a href="https://docs.openclaw.ai/prose" rel="noreferrer noopener" target="_blank">prose</a> <a href="https://docs.openclaw.ai/channels/access-groups" rel="noreferrer noopener" target="_blank">access</a></p>\n',
       );
     });
 
@@ -776,39 +1000,18 @@ PY
       expect(htmlFragment(first).firstElementChild?.className).toBe("markdown-plain-text-fallback");
       expect(second).toBe(first);
     });
-
-    it("falls back to escaped text if md.render throws (#36213)", () => {
-      const renderSpy = vi.spyOn(md, "render").mockImplementation(() => {
-        throw new Error("forced failure");
-      });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const html = toSanitizedMarkdownHtml("test");
-        expect(html).toBe('<pre class="code-block">test</pre>');
-        expect(warnSpy).toHaveBeenCalledOnce();
-      } finally {
-        renderSpy.mockRestore();
-        warnSpy.mockRestore();
-      }
-    });
-  });
-});
-
-describe("toStreamingPlainTextHtml", () => {
-  it("strips unsupported citation control markers before escaping streaming text", () => {
-    const html = toStreamingPlainTextHtml(
-      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
-    );
-
-    expect(html).toBe(
-      '<div class="markdown-plain-text-fallback">v2026.5.20 release note\n\nStill readable.</div>',
-    );
-    expect(html).not.toContain("cite");
-    expect(html).not.toContain("turn2view0");
   });
 });
 
 describe("toStreamingMarkdownHtml", () => {
+  it("marks a completed transcript-role header in the streaming tail", () => {
+    const html = toStreamingMarkdownHtml("user[Thu 2026-07-02] question", {
+      assistantTranscriptRoleHeaders: true,
+    });
+
+    expect(html).toContain('class="assistant-transcript-role"');
+  });
+
   it("renders streaming raw block art without collapsing quiet-zone spaces", () => {
     const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
     const html = toStreamingMarkdownHtml(blockArt);
@@ -825,82 +1028,89 @@ describe("toStreamingMarkdownHtml", () => {
     const html = toStreamingMarkdownHtml(blockArt);
     const fragment = htmlFragment(html);
     const code = fragment.querySelector("pre code.markdown-block-art");
-    const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
 
     expect(code?.textContent).toContain("… truncated");
     expect(code?.textContent).toContain(`showing first 140000`);
     expect(code?.textContent?.length).toBeLessThan(blockArt.length);
-    expect(copy?.dataset.code).toContain("openclaw:block-art-code:");
-    expect(copy?.dataset.codeEncoding).toBe(blockArtCodeBlockCopyPayloadEncoding);
-    expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
-      code?.textContent,
-    );
   });
 
-  it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
+  it("renders completed block prefixes as markdown and closes the streaming tail", () => {
     const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
 
-    expect(html).toBe(
-      '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',
-    );
+    expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
   });
 
-  it("keeps a single open paragraph as escaped text", () => {
+  it("uses Unicode separators as stable markdown boundaries", () => {
+    const html = toStreamingMarkdownHtml("## Done\u2028\u2028working **tail");
+
+    expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
+  });
+
+  it("renders a single open paragraph as markdown with closed formatting", () => {
     const html = toStreamingMarkdownHtml("**still streaming");
 
-    expect(html).toBe('<div class="markdown-plain-text-fallback">**still streaming</div>');
+    expect(html).toBe("<p><strong>still streaming</strong></p>\n");
   });
 
-  it("does not invoke the markdown parser before a stable block boundary exists", () => {
-    const renderSpy = vi.spyOn(md, "render");
-    try {
-      const html = toStreamingMarkdownHtml("**still streaming parser sentinel");
+  it("renders half-written links as text only while streaming", () => {
+    const html = toStreamingMarkdownHtml("see [Streamdown](https://strea");
 
-      expect(html).toBe(
-        '<div class="markdown-plain-text-fallback">**still streaming parser sentinel</div>',
-      );
-      expect(renderSpy).not.toHaveBeenCalled();
-    } finally {
-      renderSpy.mockRestore();
-    }
+    expect(html).toBe("<p>see Streamdown</p>\n");
   });
 
-  it("reuses the rendered stable prefix while only the streaming tail changes", () => {
-    const renderSpy = vi.spyOn(md, "render");
-    try {
-      const first = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nfirst **tail");
-      const second = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nsecond **tail");
+  it("streams tables as markdown before the closing row arrives", () => {
+    const html = toStreamingMarkdownHtml("| left | right |\n| --- | --- |\n| 1 | 2");
+    const fragment = htmlFragment(html);
 
-      expect(first).toContain("<h2>Streaming cache sentinel</h2>");
-      expect(second).toContain("<h2>Streaming cache sentinel</h2>");
-      expect(renderSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      renderSpy.mockRestore();
-    }
+    expect(fragment.querySelector("table")).not.toBeNull();
+    expect(fragment.querySelector("th")?.textContent).toBe("left");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
-  it("does not parse an open code fence while streaming", () => {
+  it("leaves dollar amounts alone while streaming", () => {
+    const html = toStreamingMarkdownHtml("prices are $$50 and");
+
+    expect(html).toBe("<p>prices are $$50 and</p>\n");
+  });
+
+  it("streams an open code fence as a live-highlighted code block", () => {
     const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
+    const fragment = htmlFragment(html);
 
-    expect(html).toBe(
-      '<p>Intro</p>\n<div class="markdown-plain-text-fallback">```ts\nconst x = 1 &lt; 2</div>',
-    );
+    expect(fragment.querySelector("p")?.textContent).toBe("Intro");
+    expect(fragment.querySelector("code.language-ts")?.textContent).toContain("const x = 1 < 2");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
-  it("keeps an open list code fence streaming through blank lines", () => {
+  it("streams an open list code fence through blank lines", () => {
     const html = toStreamingMarkdownHtml("- ```ts\n  const x = 1;\n\n  const y = 2;");
+    const fragment = htmlFragment(html);
+    const code = fragment.querySelector("li code");
 
-    expect(html).toBe(
-      '<div class="markdown-plain-text-fallback">- ```ts\n  const x = 1;\n\n  const y = 2;</div>',
-    );
+    expect(code?.textContent).toContain("const x = 1;");
+    expect(code?.textContent).toContain("const y = 2;");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
-  it("keeps an open blockquote code fence streaming through blank lines", () => {
-    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
+  it("keeps completed tilde-fence code out of the remend tail", () => {
+    // remend only understands ``` fences; a closed ~~~ block must land in the
+    // stable prefix so its raw markers are never "completed" as inline markdown.
+    const html = toStreamingMarkdownHtml('~~~ts\nconst s = "**open";\n~~~\ncontinuing **bold');
+    const fragment = htmlFragment(html);
 
-    expect(html).toBe(
-      '<div class="markdown-plain-text-fallback">&gt; ```ts\n&gt; const x = 1;\n&gt;\n&gt; const y = 2;</div>',
-    );
+    expect(fragment.querySelector("code")?.textContent).toContain('const s = "**open";');
+    expect(fragment.querySelector("code strong")).toBeNull();
+    expect(fragment.querySelector("p strong")?.textContent).toBe("bold");
+  });
+
+  it("streams an open blockquote code fence through blank lines", () => {
+    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
+    const fragment = htmlFragment(html);
+    const code = fragment.querySelector("blockquote code");
+
+    expect(code?.textContent).toContain("const x = 1;");
+    expect(code?.textContent).toContain("const y = 2;");
+    expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
   it("renders a completed code fence once the closing fence arrives", () => {
@@ -909,49 +1119,5 @@ describe("toStreamingMarkdownHtml", () => {
     expect(html).toContain('<code class="hljs language-ts"');
     expect(html).toContain("const x = 1;");
     expect(html).not.toContain("markdown-plain-text-fallback");
-  });
-});
-
-describe("renderMarkdownSidebar", () => {
-  it("renders sanitized markdown content", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderMarkdownSidebar({
-        content: { kind: "markdown", content: "Hello **world**" },
-        error: null,
-        onClose: () => undefined,
-        onViewRawText: () => undefined,
-      }),
-      container,
-    );
-
-    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Markdown Preview");
-    expect(container.querySelector(".sidebar-markdown-shell__eyebrow span")?.textContent).toBe(
-      "Rendered Markdown",
-    );
-    expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("world");
-    expect(
-      Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim()),
-    ).toEqual(["", "View Raw Text"]);
-  });
-
-  it("renders a quiet empty state for blank markdown previews", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderMarkdownSidebar({
-        content: { kind: "markdown", content: "   " },
-        error: null,
-        onClose: () => undefined,
-        onViewRawText: () => undefined,
-      }),
-      container,
-    );
-
-    expect(container.querySelector(".sidebar-markdown-reader")).toBeNull();
-    expect(container.querySelector(".sidebar-markdown-empty")?.textContent?.trim()).toBe(
-      "No previewable markdown content.",
-    );
   });
 });

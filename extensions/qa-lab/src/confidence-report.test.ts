@@ -5,11 +5,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildQaConfidenceReport,
-  buildQaConfidenceSelfTestSummary,
   renderQaConfidenceMarkdownReport,
   writeQaConfidenceSelfTestArtifacts,
-  type QaConfidenceManifest,
 } from "./confidence-report.js";
+
+type QaConfidenceManifest = Parameters<typeof buildQaConfidenceReport>[0]["manifest"];
 
 describe("qa confidence report", () => {
   let tempRoot: string;
@@ -949,7 +949,10 @@ describe("qa confidence report", () => {
   });
 
   it("emits confidence self-test canaries for every drift class we need to catch", async () => {
-    const summary = await buildQaConfidenceSelfTestSummary("2026-05-12T00:00:00.000Z");
+    const { summary } = await writeQaConfidenceSelfTestArtifacts({
+      outputDir: tempRoot,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
 
     expect(summary.pass).toBe(true);
     expect(summary.canaries.map((canary) => canary.id)).toEqual([

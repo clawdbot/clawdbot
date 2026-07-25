@@ -2,12 +2,12 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveStorePath,
-} from "../config/sessions/paths.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+  loadSessionEntryReadOnly,
+  resolveSessionTranscriptReadTarget,
+} from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -43,13 +43,16 @@ function readOptionalString(value: unknown): string | undefined {
 }
 
 function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajectoryCommandOptions> {
-  const trimmed = encoded.trim();
-  if (!ENCODED_EXPORT_REQUEST_RE.test(trimmed)) {
+  if (!ENCODED_EXPORT_REQUEST_RE.test(encoded)) {
+    throw new Error("Encoded trajectory export request is invalid");
+  }
+  const bytes = Buffer.from(encoded, "base64url");
+  if (bytes.toString("base64url") !== encoded) {
     throw new Error("Encoded trajectory export request is invalid");
   }
   let decoded: unknown;
   try {
-    decoded = JSON.parse(Buffer.from(trimmed, "base64url").toString("utf8")) as unknown;
+    decoded = JSON.parse(bytes.toString("utf8")) as unknown;
   } catch {
     throw new Error("Encoded trajectory export request is invalid JSON");
   }
@@ -84,8 +87,8 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
 function resolveExportTrajectoryOptions(
   opts: ExportTrajectoryCommandOptions,
 ): ExportTrajectoryCommandOptions {
-  const encoded = opts.requestJsonBase64?.trim();
-  if (!encoded) {
+  const encoded = opts.requestJsonBase64;
+  if (encoded === undefined || encoded.length === 0) {
     return opts;
   }
   return {
@@ -119,7 +122,8 @@ export async function exportTrajectoryCommand(
   const storePath = resolvedOpts.store
     ? resolveStorePath(resolvedOpts.store, { agentId: targetAgentId })
     : resolveStorePath(getRuntimeConfig().session?.store, { agentId: targetAgentId });
-  const entry = loadSessionEntry({
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  const entry = loadSessionEntryReadOnly({
     agentId: targetAgentId,
     sessionKey,
     storePath,
@@ -134,17 +138,19 @@ export async function exportTrajectoryCommand(
 
   let sessionFile: string;
   try {
-    sessionFile = resolveSessionFilePath(
-      entry.sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
-    );
+    sessionFile = resolveSessionTranscriptReadTarget({
+      agentId: targetAgentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+      storePath,
+    }).sessionFile;
   } catch (error) {
     runtime.error(`Failed to resolve session file: ${formatErrorMessage(error)}`);
     runtime.exit(1);
     return;
   }
-  if (!(await pathExists(sessionFile))) {
+  if (!parseSqliteSessionFileMarker(sessionFile) && !(await pathExists(sessionFile))) {
     runtime.error(
       `Session file not found for ${sessionKey}. Run ${formatCliCommand("openclaw doctor")} to inspect session storage.`,
     );

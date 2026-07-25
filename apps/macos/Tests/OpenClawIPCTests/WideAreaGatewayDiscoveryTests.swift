@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import Testing
 @testable import OpenClawDiscovery
@@ -22,16 +21,7 @@ private final class NameserverQueryLog: @unchecked Sendable {
 
 @Suite(.serialized)
 struct WideAreaGatewayDiscoveryTests {
-    @Test func `discovers beacon from tailnet dns sd fallback`() {
-        let originalWideAreaDomain = getenv("OPENCLAW_WIDE_AREA_DOMAIN").map { String(cString: $0) }
-        setenv("OPENCLAW_WIDE_AREA_DOMAIN", "openclaw.internal", 1)
-        defer {
-            if let originalWideAreaDomain {
-                setenv("OPENCLAW_WIDE_AREA_DOMAIN", originalWideAreaDomain, 1)
-            } else {
-                unsetenv("OPENCLAW_WIDE_AREA_DOMAIN")
-            }
-        }
+    @Test func `discovers beacon from tailnet dns sd fallback`() async {
         let statusJson = """
         {
           "Self": { "TailscaleIPs": ["100.69.232.64"] },
@@ -61,9 +51,15 @@ struct WideAreaGatewayDiscoveryTests {
                 return ""
             })
 
-        let beacons = WideAreaGatewayDiscovery.discover(
-            timeoutSeconds: 2.0,
-            context: context)
+        // Env mutation must hold TestIsolationLock; raw setenv races parallel
+        // tests scanning environ (e.g. OPENCLAW_CONFIG_PATH readers).
+        let beacons = await TestIsolation.withEnvValues(
+            ["OPENCLAW_WIDE_AREA_DOMAIN": "openclaw.internal"])
+        {
+            WideAreaGatewayDiscovery.discover(
+                timeoutSeconds: 2.0,
+                context: context)
+        }
 
         #expect(beacons.count == 1)
         let beacon = beacons[0]
@@ -75,16 +71,7 @@ struct WideAreaGatewayDiscoveryTests {
         #expect(beacon.cliPath == "/Users/steipete/openclaw/src/entry.ts")
     }
 
-    @Test func `attacker peer cannot become nameserver`() {
-        let originalWideAreaDomain = getenv("OPENCLAW_WIDE_AREA_DOMAIN").map { String(cString: $0) }
-        setenv("OPENCLAW_WIDE_AREA_DOMAIN", "openclaw.internal", 1)
-        defer {
-            if let originalWideAreaDomain {
-                setenv("OPENCLAW_WIDE_AREA_DOMAIN", originalWideAreaDomain, 1)
-            } else {
-                unsetenv("OPENCLAW_WIDE_AREA_DOMAIN")
-            }
-        }
+    @Test func `attacker peer cannot become nameserver`() async {
         let statusJson = """
         {
           "Self": { "TailscaleIPs": ["100.64.0.1"] },
@@ -117,9 +104,13 @@ struct WideAreaGatewayDiscoveryTests {
                 return ""
             })
 
-        let beacons = WideAreaGatewayDiscovery.discover(
-            timeoutSeconds: 2.0,
-            context: context)
+        let beacons = await TestIsolation.withEnvValues(
+            ["OPENCLAW_WIDE_AREA_DOMAIN": "openclaw.internal"])
+        {
+            WideAreaGatewayDiscovery.discover(
+                timeoutSeconds: 2.0,
+                context: context)
+        }
 
         #expect(queriedNameservers.count(matching: "@100.64.0.2") == 0)
         #expect(queriedNameservers.count(matching: "@100.100.100.100") == 1)

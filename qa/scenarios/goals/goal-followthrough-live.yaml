@@ -1,0 +1,139 @@
+title: Active goal followthrough on bare continue
+
+scenario:
+  id: goal-followthrough-live
+  surface: goals
+  category: session-memory.context-engine
+  runtimePairLane: core
+  coverage:
+    primary:
+      - session-memory.goal-continuance-continuance
+    secondary:
+      - session-memory.goal-continuance-context-injection
+  objective: Verify a live model advances the next concrete step of an active multi-step goal on a later bare continue turn.
+  successCriteria:
+    - The first goal turn acknowledges the staged first step without creating the second-step artifact early.
+    - A later inbound message contains only `continue`.
+    - The continue turn creates the required artifact in the workspace instead of returning another plan.
+    - The continue turn does not ask for permission or approval before the feasible write.
+    - The final reply reports the completed artifact step.
+  docsRefs:
+    - docs/tools/goal.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/auto-reply/reply/inbound-meta.ts
+    - src/auto-reply/reply/commands-goal.ts
+    - src/agents/tools/goal-tools.ts
+  execution:
+    kind: flow
+    summary: Stage a two-step active goal, then require a bare continue turn to write the next artifact without replanning.
+    channel: qa-channel
+    config:
+      requiredProviderMode: live-frontier
+      conversationId: goal-followthrough-live
+      senderId: qa-goal-operator
+      artifactFilePrefix: goal-continuance-live
+      artifactText: Goal continuance advanced the concrete next step.
+      readyMarker: GOAL-CONTINUANCE-READY
+      doneMarker: GOAL-CONTINUANCE-DONE
+      forbiddenNeedles:
+        - need permission
+        - need your approval
+        - can you approve
+        - would you like me to
+        - next i would
+
+flow:
+  steps:
+    - name: advances the staged artifact step on bare continue
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: runSuffix
+          value:
+            expr: randomUUID().slice(0, 8)
+        - set: conversationId
+          value:
+            expr: "`${config.conversationId}-${runSuffix}`"
+        - set: artifactFile
+          value:
+            expr: "`${config.artifactFilePrefix}-${runSuffix}.txt`"
+        - set: artifactPath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, artifactFile)"
+        - set: firstOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text:
+              expr: "`/goal start Two-step goal. Step 1: reply exactly ${config.readyMarker} without creating ${artifactFile}. Step 2, only on a later bare continue turn: create ${artifactFile} containing exactly '${config.artifactText}', then reply with ${config.doneMarker}.`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: firstOutboundIndex
+            textIncludes:
+              ref: config.readyMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 90000)
+          saveAs: readyReply
+        - set: artifactBeforeContinue
+          value:
+            expr: "await fs.readFile(artifactPath, 'utf8').catch(() => undefined)"
+        - assert:
+            expr: "artifactBeforeContinue === undefined"
+            message:
+              expr: "`goal created the second-step artifact before continue: ${String(artifactBeforeContinue)}`"
+        - set: continueOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Goal Operator
+            text: continue
+        - call: waitForCondition
+          saveAs: artifact
+          args:
+            - lambda:
+                async: true
+                expr: "fs.readFile(artifactPath, 'utf8').then((value) => value.trim() === config.artifactText ? value : undefined).catch(() => undefined)"
+            - expr: liveTurnTimeoutMs(env, 90000)
+            - 250
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: continueOutboundIndex
+            textIncludes:
+              ref: config.doneMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 90000)
+          saveAs: doneReply
+        - assert:
+            expr: "!config.forbiddenNeedles.some((needle) => normalizeLowercaseStringOrEmpty(doneReply.text).includes(needle))"
+            message:
+              expr: "`goal followthrough replanned or asked permission: ${doneReply.text}`"
+      detailsExpr: "`ready=${readyReply.text}; done=${doneReply.text}; artifact=${artifact.trim()}`"

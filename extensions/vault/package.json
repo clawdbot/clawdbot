@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/vault",
+  "version": "2026.7.2",
+  "private": true,
+  "description": "HashiCorp Vault SecretRef provider integration for OpenClaw",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "build": {
+      "staticAssets": [
+        {
+          "source": "./vault-secret-ref-resolver.js",
+          "output": "vault-secret-ref-resolver.js"
+        },
+        {
+          "source": "./vault-secret-id.js",
+          "output": "vault-secret-id.js"
+        }
+      ]
+    }
+  }
+}

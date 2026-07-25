@@ -64,6 +64,9 @@ describe("createOpenAIRealtimeClientSecret", () => {
 
     expect(result.value).toBe("eph-secret-abc");
     expect(typeof result.expiresAt).toBe("number");
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
   });
 
   it("bounds oversized success response and cancels the stream", async () => {
@@ -96,5 +99,46 @@ describe("createOpenAIRealtimeClientSecret", () => {
     ).rejects.toThrow(/openai\.realtime-session/);
 
     expect(streamed.wasCanceled()).toBe(true);
+  });
+
+  it("creates transcription secrets through the current client-secrets endpoint", async () => {
+    guardedFetch(
+      new Response(JSON.stringify({ value: "ek-transcription", expires_at: 1_800_000_000 }), {
+        status: 200,
+      }),
+    );
+
+    await createOpenAIRealtimeTranscriptionClientSecret({
+      authToken: "sk-test",
+      auditContext: "test",
+      session: { type: "transcription" },
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/realtime/client_secrets",
+        timeoutMs: 30_000,
+        init: expect.objectContaining({
+          body: JSON.stringify({ session: { type: "transcription" } }),
+        }),
+      }),
+    );
+  });
+
+  it("replaces rejected transcription API-key details with bounded guidance", async () => {
+    guardedFetch(
+      new Response(JSON.stringify({ error: { message: "Incorrect API key provided: secret" } }), {
+        status: 401,
+      }),
+    );
+
+    await expect(
+      createOpenAIRealtimeTranscriptionClientSecret({
+        authToken: "sk-test",
+        auditContext: "test",
+        session: { type: "transcription" },
+        authRejectedMessage: "Update the transcription API key",
+      }),
+    ).rejects.toThrow("Update the transcription API key");
   });
 });
