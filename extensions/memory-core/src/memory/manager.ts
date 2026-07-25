@@ -655,20 +655,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     // Provider replacement must wait for the previous worker to exit; otherwise
     // repeated retries can accumulate local workers on constrained hosts.
-    const retirement = this.providerRetirementPromise.catch(() => {}).then(async () => {
-      let firstError: unknown;
-      for (const pendingProvider of this.providersPendingRetirement) {
-        try {
-          await pendingProvider.close?.();
-          this.providersPendingRetirement.delete(pendingProvider);
-        } catch (err) {
-          firstError ??= err;
+    const retirement = this.providerRetirementPromise
+      .catch(() => {})
+      .then(async () => {
+        let firstError: unknown;
+        for (const pendingProvider of this.providersPendingRetirement) {
+          try {
+            await pendingProvider.close?.();
+            this.providersPendingRetirement.delete(pendingProvider);
+          } catch (err) {
+            firstError ??= err;
+          }
         }
-      }
-      if (firstError) {
-        throw toLintErrorObject(firstError, "Embedding provider retirement failed");
-      }
-    });
+        if (firstError) {
+          throw toLintErrorObject(firstError, "Embedding provider retirement failed");
+        }
+      });
     this.providerRetirementPromise = retirement;
     void retirement.catch((err: unknown) => {
       log.warn(`memory embeddings: failed to close previous provider: ${formatErrorMessage(err)}`);

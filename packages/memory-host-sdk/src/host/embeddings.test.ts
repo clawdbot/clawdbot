@@ -710,7 +710,9 @@ process.on("message", (message) => {
       .toBe("started");
 
     controller.abort(new Error("cancelled"));
-    const queuedEmbedError = provider.embedQuery("queued after cancel").catch((err: unknown) => err);
+    const queuedEmbedError = provider
+      .embedQuery("queued after cancel")
+      .catch((err: unknown) => err);
     const closePromise = provider.close?.() ?? Promise.resolve();
     await expect(embedPromise).rejects.toThrow("cancelled");
     await expect(closePromise).resolves.toBeUndefined();
@@ -772,9 +774,12 @@ process.on("message", (message) => {
 
     await expect(provider.close?.()).resolves.toBeUndefined();
 
-    expect(warning).toHaveBeenCalledWith(expect.objectContaining({ message: "native disposal failed" }), {
-      code: "OPENCLAW_EMBEDDING_WORKER_CLOSE",
-    });
+    expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "native disposal failed" }),
+      {
+        code: "OPENCLAW_EMBEDDING_WORKER_CLOSE",
+      },
+    );
   });
 
   it("rejects pending and queued requests when closing a busy worker", async () => {
