@@ -114,6 +114,16 @@ describe("bundled plugin postinstall", () => {
         fileURLToPath(new URL("../../scripts/lib/package-dist-imports.mjs", import.meta.url)),
         path.join(scriptRoot, "lib", "package-dist-imports.mjs"),
       );
+      await fs.copyFile(
+        fileURLToPath(new URL("../../scripts/lib/guard-inventory-utils.mjs", import.meta.url)),
+        path.join(scriptRoot, "lib", "guard-inventory-utils.mjs"),
+      );
+      await fs.mkdir(path.join(packageRoot, "node_modules"), { recursive: true });
+      await fs.symlink(
+        fileURLToPath(new URL("../../node_modules/typescript", import.meta.url)),
+        path.join(packageRoot, "node_modules", "typescript"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
       for (const sentinel of sentinels) {
         await fs.mkdir(path.dirname(sentinel), { recursive: true });
         await fs.writeFile(sentinel, "owned by another Node application\n");
