@@ -43,6 +43,7 @@ let providerRuntimeActiveBatchCalls = 0;
 let providerRuntimeMaxActiveBatchCalls = 0;
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
+let providerCloseFailure: unknown = new Error("provider close failed");
 let providerCreationFailure: string | null = null;
 let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
@@ -169,7 +170,7 @@ vi.mock("./embeddings.js", () => {
             await providerCloseGate;
             if (providerCloseFailuresRemaining > 0) {
               providerCloseFailuresRemaining -= 1;
-              throw new Error("provider close failed");
+              throw providerCloseFailure;
             }
           },
           embedQuery: async (text: string) => embedText(text),
@@ -316,6 +317,7 @@ describe("memory index", () => {
     providerRuntimeMaxActiveBatchCalls = 0;
     providerCloseCalls = 0;
     providerCloseFailuresRemaining = 0;
+    providerCloseFailure = new Error("provider close failed");
     providerCreationFailure = null;
     providerCloseGate = null;
     providerInitGate = null;
@@ -1669,6 +1671,51 @@ describe("memory index", () => {
     const replacement = await replacementPromise;
     managersForCleanup.add(replacement);
     expect(replacement === first).toBe(false);
+  });
+
+  it("retains a failed global close owner until provider retirement succeeds", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    providerCloseFailuresRemaining = 2;
+    providerCloseFailure = undefined;
+
+    let globalCloseRejected = false;
+    await closeAllMemorySearchManagers().then(
+      () => {},
+      () => {
+        globalCloseRejected = true;
+      },
+    );
+    expect(globalCloseRejected).toBe(true);
+    expect(providerCloseCalls).toBe(2);
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const callsBeforeReplacement = providerCalls.length;
+    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
+    );
+    let concurrentGlobalClose: Promise<void> = Promise.resolve();
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(3));
+      expect(providerCalls).toHaveLength(callsBeforeReplacement);
+      concurrentGlobalClose = closeAllMemorySearchManagers();
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const replacement = await replacementPromise;
+    await concurrentGlobalClose;
+    managersForCleanup.add(replacement);
+    expect(replacement === first).toBe(false);
+    expect((replacement as unknown as { closed: boolean }).closed).toBe(false);
   });
 
   it("does not reuse memory index managers across local-service hosts", async () => {

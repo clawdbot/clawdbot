@@ -53,11 +53,7 @@ import {
 } from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
-import {
-  closeManagedCacheEntries,
-  getOrCreateManagedCacheEntry,
-  resolveSingletonManagedCache,
-} from "./manager-cache.js";
+import { getOrCreateManagedCacheEntry, resolveSingletonManagedCache } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
@@ -106,6 +102,7 @@ const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 const MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY = Symbol.for("openclaw.memoryIndexManagerScopeCloses");
+const MEMORY_INDEX_MANAGER_GLOBAL_CLOSE_KEY = Symbol.for("openclaw.memoryIndexManagerGlobalClose");
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
@@ -122,6 +119,10 @@ const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
 const INDEX_SCOPE_CLOSES = resolveGlobalSingleton<Map<string, Promise<void>>>(
   MEMORY_INDEX_MANAGER_SCOPE_CLOSES_KEY,
   () => new Map(),
+);
+const INDEX_GLOBAL_CLOSE = resolveGlobalSingleton<{ promise: Promise<void> | null }>(
+  MEMORY_INDEX_MANAGER_GLOBAL_CLOSE_KEY,
+  () => ({ promise: null }),
 );
 
 type EmbeddingProbeCacheEntry = {
@@ -175,13 +176,44 @@ const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   EMBEDDING_PROBE_CACHE.clear();
-  await closeManagedCacheEntries({
-    cache: INDEX_CACHE,
-    pending: INDEX_CACHE_PENDING,
-    onCloseError: (err) => {
-      log.warn(`failed to close memory index manager: ${String(err)}`);
-    },
-  });
+  const previousClose = INDEX_GLOBAL_CLOSE.promise ?? Promise.resolve();
+  const closePromise = previousClose
+    .catch(() => undefined)
+    .then(async () => {
+      const scopedCloses = Array.from(INDEX_SCOPE_CLOSES.values());
+      if (scopedCloses.length > 0) {
+        await Promise.allSettled(scopedCloses);
+      }
+      const pending = Array.from(INDEX_CACHE_PENDING.values());
+      if (pending.length > 0) {
+        await Promise.allSettled(pending);
+      }
+      const entries = Array.from(INDEX_CACHE.entries());
+      let firstError: unknown;
+      let closeFailed = false;
+      for (const [key, manager] of entries) {
+        try {
+          await manager.close();
+          if (INDEX_CACHE.get(key) === manager) {
+            INDEX_CACHE.delete(key);
+          }
+        } catch (err) {
+          if (!closeFailed) {
+            firstError = err;
+          }
+          closeFailed = true;
+          log.warn(`failed to close memory index manager: ${String(err)}`);
+        }
+      }
+      if (closeFailed) {
+        throw firstError;
+      }
+    });
+  INDEX_GLOBAL_CLOSE.promise = closePromise;
+  await closePromise;
+  if (INDEX_GLOBAL_CLOSE.promise === closePromise) {
+    INDEX_GLOBAL_CLOSE.promise = null;
+  }
 }
 
 export async function closeMemoryIndexManagersForAgent(params: {
@@ -306,6 +338,7 @@ async function closeMemoryIndexManagersForScope(params: {
       }
       const entries = Array.from(INDEX_CACHE.entries()).filter(([key]) => isScopedKey(key));
       let firstError: unknown;
+      let closeFailed = false;
       for (const [key, manager] of entries) {
         try {
           await manager.close();
@@ -313,13 +346,16 @@ async function closeMemoryIndexManagersForScope(params: {
             INDEX_CACHE.delete(key);
           }
         } catch (err) {
-          firstError ??= err;
+          if (!closeFailed) {
+            firstError = err;
+          }
+          closeFailed = true;
           log.warn(
             `failed to close memory index manager for agent ${params.agentId}: ${String(err)}`,
           );
         }
       }
-      if (firstError) {
+      if (closeFailed) {
         throw firstError;
       }
     });
@@ -435,6 +471,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     purpose?: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
+    while (INDEX_GLOBAL_CLOSE.promise) {
+      const pendingGlobalClose = INDEX_GLOBAL_CLOSE.promise;
+      try {
+        await pendingGlobalClose;
+      } catch {
+        if (INDEX_GLOBAL_CLOSE.promise === pendingGlobalClose) {
+          await closeAllMemoryIndexManagers();
+        }
+      }
+    }
     const { cfg, agentId } = params;
     const settings = resolveMemorySearchConfig(cfg, agentId);
     if (!settings) {
@@ -699,15 +745,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       .catch(() => {})
       .then(async () => {
         let firstError: unknown;
+        let closeFailed = false;
         for (const pendingProvider of this.providersPendingRetirement) {
           try {
             await pendingProvider.close?.();
             this.providersPendingRetirement.delete(pendingProvider);
           } catch (err) {
-            firstError ??= err;
+            if (!closeFailed) {
+              firstError = err;
+            }
+            closeFailed = true;
           }
         }
-        if (firstError) {
+        if (closeFailed) {
           throw toLintErrorObject(firstError, "Embedding provider retirement failed");
         }
       });
