@@ -77,6 +77,45 @@ export const SessionsObserverVisibilityResultSchema = closedObject({
   ok: Type.Literal(true),
 });
 
+/** One bounded question/answer exchange in the ephemeral session companion. */
+export const SessionCompanionExchangeSchema = closedObject({
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  ts: Type.Integer({ minimum: 0 }),
+});
+
+/** Asks the read-only companion about one session and its workspace. */
+export const SessionsCompanionAskParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+});
+
+/** Companion answer returned only to the requesting operator. */
+export const SessionsCompanionAskResultSchema = closedObject({
+  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  ts: Type.Integer({ minimum: 0 }),
+});
+
+/** Selects the in-memory companion thread for one session. */
+export const SessionsCompanionStateParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+});
+
+/** Current bounded exchanges for one session companion thread. */
+export const SessionsCompanionStateResultSchema = closedObject({
+  exchanges: Type.Array(SessionCompanionExchangeSchema, { maxItems: 24 }),
+});
+
+/** Selects the in-memory companion thread to clear. */
+export const SessionsCompanionResetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+});
+
+/** Acknowledges clearing one companion thread. */
+export const SessionsCompanionResetResultSchema = closedObject({
+  ok: Type.Literal(true),
+});
+
 /**
  * Session protocol schemas.
  *
@@ -774,6 +813,13 @@ export type SessionsObserverVisibilityParams = Static<
 export type SessionsObserverVisibilityResult = Static<
   typeof SessionsObserverVisibilityResultSchema
 >;
+export type SessionCompanionExchange = Static<typeof SessionCompanionExchangeSchema>;
+export type SessionsCompanionAskParams = Static<typeof SessionsCompanionAskParamsSchema>;
+export type SessionsCompanionAskResult = Static<typeof SessionsCompanionAskResultSchema>;
+export type SessionsCompanionStateParams = Static<typeof SessionsCompanionStateParamsSchema>;
+export type SessionsCompanionStateResult = Static<typeof SessionsCompanionStateResultSchema>;
+export type SessionsCompanionResetParams = Static<typeof SessionsCompanionResetParamsSchema>;
+export type SessionsCompanionResetResult = Static<typeof SessionsCompanionResetResultSchema>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;
