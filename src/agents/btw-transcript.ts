@@ -109,16 +109,23 @@ export async function readBtwTranscriptMessages(params: {
 }): Promise<unknown[]> {
   try {
     const marker = parseSqliteSessionFileMarker(params.sessionFile);
-    const agentId = params.agentId ?? marker?.agentId;
-    const sessionId = marker?.sessionId ?? params.sessionId;
-    const storePath = params.storePath ?? marker?.storePath;
-    const markerMatches = marker
-      ? listSessionEntries({
-          agentId: marker.agentId,
-          readOnly: true,
-          storePath: marker.storePath,
-        }).filter(({ entry }) => entry.sessionId === marker.sessionId)
-      : [];
+    const completeTarget = Boolean(
+      params.agentId?.trim() &&
+      params.sessionId.trim() &&
+      params.sessionKey?.trim() &&
+      params.storePath?.trim(),
+    );
+    const agentId = completeTarget ? params.agentId : (params.agentId ?? marker?.agentId);
+    const sessionId = completeTarget ? params.sessionId : (marker?.sessionId ?? params.sessionId);
+    const storePath = completeTarget ? params.storePath : (params.storePath ?? marker?.storePath);
+    const markerMatches =
+      marker && !completeTarget
+        ? listSessionEntries({
+            agentId: marker.agentId,
+            readOnly: true,
+            storePath: marker.storePath,
+          }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+        : [];
     const sessionKey =
       params.sessionKey ?? (markerMatches.length === 1 ? markerMatches[0]?.sessionKey : undefined);
     if (!sessionKey || !storePath) {

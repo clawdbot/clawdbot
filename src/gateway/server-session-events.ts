@@ -184,7 +184,9 @@ async function handleTranscriptUpdateBroadcast(
     update.target &&
     !completeTarget &&
     ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
-      (targetSessionId && targetSessionId !== legacyMarker.sessionId) ||
+      (targetSessionId &&
+        targetSessionId !== legacyMarker.sessionId &&
+        targetKeyEntry?.sessionId !== legacyMarker.sessionId) ||
       (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
       (targetSessionKey && targetKeyEntry?.sessionId !== legacyMarker.sessionId) ||
       (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))

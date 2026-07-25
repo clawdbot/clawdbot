@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   buildMemoryPromptSection,
   getActivePreparedMemoryPromptSection,
@@ -42,8 +43,46 @@ function buildCompactionResultSessionTarget(params: {
   const completeTarget = Boolean(
     targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
   );
+  const candidateSessionKey = targetSessionKey ?? suppliedSessionKey;
+  const candidateEntry =
+    marker && !completeTarget && candidateSessionKey
+      ? loadSessionEntry({
+          agentId: marker.agentId,
+          sessionKey: candidateSessionKey,
+          storePath: marker.storePath,
+        })
+      : undefined;
+  const markerMatches =
+    marker && !completeTarget
+      ? listSessionEntries({
+          agentId: marker.agentId,
+          readOnly: true,
+          storePath: marker.storePath,
+        }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+      : [];
+  const markerSessionKey = marker
+    ? candidateEntry?.sessionId === marker.sessionId
+      ? candidateSessionKey
+      : markerMatches.length === 1
+        ? markerMatches[0]?.sessionKey
+        : markerMatches.length === 0
+          ? candidateSessionKey
+          : undefined
+    : undefined;
   if (!completeTarget && sessionFile && !marker) {
     throw new Error("Legacy context-engine file successors are unsupported");
+  }
+  if (marker && !completeTarget && !markerSessionKey) {
+    throw new Error("Legacy context-engine successor identity is ambiguous");
+  }
+  if (
+    marker &&
+    !completeTarget &&
+    candidateSessionKey &&
+    markerMatches.length > 0 &&
+    candidateEntry?.sessionId !== marker.sessionId
+  ) {
+    throw new Error("Legacy context-engine successor session key is inconsistent");
   }
   if (
     marker &&
@@ -60,8 +99,12 @@ function buildCompactionResultSessionTarget(params: {
   if (!sessionId) {
     return undefined;
   }
-  const agentId = targetAgentId ?? suppliedAgentId ?? marker?.agentId;
-  const sessionKey = targetSessionKey ?? suppliedSessionKey;
+  const agentId = targetAgentId ?? marker?.agentId ?? suppliedAgentId;
+  const sessionKey = completeTarget
+    ? targetSessionKey
+    : marker
+      ? markerSessionKey
+      : (targetSessionKey ?? suppliedSessionKey);
   const storePath = targetStorePath ?? marker?.storePath;
   return {
     ...(agentId ? { agentId } : {}),

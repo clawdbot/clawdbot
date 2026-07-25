@@ -981,7 +981,11 @@ export async function runPreflightCompactionIfNeeded(params: {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
     }
-    const compactionSessionKey = params.sessionKey;
+    const compactionSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+    if (!compactionSessionKey) {
+      await notifyTerminalCompaction("skipped");
+      return entry ?? params.sessionEntry;
+    }
     const compactionAgentId =
       resolveAgentIdFromSessionKey(compactionSessionKey) ??
       params.followupRun.run.agentId ??
@@ -1536,7 +1540,10 @@ export async function runMemoryFlushIfNeeded(params: {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
           params.replyOperation.updateSessionId(updatedEntry.sessionId);
-          params.followupRun.run.sessionFile = params.sessionKey;
+          const refreshedSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+          if (refreshedSessionKey) {
+            params.followupRun.run.sessionFile = refreshedSessionKey;
+          }
         }
       } catch (err) {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);

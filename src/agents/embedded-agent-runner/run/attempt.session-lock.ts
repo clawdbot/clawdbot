@@ -125,6 +125,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     publishValidatedSessionFileSnapshot: () => false,
     readTrustedCurrentSessionFileSnapshot: async () => undefined,
     releaseForPrompt: async () => {
+      await serializeLifecycle(() => {});
       promptReleased = true;
       promptSettled = new Promise<void>((resolve) => {
         settlePrompt = resolve;

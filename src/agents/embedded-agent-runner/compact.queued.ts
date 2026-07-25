@@ -5,7 +5,7 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../config/sessions/legacy-sqlite-marker.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -721,12 +721,37 @@ async function compactResolvedContextEngine(
           const keyedSessionId = delegatedSessionFile.startsWith("agent:")
             ? (delegatedSessionId ?? keyedEntry?.sessionId)
             : undefined;
-          const legacyTarget = marker
-            ? {
-                ...marker,
-                sessionId: marker.sessionId,
+          const retainedMarkerEntry = marker
+            ? loadSessionEntry({
+                agentId: marker.agentId,
                 sessionKey: runtimeTarget.sessionKey,
-              }
+                storePath: marker.storePath,
+              })
+            : undefined;
+          const markerMatches = marker
+            ? listSessionEntries({
+                agentId: marker.agentId,
+                readOnly: true,
+                storePath: marker.storePath,
+              }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+            : [];
+          const markerSessionKey = marker
+            ? retainedMarkerEntry?.sessionId === marker.sessionId
+              ? runtimeTarget.sessionKey
+              : markerMatches.length === 1
+                ? markerMatches[0]?.sessionKey
+                : markerMatches.length === 0
+                  ? runtimeTarget.sessionKey
+                  : undefined
+            : undefined;
+          const legacyTarget = marker
+            ? markerSessionKey
+              ? {
+                  ...marker,
+                  sessionId: marker.sessionId,
+                  sessionKey: markerSessionKey,
+                }
+              : undefined
             : keyedSessionId
               ? {
                   ...runtimeTarget,

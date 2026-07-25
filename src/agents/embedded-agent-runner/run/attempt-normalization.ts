@@ -2,7 +2,7 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { listSessionEntries, loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
@@ -65,17 +65,38 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
   if (sessionFileUsed && sessionFileChanged) {
     const marker = parseSqliteSessionFileMarker(sessionFileUsed);
     if (marker) {
+      const retainedSessionKey = sessionPromptState.sessionTarget?.sessionKey;
+      const retainedEntry = retainedSessionKey
+        ? loadSessionEntry({
+            agentId: marker.agentId,
+            sessionKey: retainedSessionKey,
+            storePath: marker.storePath,
+          })
+        : undefined;
+      const markerMatches = listSessionEntries({
+        agentId: marker.agentId,
+        readOnly: true,
+        storePath: marker.storePath,
+      }).filter(({ entry }) => entry.sessionId === marker.sessionId);
+      const successorSessionKey =
+        retainedEntry?.sessionId === marker.sessionId
+          ? retainedSessionKey
+          : markerMatches.length === 1
+            ? markerMatches[0]?.sessionKey
+            : markerMatches.length === 0
+              ? retainedSessionKey
+              : undefined;
       if (
         (marker.sessionId !== sessionIdUsed && sessionIdUsed !== previousSessionId) ||
-        !sessionPromptState.sessionTarget?.sessionKey ||
-        marker.agentId !== sessionPromptState.sessionTarget.agentId
+        !successorSessionKey ||
+        marker.agentId !== sessionPromptState.sessionTarget?.agentId
       ) {
         throw new Error("Legacy context-engine successor identity is inconsistent");
       }
       adoptedSessionId = marker.sessionId;
       nextSessionTarget = {
         ...marker,
-        sessionKey: sessionPromptState.sessionTarget.sessionKey,
+        sessionKey: successorSessionKey,
       };
     } else if (
       sessionFileUsed.startsWith("agent:") &&
