@@ -16,6 +16,8 @@ tags: [pipeline, ship, pull, promote, telegram, bugbot]
 **Primary clock:** Lisa Option A — `agents/ship-pull-clock.md` (cron → Cursor ACP). Cursor Automations are backup only.  
 **Channel:** Telegram only for these lines and Main Approve prompts.
 
+**Wave names** use local hour labels: Ship 06, Pull 08, Ship 16, Pull 18 (not A/B; not `Ship 06:00`).
+
 ## Status file
 
 Prefer reading:
@@ -26,14 +28,12 @@ If missing, treat checkpoints as unknown and do **not** invent Clear. You may wr
 
 ## One-line contract (hard)
 
-Heartbeat / digest pipeline lines must be **exactly** one of these shapes — no lists, no links, no extra words.
+Heartbeat / digest pipeline lines must be **exactly** one of these shapes — no lists, no links, no extra words:
 
-User-facing labels use **clock times** (Asia/Taipei), not Ship A/B or Pull A/B:
-
-- `Ship 06:00: Clear` / `Ship 06:00: Issues`
-- `Pull 08:00: Clear` / `Pull 08:00: Issues`
-- `Ship 16:00: Clear` / `Ship 16:00: Issues`
-- `Pull 18:00: Clear` / `Pull 18:00: Issues`
+- `Ship 06: Clear` / `Ship 06: Issues`
+- `Pull 08: Clear` / `Pull 08: Issues`
+- `Ship 16: Clear` / `Ship 16: Issues`
+- `Pull 18: Clear` / `Pull 18: Issues`
 - `Staging promote (Tue): Clear` / `Staging promote (Tue): Issues`
 - `Staging promote (Fri): Clear` / `Staging promote (Fri): Issues`
 - `Main ready (Mon): Clear` / `Main ready (Mon): Issues`
@@ -42,15 +42,15 @@ Details only when Carlos asks.
 
 ## Calendar (Asia/Taipei)
 
-| Event (user-facing) | Time          | Lisa action                                                |
-| ------------------- | ------------- | ---------------------------------------------------------- |
-| Ship 06:00          | 06:00         | Cron `lisa-ship-a` → ACP shipper; then reflect status line |
-| Pull 08:00          | 08:00         | Cron `lisa-pull-a` → ACP puller; then reflect status line  |
-| Ship 16:00          | 16:00         | Cron `lisa-ship-b` → ACP shipper; then reflect status line |
-| Pull 18:00          | 18:00         | Cron `lisa-pull-b` → ACP puller; then reflect status line  |
-| Staging             | Tue/Fri 08:00 | Reflect staging promote line                               |
-| Main package        | Mon 08:00     | `Main ready (Mon): Clear` or `Issues`                      |
-| Main Approve        | Mon ~08:30    | Ask Carlos on Telegram to Approve; on yes, dispatch merge  |
+| Event        | Time          | Lisa action                                                 |
+| ------------ | ------------- | ----------------------------------------------------------- |
+| Ship 06      | 06:00         | Cron `lisa-ship-06` → ACP shipper; then reflect status line |
+| Pull 08      | 08:00         | Cron `lisa-pull-08` → ACP puller; then reflect status line  |
+| Ship 16      | 16:00         | Cron `lisa-ship-16` → ACP shipper; then reflect status line |
+| Pull 18      | 18:00         | Cron `lisa-pull-18` → ACP puller; then reflect status line  |
+| Staging      | Tue/Fri 08:00 | Reflect staging promote line                                |
+| Main package | Mon 08:00     | `Main ready (Mon): Clear` or `Issues`                       |
+| Main Approve | Mon ~08:30    | Ask Carlos on Telegram to Approve; on yes, dispatch merge   |
 
 Full ship/pull spawn prompts and repo order: `agents/ship-pull-clock.md`. Mini must be awake.
 

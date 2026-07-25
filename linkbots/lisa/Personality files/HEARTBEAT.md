@@ -52,9 +52,9 @@ Quiet hours (`user/schedule.md`, 23:00–07:00) suppress only non-urgent proacti
 
 ## Pipeline checkpoints (Ship / Pull / Promote)
 
-**Primary clock:** Lisa Option A — crons `lisa-ship-a` / `lisa-pull-a` / `lisa-ship-b` / `lisa-pull-b` spawn Cursor ACP (see `agents/ship-pull-clock.md`). Mini must be awake. Cursor Automations are backup only.
+**Primary clock:** Lisa Option A — crons `lisa-ship-06` / `lisa-pull-08` / `lisa-ship-16` / `lisa-pull-18` spawn Cursor ACP (see `agents/ship-pull-clock.md`). Mini must be awake. Cursor Automations are backup only.
 
-When this cycle’s wall-clock is near or after a checkpoint (06:00 Ship 06:00, 08:00 Pull 08:00, 16:00 Ship 16:00, 18:00 Pull 18:00, Tue/Fri 08:00 staging, Mon 08:00 main package), `read` `memory/pipeline-status.md` if present and include **section D** below. Full procedure: `agents/pipeline-status.md`. One line per checkpoint only — no lists/links. If the file is missing, omit section D rather than inventing Clear. Also verify the four ship/pull cron jobs are enabled when listing cron health.
+When this cycle’s wall-clock is near or after a checkpoint (06:00 Ship 06, 08:00 Pull 08, 16:00 Ship 16, 18:00 Pull 18, Tue/Fri 08:00 staging, Mon 08:00 main package), `read` `memory/pipeline-status.md` if present and include **section D** below. Full procedure: `agents/pipeline-status.md`. One line per checkpoint only — no lists/links. If the file is missing, omit section D rather than inventing Clear. Also verify the four ship/pull cron jobs are enabled when listing cron health.
 
 Monday ~08:30: if `Main ready (Mon): Clear`, ask Carlos on Telegram whether to Approve `staging`→`main` (see `agents/pipeline-status.md`).
 
