@@ -326,7 +326,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("uses broker-owned capabilities when Codex OAuth is the browser fallback", () => {
     const broker = {
       capabilities: {
-        transports: ["webrtc"] as const,
+        transports: ["webrtc" as const],
         handlesAgentConsult: true,
         supportsToolCalls: false,
         supportsVideoFrames: false,
@@ -360,7 +360,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("discovers the optional Codex OAuth runtime without a Plugin SDK registrar", () => {
     const broker = {
       capabilities: {
-        transports: ["webrtc"] as const,
+        transports: ["webrtc" as const],
         handlesAgentConsult: true,
         supportsToolCalls: false,
         supportsVideoFrames: false,

@@ -181,9 +181,9 @@ describe("Codex OAuth realtime browser session", () => {
       getPluginConfig: () => ({}),
     });
 
-    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(false);
+    expect(realtime.broker.isConfigured()).toBe(false);
     await realtime.warmup();
-    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(true);
+    expect(realtime.broker.isConfigured()).toBe(true);
     expect(sharedClientMocks.getSharedClient).toHaveBeenCalledWith(
       expect.objectContaining({ authRequirement: "subscription" }),
     );
@@ -201,7 +201,7 @@ describe("Codex OAuth realtime browser session", () => {
     });
 
     await expect(realtime.warmup()).rejects.toThrow("ChatGPT login required");
-    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(false);
+    expect(realtime.broker.isConfigured()).toBe(false);
     sharedClientMocks.getSharedClient.mockRejectedValueOnce(new Error("ChatGPT login required"));
     await expect(realtime.broker.createBrowserSession({ providerConfig: {} })).rejects.toThrow(
       "ChatGPT login required",
@@ -209,9 +209,9 @@ describe("Codex OAuth realtime browser session", () => {
 
     useFakeClient(fake);
     now.mockReturnValue(11_000);
-    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(false);
+    expect(realtime.broker.isConfigured()).toBe(false);
     await vi.waitFor(() => {
-      expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(true);
+      expect(realtime.broker.isConfigured()).toBe(true);
     });
     await Promise.all(
       Array.from({ length: 8 }, () => realtime.broker.createBrowserSession({ providerConfig: {} })),
@@ -242,7 +242,7 @@ describe("Codex OAuth realtime browser session", () => {
       first.emitClose();
 
       await vi.waitFor(() => {
-        expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(true);
+        expect(realtime.broker.isConfigured()).toBe(true);
         expect(sharedClientMocks.releaseClient).toHaveBeenCalledWith(first.client);
       });
       await expect(
