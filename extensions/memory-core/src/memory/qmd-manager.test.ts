@@ -6105,6 +6105,80 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses index record after index recovery, not stale hint-only cache", async () => {
+    const searchDocid = "recovered-doc-after-empty-index";
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              docid: searchDocid,
+              file: "qmd://workspace-main/notes/welcome.md",
+              score: 0.91,
+              snippet: "@@ -3,1\nQMD activation",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: {
+        prepare: () => { all: (arg: unknown) => unknown[] };
+        close: () => void;
+      } | null;
+    };
+
+    // 第一次搜索：索引为空，使用 QMD 文件提示回退
+    inner.db = {
+      prepare: () => ({
+        all: () => [],
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("QMD activation", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.91,
+        snippet: "@@ -3,1\nQMD activation",
+        source: "memory",
+      },
+    ]);
+
+    // 第二次搜索：索引恢复后，应该使用索引中的记录而不是缓存的回退位置
+    inner.db = {
+      prepare: () => ({
+        all: () => [{ collection: "workspace-main", path: "indexed/path.md" }],
+      }),
+      close: () => {},
+    };
+
+    await expect(
+      manager.search("QMD activation", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "indexed/path.md",
+        startLine: 3,
+        endLine: 3,
+        score: 0.91,
+        snippet: "@@ -3,1\nQMD activation",
+        source: "memory",
+      },
+    ]);
+    await manager.close();
+  });
+
   it("throws when stdout is empty without the no-results marker", async () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "query") {

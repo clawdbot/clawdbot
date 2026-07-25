@@ -91,15 +91,16 @@ export class QmdDocumentResolver {
       }
       throw err;
     }
-    // QMD hits can include both docid and file; keep the file hint usable when
-    // OpenClaw's local hash lookup is stale or missing so valid hits survive.
-    const location =
-      (rows.length > 0 ? this.pickDocLocation(rows, normalizedHints) : null) ??
-      this.resolveDocLocationFromHints(normalizedHints);
-    if (location) {
-      this.docPathCache.set(cacheKey, location);
+    if (rows.length > 0) {
+      const dbLocation = this.pickDocLocation(rows, normalizedHints);
+      if (dbLocation) {
+        this.docPathCache.set(cacheKey, dbLocation);
+        return dbLocation;
+      }
     }
-    return location;
+    // 当索引查询无结果或无匹配时，使用 QMD 文件提示回退
+    // 不要缓存 hint-derived 位置，以便索引恢复时可以重新建立权威路径
+    return this.resolveDocLocationFromHints(normalizedHints);
   }
 
   normalizeDocHints(hints?: QmdDocHints): QmdDocHints {
