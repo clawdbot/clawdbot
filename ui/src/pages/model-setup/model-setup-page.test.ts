@@ -39,8 +39,9 @@ const detection: SystemAgentSetupDetectResult = {
   setupComplete: false,
 };
 
-function createContext(): { context: ApplicationContext; client: GatewayBrowserClient } {
-  const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+function createContext() {
+  const request = vi.fn<GatewayBrowserClient["request"]>();
+  const client = { request } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
     phase: "connected",
@@ -76,6 +77,7 @@ function createContext(): { context: ApplicationContext; client: GatewayBrowserC
   } as unknown as ApplicationGateway;
   return {
     client,
+    request,
     context: {
       gateway,
       basePath: "/openclaw",
@@ -228,8 +230,7 @@ describe("ModelSetupPage catalog icons", () => {
   });
 
   it("starts a prepare wizard from the download affordance", async () => {
-    const { context, client } = createContext();
-    const request = vi.mocked(client.request);
+    const { context, client, request } = createContext();
     request.mockImplementation(async (method: string) => {
       if (method === "openclaw.setup.prepare.start") {
         return { sessionId: "prepare-session", done: false, status: "running" };

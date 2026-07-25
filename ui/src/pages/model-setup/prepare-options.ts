@@ -43,6 +43,6 @@ export function listModelSetupPrepareOptions(
     )
     .map((choice) => {
       const wire = presented.find((entry) => entry.id === choice.id);
-      return wire ? { ...choice, ...wire, id: choice.id } : choice;
+      return wire ? Object.assign({}, choice, wire, { id: choice.id }) : choice;
     });
 }
