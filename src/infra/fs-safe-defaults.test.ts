@@ -56,4 +56,12 @@ describe("fs-safe defaults", () => {
 
     expect(configureFsSafeNative).not.toHaveBeenCalled();
   });
+
+  it("does not treat a retired interpreter path as a native mode override", async () => {
+    process.env.OPENCLAW_FS_SAFE_PYTHON = "/usr/bin/python3";
+
+    await importDefaults();
+
+    expect(configureFsSafeNative).toHaveBeenCalledWith({ mode: "off" });
+  });
 });

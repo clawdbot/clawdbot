@@ -256,6 +256,9 @@ async function shouldReclaimGatewayLock(params: {
   if (ownerStatus === "alive") {
     return false;
   }
+  if (ownerStatus === "unknown" && ownerPid) {
+    return false;
+  }
   if (params.payload?.createdAt) {
     const createdAt = Date.parse(params.payload.createdAt);
     if (Number.isFinite(createdAt) && params.now() - createdAt > params.staleMs) {

@@ -8,10 +8,6 @@ const hasModeOverride = [
   "OPENCLAW_FS_SAFE_NATIVE_MODE",
   "FS_SAFE_PYTHON_MODE",
   "OPENCLAW_FS_SAFE_PYTHON_MODE",
-  "FS_SAFE_PYTHON",
-  "OPENCLAW_FS_SAFE_PYTHON",
-  "OPENCLAW_PINNED_PYTHON",
-  "OPENCLAW_PINNED_WRITE_PYTHON",
 ].some((key) => process.env[key] != null);
 
 if (!hasModeOverride) {

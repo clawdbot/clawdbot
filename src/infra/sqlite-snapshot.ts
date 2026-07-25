@@ -492,6 +492,9 @@ export async function publishVerifiedSqliteFile(
         );
       }
     }
+    if (!publishedIdentity) {
+      throw new Error(`SQLite snapshot target was not published: ${options.targetPath}`);
+    }
     const initialPublishedIdentity = publishedIdentity;
     target ??= await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);

@@ -746,7 +746,7 @@ describe("gateway lock", () => {
     }
   });
 
-  it("ages out an old maintenance owner with unreadable process identity", async () => {
+  it("keeps an old maintenance owner when its live identity is unreadable", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
@@ -765,13 +765,14 @@ describe("gateway lock", () => {
     const spy = createEaccesProcStatSpy();
 
     try {
-      const lock = await acquireForTest(env, {
-        platform: "linux",
-        readProcessCmdline: () => null,
-        staleMs: 0,
-        timeoutMs: 80,
-      });
-      await expectGatewayLock(lock).release();
+      await expect(
+        acquireForTest(env, {
+          platform: "linux",
+          readProcessCmdline: () => null,
+          staleMs: 0,
+          timeoutMs: 80,
+        }),
+      ).rejects.toBeInstanceOf(GatewayLockError);
     } finally {
       spy.mockRestore();
     }
