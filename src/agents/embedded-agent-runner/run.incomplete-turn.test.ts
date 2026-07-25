@@ -4920,6 +4920,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         timedOut: true,
         timedOutByRunBudget: true,
         timedOutDuringToolExecution: true,
+        lastToolError: { toolName: "exec", error: "command aborted", meta: "sleep 30" },
       }),
     );
 
@@ -4928,6 +4929,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-tool-exec-timeout-notice",
+      config: { messages: { suppressToolErrors: true } } as OpenClawConfig,
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
@@ -4944,6 +4946,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         timedOut: true,
         timedOutByRunBudget: true,
         timedOutDuringToolExecution: true,
+        lastToolError: { toolName: "exec", error: "command aborted", meta: "sleep 30" },
       }),
     );
 
@@ -4953,6 +4956,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       model: "gpt-5.5",
       runId: "run-tool-exec-timeout-silent-context",
       allowEmptyAssistantReplyAsSilent: true,
+      config: { messages: { suppressToolErrors: true } } as OpenClawConfig,
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);

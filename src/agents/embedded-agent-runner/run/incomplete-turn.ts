@@ -260,6 +260,12 @@ export function resolveIncompleteTurnPayloadText(params: {
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
   const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  // payloadCount, not lastToolError, proves whether error policy exposed the failure.
+  // Keep every other delivery/continuation state as a reason not to double-notify.
+  const hasTimeoutTerminalOutput = hasAttemptTerminalState({
+    ...params.attempt,
+    lastToolError: undefined,
+  });
   // Timeout phase and interruption precedence belong to the canonical attempt terminal.
   // Only its tool-execution timeout may become an incomplete-turn payload here.
   if (
@@ -267,7 +273,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     terminal.timedOutDuringToolExecution &&
     params.payloadCount === 0 &&
     params.allowEmptyAssistantReplyAsSilent !== true &&
-    !hasTerminalOutput
+    !hasTimeoutTerminalOutput
   ) {
     return TURN_BUDGET_TIMEOUT_NOTICE;
   }
