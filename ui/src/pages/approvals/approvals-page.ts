@@ -11,18 +11,13 @@ import type {
   ApprovalTerminalReason,
   TerminalApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsPage } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { AsyncGatewayScopeController } from "../../lit/async-gateway-scope-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -122,78 +117,36 @@ class ApprovalsPage extends OpenClawLightDomElement {
   @state() private loading = false;
   @state() private loadingMore = false;
   @state() private error: string | null = null;
-  @state() private connected = false;
-
-  private client: GatewayBrowserClient | null = null;
-  private gatewaySource: ApplicationContext["gateway"] | null = null;
-  private requestGeneration = 0;
   private hasLoaded = false;
-  private readonly subscriptions = new SubscriptionsController(this).effect(
+  private readonly gatewayScope = new AsyncGatewayScopeController(
+    this,
     () => this.context?.gateway,
-    (gateway) => {
-      // A new gateway identity (even with the same client/connection) is a fresh
-      // data source: invalidate in-flight requests and drop the previous
-      // gateway's rows/cursor/error so stale history is not shown and "Load more"
-      // cannot append across sources. Mirrors the client-change reset below.
-      if (this.gatewaySource !== gateway) {
-        this.requestGeneration += 1;
-        this.loading = false;
-        this.loadingMore = false;
-        this.hasLoaded = false;
+    (snapshot, { clientChanged, connectionChanged }) => {
+      if (clientChanged) {
         this.items = [];
         this.nextCursor = null;
         this.error = null;
-      }
-      this.gatewaySource = gateway;
-      this.applyGatewaySnapshot(gateway.snapshot);
-      return gateway.subscribe((snapshot) => {
-        if (this.gatewaySource === gateway && this.context.gateway === gateway) {
-          this.applyGatewaySnapshot(snapshot);
+        this.hasLoaded = false;
+        this.loading = false;
+        this.loadingMore = false;
+      } else if (connectionChanged) {
+        this.loading = false;
+        this.loadingMore = false;
+        if (snapshot.phase === "connected") {
+          this.hasLoaded = false;
         }
-      });
+      }
+      if (snapshot.phase === "connected" && snapshot.client && !this.hasLoaded && !this.loading) {
+        void this.loadPage(true);
+      }
     },
   );
 
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    this.requestGeneration += 1;
-    this.gatewaySource = null;
-    super.disconnectedCallback();
-  }
-
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
-    this.connected = snapshot.phase === "connected";
-    if (clientChanged) {
-      this.client = snapshot.client;
-      this.requestGeneration += 1;
-      this.items = [];
-      this.nextCursor = null;
-      this.error = null;
-      this.hasLoaded = false;
-      this.loading = false;
-      this.loadingMore = false;
-    } else if (connectionChanged) {
-      this.requestGeneration += 1;
-      this.loading = false;
-      this.loadingMore = false;
-      if (snapshot.phase === "connected") {
-        this.hasLoaded = false;
-      }
-    }
-    if (snapshot.phase === "connected" && snapshot.client && !this.hasLoaded && !this.loading) {
-      void this.loadPage(true);
-    }
-  }
-
   private async loadPage(reset: boolean): Promise<void> {
-    const client = this.client;
-    const gateway = this.gatewaySource;
-    if (!client || !gateway || !this.connected || this.loading || this.loadingMore) {
+    const scope = this.gatewayScope.capture();
+    if (!scope || this.loading || this.loadingMore) {
       return;
     }
-    const generation = this.requestGeneration;
     const cursor = reset ? undefined : (this.nextCursor ?? undefined);
     if (!reset && !cursor) {
       return;
@@ -204,16 +157,9 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.loadingMore = true;
     }
     this.error = null;
-    const isCurrent = () =>
-      this.isConnected &&
-      this.connected &&
-      this.gatewaySource === gateway &&
-      this.context.gateway === gateway &&
-      gateway.snapshot.phase === "connected" &&
-      this.client === client &&
-      this.requestGeneration === generation;
+    const isCurrent = () => this.gatewayScope.isCurrent(scope);
     try {
-      const result = await client.request<ApprovalHistoryResult>("approval.history", {
+      const result = await scope.client.request<ApprovalHistoryResult>("approval.history", {
         ...(cursor ? { cursor } : {}),
         limit: APPROVAL_HISTORY_PAGE_SIZE,
       });
@@ -309,7 +255,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
     const body = renderSettingsPage(
       html`
         <p class="settings-page__intro">${t("approvalHistory.description")}</p>
-        ${!this.connected
+        ${!this.gatewayScope.connected
           ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
           : nothing}
         ${this.error

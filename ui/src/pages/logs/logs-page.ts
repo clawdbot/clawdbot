@@ -2,13 +2,8 @@ import "../../styles/logs.css";
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -20,9 +15,12 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import {
+  AsyncGatewayScopeController,
+  type AsyncGatewayScope,
+} from "../../lit/async-gateway-scope-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
   parseLogLine,
@@ -34,18 +32,10 @@ import { renderLogs } from "./view.ts";
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
-type LogsRequestScope = {
-  gateway: ApplicationContext["gateway"];
-  client: GatewayBrowserClient;
-  generation: number;
-};
-
 class LogsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private client: GatewayBrowserClient | null = null;
-  @state() private connected = false;
   @state() private logsLoading = false;
   @state() private logsStatus = createPanelRefreshStatus();
   @state() private logsFile: string | null = null;
@@ -69,25 +59,21 @@ class LogsPage extends OpenClawLightDomElement {
   );
   private logsScrollFrame: number | null = null;
   private contentScrollFrame: number | null = null;
-  private hasBoundGatewaySource = false;
-  private gatewaySource: ApplicationContext["gateway"] | null = null;
-  private requestGeneration = 0;
-  private activeRequest: LogsRequestScope | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).effect(
+  private activeRequest: AsyncGatewayScope | null = null;
+  private readonly gatewayScope = new AsyncGatewayScopeController(
+    this,
     () => this.context?.gateway,
-    (gateway) => {
-      const resetForSourceBind = this.hasBoundGatewaySource;
-      this.hasBoundGatewaySource = true;
-      this.gatewaySource = gateway;
-      this.requestGeneration += 1;
-      const cleanup = gateway.subscribe((snapshot) => {
-        if (this.gatewaySource === gateway && this.context.gateway === gateway) {
-          this.applyGatewaySnapshot(snapshot);
-        }
-      });
-      this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
-      this.logsAtBottom = true;
-      return cleanup;
+    (_snapshot, { clientChanged, connectionChanged }) => {
+      if (clientChanged || connectionChanged) {
+        this.activeRequest = null;
+      }
+      if (clientChanged) {
+        this.resetServerState();
+      } else if (connectionChanged) {
+        this.logsLoading = false;
+      }
+      this.syncPolling();
+      this.ensureInitialLogs();
     },
   );
 
@@ -110,10 +96,7 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.subscriptions.clear();
-    this.requestGeneration += 1;
     this.activeRequest = null;
-    this.gatewaySource = null;
     this.logsLoading = false;
     if (this.logsScrollFrame !== null) {
       cancelAnimationFrame(this.logsScrollFrame);
@@ -134,24 +117,6 @@ class LogsPage extends OpenClawLightDomElement {
     }
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
-    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
-    const clientChanged = resetForSourceBind || snapshot.client !== this.client;
-    if (clientChanged || connectionChanged) {
-      this.requestGeneration += 1;
-      this.activeRequest = null;
-    }
-    this.client = snapshot.client;
-    this.connected = snapshot.phase === "connected";
-    if (clientChanged) {
-      this.resetServerState();
-    } else if (connectionChanged) {
-      this.logsLoading = false;
-    }
-    this.syncPolling();
-    this.ensureInitialLogs();
-  }
-
   private resetServerState() {
     this.logsLoading = false;
     this.logsStatus = createPanelRefreshStatus();
@@ -163,7 +128,7 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   private syncPolling() {
-    if (!this.connected || !this.client) {
+    if (!this.gatewayScope.connected || !this.gatewayScope.client) {
       this.polling.stop();
       return;
     }
@@ -171,7 +136,12 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   private ensureInitialLogs() {
-    if (!this.connected || !this.client || this.logsEntries.length > 0 || this.logsLoading) {
+    if (
+      !this.gatewayScope.connected ||
+      !this.gatewayScope.client ||
+      this.logsEntries.length > 0 ||
+      this.logsLoading
+    ) {
       return;
     }
     void this.loadLogs({ reset: true }).then((current) => {
@@ -181,41 +151,15 @@ class LogsPage extends OpenClawLightDomElement {
     });
   }
 
-  private captureRequestScope(): LogsRequestScope | null {
-    const gateway = this.gatewaySource;
-    const client = this.client;
-    if (
-      !gateway ||
-      !client ||
-      !this.connected ||
-      !this.isConnected ||
-      this.context.gateway !== gateway
-    ) {
-      return null;
-    }
-    return { gateway, client, generation: this.requestGeneration };
-  }
-
-  private isRequestScopeCurrent(scope: LogsRequestScope): boolean {
-    return (
-      this.isConnected &&
-      this.gatewaySource === scope.gateway &&
-      this.context.gateway === scope.gateway &&
-      this.requestGeneration === scope.generation &&
-      this.client === scope.client &&
-      this.connected
-    );
-  }
-
   private async loadLogs(opts?: { reset?: boolean; quiet?: boolean }): Promise<boolean> {
-    const scope = this.captureRequestScope();
+    const scope = this.gatewayScope.capture();
     const quiet = opts?.quiet === true;
-    if (!scope || (this.activeRequest && this.isRequestScopeCurrent(this.activeRequest))) {
+    if (!scope || (this.activeRequest && this.gatewayScope.isCurrent(this.activeRequest))) {
       return false;
     }
     this.activeRequest = scope;
     const isCurrentOperation = () =>
-      this.activeRequest === scope && this.isRequestScopeCurrent(scope);
+      this.activeRequest === scope && this.gatewayScope.isCurrent(scope);
     if (!quiet) {
       this.logsLoading = true;
     }
@@ -266,7 +210,7 @@ class LogsPage extends OpenClawLightDomElement {
     } finally {
       if (this.activeRequest === scope) {
         this.activeRequest = null;
-        if (this.isRequestScopeCurrent(scope) && !quiet) {
+        if (this.gatewayScope.isCurrent(scope) && !quiet) {
           this.logsLoading = false;
         }
       }
@@ -277,15 +221,8 @@ class LogsPage extends OpenClawLightDomElement {
     if (this.logsScrollFrame !== null) {
       cancelAnimationFrame(this.logsScrollFrame);
     }
-    const gateway = this.gatewaySource;
-    const generation = this.requestGeneration;
-    const isCurrent = () =>
-      this.isConnected &&
-      this.connected &&
-      gateway !== null &&
-      this.gatewaySource === gateway &&
-      this.context.gateway === gateway &&
-      this.requestGeneration === generation;
+    const scope = this.gatewayScope.capture();
+    const isCurrent = () => scope !== null && this.gatewayScope.isCurrent(scope);
     void this.updateComplete.then(() => {
       if (!isCurrent()) {
         return;

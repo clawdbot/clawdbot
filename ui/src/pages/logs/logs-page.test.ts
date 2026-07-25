@@ -6,15 +6,14 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import "./logs-page.ts";
 
 type TestLogsPage = HTMLElement & {
-  context: ApplicationContext;
-  connected: boolean;
+  context: MutableTestContext;
+  gatewayScope: { connected: boolean };
   logsAtBottom: boolean;
   logsAutoFollow: boolean;
   logsEntries: unknown[];
   logsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   scheduleScroll: (force?: boolean) => void;
   readonly updateComplete: Promise<boolean>;
-  applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadLogs: (opts?: { reset?: boolean; quiet?: boolean }) => Promise<boolean>;
   requestUpdate: () => void;
 };
@@ -27,16 +26,33 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
+type MutableTestContext = ApplicationContext & {
+  gateway: ApplicationContext["gateway"] & { emit(connected: boolean): void };
+};
+
+function contextWithClient(client: GatewayBrowserClient): MutableTestContext {
+  const snapshot = { client, phase: "stopped" } as ApplicationGatewaySnapshot;
+  let listener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
   return {
     basePath: "",
     gateway: {
-      snapshot: { client, phase: "stopped" },
-      subscribe: () => () => undefined,
+      snapshot,
+      subscribe(next: (snapshot: ApplicationGatewaySnapshot) => void) {
+        listener = next;
+        return () => {
+          if (listener === next) {
+            listener = undefined;
+          }
+        };
+      },
+      emit(connected: boolean) {
+        snapshot.phase = connected ? "connected" : "stopped";
+        listener?.(snapshot);
+      },
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
-  } as unknown as ApplicationContext;
+  } as unknown as MutableTestContext;
 }
 
 describe("LogsPage lifecycle", () => {
@@ -55,7 +71,7 @@ describe("LogsPage lifecycle", () => {
       },
       navigate: vi.fn(),
       preload: vi.fn(async () => undefined),
-    } as unknown as ApplicationContext;
+    } as unknown as MutableTestContext;
     const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
 
     document.body.append(page);
@@ -104,7 +120,7 @@ describe("LogsPage lifecycle", () => {
     page.context = contextWithClient(client);
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    page.gatewayScope.connected = true;
 
     const load = page.loadLogs({ reset: true });
     page.context = contextWithClient(client);
@@ -125,7 +141,7 @@ describe("LogsPage lifecycle", () => {
     page.context = contextWithClient(client);
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    page.gatewayScope.connected = true;
 
     const load = page.loadLogs({ reset: true });
     page.remove();
@@ -144,10 +160,10 @@ describe("LogsPage lifecycle", () => {
     page.context = contextWithClient(client);
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    page.gatewayScope.connected = true;
 
     const load = page.loadLogs({ reset: true });
-    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
+    page.context.gateway.emit(false);
     pending.resolve({ cursor: 1, lines: ["stale"], reset: true });
     await load;
 
@@ -164,7 +180,7 @@ describe("LogsPage lifecycle", () => {
     page.context = contextWithClient(client);
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    page.gatewayScope.connected = true;
 
     const first = page.loadLogs({ quiet: true });
     const second = page.loadLogs({ quiet: true });
@@ -187,7 +203,7 @@ describe("LogsPage lifecycle", () => {
     page.context = contextWithClient(client);
     document.body.append(page);
     await page.updateComplete;
-    page.connected = true;
+    page.gatewayScope.connected = true;
 
     await page.loadLogs({ reset: true });
     await page.loadLogs({ reset: true });
@@ -217,12 +233,12 @@ describe("LogsPage lifecycle", () => {
     const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     document.body.append(page);
     await page.updateComplete;
-    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    page.context.gateway.emit(true);
     requestFrame.mockClear();
 
     page.scheduleScroll();
-    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
-    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    page.context.gateway.emit(false);
+    page.context.gateway.emit(true);
     await Promise.resolve();
 
     expect(requestFrame).not.toHaveBeenCalled();
