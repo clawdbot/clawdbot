@@ -605,6 +605,126 @@ describe("OpenCode session upstream activity", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "classifies ignored-only text as non-human and advances the marker",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        messages: [
+          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
+          {
+            info: { id: "msg_ignored", role: "user", time: { created: 1_700_000_001_000 } },
+            parts: [
+              {
+                id: "part-ignored",
+                type: "text",
+                text: "plugin bookkeeping",
+                ignored: true,
+              },
+            ],
+          },
+        ],
+      };
+      await installStatefulOpenCode([session]);
+
+      await expect(
+        checkOpenCodeUpstreamActivity([
+          {
+            sessionKey: "agent:main:ses-a",
+            agentId: "main",
+            threadId: "ses_a",
+            hostId: "gateway",
+            upstreamKind: "opencode-cli",
+            upstreamRef: { threadId: "ses_a" },
+            marker: {
+              messageId: "msg_a0",
+              createdAt: 1_700_000_000_000,
+              sessionUpdatedAt: 1_700_000_000_000,
+            },
+            ownRecentUserTexts: [],
+          },
+        ]),
+      ).resolves.toEqual([
+        {
+          kind: "activity",
+          sessionKey: "agent:main:ses-a",
+          humanTurns: 0,
+          nextMarker: {
+            messageId: "msg_ignored",
+            createdAt: 1_700_000_001_000,
+            sessionUpdatedAt: 1_700_000_001_000,
+          },
+        },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps real user content when an ignored text part is mixed in",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        messages: [
+          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
+          {
+            info: { id: "msg_mixed", role: "user", time: { created: 1_700_000_001_000 } },
+            parts: [
+              {
+                id: "part-ignored",
+                type: "text",
+                text: "plugin bookkeeping",
+                ignored: true,
+              },
+              { id: "part-real", type: "text", text: "real external turn" },
+            ],
+          },
+        ],
+      };
+      await installStatefulOpenCode([session]);
+      const probe = {
+        sessionKey: "agent:main:ses-a",
+        agentId: "main",
+        threadId: "ses_a",
+        hostId: "gateway",
+        upstreamKind: "opencode-cli" as const,
+        upstreamRef: { threadId: "ses_a" },
+        marker: {
+          messageId: "msg_a0",
+          createdAt: 1_700_000_000_000,
+          sessionUpdatedAt: 1_700_000_000_000,
+        },
+        ownRecentUserTexts: [],
+      };
+
+      const outcomes = await checkOpenCodeUpstreamActivity([probe]);
+      expect(outcomes).toEqual([
+        expect.objectContaining({
+          kind: "activity",
+          humanTurns: 1,
+          nextMarker: {
+            messageId: "msg_mixed",
+            createdAt: 1_700_000_001_000,
+            sessionUpdatedAt: 1_700_000_001_000,
+          },
+        }),
+      ]);
+      const activity = outcomes[0];
+      expect(activity?.kind).toBe("activity");
+      await expect(
+        checkOpenCodeUpstreamActivity([
+          {
+            ...probe,
+            marker: activity?.kind === "activity" ? activity.nextMarker : probe.marker,
+          },
+        ]),
+      ).resolves.toEqual([]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "excludes generated rows without discarding mixed real user content",
     async () => {
       const session: StatefulOpenCodeSession = {

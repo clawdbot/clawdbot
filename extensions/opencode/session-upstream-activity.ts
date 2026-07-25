@@ -215,6 +215,7 @@ function readExportMessages(value: unknown): OpenCodeExportMessage[] {
         isRecord(part) &&
         part.type !== "compaction" &&
         part.synthetic !== true &&
+        !(part.type === "text" && part.ignored === true) &&
         !(isRecord(part.metadata) && part.metadata.compaction_continue === true),
     );
     const userText = meaningfulParts
