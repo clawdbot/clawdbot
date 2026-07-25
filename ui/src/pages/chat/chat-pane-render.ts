@@ -657,7 +657,6 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       focusVersion: state.sidebarFocusVersion,
       layout: sidebarLayout,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      onDefined: () => this.requestUpdate(),
       panelTemplates,
       primary,
       sessionKey: state.sessionKey,

@@ -321,7 +321,12 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.open") === true;
     const contentGeneration = this.connectionGeneration;
-    return {
+    const cached = this.sessionDiscussionPanels.get(sessionKey);
+    if (cached?.generation === contentGeneration && cached.canOpen === canOpen) {
+      cached.config.openUrl = this.sessionDiscussionOpenUrls.get(sessionKey) ?? null;
+      return cached.config;
+    }
+    const config: SessionDiscussionPanelConfig = {
       sessionKey,
       canOpen,
       openUrl: this.sessionDiscussionOpenUrls.get(sessionKey) ?? null,
@@ -362,6 +367,12 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         state.requestUpdate();
       },
     };
+    this.sessionDiscussionPanels.set(sessionKey, {
+      generation: contentGeneration,
+      canOpen,
+      config,
+    });
+    return config;
   }
 
   protected openSessionDiscussionSlot(): boolean {

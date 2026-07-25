@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -72,6 +72,37 @@ describe("chat pane session discussion auto-show", () => {
       ?.onStateChange(SESSION_KEY, "open", openUrl);
 
     expect(pane.buildSessionDiscussionPanel(state, SESSION_KEY)?.openUrl).toBe(openUrl);
+  });
+
+  it("does not reload discussion info when the pane renders unchanged config twice", async () => {
+    const { pane, state, request } = createDiscussionPane({
+      info: { state: "open", embedUrl: "https://clack.example/embed/c1" },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    const renderPanel = async () => {
+      const config = pane.buildSessionDiscussionPanel(state, SESSION_KEY)!;
+      render(
+        html`<openclaw-session-discussion
+          .sessionKey=${config.sessionKey}
+          .canOpen=${config.canOpen}
+          .sourceGeneration=${pane.connectionGeneration}
+          .loadInfo=${config.loadInfo}
+          .openDiscussion=${config.openDiscussion}
+          .onStateChange=${config.onStateChange}
+        ></openclaw-session-discussion>`,
+        container,
+      );
+      await container.querySelector("openclaw-session-discussion")?.updateComplete;
+    };
+
+    await renderPanel();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await renderPanel();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    container.remove();
   });
 
   it("does not auto-show for a merely available discussion", async () => {

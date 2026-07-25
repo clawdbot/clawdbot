@@ -37,16 +37,15 @@ import {
   serializeSidebarEntry,
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
-import {
-  normalizeBoardSessionViews,
-  normalizeSidebarSessionActivePanels,
-  normalizeSidebarSessionLayouts,
-  type BoardSessionViews,
-  type SidebarSessionActivePanels,
-  type SidebarSessionLayouts,
-} from "../lib/board/settings.ts";
+import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import {
+  normalizeSidebarSessionActivePanels,
+  normalizeSidebarSessionLayouts,
+  type SidebarSessionActivePanels,
+  type SidebarSessionLayouts,
+} from "../pages/chat/sidebar-layout-persistence.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+/* @vitest-environment jsdom */
+
+import { html, render } from "lit";
+import { describe, expect, it, vi } from "vitest";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
+import { renderSidebarRegion, resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
 function board(dock: ResolvedBoardView["dock"], face: ResolvedBoardView["face"] = "dashboard") {
@@ -12,6 +15,47 @@ function board(dock: ResolvedBoardView["dock"], face: ResolvedBoardView["face"] 
 }
 
 describe("chat pane sidebar layout", () => {
+  it("preserves the primary DOM across open, close, and reopen", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const callbacks = {
+      activatePanel: vi.fn(),
+      closeSlot: vi.fn(),
+      detachPanel: vi.fn(),
+      mergePanel: vi.fn(),
+      resizeColumn: vi.fn(),
+    };
+    const renderLayout = async (layout: ReturnType<typeof openSlot> | { columns: [] }) => {
+      render(
+        renderSidebarRegion({
+          availableWidth: 1_400,
+          callbacks,
+          discussionOpenUrl: null,
+          focusPanelId: "",
+          focusVersion: 0,
+          layout,
+          narrow: false,
+          panelTemplates: { detail: html`<aside>Details</aside>` },
+          primary: html`<main data-primary>Primary</main>`,
+          sessionKey: "agent:main:current",
+        }),
+        container,
+      );
+      await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+    };
+
+    await renderLayout({ columns: [] });
+    const primary = container.querySelector("[data-primary]");
+    await renderLayout(openSlot({ columns: [] }, "detail"));
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+    await renderLayout({ columns: [] });
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+    await renderLayout(openSlot({ columns: [] }, "detail"));
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+
+    container.remove();
+  });
+
   it("promotes side-docked dashboard chat into the requested side", () => {
     const layout = resolveSidebarLayoutForBoard({
       board: board("left"),

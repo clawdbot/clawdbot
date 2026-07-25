@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { openSlot } from "../../pages/chat/sidebar-layout.ts";
-import { canonicalUiSessionKeyForPersistence } from "../sessions/session-key.ts";
+import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import {
   normalizeSidebarSessionActivePanels,
   normalizeSidebarSessionLayouts,
   type SidebarSessionLayouts,
   updateSidebarSessionActivePanel,
   updateSidebarSessionLayout,
-} from "./settings.ts";
+} from "./sidebar-layout-persistence.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 describe("sidebar session layout settings", () => {
   it("uses one persistence key for configured main-session aliases", () => {

@@ -283,23 +283,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     });
   }
 
-  private renderWideShell() {
-    const left = this.layout.columns.filter((column) => column.side === "left");
-    const right = this.layout.columns.filter((column) => column.side === "right");
-    return html`${left.map(
-        (column, index) => html`
-          ${this.renderColumn(column)} ${this.renderDivider(column, "left", index + 1)}
-        `,
-      )}
-      <div class="sidebar-region__primary">${this.primary}</div>
-      ${right.map(
-        (column, index) => html`
-          ${this.renderDivider(column, "right", index)} ${this.renderColumn(column)}
-        `,
-      )}`;
-  }
-
-  private renderNarrowShell(panels: SidebarPanel[], activePanelId: string) {
+  private renderNarrowColumn(panels: SidebarPanel[], activePanelId: string) {
     const collapsed: SidebarColumn = {
       id: "collapsed-sidebar-column",
       side: "right",
@@ -307,26 +291,41 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       activePanelId,
       width: SIDEBAR_MIN_WIDTH_PX,
     };
-    return html`<div class="sidebar-region__primary">${this.primary}</div>
-      ${panels.length > 0
-        ? html`<section class="sidebar-column sidebar-column--collapsed">
-            ${this.renderHeader(collapsed, activePanelId, true)}
-            <div class="sidebar-column__body"></div>
-          </section>`
-        : nothing}`;
+    return panels.length > 0
+      ? html`<section class="sidebar-column sidebar-column--collapsed">
+          ${this.renderHeader(collapsed, activePanelId, true)}
+          <div class="sidebar-column__body"></div>
+        </section>`
+      : nothing;
   }
 
   override render() {
     const width = this.availableWidth > 0 ? this.availableWidth : Number.POSITIVE_INFINITY;
     const collapsed = this.narrow || isSidebarRegionCollapsed(this.layout, width);
     const panels = panelsOf(this.layout);
+    const left = this.layout.columns.filter((column) => column.side === "left");
+    const right = this.layout.columns.filter((column) => column.side === "right");
     const activePanelId =
       panels.find((panel) => panel.id === this.focusPanelId)?.id ??
       this.layout.columns.at(-1)?.activePanelId ??
       panels[0]?.id ??
       "";
     return html`<div class="sidebar-region ${collapsed ? "sidebar-region--narrow" : ""}">
-      ${collapsed ? this.renderNarrowShell(panels, activePanelId) : this.renderWideShell()}
+      ${collapsed
+        ? nothing
+        : left.map(
+            (column, index) => html`
+              ${this.renderColumn(column)} ${this.renderDivider(column, "left", index + 1)}
+            `,
+          )}
+      <div class="sidebar-region__primary">${this.primary}</div>
+      ${collapsed
+        ? this.renderNarrowColumn(panels, activePanelId)
+        : right.map(
+            (column, index) => html`
+              ${this.renderDivider(column, "right", index)} ${this.renderColumn(column)}
+            `,
+          )}
       ${repeat(
         panels,
         (panel) => panel.id,

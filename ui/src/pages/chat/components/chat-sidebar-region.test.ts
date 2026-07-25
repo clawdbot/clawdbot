@@ -203,6 +203,17 @@ describe("chat sidebar region", () => {
     expect(region.querySelector('[data-panel="detail"]')).toBe(detailNode);
   });
 
+  it("preserves the primary DOM node while crossing the responsive breakpoint", async () => {
+    const region = await createRegion(false);
+    const primaryNode = region.querySelector("[data-primary]");
+
+    region.narrow = true;
+    region.availableWidth = 620;
+    await region.updateComplete;
+
+    expect(region.querySelector("[data-primary]")).toBe(primaryNode);
+  });
+
   it("restores the persisted active tab when the session changes", async () => {
     const region = await createRegion(true);
     const chat = region.layout.columns[0]!.panels[0]!;

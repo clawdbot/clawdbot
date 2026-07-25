@@ -1,9 +1,14 @@
 import { html, type TemplateResult } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type {
   SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region.ts";
+import type {
+  DetailFullMessageResult,
+  SidebarFullMessageRequest,
+} from "./components/chat-sidebar.ts";
 import {
   closeSlot,
   detachPanelToColumn,
@@ -11,8 +16,9 @@ import {
   openSlot,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+import "./components/chat-sidebar-region.ts";
 
-let sidebarRegionLoad: Promise<boolean> | null = null;
+const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
 export function renderSidebarRegion(params: {
   availableWidth: number;
@@ -24,20 +30,8 @@ export function renderSidebarRegion(params: {
   narrow: boolean;
   panelTemplates: SidebarPanelTemplates;
   primary: TemplateResult;
-  onDefined: () => void;
   sessionKey: string;
 }): TemplateResult {
-  if (params.layout.columns.length === 0) {
-    return params.primary;
-  }
-  if (!customElements.get("openclaw-chat-sidebar-region")) {
-    sidebarRegionLoad ??= import("./components/chat-sidebar-region.ts").then(
-      () => true,
-      () => false,
-    );
-    void sidebarRegionLoad.then((loaded) => loaded && params.onDefined());
-    return params.primary;
-  }
   return html`<openclaw-chat-sidebar-region
     .layout=${params.layout}
     .primary=${params.primary}
@@ -105,10 +99,3 @@ export function createSidebarFullMessageLoader(
     });
   };
 }
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  DetailFullMessageResult,
-  SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
-
-const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;

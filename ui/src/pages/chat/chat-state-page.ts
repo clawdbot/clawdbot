@@ -6,7 +6,7 @@ import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/se
 import {
   updateSidebarSessionActivePanel,
   updateSidebarSessionLayout,
-} from "../../lib/board/settings.ts";
+} from "./sidebar-layout-persistence.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";

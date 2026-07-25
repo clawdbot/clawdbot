@@ -171,6 +171,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.clearTypingActors();
       this.sessionDiscussionStates.clear();
       this.sessionDiscussionOpenUrls.clear();
+      this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();
       // A new gateway/account owns its own membership + identity data; drop the
       // previous connection's sharing cache so a stale loading entry cannot
