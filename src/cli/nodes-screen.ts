@@ -47,6 +47,13 @@ export async function writeScreenRecordToFile(
 }
 
 /** Validated payload returned by `nodes screen snapshot` RPC calls. */
+export type ScreenSnapshotScreenInfo = {
+  index: number;
+  width: number;
+  height: number;
+  main: boolean;
+};
+
 type ScreenSnapshotPayload = {
   format: string;
   base64: string;
@@ -55,7 +62,43 @@ type ScreenSnapshotPayload = {
   screenIndex?: number;
   width?: number;
   height?: number;
+  /** Logical display size in points (CGEvent space); may exceed image pixels. */
+  displayWidth?: number;
+  displayHeight?: number;
+  /** All displays in screenIndex order when the node reports multi-monitor inventory. */
+  screens?: ScreenSnapshotScreenInfo[];
 };
+
+function parseScreenSnapshotScreens(value: unknown): ScreenSnapshotScreenInfo[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const screens: ScreenSnapshotScreenInfo[] = [];
+  for (const entry of value) {
+    const obj = asRecord(entry);
+    if (
+      typeof obj.index !== "number" ||
+      !Number.isInteger(obj.index) ||
+      obj.index < 0 ||
+      typeof obj.width !== "number" ||
+      !Number.isFinite(obj.width) ||
+      obj.width <= 0 ||
+      typeof obj.height !== "number" ||
+      !Number.isFinite(obj.height) ||
+      obj.height <= 0 ||
+      typeof obj.main !== "boolean"
+    ) {
+      continue;
+    }
+    screens.push({
+      index: obj.index,
+      width: Math.floor(obj.width),
+      height: Math.floor(obj.height),
+      main: obj.main,
+    });
+  }
+  return screens.length > 0 ? screens : undefined;
+}
 
 /** Validate and normalize an unknown screen-snapshot payload. */
 export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotPayload {
@@ -72,6 +115,9 @@ export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotPayloa
     screenIndex: typeof obj.screenIndex === "number" ? obj.screenIndex : undefined,
     width: typeof obj.width === "number" ? obj.width : undefined,
     height: typeof obj.height === "number" ? obj.height : undefined,
+    displayWidth: typeof obj.displayWidth === "number" ? obj.displayWidth : undefined,
+    displayHeight: typeof obj.displayHeight === "number" ? obj.displayHeight : undefined,
+    screens: parseScreenSnapshotScreens(obj.screens),
   };
 }
 

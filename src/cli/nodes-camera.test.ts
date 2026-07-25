@@ -518,6 +518,12 @@ describe("nodes screen helpers", () => {
         screenIndex: 1,
         width: 1200,
         height: 800,
+        displayWidth: 1728,
+        displayHeight: 1117,
+        screens: [
+          { index: 0, width: 1728, height: 1117, main: true },
+          { index: 1, width: 1920, height: 1080, main: false },
+        ],
       }),
     ).toEqual({
       format: "png",
@@ -526,7 +532,23 @@ describe("nodes screen helpers", () => {
       screenIndex: 1,
       width: 1200,
       height: 800,
+      displayWidth: 1728,
+      displayHeight: 1117,
+      screens: [
+        { index: 0, width: 1728, height: 1117, main: true },
+        { index: 1, width: 1920, height: 1080, main: false },
+      ],
     });
+  });
+
+  it("omits malformed screen.snapshot screens entries", () => {
+    expect(
+      parseScreenSnapshotPayload({
+        format: "png",
+        base64: "Zm9v",
+        screens: [{ index: 0, width: 100, height: 50, main: true }, { index: "x" }, null],
+      }).screens,
+    ).toEqual([{ index: 0, width: 100, height: 50, main: true }]);
   });
 
   it("rejects invalid screen.snapshot payload", () => {

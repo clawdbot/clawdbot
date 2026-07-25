@@ -370,7 +370,9 @@ final class ComputerActionService {
             case .missingCoordinate:
                 "coordinate is required for this action"
             case .coordinateOutOfBounds:
-                "coordinate is outside the captured screen"
+                // Include the word "screenshot" so the agent tool can treat this as a
+                // definitive pre-input rejection and keep the authorizing frame.
+                "coordinate is outside the captured screenshot frame"
             case .invalidReferenceWidth:
                 "refWidth must be a positive integer"
             case .missingKeys:

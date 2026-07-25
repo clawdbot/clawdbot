@@ -57,6 +57,12 @@ function screenshotPayload(screenIndex = 0, base64 = TINY_PNG_BASE64) {
       displayFrameId: `display-${screenIndex}-frame`,
       width: 1280,
       height: 800,
+      displayWidth: 1728,
+      displayHeight: 1117,
+      screens: [
+        { index: 0, width: 1728, height: 1117, main: true },
+        { index: 1, width: 1920, height: 1080, main: false },
+      ],
       screenIndex,
     },
   };
@@ -325,6 +331,78 @@ describe("createComputerTool execution", () => {
       tool.execute("act", { action: "double_click", frameId: readFrameId(screenshot) }),
     ).rejects.toThrow(/coordinate/);
     expect(() => readLastComputerActParams()).toThrow(/missing computer\.act request/);
+  });
+
+  it("reports screenshot pixels and display points so models do not confuse the two", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    const tool = createComputerTool({ modelHasVision: true });
+    const screenshot = await tool.execute("shot", { action: "screenshot" });
+    const text = screenshot.content.find((block) => block.type === "text");
+    expect(text && "text" in text ? text.text : "").toMatch(
+      /screenshot \d+x\d+; display 1728x1117 pts \(screen 0, frameId /,
+    );
+    expect(text && "text" in text ? text.text : "").toMatch(
+      /screens: 0=1728x1117 pts \(main\), 1=1920x1080 pts/,
+    );
+  });
+
+  it("rejects coordinates outside the screenshot frame without clearing it", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    const tool = createComputerTool({ modelHasVision: true });
+    const screenshot = await tool.execute("shot", { action: "screenshot" });
+    const frameId = readFrameId(screenshot);
+    // Delivered frame is capped to EFFECTIVE_REF_WIDTH on the long edge.
+    await expect(
+      tool.execute("act", {
+        action: "left_click",
+        coordinate: [100, 900],
+        frameId,
+      }),
+    ).rejects.toThrow(/outside the screenshot frame/);
+    expect(() => readLastComputerActParams()).toThrow(/missing computer\.act request/);
+    // Same frame must still authorize a corrected in-bounds click.
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+      if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
+        return { payload: { ok: true } };
+      }
+      return screenshotPayload();
+    });
+    await expect(
+      tool.execute("act", { action: "left_click", coordinate: [10, 20], frameId }),
+    ).resolves.toMatchObject({ details: { action: "left_click" } });
+    expect(readLastComputerActParams()).toMatchObject({ x: 10, y: 20 });
+  });
+
+  it("keeps the authorizing frame when the node rejects out-of-bounds coordinates", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    const tool = createComputerTool({ modelHasVision: true });
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    const screenshot = await tool.execute("shot", { action: "screenshot" });
+    const frameId = readFrameId(screenshot);
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+      if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
+        const err = new Error(
+          "INVALID_REQUEST: coordinate is outside the captured screenshot frame",
+        );
+        err.name = "GatewayClientRequestError";
+        throw err;
+      }
+      return screenshotPayload();
+    });
+    await expect(
+      tool.execute("act", { action: "left_click", coordinate: [10, 20], frameId }),
+    ).rejects.toThrow(/outside the captured screenshot frame/);
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+      if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
+        return { payload: { ok: true } };
+      }
+      return screenshotPayload();
+    });
+    await expect(
+      tool.execute("act", { action: "left_click", coordinate: [11, 21], frameId }),
+    ).resolves.toMatchObject({ details: { action: "left_click" } });
   });
 
   it.each([

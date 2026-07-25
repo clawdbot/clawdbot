@@ -246,8 +246,12 @@ for arch in "${BUILD_ARCHS[@]}"; do
   run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
   echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   run_with_locked_swift_packages swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
-  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
-  swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
+  if [[ "${SKIP_MLX_TTS:-0}" != "1" ]]; then
+    echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
+    swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
+  else
+    echo "⏭  Skipping $MLX_TTS_HELPER_PRODUCT (SKIP_MLX_TTS=1; needs Swift 6.3+)"
+  fi
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
@@ -299,17 +303,21 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
-echo "🚚 Copying MLX TTS helper"
-cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-  HELPER_BIN_INPUTS=()
-  for arch in "${BUILD_ARCHS[@]}"; do
-    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
-  done
-  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "${SKIP_MLX_TTS:-0}" != "1" ]]; then
+  echo "🚚 Copying MLX TTS helper"
+  cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    HELPER_BIN_INPUTS=()
+    for arch in "${BUILD_ARCHS[@]}"; do
+      HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+    done
+    /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  fi
+  chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
+else
+  echo "⏭  Skipping MLX TTS helper copy (SKIP_MLX_TTS=1)"
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then

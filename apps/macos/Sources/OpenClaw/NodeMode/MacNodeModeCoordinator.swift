@@ -459,7 +459,17 @@ final class MacNodeModeCoordinator: NSObject {
         claudeSessionCatalogEnabled: Bool) async throws -> ConnectionAttempt?
     {
         let config = endpoint.config
-        let workerManifest = try await self.startNodeHostWorkerIfConfigured()
+        // Local debug builds can stall forever in CLI discovery / version checks
+        // before the node websocket ever connects. Prefer native caps (including
+        // computer.act) over a blocking node-host worker startup.
+        let workerManifest: MacNodeHostManifest?
+        do {
+            workerManifest = try await self.startNodeHostWorkerIfConfigured()
+        } catch {
+            self.logger.error(
+                "node-host worker unavailable; continuing with native caps only: \(error.localizedDescription, privacy: .public)")
+            workerManifest = nil
+        }
         let nativeCaps = self.currentCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
@@ -784,6 +794,11 @@ final class MacNodeModeCoordinator: NSObject {
 
     private func startNodeHostWorkerIfConfigured() async throws -> MacNodeHostManifest? {
         guard let nodeHostWorker else { return nil }
+        // Skip worker in local debug packaging: CLIInstaller.status()/path discovery
+        // can block node connect indefinitely when the global CLI is a beta build.
+        #if DEBUG
+        return nil
+        #else
         let executable: String
         if let projectExecutable = CommandResolver.projectOpenClawExecutable() {
             executable = projectExecutable
@@ -795,6 +810,7 @@ final class MacNodeModeCoordinator: NSObject {
             }
         }
         return try await nodeHostWorker.start(command: [executable, "node", "worker"])
+        #endif
     }
 
     private func buildSessionBox(url: URL, tls: GatewayTLSRoute?) -> WebSocketSessionBox? {

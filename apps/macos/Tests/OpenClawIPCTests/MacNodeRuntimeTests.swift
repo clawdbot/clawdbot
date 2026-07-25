@@ -122,6 +122,9 @@ struct MacNodeRuntimeTests {
                 format: .jpeg,
                 width: 10,
                 height: 10,
+                displayWidthPoints: 1920,
+                displayHeightPoints: 1080,
+                screens: [ScreenSnapshotScreenInfo(index: 0, widthPoints: 1920, heightPoints: 1080, main: true)],
                 displayFrameId: "display-frame-test"),
             snapshotError: Error? = nil)
         {
@@ -436,6 +439,9 @@ struct MacNodeRuntimeTests {
                     format: format ?? .jpeg,
                     width: 640,
                     height: 360,
+                    displayWidthPoints: 1920,
+                    displayHeightPoints: 1080,
+                    screens: [ScreenSnapshotScreenInfo(index: 0, widthPoints: 1920, heightPoints: 1080, main: true)],
                     displayFrameId: "display-frame-test")
             }
 
@@ -522,6 +528,9 @@ struct MacNodeRuntimeTests {
                     format: format ?? .jpeg,
                     width: 800,
                     height: 450,
+                    displayWidthPoints: 1920,
+                    displayHeightPoints: 1080,
+                    screens: [ScreenSnapshotScreenInfo(index: 0, widthPoints: 1920, heightPoints: 1080, main: true)],
                     displayFrameId: "display-frame-test")
             }
 
@@ -589,11 +598,21 @@ struct MacNodeRuntimeTests {
         let payloadJSON = try #require(response.payloadJSON)
 
         struct Payload: Decodable {
+            struct Screen: Decodable {
+                var index: Int
+                var width: Int
+                var height: Int
+                var main: Bool
+            }
+
             var format: String
             var base64: String
             var displayFrameId: String
             var width: Int
             var height: Int
+            var displayWidth: Int
+            var displayHeight: Int
+            var screens: [Screen]
             var capturedAtMs: Int64
         }
 
@@ -603,6 +622,13 @@ struct MacNodeRuntimeTests {
         #expect(payload.displayFrameId == "display-frame-test")
         #expect(payload.width == 800)
         #expect(payload.height == 450)
+        #expect(payload.displayWidth == 1920)
+        #expect(payload.displayHeight == 1080)
+        #expect(payload.screens.count == 1)
+        #expect(payload.screens[0].index == 0)
+        #expect(payload.screens[0].width == 1920)
+        #expect(payload.screens[0].height == 1080)
+        #expect(payload.screens[0].main == true)
         #expect(payload.capturedAtMs > 0)
         let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
         #expect(snapshotCalledAtMs != nil)
@@ -674,6 +700,9 @@ struct MacNodeRuntimeTests {
                 format: format ?? .jpeg,
                 width: 10,
                 height: 10,
+                displayWidthPoints: 1920,
+                displayHeightPoints: 1080,
+                screens: [ScreenSnapshotScreenInfo(index: 0, widthPoints: 1920, heightPoints: 1080, main: true)],
                 displayFrameId: "display-frame-test")
         }
 
@@ -992,6 +1021,9 @@ struct MacNodeRuntimeTests {
                 format: .jpeg,
                 width: 4000,
                 height: 3000,
+                displayWidthPoints: 1920,
+                displayHeightPoints: 1080,
+                screens: [ScreenSnapshotScreenInfo(index: 0, widthPoints: 1920, heightPoints: 1080, main: true)],
                 displayFrameId: "display-frame-test"))
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
@@ -1017,6 +1049,9 @@ struct MacNodeRuntimeTests {
                 format: .png,
                 width: 4000,
                 height: 3000,
+                displayWidthPoints: 1920,
+                displayHeightPoints: 1080,
+                screens: [ScreenSnapshotScreenInfo(index: 0, widthPoints: 1920, heightPoints: 1080, main: true)],
                 displayFrameId: "display-frame-test"))
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
@@ -1042,6 +1077,9 @@ struct MacNodeRuntimeTests {
                 format: .jpeg,
                 width: 4000,
                 height: 3000,
+                displayWidthPoints: 1920,
+                displayHeightPoints: 1080,
+                screens: [ScreenSnapshotScreenInfo(index: 0, widthPoints: 1920, heightPoints: 1080, main: true)],
                 displayFrameId: "display-frame-test"))
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })

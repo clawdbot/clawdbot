@@ -657,11 +657,21 @@ extension MacNodeRuntime {
             return Self.screenSnapshotPayloadTooLarge(req)
         }
         struct ScreenSnapshotPayload: Encodable {
+            struct Screen: Encodable {
+                var index: Int
+                var width: Int
+                var height: Int
+                var main: Bool
+            }
+
             var format: String
             var base64: String
             var displayFrameId: String
             var width: Int
             var height: Int
+            var displayWidth: Int
+            var displayHeight: Int
+            var screens: [Screen]
             var screenIndex: Int?
             var capturedAtMs: Int64
         }
@@ -671,6 +681,15 @@ extension MacNodeRuntime {
             displayFrameId: res.displayFrameId,
             width: res.width,
             height: res.height,
+            displayWidth: res.displayWidthPoints,
+            displayHeight: res.displayHeightPoints,
+            screens: res.screens.map {
+                ScreenSnapshotPayload.Screen(
+                    index: $0.index,
+                    width: $0.widthPoints,
+                    height: $0.heightPoints,
+                    main: $0.main)
+            },
             screenIndex: params.screenIndex,
             capturedAtMs: capturedAtMs))
         if try Self.projectedOuterFrameBytes(

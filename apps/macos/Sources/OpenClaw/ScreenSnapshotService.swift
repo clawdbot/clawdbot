@@ -3,11 +3,25 @@ import Foundation
 import OpenClawKit
 @preconcurrency import ScreenCaptureKit
 
+struct ScreenSnapshotScreenInfo: Sendable, Equatable {
+    let index: Int
+    let widthPoints: Int
+    let heightPoints: Int
+    let main: Bool
+}
+
 struct ScreenSnapshotResult: Sendable {
     let data: Data
     let format: OpenClawScreenSnapshotFormat
     let width: Int
     let height: Int
+    /// Logical display size in CoreGraphics points (CGEvent / CGDisplayBounds space).
+    /// Reported separately from the possibly-downscaled JPEG so agents can tell
+    /// screenshot pixels from the live desktop geometry they map onto.
+    let displayWidthPoints: Int
+    let displayHeightPoints: Int
+    /// All displays in the same displayID-sorted order used by screenIndex.
+    let screens: [ScreenSnapshotScreenInfo]
     let displayFrameId: String
 }
 
@@ -48,14 +62,17 @@ final class ScreenSnapshotService {
         guard !displays.isEmpty else {
             throw ScreenSnapshotError.noDisplays
         }
+        let screens = try Self.screenInventory(displays: displays)
 
         let idx = screenIndex ?? 0
         guard idx >= 0, idx < displays.count else {
             throw ScreenSnapshotError.invalidScreenIndex(idx)
         }
         let display = displays[idx]
+        let geometry = try Self.displayGeometry(for: display)
         let displayFrameId = try Self.displayFrameId(
             for: display,
+            geometry: geometry,
             referenceWidth: normalized.maxWidth)
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
@@ -78,8 +95,10 @@ final class ScreenSnapshotService {
         }
         // Geometry is part of the coordinate contract. If it changed while the
         // pixels were captured, no stable frame exists to authorize later input.
+        let finalGeometry = try Self.displayGeometry(for: display)
         let finalDisplayFrameId = try Self.displayFrameId(
             for: display,
+            geometry: finalGeometry,
             referenceWidth: normalized.maxWidth)
         guard displayFrameId == finalDisplayFrameId else {
             throw ScreenSnapshotError.captureFailed("display changed during screen capture")
@@ -108,13 +127,26 @@ final class ScreenSnapshotService {
             format: format,
             width: cgImage.width,
             height: cgImage.height,
+            displayWidthPoints: Int(geometry.widthPoints.rounded()),
+            displayHeightPoints: Int(geometry.heightPoints.rounded()),
+            screens: screens,
             displayFrameId: displayFrameId)
     }
 
-    private static func displayFrameId(
-        for display: SCDisplay,
-        referenceWidth: Int) throws -> String
-    {
+    /// Same displayID order as capture/act screenIndex so agents can switch screens.
+    private static func screenInventory(displays: [SCDisplay]) throws -> [ScreenSnapshotScreenInfo] {
+        let mainID = CGMainDisplayID()
+        return try displays.enumerated().map { index, display in
+            let geometry = try Self.displayGeometry(for: display)
+            return ScreenSnapshotScreenInfo(
+                index: index,
+                widthPoints: Int(geometry.widthPoints.rounded()),
+                heightPoints: Int(geometry.heightPoints.rounded()),
+                main: display.displayID == mainID)
+        }
+    }
+
+    private static func displayGeometry(for display: SCDisplay) throws -> OpenClawComputerDisplayGeometry {
         let bounds = CGDisplayBounds(display.displayID)
         let geometry = OpenClawComputerDisplayGeometry(
             originX: bounds.origin.x,
@@ -130,10 +162,18 @@ final class ScreenSnapshotService {
         else {
             throw ScreenSnapshotError.noDisplays
         }
+        return geometry
+    }
+
+    private static func displayFrameId(
+        for display: SCDisplay,
+        geometry: OpenClawComputerDisplayGeometry,
+        referenceWidth: Int) throws -> String
+    {
         return OpenClawComputerInputGeometry.displayFrameId(
             displayID: display.displayID,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
+            sourceWidth: Double(display.width),
+            sourceHeight: Double(display.height),
             referenceWidth: referenceWidth,
             display: geometry)
     }
