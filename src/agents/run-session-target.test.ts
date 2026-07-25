@@ -93,7 +93,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "legacy", "sessions.json");
     const sessionKey = "agent:main:dashboard:legacy-session";
     await upsertSessionEntry(
-      { agentId: "main", sessionId: "legacy-session", sessionKey, storePath },
+      { agentId: "main", sessionKey, storePath },
       { sessionId: "legacy-session", updatedAt: 1 },
     );
 
