@@ -709,7 +709,6 @@ src/cron/isolated-agent/run.ts
 src/cron/service.jobs.test.ts
 src/cron/service/jobs.ts
 src/cron/service/ops.test.ts
-src/cron/service/ops.ts
 src/cron/service/timer.regression.test.ts
 src/cron/store.test.ts
 src/daemon/launchd.test.ts
