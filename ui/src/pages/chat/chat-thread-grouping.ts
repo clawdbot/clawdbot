@@ -499,7 +499,7 @@ type StreamRunRenderItem = {
 };
 
 export function coalesceStreamRuns(
-  items: ReturnType<typeof buildChatItems>,
+  items: RenderChatItem[],
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
