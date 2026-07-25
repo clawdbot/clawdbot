@@ -55,13 +55,31 @@ const HealthSessionSummarySchema = closedObject({
 
 const ReadinessConditionSchema = closedObject({
   type: NonEmptyString,
+  subjectRef: Type.Optional(NonEmptyString),
+  relatedSubjectRefs: Type.Optional(Type.Array(NonEmptyString, { maxItems: 16 })),
+  observedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   status: Type.Union([Type.Literal("True"), Type.Literal("False"), Type.Literal("Unknown")]),
   requirement: Type.Union([Type.Literal("required"), Type.Literal("advisory")]),
   reason: NonEmptyString,
   message: Type.String(),
 });
 
+const ReadinessSubjectSchema = closedObject({
+  ref: NonEmptyString,
+  kind: NonEmptyString,
+  id: Type.Optional(NonEmptyString),
+  generation: Type.Optional(NonEmptyString),
+  parentRef: Type.Optional(NonEmptyString),
+});
+
 const CanonicalReadinessResultSchema = closedObject({
+  evaluatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  identity: Type.Optional(
+    closedObject({
+      producerRef: NonEmptyString,
+      subjects: Type.Array(ReadinessSubjectSchema, { maxItems: 128 }),
+    }),
+  ),
   ready: Type.Boolean(),
   conditions: Type.Array(ReadinessConditionSchema),
   failures: Type.Array(Type.String()),

@@ -3,9 +3,11 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   WORKSPACE_WRITABLE_CRITERION_ID,
   type ReadinessCondition,
+  type ReadinessContribution,
   type ReadinessRequirement,
 } from "./conditions.js";
 import { createPluginReadinessResolver } from "./plugin-readiness.js";
+import { CORE_READINESS_SUBJECT_REFS } from "./subjects.js";
 import {
   buildWorkspaceReadinessCondition,
   createWorkspaceReadinessEvidenceResolver,
@@ -32,10 +34,27 @@ function resolveSelectedReadinessCriteria(config: OpenClawConfig): SelectedCrite
 function unavailableCondition(id: string, requirement: ReadinessRequirement): ReadinessCondition {
   return {
     type: id,
+    subjectRef: CORE_READINESS_SUBJECT_REFS.plugins,
     status: "Unknown",
     requirement,
     reason: "CriterionNotRegistered",
     message: `Readiness criterion ${id} is selected but is not registered.`,
+  };
+}
+
+function withRequirement(
+  condition: ReadinessCondition,
+  requirement: ReadinessRequirement,
+): ReadinessCondition {
+  return {
+    type: condition.type,
+    subjectRef: condition.subjectRef,
+    ...(condition.relatedSubjectRefs ? { relatedSubjectRefs: condition.relatedSubjectRefs } : {}),
+    ...(condition.observedAtMs !== undefined ? { observedAtMs: condition.observedAtMs } : {}),
+    status: condition.status,
+    requirement,
+    reason: condition.reason,
+    message: condition.message,
   };
 }
 
@@ -47,17 +66,17 @@ export function createSelectedReadinessResolver() {
     config: OpenClawConfig;
     registry: Pick<PluginRegistry, "readinessCriteria">;
     env?: NodeJS.ProcessEnv;
-  }): Promise<ReadinessCondition[]> => {
+  }): Promise<ReadinessContribution> => {
     const selected = resolveSelectedReadinessCriteria(params.config);
     if (selected.length === 0) {
-      return [];
+      return { conditions: [], subjects: [] };
     }
 
     const selectedIds = new Set(selected.map((entry) => entry.id));
     const pluginIds = new Set(
       selected.filter((entry) => entry.id.startsWith("plugin.")).map((entry) => entry.id),
     );
-    const [workspaceEvidence, pluginConditions] = await Promise.all([
+    const [workspaceEvidence, pluginContribution] = await Promise.all([
       selectedIds.has(WORKSPACE_WRITABLE_CRITERION_ID)
         ? resolveWorkspace({ config: params.config, env: params.env })
         : Promise.resolve(undefined),
@@ -71,21 +90,18 @@ export function createSelectedReadinessResolver() {
         buildWorkspaceReadinessCondition(workspaceEvidence),
       );
     }
-    for (const condition of pluginConditions) {
+    for (const condition of pluginContribution.conditions) {
       conditions.set(condition.type, condition);
     }
 
-    return selected.map(({ id, requirement }) => {
-      const condition = conditions.get(id);
-      return condition
-        ? {
-            type: condition.type,
-            status: condition.status,
-            requirement,
-            reason: condition.reason,
-            message: condition.message,
-          }
-        : unavailableCondition(id, requirement);
-    });
+    return {
+      conditions: selected.map(({ id, requirement }) => {
+        const condition = conditions.get(id);
+        return condition
+          ? withRequirement(condition, requirement)
+          : unavailableCondition(id, requirement);
+      }),
+      subjects: pluginContribution.subjects,
+    };
   };
 }

@@ -11,6 +11,7 @@ import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import { buildRuntimeReadiness, type PluginReadinessInput } from "../readiness/conditions.js";
 import { createSelectedReadinessResolver } from "../readiness/selection.js";
+import { createGatewayReadinessIdentity } from "../readiness/subjects.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -368,11 +369,12 @@ export async function prepareGatewayRuntimeState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
+  const readinessIdentity = createGatewayReadinessIdentity();
   const resolveSelectedReadiness = createSelectedReadinessResolver();
   const evaluateRuntimeReadiness = async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = pluginRuntime.readinessSnapshot;
-      const additionalConditions = await resolveSelectedReadiness({
+      const contribution = await resolveSelectedReadiness({
         config: snapshot.config,
         registry: snapshot.registry,
         env: process.env,
@@ -381,10 +383,12 @@ export async function prepareGatewayRuntimeState(params: {
         continue;
       }
       return buildRuntimeReadiness({
+        identity: readinessIdentity,
         configLoaded: true,
         gateway: "responding",
         plugins: buildGatewayPluginReadinessInput(snapshot.registry),
-        additionalConditions,
+        additionalConditions: contribution.conditions,
+        additionalSubjects: contribution.subjects,
       });
     }
     throw new Error("Readiness runtime changed while it was being evaluated.");
@@ -392,6 +396,7 @@ export async function prepareGatewayRuntimeState(params: {
   const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
     evaluateConfiguredGatewayReadiness({
       config: pluginRuntime.readinessSnapshot.config,
+      identity: readinessIdentity,
       evaluateGateway: getGatewayReadiness,
       evaluateRuntime: evaluateRuntimeReadiness,
     });

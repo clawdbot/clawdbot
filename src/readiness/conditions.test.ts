@@ -79,10 +79,18 @@ describe("buildRuntimeReadiness", () => {
       additionalConditions: [
         {
           type: "plugin.storage.backend",
+          subjectRef: "plugin.storage/backend/primary",
           status: "False",
           requirement: "required",
           reason: "StorageUnavailable",
           message: "Storage is unavailable.",
+        },
+      ],
+      additionalSubjects: [
+        {
+          ref: "plugin.storage/backend/primary",
+          kind: "plugin.storage.backend",
+          id: "primary",
         },
       ],
     });
@@ -102,6 +110,7 @@ describe("buildRuntimeReadiness", () => {
       additionalConditions: [
         {
           type: "plugin.z.last",
+          subjectRef: "plugin.z/criterion/last",
           status: "True",
           requirement: "advisory",
           reason: "LastReady",
@@ -109,6 +118,7 @@ describe("buildRuntimeReadiness", () => {
         },
         {
           type: "WorkspaceWritable",
+          subjectRef: "openclaw/workspace/default",
           status: "True",
           requirement: "required",
           reason: "WorkspaceWritable",
@@ -116,11 +126,16 @@ describe("buildRuntimeReadiness", () => {
         },
         {
           type: "plugin.a.first",
+          subjectRef: "plugin.a/criterion/first",
           status: "True",
           requirement: "advisory",
           reason: "FirstReady",
           message: "First is ready.",
         },
+      ],
+      additionalSubjects: [
+        { ref: "plugin.a/criterion/first", kind: "plugin.a.criterion", id: "first" },
+        { ref: "plugin.z/criterion/last", kind: "plugin.z.criterion", id: "last" },
       ],
     });
 
@@ -152,5 +167,40 @@ describe("buildRuntimeReadiness", () => {
 
     expect(condition?.message).not.toContain("super-secret-value-that-must-not-escape");
     expect(Buffer.byteLength(condition?.message ?? "", "utf8")).toBeLessThanOrEqual(512);
+  });
+
+  it("orders equal condition types by subject reference", () => {
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      additionalConditions: [
+        {
+          type: "SharedDependencyReady",
+          subjectRef: "plugin.z/dependency/default",
+          status: "True",
+          requirement: "advisory",
+          reason: "DependencyReady",
+          message: "Dependency is ready.",
+        },
+        {
+          type: "SharedDependencyReady",
+          subjectRef: "plugin.a/dependency/default",
+          status: "True",
+          requirement: "advisory",
+          reason: "DependencyReady",
+          message: "Dependency is ready.",
+        },
+      ],
+      additionalSubjects: [
+        { ref: "plugin.z/dependency/default", kind: "plugin.z.dependency" },
+        { ref: "plugin.a/dependency/default", kind: "plugin.a.dependency" },
+      ],
+    });
+
+    expect(
+      readiness.conditions
+        .filter((condition) => condition.type === "SharedDependencyReady")
+        .map((condition) => condition.subjectRef),
+    ).toEqual(["plugin.a/dependency/default", "plugin.z/dependency/default"]);
   });
 });

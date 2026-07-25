@@ -227,11 +227,28 @@ Readiness criteria let a plugin report whether a dependency it owns is usable:
 api.registerReadinessCriterion({
   id: "backend",
   description: "Reports whether the plugin backend can accept work.",
-  async check({ pluginConfig, signal }) {
+  async check({ pluginConfig, signal, subjects }) {
+    const backend = subjects.declare({
+      kind: "backend",
+      key: "primary",
+      identity: { id: pluginConfig.accountId, generation: pluginConfig.generation },
+    });
     const reachable = await probeBackend(pluginConfig, { signal });
     return reachable
-      ? { status: "True", reason: "BackendReady", message: "Backend is reachable." }
-      : { status: "False", reason: "BackendUnavailable", message: "Backend is unreachable." };
+      ? {
+          subjectRef: backend,
+          observedAtMs: Date.now(),
+          status: "True",
+          reason: "BackendReady",
+          message: "Backend is reachable.",
+        }
+      : {
+          subjectRef: backend,
+          observedAtMs: Date.now(),
+          status: "False",
+          reason: "BackendUnavailable",
+          message: "Backend is unreachable.",
+        };
   },
 });
 ```
@@ -241,6 +258,9 @@ bounded timeout, caches the result briefly, and retains the descriptor in the
 active Gateway-pinned provider catalog for enumeration. Plugin criteria are
 advisory when registered. Only an operator can promote one to required through
 `gateway.readiness`; plugins cannot make their own checks block readiness.
+`subjects.declare(...)` returns a reference in the plugin's namespace. Declare
+identities without secrets; OpenClaw bounds, validates, reconciles, and emits
+only subjects referenced by the final result.
 
 #### Post-ack webhook work
 

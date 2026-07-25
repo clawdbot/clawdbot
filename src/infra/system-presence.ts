@@ -1,6 +1,5 @@
 // Detects system command availability for setup and diagnostics.
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,6 +10,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { DARWIN_SYSTEM_PROBE_TIMEOUT_MS, resolveDarwinProductVersion } from "./os-summary.js";
+import { getOpenClawProcessInstanceId } from "./process-instance-id.js";
 
 export type SystemPresence = {
   host?: string;
@@ -48,7 +48,7 @@ type SystemPresenceUpdate = {
 const entries = new Map<string, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
-const SELF_INSTANCE_ID = randomUUID();
+const SELF_INSTANCE_ID = getOpenClawProcessInstanceId();
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
   return normalizeOptionalLowercaseString(key);

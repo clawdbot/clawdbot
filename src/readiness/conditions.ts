@@ -1,4 +1,12 @@
 import { boundedCoreReadinessMessage } from "./sanitize.js";
+import {
+  CORE_READINESS_SUBJECT_REFS,
+  createProcessReadinessIdentity,
+  normalizeRelatedSubjectRefs,
+  reconcileReadinessIdentity,
+  type ReadinessIdentity,
+  type ReadinessSubject,
+} from "./subjects.js";
 
 export const WORKSPACE_WRITABLE_CRITERION_ID = "openclaw.workspace-writable";
 
@@ -21,6 +29,10 @@ export type ReadinessRequirement = "required" | "advisory";
 
 export type ReadinessCondition = {
   type: ReadinessConditionType;
+  /** Required on canonical results; omitted only by the compatibility-only legacy path. */
+  subjectRef?: string;
+  relatedSubjectRefs?: string[];
+  observedAtMs?: number;
   status: ReadinessConditionStatus;
   requirement: ReadinessRequirement;
   reason: string;
@@ -28,10 +40,17 @@ export type ReadinessCondition = {
 };
 
 export type CanonicalReadinessResult = {
+  evaluatedAtMs: number;
+  identity: ReadinessIdentity;
   ready: boolean;
   conditions: ReadinessCondition[];
   failures: string[];
   advisories: string[];
+};
+
+export type ReadinessContribution = {
+  conditions: ReadinessCondition[];
+  subjects: ReadinessSubject[];
 };
 
 export type PluginReadinessInput = {
@@ -44,17 +63,21 @@ export type PluginReadinessInput = {
 };
 
 type RuntimeReadinessInput = {
+  evaluatedAtMs?: number;
+  identity?: ReadinessIdentity;
   configLoaded: boolean;
   gateway: "responding" | "not-checked" | "unavailable";
   plugins?: PluginReadinessInput;
   coreConditions?: ReadinessCondition[];
   additionalConditions?: ReadinessCondition[];
+  additionalSubjects?: ReadinessSubject[];
 };
 
 export function buildUnobservedGatewayConditions(): ReadinessCondition[] {
   return [
     {
       type: "GatewayStartupComplete",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
       status: "Unknown",
       requirement: "required",
       reason: "GatewayStartupNotChecked",
@@ -62,6 +85,7 @@ export function buildUnobservedGatewayConditions(): ReadinessCondition[] {
     },
     {
       type: "GatewayAcceptingWork",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
       status: "Unknown",
       requirement: "required",
       reason: "GatewayAdmissionNotChecked",
@@ -69,6 +93,7 @@ export function buildUnobservedGatewayConditions(): ReadinessCondition[] {
     },
     {
       type: "ChannelRuntimeReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
       status: "Unknown",
       requirement: "required",
       reason: "ChannelRuntimeNotChecked",
@@ -76,6 +101,7 @@ export function buildUnobservedGatewayConditions(): ReadinessCondition[] {
     },
     {
       type: "EventLoopHealthy",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
       status: "Unknown",
       requirement: "advisory",
       reason: "EventLoopStatusUnavailable",
@@ -98,6 +124,7 @@ function buildPluginCondition(plugins: PluginReadinessInput | undefined): Readin
   if (!plugins) {
     return {
       type: "PluginsLoaded",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.plugins,
       status: "Unknown",
       requirement: "advisory",
       reason: "PluginStatusUnavailable",
@@ -107,6 +134,7 @@ function buildPluginCondition(plugins: PluginReadinessInput | undefined): Readin
   const failures = resolvePluginFailures(plugins);
   return {
     type: "PluginsLoaded",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.plugins,
     status: failures.length === 0 ? "True" : "False",
     requirement: "advisory",
     reason: failures.length === 0 ? "PluginsLoaded" : "PluginLoadFailures",
@@ -121,6 +149,7 @@ function buildGatewayCondition(gateway: RuntimeReadinessInput["gateway"]): Readi
   if (gateway === "responding") {
     return {
       type: "GatewayResponding",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
       status: "True",
       requirement: "required",
       reason: "GatewayResponding",
@@ -130,6 +159,7 @@ function buildGatewayCondition(gateway: RuntimeReadinessInput["gateway"]): Readi
   if (gateway === "unavailable") {
     return {
       type: "GatewayResponding",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
       status: "False",
       requirement: "required",
       reason: "GatewayUnavailable",
@@ -138,6 +168,7 @@ function buildGatewayCondition(gateway: RuntimeReadinessInput["gateway"]): Readi
   }
   return {
     type: "GatewayResponding",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.gateway,
     status: "Unknown",
     requirement: "required",
     reason: "GatewayNotChecked",
@@ -152,11 +183,16 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
   );
   const remainingConditions = additionalConditions
     .filter((condition) => condition.type !== "WorkspaceWritable")
-    .toSorted((left, right) => left.type.localeCompare(right.type));
+    .toSorted(
+      (left, right) =>
+        left.type.localeCompare(right.type) ||
+        (left.subjectRef ?? "").localeCompare(right.subjectRef ?? ""),
+    );
   const conditions: ReadinessCondition[] = [
     ...(input.coreConditions ?? []),
     {
       type: "ConfigLoaded",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.config,
       status: input.configLoaded ? "True" : "False",
       requirement: "required",
       reason: input.configLoaded ? "ConfigLoaded" : "ConfigNotLoaded",
@@ -175,9 +211,34 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
   const advisories = conditions
     .filter((entry) => entry.requirement === "advisory" && entry.status !== "True")
     .map((entry) => entry.reason);
+  const normalizedConditions: ReadinessCondition[] = [];
+  for (const condition of conditions) {
+    const relatedSubjectRefs = normalizeRelatedSubjectRefs(condition.relatedSubjectRefs);
+    normalizedConditions.push(
+      relatedSubjectRefs ? { ...condition, relatedSubjectRefs } : condition,
+    );
+  }
+  if (normalizedConditions.some((condition) => !condition.subjectRef)) {
+    throw new Error("canonical readiness condition is missing a subject reference");
+  }
+  const conditionKeys = new Set<string>();
+  for (const condition of normalizedConditions) {
+    const key = `${condition.subjectRef}\u0000${condition.type}`;
+    if (conditionKeys.has(key)) {
+      throw new Error("duplicate canonical readiness condition");
+    }
+    conditionKeys.add(key);
+  }
+  const identity = reconcileReadinessIdentity({
+    base: input.identity ?? createProcessReadinessIdentity(),
+    subjects: input.additionalSubjects,
+    references: normalizedConditions as Array<ReadinessCondition & { subjectRef: string }>,
+  });
   return {
+    evaluatedAtMs: input.evaluatedAtMs ?? Date.now(),
+    identity,
     ready: failures.length === 0,
-    conditions,
+    conditions: normalizedConditions,
     failures,
     advisories,
   };

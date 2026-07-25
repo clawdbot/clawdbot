@@ -558,6 +558,7 @@ describe("canonical configured Gateway readiness", () => {
     });
     expect(result.conditions).toContainEqual({
       type: "ReadinessEvaluationComplete",
+      subjectRef: "openclaw/gateway/current",
       status: "Unknown",
       requirement: "required",
       reason: "ReadinessEvaluationTimedOut",
@@ -577,6 +578,32 @@ describe("canonical configured Gateway readiness", () => {
 
     expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
     expect(JSON.stringify(result)).not.toContain("secret backend path");
+  });
+
+  it("fails closed when merged conditions collide on subject and type", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: { gateway: { readiness: {} } },
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () =>
+        buildRuntimeReadiness({
+          configLoaded: true,
+          gateway: "responding",
+          additionalConditions: [
+            {
+              type: "GatewayStartupComplete",
+              subjectRef: "openclaw/gateway/current",
+              status: "True",
+              requirement: "required",
+              reason: "DuplicateStartupCondition",
+              message: "Duplicate startup condition.",
+            },
+          ],
+        }),
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
+    expect(result.conditions?.[0]?.type).toBe("ReadinessEvaluationComplete");
   });
 
   it("fails closed without rejecting when the core Gateway checker throws", async () => {
