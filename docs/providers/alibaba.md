@@ -6,7 +6,7 @@ read_when:
   - You need Model Studio or DashScope API key setup for video generation
 ---
 
-OpenClaw ships a bundled `alibaba` plugin that registers a video-generation provider for Wan models on Alibaba Model Studio (the international name for DashScope). The plugin is enabled by default; you only need to set an API key.
+The bundled `alibaba` plugin registers a video-generation provider for Wan models on Alibaba Model Studio (the international name for DashScope). It is enabled by default; only an API key is needed.
 
 | Property         | Value                                                                           |
 | ---------------- | ------------------------------------------------------------------------------- |
@@ -22,19 +22,19 @@ OpenClaw ships a bundled `alibaba` plugin that registers a video-generation prov
 
 <Steps>
   <Step title="Set an API key">
-    Use onboarding to store the key against the `alibaba` provider:
+    Store the key against the `alibaba` provider through onboarding:
 
     ```bash
     openclaw onboard --auth-choice alibaba-model-studio-api-key
     ```
 
-    Or pass the key directly during install/onboarding:
+    Or pass the key directly:
 
     ```bash
     openclaw onboard --alibaba-model-studio-api-key <your-key>
     ```
 
-    Or export any of the accepted env vars before starting the Gateway:
+    Or export one of the accepted env vars before starting the Gateway:
 
     ```bash
     export MODELSTUDIO_API_KEY=sk-...
@@ -61,13 +61,13 @@ OpenClaw ships a bundled `alibaba` plugin that registers a video-generation prov
     openclaw models list --provider alibaba
     ```
 
-    The list should include all five bundled Wan models. If `MODELSTUDIO_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    The list includes all five bundled Wan models. If `MODELSTUDIO_API_KEY` cannot be resolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
 
 <Note>
-  The Alibaba plugin and the [Qwen plugin](/providers/qwen) both authenticate against DashScope and accept overlapping env vars. Use `alibaba/...` model ids to drive the dedicated Wan video surface; use `qwen/...` ids when you want Qwen's chat, embedding, or media-understanding surface.
+  The Alibaba plugin and the [Qwen plugin](/providers/qwen) both authenticate against DashScope and accept overlapping env vars. Use `alibaba/...` model ids for the dedicated Wan video surface; use `qwen/...` ids for Qwen chat, embedding, or media-understanding.
 </Note>
 
 ## Built-in Wan models
@@ -82,7 +82,7 @@ OpenClaw ships a bundled `alibaba` plugin that registers a video-generation prov
 
 ## Capabilities and limits
 
-The bundled provider mirrors DashScope's Wan video API caps. All three modes share the same per-request video count and duration cap; only the input shape differs.
+All three modes share the same per-request video count and duration cap; only the input shape differs.
 
 | Mode               | Max output videos | Max input images | Max input videos | Max duration | Supported controls                                        |
 | ------------------ | ----------------- | ---------------- | ---------------- | ------------ | --------------------------------------------------------- |
@@ -90,17 +90,17 @@ The bundled provider mirrors DashScope's Wan video API caps. All three modes sha
 | Image-to-video     | 1                 | 1                | n/a              | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
 | Reference-to-video | 1                 | n/a              | 4                | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark` |
 
-When a request omits `durationSeconds`, the provider sends DashScope's accepted default of **5 seconds**. Set `durationSeconds` explicitly on the [video generation tool](/tools/video-generation) to extend up to 10 s.
+A request that omits `durationSeconds` gets DashScope's accepted default of **5 seconds**. Set `durationSeconds` explicitly on the [video generation tool](/tools/video-generation) to extend up to 10 s.
 
 <Warning>
-  Reference image and video inputs must be remote `http(s)` URLs. Local file paths are not accepted by DashScope's reference modes; upload to object storage first or use the [media tool](/tools/media-overview) flow that already produces a public URL.
+  Reference image and video inputs must be remote `http(s)` URLs; DashScope's reference modes reject local file paths. Upload to object storage first, or use the [media tool](/tools/media-overview) flow that already produces a public URL.
 </Warning>
 
 ## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Override the DashScope base URL">
-    The provider defaults to the international DashScope endpoint. To target the China-region endpoint, set:
+    The provider defaults to the international DashScope endpoint. To target the China-region endpoint:
 
     ```json5
     {
@@ -125,17 +125,17 @@ When a request omits `durationSeconds`, the provider sends DashScope's accepted 
     2. `DASHSCOPE_API_KEY`
     3. `QWEN_API_KEY`
 
-    Configured `auth.profiles` entries (set via `openclaw models auth login`) override env-var resolution. See [Auth profiles in the models FAQ](/help/faq-models#what-is-an-auth-profile) for profile rotation, cooldown, and override mechanics.
+    Configured `auth.profiles` entries (set via `openclaw models auth login`) override env-var resolution. See [Auth profiles in the models FAQ](/help/faq-models#auth-profiles-what-they-are-and-how-to-manage-them) for profile rotation, cooldown, and override mechanics.
 
   </Accordion>
 
   <Accordion title="Relationship to the Qwen plugin">
     Both bundled plugins talk to DashScope and accept overlapping API keys. Use:
 
-    - `alibaba/wan*.*` ids to drive the dedicated Wan video provider documented on this page.
+    - `alibaba/wan*.*` ids for the dedicated Wan video provider documented on this page.
     - `qwen/*` ids for Qwen chat, embedding, and media understanding (see [Qwen](/providers/qwen)).
 
-    Setting `MODELSTUDIO_API_KEY` once authenticates both plugins because the auth env var list intentionally overlaps; you do not need to onboard each plugin separately.
+    Setting `MODELSTUDIO_API_KEY` once authenticates both plugins, since the auth env var list intentionally overlaps; onboarding each plugin separately is not required.
 
   </Accordion>
 </AccordionGroup>

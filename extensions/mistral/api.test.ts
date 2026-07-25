@@ -5,6 +5,7 @@ import {
   applyMistralModelCompat,
   MISTRAL_MEDIUM_3_5_ID,
   MISTRAL_MODEL_TRANSPORT_PATCH,
+  MISTRAL_SMALL_4_ID,
   MISTRAL_SMALL_LATEST_ID,
   resolveMistralCompatPatch,
 } from "./api.js";
@@ -70,6 +71,17 @@ describe("resolveMistralCompatPatch", () => {
     });
   });
 
+  it("enables reasoning_effort mapping for Mistral Small 4's pinned id", () => {
+    expect(resolveMistralCompatPatch({ id: MISTRAL_SMALL_4_ID })).toEqual({
+      supportsStore: false,
+      supportsPromptCacheKey: true,
+      supportsLongCacheRetention: false,
+      supportsReasoningEffort: true,
+      maxTokensField: "max_tokens",
+      reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
+    });
+  });
+
   it("enables reasoning_effort mapping for mistral-medium-3-5", () => {
     expect(resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID })).toEqual({
       supportsStore: false,
@@ -102,6 +114,13 @@ describe("applyMistralModelCompat", () => {
 
   it("applies reasoning compat for mistral-small-latest", () => {
     const normalized = applyMistralModelCompat({ id: MISTRAL_SMALL_LATEST_ID });
+    expect(supportsReasoningEffort(normalized)).toBe(true);
+    expect(reasoningEffortMap(normalized)?.high).toBe("high");
+    expect(reasoningEffortMap(normalized)?.off).toBe("none");
+  });
+
+  it("applies reasoning compat for Mistral Small 4's pinned id", () => {
+    const normalized = applyMistralModelCompat({ id: MISTRAL_SMALL_4_ID });
     expect(supportsReasoningEffort(normalized)).toBe(true);
     expect(reasoningEffortMap(normalized)?.high).toBe("high");
     expect(reasoningEffortMap(normalized)?.off).toBe("none");
@@ -170,14 +189,17 @@ describe("applyMistralModelCompat", () => {
     expect(applyMistralModelCompat(model)).toBe(model);
   });
 
-  it("exposes thinking profile levels for mistral-medium-3-5", async () => {
-    const provider = await registerSingleProviderPlugin(mistralPlugin);
+  it.each([MISTRAL_SMALL_LATEST_ID, MISTRAL_SMALL_4_ID, MISTRAL_MEDIUM_3_5_ID])(
+    "exposes binary thinking profile levels for %s",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(mistralPlugin);
 
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "mistral",
-        modelId: MISTRAL_MEDIUM_3_5_ID,
-      }),
-    ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
-  });
+      expect(
+        provider.resolveThinkingProfile?.({
+          provider: "mistral",
+          modelId,
+        }),
+      ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
+    },
+  );
 });

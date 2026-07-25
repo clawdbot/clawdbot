@@ -1,6 +1,7 @@
 // Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
@@ -37,8 +38,8 @@ export function createMergePatch(base: unknown, target: unknown): unknown {
   const patch: Record<string, unknown> = {};
   const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
   for (const key of keys) {
-    const hasBase = key in base;
-    const hasTarget = key in target;
+    const hasBase = Object.hasOwn(base, key);
+    const hasTarget = Object.hasOwn(target, key);
     if (!hasTarget) {
       patch[key] = null;
       continue;
@@ -215,7 +216,8 @@ function setPathValue(value: unknown, path: string[], nextValue: unknown): unkno
   if (path.length === 0) {
     return cloneUnknown(nextValue);
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length) {
@@ -273,7 +275,8 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   if (path.length === 0) {
     return cloneUnknown(nextValue);
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value) || isNumericPathSegment(head)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined) {
@@ -294,7 +297,8 @@ function deletePathValue(value: unknown, path: string[]): unknown {
   if (path.length === 0) {
     return value;
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length || tail.length === 0) {
@@ -442,15 +446,7 @@ function normalizeAgentModelConfigForWrite(value: unknown): unknown {
   return mutated ? next : value;
 }
 
-const AGENT_MODEL_CONFIG_KEYS = [
-  "model",
-  "imageModel",
-  "imageGenerationModel",
-  "videoGenerationModel",
-  "musicGenerationModel",
-  "voiceModel",
-  "pdfModel",
-] as const;
+const AGENT_MODEL_CONFIG_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 
 function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
   const value = getPathValue(config, path);
@@ -480,6 +476,10 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     next = normalizeModelConfigPathForWrite(next, [...path, key]);
   }
+  for (const key of ["image", "video", "music"] as const) {
+    next = normalizeModelConfigPathForWrite(next, [...path, "mediaModels", key]);
+  }
+  next = normalizeModelStringPathForWrite(next, [...path, "utilityModel"]);
   next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
   next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
   next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
@@ -496,28 +496,30 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
 }
 
 function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
-  const list = getPathValue(config, ["agents", "list"]);
-  if (!Array.isArray(list)) {
+  const entries = getPathValue(config, ["agents", "entries"]);
+  if (!isRecord(entries)) {
     return config;
   }
 
   let mutated = false;
-  const nextList = list.map((agent) => {
-    if (!isRecord(agent)) {
-      return agent;
-    }
+  const nextEntries = Object.fromEntries(
+    Object.entries(entries).map(([agentId, agent]) => {
+      if (!isRecord(agent)) {
+        return [agentId, agent];
+      }
 
-    const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
-      agent: unknown;
-    };
-    if (normalized.agent !== agent) {
-      mutated = true;
-      return normalized.agent;
-    }
-    return agent;
-  });
+      const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
+        agent: unknown;
+      };
+      if (normalized.agent !== agent) {
+        mutated = true;
+        return [agentId, normalized.agent];
+      }
+      return [agentId, agent];
+    }),
+  );
 
-  return mutated ? setPathValue(config, ["agents", "list"], nextList) : config;
+  return mutated ? setPathValue(config, ["agents", "entries"], nextEntries) : config;
 }
 
 function normalizeToolsModelRefsForWrite(config: unknown): unknown {
@@ -785,7 +787,8 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   if (path.length === 0) {
     return true;
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length) {
@@ -853,7 +856,7 @@ function mergeMissingExplicitValues(
   return { changed, value: changed ? next : currentValue };
 }
 
-export function injectExplicitlySetPaths(params: {
+function injectExplicitlySetPaths(params: {
   valueSource: unknown;
   persistedCandidate: unknown;
   explicitSetPaths?: readonly (readonly string[])[];
@@ -1018,7 +1021,7 @@ function unsetPathForWriteAt(
   if (depth >= pathSegments.length) {
     return { changed: false, value };
   }
-  const segment = pathSegments[depth];
+  const segment = expectDefined(pathSegments[depth], "path segments entry at depth");
   const isLeaf = depth === pathSegments.length - 1;
 
   if (Array.isArray(value)) {
@@ -1076,7 +1079,7 @@ function unsetPathForWriteAt(
   };
 }
 
-export function unsetPathForWrite(
+function unsetPathForWrite(
   root: OpenClawConfig,
   pathSegments: string[],
 ): { changed: boolean; next: OpenClawConfig } {
@@ -1154,8 +1157,8 @@ export function collectChangedPaths(
     const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
     for (const key of keys) {
       const childPath = path ? `${path}.${key}` : key;
-      const hasBase = key in base;
-      const hasTarget = key in target;
+      const hasBase = Object.hasOwn(base, key);
+      const hasTarget = Object.hasOwn(target, key);
       if (!hasTarget || !hasBase) {
         output.add(childPath);
         continue;
@@ -1266,3 +1269,4 @@ export function resolveWriteEnvSnapshotForPath(params: {
   }
   return undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

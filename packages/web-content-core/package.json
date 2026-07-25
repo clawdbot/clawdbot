@@ -6,14 +6,7 @@
     "dist"
   ],
   "type": "module",
-  "main": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.mts",
-      "import": "./dist/index.mjs",
-      "default": "./dist/index.mjs"
-    },
     "./provider-runtime-shared": {
       "types": "./dist/provider-runtime-shared.d.mts",
       "import": "./dist/provider-runtime-shared.mjs",
@@ -21,6 +14,6 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/provider-runtime-shared.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/provider-runtime-shared.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   }
 }

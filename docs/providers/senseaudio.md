@@ -6,7 +6,7 @@ read_when:
 title: "SenseAudio"
 ---
 
-SenseAudio can transcribe inbound audio and voice-note attachments through OpenClaw's shared `tools.media.audio` pipeline. OpenClaw posts multipart audio to the OpenAI-compatible transcription endpoint and injects the returned text as `{{Transcript}}` plus an `[Audio]` block.
+SenseAudio transcribes inbound audio and voice-note attachments through OpenClaw's shared `tools.media.audio` pipeline. OpenClaw posts multipart audio to the OpenAI-compatible transcription endpoint and injects the returned text as `{{Transcript}}` plus an `[Audio]` block.
 
 | Property      | Value                                            |
 | ------------- | ------------------------------------------------ |
@@ -49,13 +49,13 @@ SenseAudio can transcribe inbound audio and voice-note attachments through OpenC
 
 ## Options
 
-| Option     | Path                                  | Description                         |
-| ---------- | ------------------------------------- | ----------------------------------- |
-| `model`    | `tools.media.audio.models[].model`    | SenseAudio ASR model id             |
-| `language` | `tools.media.audio.models[].language` | Optional language hint              |
-| `prompt`   | `tools.media.audio.prompt`            | Optional transcription prompt       |
-| `baseUrl`  | `tools.media.audio.baseUrl` or model  | Override the OpenAI-compatible base |
-| `headers`  | `tools.media.audio.request.headers`   | Extra request headers               |
+| Option     | Path                            | Description                         |
+| ---------- | ------------------------------- | ----------------------------------- |
+| `model`    | `tools.media.models[].model`    | SenseAudio ASR model id             |
+| `language` | `tools.media.models[].language` | Optional language hint              |
+| `prompt`   | `tools.media.models[].prompt`   | Optional transcription prompt       |
+| `baseUrl`  | `tools.media.models[].baseUrl`  | Override the OpenAI-compatible base |
+| `headers`  | `tools.media.models[].headers`  | Extra request headers               |
 
 <Note>
 SenseAudio is batch STT only in OpenClaw. Voice Call realtime transcription

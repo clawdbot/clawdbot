@@ -13,7 +13,6 @@ import {
   createUserDmChannel,
   deleteChannelMessage,
   deleteOwnMessageReaction,
-  deleteWebhookMessage,
   editApplicationCommand,
   editWebhookMessage,
   getCurrentUser,
@@ -207,13 +206,7 @@ describe("Discord REST API helpers", () => {
   });
 
   it("routes interaction webhook helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([
-      { ok: true },
-      { id: "m1" },
-      { id: "m2" },
-      { id: "m3" },
-      undefined,
-    ]);
+    const rest = createFakeRestClient([{ ok: true }, { id: "m1" }, { id: "m2" }, { id: "m3" }]);
     const query = { wait: "true" };
 
     await expect(createInteractionCallback(rest, "i1", "itoken", { type: 5 })).resolves.toEqual({
@@ -226,8 +219,6 @@ describe("Discord REST API helpers", () => {
     await expect(
       editWebhookMessage(rest, "app1", "wtoken", "m1", { body: { content: "updated" } }),
     ).resolves.toEqual({ id: "m3" });
-    await deleteWebhookMessage(rest, "app1", "wtoken", "m1");
-
     expect(rest.calls).toEqual([
       {
         method: "POST",
@@ -246,7 +237,6 @@ describe("Discord REST API helpers", () => {
         path: Routes.webhookMessage("app1", "wtoken", "m1"),
         data: { body: { content: "updated" } },
       },
-      { method: "DELETE", path: Routes.webhookMessage("app1", "wtoken", "m1") },
     ]);
   });
 

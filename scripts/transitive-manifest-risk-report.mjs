@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import YAML from "yaml";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { parseReportCliArgs, writeReportArtifact } from "./lib/report-cli-helpers.mjs";
 import {
   collectAllResolvedPackagesFromLockfile,
@@ -24,7 +25,7 @@ const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
 const NPM_PACKUMENT_ACCEPT_HEADER = "application/json";
 /** Maximum npm packument response size accepted by the risk scanner. */
-export const NPM_PACKUMENT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const NPM_PACKUMENT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const NPM_PACKUMENT_FETCH_TIMEOUT_MS = 60_000;
 
 function isAllowedPinnedSpec(spec) {
@@ -130,10 +131,6 @@ function splitMinimumReleaseAgeExcludeSelector(selector) {
       .map((entry) => entry.trim())
       .filter(Boolean),
   };
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function packagePatternMatches(pattern, packageName) {
@@ -606,7 +603,7 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-export async function runTransitiveManifestRiskReport({
+async function runTransitiveManifestRiskReport({
   rootDir = process.cwd(),
   fetchImpl = fetch,
   now = new Date(),

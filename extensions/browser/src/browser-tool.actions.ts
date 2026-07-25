@@ -13,21 +13,26 @@ import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
   browserConsoleMessages,
+  browserDownload,
   browserSnapshot,
   browserTabs,
+  browserWaitForDownload,
   getBrowserProfileCapabilities,
   getRuntimeConfig,
   imageResultFromFile,
   jsonResult,
   normalizeOptionalString,
+  readStringParam,
   readStringValue,
   resolveBrowserConfig,
   resolveProfile,
   resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
+import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
 } from "./browser/constants.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
@@ -35,13 +40,15 @@ import { neutralizeMediaDirectives } from "./browser/vision.js";
 const browserToolActionDeps = {
   browserAct,
   browserConsoleMessages,
+  browserDownload,
   browserSnapshot,
   browserTabs,
+  browserWaitForDownload,
   getRuntimeConfig,
   imageResultFromFile,
 };
 
-const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
@@ -83,7 +90,6 @@ function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
     case "drag":
     case "select":
     case "fill":
-    case "evaluate":
       return true;
     default:
       return false;
@@ -114,50 +120,12 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const configuredTimeout =
-    normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
-  return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
+  return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
 }
 
 function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
-  const candidateTimeouts: number[] = [];
-  const explicitTimeout = normalizePositiveTimeoutMs(
-    (request as BrowserActRequestWithTimeout).timeoutMs,
-  );
-  if (explicitTimeout !== undefined) {
-    candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-  }
-  if (request.kind === "wait") {
-    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
-    if (waitDuration !== undefined) {
-      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-    }
-  }
-  return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
+  return resolveBrowserActRequestTimeoutMs(request);
 }
-
-export const testing = {
-  setDepsForTest(
-    overrides: Partial<{
-      browserAct: typeof browserAct;
-      browserConsoleMessages: typeof browserConsoleMessages;
-      browserSnapshot: typeof browserSnapshot;
-      browserTabs: typeof browserTabs;
-      imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
-    }> | null,
-  ) {
-    browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
-    browserToolActionDeps.browserConsoleMessages =
-      overrides?.browserConsoleMessages ?? browserConsoleMessages;
-    browserToolActionDeps.browserSnapshot = overrides?.browserSnapshot ?? browserSnapshot;
-    browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
-    browserToolActionDeps.imageResultFromFile =
-      overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
-  },
-};
 
 type BrowserProxyRequest = (opts: {
   method: string;
@@ -276,9 +244,12 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!profile) {
     return false;
   }
+  const status =
+    err && typeof err === "object" && "status" in err ? (err as { status?: unknown }).status : null;
+  const msg = String(err);
+  const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
   if (profile === "user") {
-    const msg = String(err);
-    return msg.includes("404:") && msg.includes("tab not found");
+    return isTabNotFound;
   }
   const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -286,31 +257,31 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
     return false;
   }
-  const msg = String(err);
-  return msg.includes("404:") && msg.includes("tab not found");
+  return isTabNotFound;
 }
 
-function stripTargetIdFromActRequest(
-  request: Parameters<typeof browserAct>[1],
-): Parameters<typeof browserAct>[1] | null {
-  const targetId = normalizeOptionalString(request.targetId);
-  if (!targetId) {
+function replaceStaleTargetIdInActRequest(
+  request: BrowserActRequest,
+  targetId: string,
+): BrowserActRequest | null {
+  if (!normalizeOptionalString(request.targetId) || !targetId) {
     return null;
   }
-  const retryRequest = { ...request };
-  delete retryRequest.targetId;
-  return retryRequest as Parameters<typeof browserAct>[1];
+  return { ...request, targetId } as BrowserActRequest;
 }
 
-function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>[1]): boolean {
-  const typedRequest = request as Partial<Record<"kind" | "action", unknown>>;
-  const kind =
-    typeof typedRequest.kind === "string"
-      ? typedRequest.kind
-      : typeof typedRequest.action === "string"
-        ? typedRequest.action
-        : "";
-  return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
+function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): boolean {
+  if (request.kind !== "wait" || normalizeNonNegativeDurationMs(request.timeMs) === undefined) {
+    return false;
+  }
+  return [
+    request.fn,
+    request.text,
+    request.textGone,
+    request.selector,
+    request.url,
+    request.loadState,
+  ].every((value) => !normalizeOptionalString(value));
 }
 
 function isAriaRefsUnsupportedError(err: unknown): boolean {
@@ -332,6 +303,7 @@ export async function executeTabsAction(params: {
   profile?: string;
   timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
+  targetId?: string;
 }): Promise<AgentToolResult<unknown>> {
   const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
@@ -341,10 +313,16 @@ export async function executeTabsAction(params: {
       profile,
       timeoutMs,
     });
-    const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
+    const tabs = ((result as { tabs?: unknown[] }).tabs ?? []).filter(
+      (tab) =>
+        !params.targetId ||
+        readStringValue((tab as { targetId?: unknown } | undefined)?.targetId) === params.targetId,
+    );
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
+  const tabs = (await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs })).filter(
+    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+  );
   return formatTabsToolResult(tabs);
 }
 
@@ -570,6 +548,78 @@ export async function executeConsoleAction(params: {
   return formatConsoleToolResult(result);
 }
 
+function resolveDownloadProxyTimeoutMs(timeoutMs: number | undefined): number {
+  const waitTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
+  // The node proxy must outlive the browser-server request; callBrowserProxy
+  // adds a second grace window for the outer Gateway node.invoke call.
+  return waitTimeoutMs + BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS;
+}
+
+type BrowserDownloadRequest =
+  | { action: "download"; route: "/download"; ref: string; path: string }
+  | { action: "waitfordownload"; route: "/wait/download"; path?: string };
+
+function readBrowserDownloadRequest(
+  action: BrowserDownloadRequest["action"],
+  input: Record<string, unknown>,
+): BrowserDownloadRequest {
+  if (action === "download") {
+    return {
+      action,
+      route: "/download",
+      ref: readStringParam(input, "ref", { required: true }),
+      path: readStringParam(input, "path", { required: true }),
+    };
+  }
+  return {
+    action,
+    route: "/wait/download",
+    path: readStringParam(input, "path"),
+  };
+}
+
+/** Execute explicit Browser download operations through the local or node-host path. */
+export async function executeDownloadAction(params: {
+  action: "download" | "waitfordownload";
+  input: Record<string, unknown>;
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
+}): Promise<AgentToolResult<unknown>> {
+  const { action, input, baseUrl, profile, proxyRequest } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
+  const request = readBrowserDownloadRequest(action, input);
+  const result = proxyRequest
+    ? await proxyRequest({
+        method: "POST",
+        path: request.route,
+        profile,
+        timeoutMs: resolveDownloadProxyTimeoutMs(timeoutMs),
+        body:
+          request.action === "download"
+            ? { ref: request.ref, path: request.path, targetId, timeoutMs }
+            : { path: request.path, targetId, timeoutMs },
+      })
+    : request.action === "download"
+      ? await browserToolActionDeps.browserDownload(baseUrl, {
+          ref: request.ref,
+          path: request.path,
+          targetId,
+          timeoutMs,
+          profile,
+        })
+      : await browserToolActionDeps.browserWaitForDownload(baseUrl, {
+          path: request.path,
+          targetId,
+          timeoutMs,
+          profile,
+        });
+  params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+  return jsonResult(result);
+}
+
 /** Execute browser actions with profile-aware timeout defaults and stale-tab recovery. */
 export async function executeActAction(params: {
   request: BrowserActRequest;
@@ -599,7 +649,6 @@ export async function executeActAction(params: {
     return jsonResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
-      const retryRequest = stripTargetIdFromActRequest(effectiveRequest);
       const tabs = proxyRequest
         ? ((
             (await proxyRequest({
@@ -609,29 +658,37 @@ export async function executeActAction(params: {
             })) as { tabs?: unknown[] }
           ).tabs ?? [])
         : await browserToolActionDeps.browserTabs(baseUrl, { profile }).catch(() => []);
-      // Some user-browser targetIds can go stale between snapshots and actions.
-      // Only retry safe read-only actions, and only when exactly one tab remains attached.
-      if (retryRequest && canRetryChromeActWithoutTargetId(effectiveRequest) && tabs.length === 1) {
-        try {
-          const retryResult = proxyRequest
-            ? await proxyRequest({
-                method: "POST",
-                path: "/act",
-                profile,
-                body: retryRequest,
-                timeoutMs: resolveActProxyTimeoutMs(retryRequest),
-              })
-            : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
-                profile,
-              });
-          params.onTabActivity?.(
-            readStringValue((retryResult as { targetId?: unknown }).targetId) ??
-              readStringValue(retryRequest.targetId),
-          );
-          return jsonResult(retryResult);
-        } catch {
-          // Fall through to explicit stale-target guidance.
-        }
+      const freshTargetId =
+        tabs.length === 1
+          ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
+          : undefined;
+      const retryRequest = freshTargetId
+        ? replaceStaleTargetIdInActRequest(effectiveRequest, freshTargetId)
+        : null;
+      // This is same-agent continuity, not identity recovery: only target-independent
+      // waits may retry, against the one freshly listed tab. Ref-scoped and scripted
+      // operations require explicit fresh selection (and a fresh snapshot for refs).
+      if (
+        retryRequest &&
+        canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
+        tabs.length === 1
+      ) {
+        const retryResult = proxyRequest
+          ? await proxyRequest({
+              method: "POST",
+              path: "/act",
+              profile,
+              body: retryRequest,
+              timeoutMs: resolveActProxyTimeoutMs(retryRequest),
+            })
+          : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
+              profile,
+            });
+        params.onTabActivity?.(
+          readStringValue((retryResult as { targetId?: unknown }).targetId) ??
+            readStringValue(retryRequest.targetId),
+        );
+        return jsonResult(retryResult);
       }
       if (!tabs.length) {
         throw new Error(
@@ -647,4 +704,3 @@ export async function executeActAction(params: {
     throw err;
   }
 }
-export { testing as __testing };

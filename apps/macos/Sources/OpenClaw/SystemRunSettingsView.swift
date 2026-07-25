@@ -24,25 +24,66 @@ struct SystemRunSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            self.summaryPanel
+            if self.model.policyAvailable {
+                self.summaryPanel
 
-            Picker("", selection: self.$tab) {
-                ForEach(ExecApprovalsSettingsTab.allCases) { tab in
-                    Text(tab.title).tag(tab)
+                Picker("", selection: self.$tab) {
+                    ForEach(ExecApprovalsSettingsTab.allCases) { tab in
+                        Text(tab.title).tag(tab)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 280)
+                .pickerStyle(.segmented)
+                .frame(width: 280)
 
-            if self.tab == .policy {
-                self.policyView
+                if let mutationErrorMessage = self.model.mutationErrorMessage {
+                    Text(mutationErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+
+                if self.tab == .policy {
+                    self.policyView
+                } else {
+                    self.allowlistView
+                }
+            } else if self.model.readErrorMessage != nil {
+                self.unavailablePanel
             } else {
-                self.allowlistView
+                self.loadingPanel
             }
         }
         .task { await self.model.refresh() }
         .onChange(of: self.tab) { _, _ in
             Task { await self.model.refreshSkillBins() }
+        }
+    }
+
+    private var loadingPanel: some View {
+        SettingsCardGroup("Exec Approvals") {
+            SettingsCardRow(
+                title: "Loading settings…",
+                subtitle: "Reading the persisted policy.",
+                showsDivider: false)
+            {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private var unavailablePanel: some View {
+        SettingsCardGroup("Exec Approvals Unavailable") {
+            SettingsCardRow(
+                title: "Settings could not be read",
+                subtitle: self.model.readErrorMessage.map(SettingsTextValue.verbatim) ??
+                    "Retry to load the persisted policy.",
+                showsDivider: false)
+            {
+                Button("Retry") {
+                    Task { await self.model.retryUnavailableSettings(maxAttempts: 1) }
+                }
+                .buttonStyle(.bordered)
+            }
         }
     }
 
@@ -104,7 +145,7 @@ struct SystemRunSettingsView: View {
             SettingsCardGroup("Policy") {
                 SettingsCardRow(
                     title: "Command access",
-                    subtitle: self.model.security.policyDescription)
+                    subtitle: .localized(self.model.security.policyDescription))
                 {
                     Picker("Command access", selection: Binding(
                         get: { self.model.security },
@@ -121,7 +162,7 @@ struct SystemRunSettingsView: View {
 
                 SettingsCardRow(
                     title: "Prompt behavior",
-                    subtitle: self.model.ask.policyDescription)
+                    subtitle: .localized(self.model.ask.policyDescription))
                 {
                     Picker("Prompt behavior", selection: Binding(
                         get: { self.model.ask },
@@ -216,22 +257,17 @@ struct SystemRunSettingsView: View {
                     }
                 }
 
-                if let validationMessage = self.model.allowlistValidationMessage {
-                    Text(validationMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
-
                 if self.model.entries.isEmpty {
                     self.emptyAllowlistState
                 } else {
                     SettingsCardGroup("Allowed Commands") {
                         ForEach(self.model.entries, id: \.id) { entry in
                             ExecAllowlistRow(
-                                entry: Binding(
-                                    get: { self.model.entry(for: entry.id) ?? entry },
-                                    set: { self.model.updateEntry($0, id: entry.id) }),
+                                entry: entry,
                                 showsDivider: entry.id != self.model.entries.last?.id,
+                                onPatternChange: { pattern in
+                                    self.model.updateEntry(pattern: pattern, id: entry.id)
+                                },
                                 onRemove: { self.model.removeEntry(id: entry.id) })
                         }
                     }
@@ -279,7 +315,7 @@ struct SystemRunSettingsView: View {
     }
 
     private func addPatternIfValid() {
-        if self.model.addEntry(self.newPattern) == nil {
+        if self.model.addEntry(self.newPattern) {
             self.newPattern = ""
         }
     }
@@ -311,8 +347,9 @@ private enum ExecApprovalsSettingsTab: String, CaseIterable, Identifiable {
 }
 
 struct ExecAllowlistRow: View {
-    @Binding var entry: ExecAllowlistEntry
+    let entry: ExecAllowlistEntry
     var showsDivider = true
+    let onPatternChange: (String) -> String
     let onRemove: () -> Void
     @State private var draftPattern: String = ""
 
@@ -366,6 +403,9 @@ struct ExecAllowlistRow: View {
         .onAppear {
             self.draftPattern = self.entry.pattern
         }
+        .onChange(of: self.entry.pattern) { _, pattern in
+            self.draftPattern = pattern
+        }
     }
 
     private var patternBinding: Binding<String> {
@@ -373,7 +413,7 @@ struct ExecAllowlistRow: View {
             get: { self.draftPattern.isEmpty ? self.entry.pattern : self.draftPattern },
             set: { newValue in
                 self.draftPattern = newValue
-                self.entry.pattern = newValue
+                self.draftPattern = self.onPatternChange(newValue)
             })
     }
 }
@@ -434,6 +474,15 @@ extension ExecAsk {
 @Observable
 final class ExecApprovalsSettingsModel {
     private static let defaultsScopeId = "__defaults__"
+    private static let readUnavailableMessage = "Exec approval settings are unavailable. Retry to refresh."
+    @ObservationIgnored private let resolveApprovalsAsync:
+        @MainActor (String) async -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
+    @ObservationIgnored private let resolveDefaultsAsync:
+        @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
+    @ObservationIgnored private let readRetryDelay: Duration
+    @ObservationIgnored private let automaticReadRetryAttempts: Int
+    @ObservationIgnored private var readRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var readGeneration = 0
     var agentIds: [String] = []
     var selectedAgentId: String = "main"
     var defaultAgentId: String = "main"
@@ -443,7 +492,16 @@ final class ExecApprovalsSettingsModel {
     var autoAllowSkills = false
     var entries: [ExecAllowlistEntry] = []
     var skillBins: [String] = []
-    var allowlistValidationMessage: String?
+    var policyLoadState: ExecApprovalsPolicyLoadState = .loading
+    var mutationErrorMessage: String?
+
+    var policyAvailable: Bool {
+        self.policyLoadState.isAvailable
+    }
+
+    var readErrorMessage: String? {
+        self.policyLoadState.errorMessage
+    }
 
     var agentPickerIds: [String] {
         [Self.defaultsScopeId] + self.agentIds
@@ -453,14 +511,38 @@ final class ExecApprovalsSettingsModel {
         self.selectedAgentId == Self.defaultsScopeId
     }
 
+    init(
+        resolveApprovalsAsync: @escaping @MainActor (String) async -> Result<
+            ExecApprovalsResolved,
+            ExecApprovalsReadError,
+        > = {
+            await ExecApprovalsStore.resolveAsyncResult(agentId: $0)
+        },
+        resolveDefaultsAsync: @escaping @MainActor () async -> Result<
+            ExecApprovalsResolvedDefaults,
+            ExecApprovalsReadError,
+        > = {
+            await ExecApprovalsStore.resolveDefaultsAsyncResult()
+        },
+        readRetryDelay: Duration = .milliseconds(250),
+        automaticReadRetryAttempts: Int = 5)
+    {
+        self.resolveApprovalsAsync = resolveApprovalsAsync
+        self.resolveDefaultsAsync = resolveDefaultsAsync
+        self.readRetryDelay = readRetryDelay
+        self.automaticReadRetryAttempts = automaticReadRetryAttempts
+    }
+
     func label(for id: String) -> String {
-        if id == Self.defaultsScopeId { return "Defaults" }
+        if id == Self.defaultsScopeId {
+            return "Defaults"
+        }
         return id
     }
 
     func refresh() async {
         await self.refreshAgents()
-        self.loadSettings(for: self.selectedAgentId)
+        await self.loadSettings(for: self.selectedAgentId)
         await self.refreshSkillBins()
     }
 
@@ -475,7 +557,9 @@ final class ExecApprovalsSettingsModel {
             guard let raw = entry["id"] as? String else { continue }
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            if !seen.insert(trimmed).inserted { continue }
+            if !seen.insert(trimmed).inserted {
+                continue
+            }
             ids.append(trimmed)
             if (entry["default"] as? Bool) == true, defaultId == nil {
                 defaultId = trimmed
@@ -499,35 +583,129 @@ final class ExecApprovalsSettingsModel {
 
     func selectAgent(_ id: String) {
         self.selectedAgentId = id
-        self.allowlistValidationMessage = nil
-        self.loadSettings(for: id)
-        Task { await self.refreshSkillBins() }
+        self.mutationErrorMessage = nil
+        let task = self.startSettingsRead(for: id)
+        Task { [weak self] in
+            await task.value
+            guard let self, self.selectedAgentId == id, self.policyAvailable else { return }
+            await self.refreshSkillBins()
+        }
     }
 
-    func loadSettings(for agentId: String) {
-        if agentId == Self.defaultsScopeId {
-            let defaults = ExecApprovalsStore.resolveDefaults()
-            self.security = defaults.security
-            self.ask = defaults.ask
-            self.askFallback = defaults.askFallback
-            self.autoAllowSkills = defaults.autoAllowSkills
-            self.entries = []
-            self.allowlistValidationMessage = nil
-            return
-        }
-        let resolved = ExecApprovalsStore.resolve(agentId: agentId)
+    func loadSettings(for agentId: String) async {
+        let task = self.startSettingsRead(for: agentId)
+        await task.value
+    }
+
+    func retryUnavailableSettings(maxAttempts: Int) async {
+        let task = self.startSettingsRead(
+            for: self.selectedAgentId,
+            maxAttempts: maxAttempts)
+        await task.value
+    }
+
+    func waitForPendingSettingsRead() async {
+        await self.readRetryTask?.value
+    }
+
+    private func apply(defaults: ExecApprovalsResolvedDefaults) {
+        self.security = defaults.security
+        self.ask = defaults.ask
+        self.askFallback = defaults.askFallback
+        self.autoAllowSkills = defaults.autoAllowSkills
+        self.entries = []
+        self.finishSettingsRead()
+    }
+
+    private func apply(resolved: ExecApprovalsResolved) {
         self.security = resolved.agent.security
         self.ask = resolved.agent.ask
         self.askFallback = resolved.agent.askFallback
         self.autoAllowSkills = resolved.agent.autoAllowSkills
         self.entries = resolved.allowlist
             .sorted { $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending }
-        self.allowlistValidationMessage = nil
+        self.finishSettingsRead()
+    }
+
+    private func finishSettingsRead() {
+        self.policyLoadState = .available
+        self.mutationErrorMessage = nil
+    }
+
+    @discardableResult
+    private func startSettingsRead(
+        for agentId: String,
+        maxAttempts: Int? = nil,
+        showLoading: Bool = true) -> Task<Void, Never>
+    {
+        self.readGeneration += 1
+        let generation = self.readGeneration
+        self.readRetryTask?.cancel()
+        if showLoading {
+            self.policyLoadState = .loading
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performSettingsReadRetries(
+                for: agentId,
+                maxAttempts: maxAttempts ?? self.automaticReadRetryAttempts + 1,
+                generation: generation)
+        }
+        self.readRetryTask = task
+        return task
+    }
+
+    private func performSettingsReadRetries(
+        for agentId: String,
+        maxAttempts: Int,
+        generation: Int) async
+    {
+        guard self.readGeneration == generation else { return }
+        guard maxAttempts > 0 else {
+            self.policyLoadState = .unavailable(Self.readUnavailableMessage)
+            return
+        }
+        for attempt in 0..<maxAttempts {
+            if attempt > 0 {
+                do {
+                    try await Task.sleep(for: self.readRetryDelay)
+                } catch {
+                    return
+                }
+            }
+            guard self.readGeneration == generation, self.selectedAgentId == agentId else { return }
+            if await self.loadSettingsOnceAsync(
+                for: agentId,
+                generation: generation)
+            {
+                return
+            }
+        }
+        guard self.readGeneration == generation else { return }
+        self.policyLoadState = .unavailable(Self.readUnavailableMessage)
+    }
+
+    private func loadSettingsOnceAsync(
+        for agentId: String,
+        generation: Int) async -> Bool
+    {
+        if agentId == Self.defaultsScopeId {
+            let result = await self.resolveDefaultsAsync()
+            guard self.readGeneration == generation, self.selectedAgentId == agentId else { return false }
+            guard case let .success(defaults) = result else { return false }
+            self.apply(defaults: defaults)
+            return true
+        }
+
+        let result = await self.resolveApprovalsAsync(agentId)
+        guard self.readGeneration == generation, self.selectedAgentId == agentId else { return false }
+        guard case let .success(resolved) = result else { return false }
+        self.apply(resolved: resolved)
+        return true
     }
 
     func setSecurity(_ security: ExecSecurity) {
-        self.security = security
-        if self.isDefaultsScope {
+        let result = if self.isDefaultsScope {
             ExecApprovalsStore.updateDefaults { defaults in
                 defaults.security = security
             }
@@ -536,12 +714,13 @@ final class ExecApprovalsSettingsModel {
                 entry.security = security
             }
         }
-        self.syncQuickMode()
+        self.finishMutation(result) {
+            self.security = security
+        }
     }
 
     func setAsk(_ ask: ExecAsk) {
-        self.ask = ask
-        if self.isDefaultsScope {
+        let result = if self.isDefaultsScope {
             ExecApprovalsStore.updateDefaults { defaults in
                 defaults.ask = ask
             }
@@ -550,12 +729,13 @@ final class ExecApprovalsSettingsModel {
                 entry.ask = ask
             }
         }
-        self.syncQuickMode()
+        self.finishMutation(result) {
+            self.ask = ask
+        }
     }
 
     func setAskFallback(_ mode: ExecSecurity) {
-        self.askFallback = mode
-        if self.isDefaultsScope {
+        let result = if self.isDefaultsScope {
             ExecApprovalsStore.updateDefaults { defaults in
                 defaults.askFallback = mode
             }
@@ -564,11 +744,13 @@ final class ExecApprovalsSettingsModel {
                 entry.askFallback = mode
             }
         }
+        self.finishMutation(result) {
+            self.askFallback = mode
+        }
     }
 
     func setAutoAllowSkills(_ enabled: Bool) {
-        self.autoAllowSkills = enabled
-        if self.isDefaultsScope {
+        let result = if self.isDefaultsScope {
             ExecApprovalsStore.updateDefaults { defaults in
                 defaults.autoAllowSkills = enabled
             }
@@ -577,51 +759,58 @@ final class ExecApprovalsSettingsModel {
                 entry.autoAllowSkills = enabled
             }
         }
-        Task { await self.refreshSkillBins(force: enabled) }
+        if self.finishMutation(result, applyPersisted: {
+            self.autoAllowSkills = enabled
+        }) {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.waitForPendingSettingsRead()
+                await self.refreshSkillBins(force: enabled)
+            }
+        }
     }
 
     @discardableResult
-    func addEntry(_ pattern: String) -> ExecAllowlistPatternValidationReason? {
-        guard !self.isDefaultsScope else { return nil }
+    func addEntry(_ pattern: String) -> Bool {
+        guard !self.isDefaultsScope else { return false }
+        let result = ExecApprovalsStore.addAllowlistEntry(
+            agentId: self.selectedAgentId,
+            pattern: pattern)
+        return self.finishMutation(result, showLoading: true)
+    }
+
+    @discardableResult
+    func updateEntry(pattern: String, id: String) -> String {
+        guard !self.isDefaultsScope, let current = self.entry(for: id) else { return pattern }
+        let normalizedPattern: String
         switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
-        case let .valid(normalizedPattern):
-            self.entries.append(ExecAllowlistEntry(pattern: normalizedPattern, lastUsedAt: nil))
-            let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
-            self.allowlistValidationMessage = rejected.first?.reason.message
-            return rejected.first?.reason
+        case let .valid(value):
+            normalizedPattern = value
         case let .invalid(reason):
-            self.allowlistValidationMessage = reason.message
-            return reason
+            self.mutationErrorMessage = reason.message
+            return current.pattern
         }
+        let result = ExecApprovalsStore.updateAllowlistEntry(
+            agentId: self.selectedAgentId,
+            id: id,
+            pattern: normalizedPattern)
+        guard self.finishMutation(result, applyPersisted: {
+            guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
+            self.entries[index].pattern = normalizedPattern
+        }) else { return current.pattern }
+        return normalizedPattern
     }
 
-    @discardableResult
-    func updateEntry(_ entry: ExecAllowlistEntry, id: UUID) -> ExecAllowlistPatternValidationReason? {
-        guard !self.isDefaultsScope else { return nil }
-        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return nil }
-        var next = entry
-        switch ExecApprovalHelpers.validateAllowlistPattern(next.pattern) {
-        case let .valid(normalizedPattern):
-            next.pattern = normalizedPattern
-        case let .invalid(reason):
-            self.allowlistValidationMessage = reason.message
-            return reason
-        }
-        self.entries[index] = next
-        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
-        self.allowlistValidationMessage = rejected.first?.reason.message
-        return rejected.first?.reason
-    }
-
-    func removeEntry(id: UUID) {
+    func removeEntry(id: String) {
         guard !self.isDefaultsScope else { return }
-        guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
-        self.entries.remove(at: index)
-        let rejected = ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
-        self.allowlistValidationMessage = rejected.first?.reason.message
+        guard self.entries.contains(where: { $0.id == id }) else { return }
+        let result = ExecApprovalsStore.removeAllowlistEntry(agentId: self.selectedAgentId, id: id)
+        self.finishMutation(result) {
+            self.entries.removeAll(where: { $0.id == id })
+        }
     }
 
-    func entry(for id: UUID) -> ExecAllowlistEntry? {
+    func entry(for id: String) -> ExecAllowlistEntry? {
         self.entries.first(where: { $0.id == id })
     }
 
@@ -638,13 +827,24 @@ final class ExecApprovalsSettingsModel {
         self.skillBins = bins.sorted()
     }
 
-    private func syncQuickMode() {
-        if self.isDefaultsScope {
-            AppStateStore.shared.execApprovalMode = ExecApprovalQuickMode.from(security: self.security, ask: self.ask)
-            return
-        }
-        if self.selectedAgentId == self.defaultAgentId || self.agentIds.count <= 1 {
-            AppStateStore.shared.execApprovalMode = ExecApprovalQuickMode.from(security: self.security, ask: self.ask)
+    @discardableResult
+    private func finishMutation(
+        _ result: Result<Void, ExecApprovalsMutationError>,
+        showLoading: Bool = false,
+        applyPersisted: () -> Void = {}) -> Bool
+    {
+        switch result {
+        case .success:
+            applyPersisted()
+            self.mutationErrorMessage = nil
+            if self.isDefaultsScope {
+                AppStateStore.shared.retryExecApprovalModeRead()
+            }
+            self.startSettingsRead(for: self.selectedAgentId, showLoading: showLoading)
+            return true
+        case let .failure(error):
+            self.mutationErrorMessage = error.message
+            return false
         }
     }
 }

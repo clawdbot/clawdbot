@@ -1,23 +1,50 @@
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardStatus,
+} from "@openclaw/workboard-contract";
 // Workboard plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
-import type { WorkboardCard } from "./types.js";
 
 type JsonOptions = {
   json?: boolean;
 };
 
 type GatewayOptions = JsonOptions & {
+  admin?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
   expectFinal?: boolean;
   board?: string;
 };
+
+type DispatchOptions = GatewayOptions & {
+  maxStarts?: number;
+};
+
+function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
+  const error = new Error(message) as Error & { code: string; exitCode: number };
+  error.name = "InvalidArgumentError";
+  error.code = "commander.invalidArgument";
+  error.exitCode = 1;
+  return error;
+}
+
+function parsePositiveIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
 
 function writeJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -27,15 +54,15 @@ function writeLine(value: string): void {
   process.stdout.write(`${value}\n`);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function splitLabels(value: string | undefined): string[] | undefined {
   return value
     ?.split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function isWorkboardStatus(value: string): value is WorkboardStatus {
+  return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
 function formatCardLine(card: WorkboardCard): string {
@@ -88,21 +115,28 @@ async function callWorkboardGateway(
 ): Promise<unknown> {
   return await callGatewayFromCli(method, options, params, {
     mode: "cli",
-    scopes: ["operator.write", "operator.read"],
+    scopes: options.admin
+      ? ["operator.admin", "operator.write", "operator.read"]
+      : ["operator.write", "operator.read"],
   });
 }
 
 function isGatewayUnavailableError(error: unknown): boolean {
   const message = formatErrorMessage(error).toLowerCase();
-  return [
-    "econnrefused",
-    "econnreset",
-    "ehostunreach",
-    "enotfound",
-    "gateway not connected",
-    "gateway unavailable",
-    "unknown method: workboard.cards.dispatch",
-  ].some((marker) => message.includes(marker));
+  if (
+    [
+      "econnrefused",
+      "econnreset",
+      "ehostunreach",
+      "enotfound",
+      "gateway not connected",
+      "gateway unavailable",
+    ].some((marker) => message.includes(marker))
+  ) {
+    return true;
+  }
+  const unknownMethod = message.match(/unknown method:\s*([a-z0-9._-]+)/)?.[1];
+  return unknownMethod === "workboard.cards.dispatch";
 }
 
 function hasExplicitGatewayTarget(options: GatewayOptions): boolean {
@@ -184,6 +218,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
           agentId: options.agent,
           boardId: options.board,
           labels: splitLabels(options.labels),
+          workspaceAccess: { unrestricted: true },
         });
         if (options.json) {
           writeJson({ card: redactClaimToken(card) });
@@ -214,16 +249,50 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       }
     });
 
+  workboard
+    .command("move")
+    .argument("<id>", "Card id or prefix")
+    .description("Move a Workboard card to another status")
+    .requiredOption("--status <status>", "Target status")
+    .option("--json", "Print JSON", false)
+    .action(async (id: string, options: JsonOptions & { status: string }) => {
+      if (!isWorkboardStatus(options.status)) {
+        throw new Error(`--status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
+      }
+      const cards = await params.store.list();
+      const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+      if (!card) {
+        throw new Error(error);
+      }
+      const updated = await params.store.move(card.id, options.status, undefined);
+      if (options.json) {
+        writeJson({ card: redactClaimToken(updated) });
+      } else {
+        writeLine(formatCardLine(updated));
+      }
+    });
+
   addGatewayClientOptions(
     workboard
       .command("dispatch")
       .description("Promote ready cards and start worker runs through the Gateway")
       .option("--board <id>", "Dispatch a single board")
+      .option(
+        "--max-starts <count>",
+        "Maximum new worker runs to start in this pass (default 3)",
+        (value: string) => parsePositiveIntegerOption(value, "--max-starts"),
+      )
+      .option("--admin", "Request full-host workspace access", false)
       .option("--json", "Print JSON", false),
-  ).action(async (options: GatewayOptions) => {
+  ).action(async (options: DispatchOptions) => {
     try {
-      const result = await callWorkboardGateway("workboard.cards.dispatch", options, {
+      const method =
+        options.maxStarts === undefined
+          ? "workboard.cards.dispatch"
+          : "workboard.cards.dispatchWithOptions";
+      const result = await callWorkboardGateway(method, options, {
         boardId: options.board,
+        ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
       });
       if (options.json) {
         writeJson(result);

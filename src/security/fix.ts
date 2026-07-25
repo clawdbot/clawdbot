@@ -12,7 +12,7 @@ import { runExec } from "../process/exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
-export type SecurityFixChmodAction = {
+type SecurityFixChmodAction = {
   kind: "chmod";
   path: string;
   mode: number;
@@ -21,7 +21,7 @@ export type SecurityFixChmodAction = {
   error?: string;
 };
 
-export type SecurityFixIcaclsAction = {
+type SecurityFixIcaclsAction = {
   kind: "icacls";
   path: string;
   command: string;
@@ -30,9 +30,9 @@ export type SecurityFixIcaclsAction = {
   error?: string;
 };
 
-export type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
+type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
 
-export type SecurityFixResult = {
+type SecurityFixResult = {
   ok: boolean;
   stateDir: string;
   configPath: string;
@@ -42,7 +42,7 @@ export type SecurityFixResult = {
   errors: string[];
 };
 
-export type SecurityPermissionTarget = {
+type SecurityPermissionTarget = {
   path: string;
   mode: number;
   require: "dir" | "file";
@@ -240,11 +240,6 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
   const next = structuredClone(params.cfg ?? {});
   const changes: string[] = [];
 
-  if (next.logging?.redactSensitive === "off") {
-    next.logging = { ...next.logging, redactSensitive: "tools" };
-    changes.push('logging.redactSensitive=off -> "tools"');
-  }
-
   for (const channel of Object.keys(next.channels ?? {})) {
     setGroupPolicyAllowlist({ cfg: next, channel, changes });
   }
@@ -252,7 +247,7 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
   return { cfg: next, changes };
 }
 
-export async function applySecurityFixConfigMutations(params: {
+async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   channelPlugins?: ChannelPlugin[];
@@ -310,7 +305,7 @@ async function collectChannelSecurityConfigFixMutation(params: {
   return { cfg: nextCfg, changes };
 }
 
-export async function collectSecurityPermissionTargets(params: {
+async function collectSecurityPermissionTargets(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   configPath: string;
@@ -449,6 +444,7 @@ export async function fixSecurityFootguns(opts?: {
     includePaths = await collectIncludePathsRecursive({
       configPath: snap.path,
       parsed: snap.parsed,
+      env,
     }).catch(() => []);
   }
 

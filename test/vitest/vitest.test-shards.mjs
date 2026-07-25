@@ -16,6 +16,7 @@ export const fullSuiteVitestShards = [
     name: "core-unit-fast",
     projects: [
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
     ],
   },
@@ -28,11 +29,6 @@ export const fullSuiteVitestShards = [
     config: "test/vitest/vitest.full-core-unit-security.config.ts",
     name: "core-unit-security",
     projects: ["test/vitest/vitest.unit-security.config.ts"],
-  },
-  {
-    config: "test/vitest/vitest.full-core-unit-ui.config.ts",
-    name: "core-unit-ui",
-    projects: ["test/vitest/vitest.unit-ui.config.ts"],
   },
   {
     config: "test/vitest/vitest.full-core-unit-support.config.ts",
@@ -88,6 +84,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
       "test/vitest/vitest.utils.config.ts",
       "test/vitest/vitest.wizard.config.ts",
     ],
@@ -103,6 +100,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.agents-core-isolated.config.ts",
       "test/vitest/vitest.agents-core.config.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",

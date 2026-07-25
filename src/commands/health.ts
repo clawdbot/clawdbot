@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Collects and renders gateway health for channels, agents, plugins, and sessions. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -5,10 +6,12 @@ import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
+import { redactChannelStatusSummaryBaseUrl } from "../channels/account-snapshot-fields.js";
 import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
 } from "../channels/account-summary.js";
+import { countFailedChannelIngressQueueEntries } from "../channels/message/ingress-queue.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
@@ -31,14 +34,22 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import type { GatewayHotReloadStatus } from "../gateway/config-reload-status.types.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
+import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import {
+  degradedPluginMatchesRoot,
+  listActiveDegradedPlugins,
+  toPublicPluginVerificationDiagnostic,
+} from "../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -54,6 +65,7 @@ import type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   ContextEngineHealthSummary,
+  DeliveryQueueHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -64,8 +76,8 @@ export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-const debugHealth = (...args: unknown[]) => {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
+const debugHealth = (cfg: OpenClawConfig | undefined, ...args: unknown[]) => {
+  if (isDiagnosticFlagEnabled("health", cfg)) {
     console.warn("[health:debug]", ...args);
   }
 };
@@ -242,6 +254,82 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
+/** Builds dead-lettered inbound and outbound queue health for cached gateway responses. */
+export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
+  // Queue health reads are diagnostic; a storage failure must not take the
+  // gateway health endpoint down with it.
+  let failed: DeliveryQueueHealthSummary["failed"] = [];
+  try {
+    failed = countFailedDeliveryQueueEntries().map((queue) => {
+      const entry: DeliveryQueueHealthSummary["failed"][number] = {
+        queueName: queue.queueName,
+        count: queue.count,
+      };
+      if (queue.oldestFailedAt != null) {
+        entry.oldestFailedAt = queue.oldestFailedAt;
+      }
+      return entry;
+    });
+  } catch (error) {
+    debugHealth(undefined, "outbound delivery queue health read failed", error);
+  }
+  let ingressFailed: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]> = [];
+  try {
+    ingressFailed = countFailedChannelIngressQueueEntries().map((queue) => {
+      const entry: NonNullable<DeliveryQueueHealthSummary["ingressFailed"]>[number] = {
+        channelId: queue.channelId,
+        accountId: queue.accountId,
+        count: queue.count,
+      };
+      if (queue.oldestFailedAt != null) {
+        entry.oldestFailedAt = queue.oldestFailedAt;
+      }
+      return entry;
+    });
+  } catch (error) {
+    debugHealth(undefined, "channel ingress queue health read failed", error);
+  }
+  if (failed.length === 0 && ingressFailed.length === 0) {
+    return undefined;
+  }
+  return {
+    failed,
+    ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
+  };
+}
+
+/** Formats dead-lettered delivery queue entries for text health output. */
+export function formatDeliveryQueueHealthLine(
+  summary: HealthSummary,
+  now = Date.now(),
+): string | null {
+  const failed = summary.deliveryQueues?.failed ?? [];
+  const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
+  if (failed.length === 0 && ingressFailed.length === 0) {
+    return null;
+  }
+  const counts = [
+    ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
+    ...ingressFailed.map(
+      (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
+    ),
+  ].join(", ");
+  const oldest = [...failed, ...ingressFailed]
+    .map((queue) => queue.oldestFailedAt)
+    .filter((value): value is number => typeof value === "number");
+  const oldestNote =
+    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
+  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
+}
+
+/** Formats config hot-reload watcher degradation for text health output. */
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
+
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -278,11 +366,22 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 };
 
 const buildSessionSummary = async (storePath: string, agentId?: string) => {
-  const { listSessionEntries } = await import("../config/sessions/session-accessor.js");
-  const sessions = listSessionEntries({
-    ...(agentId ? { agentId } : {}),
-    storePath,
-  })
+  const { listSessionEntriesReadOnly } = await import("../config/sessions/session-accessor.js");
+  const { isTransientSqliteError } = await import("../infra/unhandled-rejections.js");
+  let listed: ReturnType<typeof listSessionEntriesReadOnly>;
+  try {
+    listed = listSessionEntriesReadOnly({
+      ...(agentId ? { agentId } : {}),
+      storePath,
+    });
+  } catch (error) {
+    if (!isTransientSqliteError(error)) {
+      throw error;
+    }
+    // Health is best-effort: an empty snapshot beats failing on a transient lock.
+    listed = [];
+  }
+  const sessions = listed
     .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
     .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
@@ -300,15 +399,31 @@ const buildSessionSummary = async (storePath: string, agentId?: string) => {
 
 function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   const registry = getActivePluginRegistry();
-  if (!registry) {
-    return undefined;
-  }
-  const loaded = registry.plugins
+  const degradedPlugins = listActiveDegradedPlugins();
+  const unavailable = degradedPlugins
+    .map(({ pluginId, state, diagnostic }) => ({
+      id: pluginId,
+      state,
+      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  const loaded = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = registry.plugins
-    .filter((plugin) => plugin.status === "error")
+  const errors = (registry?.plugins ?? [])
+    .filter(
+      (plugin) =>
+        plugin.status === "error" &&
+        !degradedPlugins.some(
+          (degraded) =>
+            plugin.id === degraded.pluginId &&
+            plugin.failurePhase === "validation" &&
+            plugin.activationReason === `configured-unavailable: ${degraded.diagnostic.reason}` &&
+            Boolean(plugin.rootDir) &&
+            degradedPluginMatchesRoot(degraded, plugin.rootDir ?? ""),
+        ),
+    )
     .map((plugin) => {
       const error: PluginHealthErrorSummary = {
         id: plugin.id,
@@ -328,10 +443,10 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
       return error;
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
-  if (loaded.length === 0 && errors.length === 0) {
+  if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
     return undefined;
   }
-  return { loaded, errors };
+  return { loaded, errors, unavailable };
 }
 
 function readBooleanField(value: unknown, key: string): boolean | undefined {
@@ -461,6 +576,7 @@ export async function getHealthSnapshot(params?: {
   includeSensitive?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
   eventLoop?: HealthSummary["eventLoop"];
+  configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = await readRuntimeHealthConfig();
@@ -530,7 +646,7 @@ export async function getHealthSnapshot(params?: {
     );
     // Probe preferred/default/bound accounts first, but include all configured
     // accounts so verbose health can explain account-specific failures.
-    debugHealth("channel", {
+    debugHealth(cfg, "channel", {
       id: plugin.id,
       accountIds,
       defaultAccountId,
@@ -548,7 +664,7 @@ export async function getHealthSnapshot(params?: {
           accountId,
         });
       if (diagnostics.length > 0) {
-        debugHealth("account.diagnostics", { channel: plugin.id, accountId, diagnostics });
+        debugHealth(cfg, "account.diagnostics", { channel: plugin.id, accountId, diagnostics });
       }
 
       let probe: unknown;
@@ -574,7 +690,7 @@ export async function getHealthSnapshot(params?: {
           ? (probeRecord.bot as { username?: string | null })
           : null;
       if (bot?.username) {
-        debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
+        debugHealth(cfg, "probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
       const runtimeSnapshot =
@@ -613,14 +729,12 @@ export async function getHealthSnapshot(params?: {
             snapshot,
           })
         : undefined;
-      const record =
+      // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
+      const record = redactChannelStatusSummaryBaseUrl(
         summary && typeof summary === "object"
           ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
-          : ({
-              ...snapshot,
-              accountId,
-              configured,
-            } satisfies ChannelAccountHealthSummary);
+          : ({ ...snapshot, accountId, configured } satisfies ChannelAccountHealthSummary),
+      );
       if (record.configured === undefined) {
         record.configured = configured;
       }
@@ -647,7 +761,11 @@ export async function getHealthSnapshot(params?: {
       accountSummaries[preferredAccountId] ??
       accountSummaries[defaultAccountId] ??
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
-    const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
+    const fallbackSummary =
+      defaultSummary ??
+      accountSummaries[
+        expectDefined(Object.keys(accountSummaries)[0], "object.keys(account summaries) entry at 0")
+      ];
     if (fallbackSummary) {
       channels[plugin.id] = {
         ...fallbackSummary,
@@ -658,6 +776,7 @@ export async function getHealthSnapshot(params?: {
 
   const pluginHealth = buildPluginHealthSummary();
   const contextEngineHealth = buildContextEngineHealthSummary();
+  const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
@@ -665,6 +784,10 @@ export async function getHealthSnapshot(params?: {
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
+    ...(deliveryQueueHealth ? { deliveryQueues: deliveryQueueHealth } : {}),
+    ...(params?.configReloadHotReloadStatus
+      ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
+      : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
@@ -750,7 +873,7 @@ export async function healthCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
   } else {
-    const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
+    const debugEnabled = isDiagnosticFlagEnabled("health", cfg);
     const rich = isRich();
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({
@@ -900,6 +1023,14 @@ export async function healthCommand(
     if (contextEngineLine) {
       runtime.log(styleHealthChannelLine(contextEngineLine, rich));
     }
+    const deliveryQueueLine = formatDeliveryQueueHealthLine(summary);
+    if (deliveryQueueLine) {
+      runtime.log(styleHealthChannelLine(deliveryQueueLine, rich));
+    }
+    const configReloadLine = formatConfigReloadHealthLine(summary);
+    if (configReloadLine) {
+      runtime.log(styleHealthChannelLine(configReloadLine, rich));
+    }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
       if (!channelSummary || channelSummary.linked !== true) {
@@ -939,7 +1070,7 @@ export async function healthCommand(
           includeChannelPrefix: true,
         });
       } catch (error) {
-        debugHealth("logSelfId.failed", {
+        debugHealth(cfg, "logSelfId.failed", {
           channel: plugin.id,
           accountId,
           error: formatErrorMessage(error),
@@ -1006,3 +1137,4 @@ async function readRuntimeHealthConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await loadConfigRuntime();
   return getRuntimeConfig();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

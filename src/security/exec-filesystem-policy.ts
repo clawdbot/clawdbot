@@ -9,7 +9,7 @@ const MUTATING_FS_TOOLS = ["write", "edit", "apply_patch"] as const;
 const RUNTIME_TOOLS = ["exec", "process"] as const;
 
 /** Scope where exec-like tools remain available while mutating filesystem tools are disabled. */
-export type ExecFilesystemPolicyDriftHit = {
+type ExecFilesystemPolicyDriftHit = {
   scopeLabel: string;
   runtimeTools: string[];
   disabledFilesystemTools: string[];

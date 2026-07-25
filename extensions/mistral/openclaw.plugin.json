@@ -107,15 +107,29 @@
           },
           {
             "id": "mistral-small-latest",
-            "name": "Mistral Small (latest)",
+            "name": "Mistral Small 4 (latest)",
             "input": ["text", "image"],
             "reasoning": true,
-            "contextWindow": 128000,
+            "contextWindow": 262144,
             "maxTokens": 16384,
             "cost": {
-              "input": 0.1,
-              "output": 0.3,
-              "cacheRead": 0.01,
+              "input": 0.15,
+              "output": 0.6,
+              "cacheRead": 0.015,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "mistral-small-2603",
+            "name": "Mistral Small 4 (26.03)",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 262144,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0.15,
+              "output": 0.6,
+              "cacheRead": 0.015,
               "cacheWrite": 0
             }
           },
@@ -136,7 +150,7 @@
       }
     },
     "discovery": {
-      "mistral": "static"
+      "mistral": "refreshable"
     }
   },
   "setup": {
@@ -152,6 +166,7 @@
       "provider": "mistral",
       "method": "api-key",
       "choiceId": "mistral-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Mistral API key",
       "groupId": "mistral",
       "groupLabel": "Mistral AI",

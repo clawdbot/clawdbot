@@ -8,7 +8,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   resolveExternalBestEffortDeliveryTarget,
   type ExternalBestEffortDeliveryTarget,
@@ -83,7 +84,7 @@ function formatUnknownError(error: unknown): string {
 }
 
 /** Builds the prompt used to resume an agent after an approved async exec completes. */
-export function buildExecApprovalFollowupPrompt(resultText: string): string {
+function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
@@ -109,10 +110,10 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
 
 /**
  * Direct/denied followups bypass the gateway agent dispatch, so the gateway
- * rebind guard never sees them. Resolve the session key's current sessionId
- * from the on-disk store and report whether it was rebound away from the
- * approval-time session by `/new` or `/reset` (#59349). Failure to resolve is
- * treated as "not rebound" so a real result is never suppressed by accident.
+ * rebind guard never sees them. Resolve the session key's current sessionId and
+ * report whether it was rebound away from the approval-time session by `/new`
+ * or `/reset` (#59349). Failure to resolve is treated as "not rebound" so a
+ * real result is never suppressed by accident.
  */
 function isExecApprovalFollowupDirectDeliveryStale(params: {
   sessionKey: string | undefined;
@@ -129,7 +130,11 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
       agentId: resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(
-      loadSessionStore(storePath)?.[sessionKey]?.sessionId,
+      loadSessionEntryReadOnly({
+        storePath,
+        sessionKey,
+        clone: false,
+      })?.sessionId,
     );
     return isExecApprovalFollowupSessionRebound({ expectedSessionId, resolvedSessionId });
   } catch (err) {
@@ -394,6 +399,12 @@ export async function sendExecApprovalFollowup(
         sessionStore: params.sessionStore,
       })
     ) {
+      emitDiagnosticEvent({
+        type: "exec.approval.followup_suppressed",
+        approvalId: params.approvalId,
+        reason: "session_rebound",
+        phase: "direct_delivery",
+      });
       log.info(
         `Dropping stale denied exec approval followup ${params.approvalId}: session ${sessionKey ?? ""} was rebound before the approval resolved`,
       );
@@ -423,6 +434,12 @@ export async function sendExecApprovalFollowup(
       sessionStore: params.sessionStore,
     })
   ) {
+    emitDiagnosticEvent({
+      type: "exec.approval.followup_suppressed",
+      approvalId: params.approvalId,
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
     log.info(
       `Dropping stale exec approval followup ${params.approvalId} direct fallback: session ${sessionKey ?? ""} was rebound before the approval resolved`,
     );

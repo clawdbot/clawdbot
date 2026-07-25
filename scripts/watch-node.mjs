@@ -7,7 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
+import { sleep } from "./lib/sleep.mjs";
+import { createRunNodePathClassifier, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -18,6 +19,8 @@ const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
 const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
+const WATCH_DIST_ENTRY_POLL_MS = 1_000;
+const WATCH_DIST_ENTRY_TIMEOUT_MS = 5 * 60 * 1_000;
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
@@ -57,7 +60,7 @@ const isDirectoryLikeWatchedPath = (repoPath, watchPaths) => {
   });
 };
 
-const isIgnoredWatchPath = (filePath, cwd, watchPaths, stats) => {
+const isIgnoredWatchPath = (filePath, cwd, watchPaths, pathClassifier, stats) => {
   const repoPath = resolveRepoPath(filePath, cwd);
   if (hasIgnoredPathSegment(repoPath)) {
     return true;
@@ -67,7 +70,7 @@ const isIgnoredWatchPath = (filePath, cwd, watchPaths, stats) => {
       return false;
     }
   }
-  return !isRestartRelevantRunNodePath(repoPath);
+  return !pathClassifier.isRestartRelevantRunNodePath(repoPath);
 };
 
 const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
@@ -94,11 +97,6 @@ const isProcessAlive = (pid, signalProcess) => {
   }
   return true;
 };
-
-const sleep = (ms) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 
 const createWatchLockKey = (cwd, args) =>
   createHash("sha256").update(cwd).update("\0").update(args.join("\0")).digest("hex").slice(0, 12);
@@ -250,10 +248,15 @@ const releaseWatchLock = (lockHandle) => {
  *   cwd?: string;
  *   args?: string[];
  *   env?: NodeJS.ProcessEnv;
+ *   fs?: Pick<typeof fs, "existsSync">;
  *   now?: () => number;
  *   sleep?: (ms: number) => Promise<void>;
  *   signalProcess?: (pid: number, signal: string | number) => void;
  *   lockDisabled?: boolean;
+ *   pathClassifier?: {
+ *     refreshGeneratedPluginAssetPaths: () => void;
+ *     isRestartRelevantRunNodePath: (repoPath: unknown) => boolean;
+ *   };
  *   createWatcher?: (
  *     watchPaths: string[],
  *     options: { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
@@ -265,16 +268,19 @@ const releaseWatchLock = (lockHandle) => {
  * Runs the watch loop and restarts the child process on relevant changes.
  */
 export async function runWatchMain(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
   const deps = {
     spawn: params.spawn ?? spawn,
     process: params.process ?? process,
-    cwd: params.cwd ?? process.cwd(),
+    cwd,
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
+    fs: params.fs ?? fs,
     now: params.now ?? Date.now,
     sleep: params.sleep ?? sleep,
     signalProcess: params.signalProcess ?? ((pid, signal) => process.kill(pid, signal)),
     lockDisabled: params.lockDisabled === true,
+    pathClassifier: params.pathClassifier ?? createRunNodePathClassifier({ rootDir: cwd }),
     createWatcher: params.createWatcher,
     loadChokidar: params.loadChokidar ?? loadChokidar,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
@@ -296,6 +302,8 @@ export async function runWatchMain(params = {}) {
     let settled = false;
     let shuttingDown = false;
     let restartRequested = false;
+    let deferredRestartGeneration = 0;
+    let deferredRestartActive = false;
     let watchProcess = null;
     let watcher = null;
     let lockHandle = null;
@@ -377,6 +385,16 @@ export async function runWatchMain(params = {}) {
     };
 
     const startRunner = () => {
+      try {
+        deps.pathClassifier.refreshGeneratedPluginAssetPaths();
+      } catch (error) {
+        logWatcher(
+          `Failed to refresh generated asset paths: ${error?.message ?? "unknown error"}`,
+          deps,
+        );
+        settle(1);
+        return;
+      }
       watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
         cwd: deps.cwd,
         detached: useChildProcessGroup,
@@ -400,6 +418,29 @@ export async function runWatchMain(params = {}) {
         if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
           forceKillWatchProcessGroup(exitedProcess);
           restartRequested = false;
+          deferredRestartGeneration += 1;
+          deferredRestartActive = false;
+          if (!hasDistEntry()) {
+            deferredRestartActive = true;
+            const generation = deferredRestartGeneration;
+            logWatcher("Watcher child exited mid-build; waiting for the build entry.", deps);
+            deferRestartUntilDistEntryExists({
+              generation,
+              targetProcess: null,
+              onReady: () => {
+                if (!watchProcess) {
+                  startRunner();
+                }
+              },
+              onTimeout: () => {
+                logWatcher("Build entry wait timed out; starting run-node recovery.", deps);
+                if (!watchProcess) {
+                  startRunner();
+                }
+              },
+            });
+            return;
+          }
           startRunner();
           return;
         }
@@ -456,7 +497,9 @@ export async function runWatchMain(params = {}) {
       watchProcess = deps.spawn(deps.process.execPath, buildDoctorRunnerArgs(), {
         cwd: deps.cwd,
         detached: useChildProcessGroup,
-        env: childEnv,
+        env: {
+          ...childEnv,
+        },
         stdio: "inherit",
       });
       watchProcess.on("error", (error) => {
@@ -486,15 +529,88 @@ export async function runWatchMain(params = {}) {
       });
     };
 
+    const hasDistEntry = () => deps.fs.existsSync(path.join(deps.cwd, "dist", "entry.js"));
+
+    const deferRestartUntilDistEntryExists = ({
+      generation,
+      targetProcess,
+      onReady,
+      onTimeout,
+    }) => {
+      void (async () => {
+        const deadline = deps.now() + WATCH_DIST_ENTRY_TIMEOUT_MS;
+        while (true) {
+          if (
+            generation !== deferredRestartGeneration ||
+            settled ||
+            shuttingDown ||
+            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
+          ) {
+            return;
+          }
+          await deps.sleep(WATCH_DIST_ENTRY_POLL_MS);
+          if (
+            generation !== deferredRestartGeneration ||
+            settled ||
+            shuttingDown ||
+            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
+          ) {
+            return;
+          }
+          if (hasDistEntry()) {
+            deferredRestartActive = false;
+            onReady();
+            return;
+          }
+          if (deps.now() >= deadline) {
+            deferredRestartActive = false;
+            onTimeout();
+            return;
+          }
+        }
+      })();
+    };
+
     const requestRestart = (changedPath) => {
-      if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths)) {
+      if (
+        shuttingDown ||
+        isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths, deps.pathClassifier)
+      ) {
         return;
       }
       if (!watchProcess) {
+        if (deferredRestartActive) {
+          return;
+        }
         startRunner();
         return;
       }
       restartRequested = true;
+
+      // A separate build can temporarily remove dist while this healthy child is
+      // still serving. Keep it alive until run-node can take ownership safely.
+      if (!hasDistEntry()) {
+        if (!deferredRestartActive) {
+          deferredRestartActive = true;
+          deferredRestartGeneration += 1;
+          logWatcher("Build entry missing; keeping watcher child alive until it returns.", deps);
+          const targetProcess = watchProcess;
+          deferRestartUntilDistEntryExists({
+            generation: deferredRestartGeneration,
+            targetProcess,
+            onReady: () => {
+              logWatcher("Build entry restored; restarting watcher child.", deps);
+              signalWatchProcess(targetProcess, WATCH_RESTART_SIGNAL);
+            },
+            onTimeout: () => {
+              restartRequested = false;
+              logWatcher("Build entry wait timed out; keeping the healthy watcher child.", deps);
+            },
+          });
+        }
+        return;
+      }
+
       if (typeof watchProcess.kill === "function") {
         signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
       }
@@ -507,7 +623,7 @@ export async function runWatchMain(params = {}) {
       watcher = createWatcher(deps.watchPaths, {
         ignoreInitial: true,
         ignored: (watchPath, stats) =>
-          isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
+          isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, deps.pathClassifier, stats),
       });
       watcher.on("add", requestRestart);
       watcher.on("change", requestRestart);

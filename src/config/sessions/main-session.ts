@@ -7,6 +7,7 @@ import {
 import type { SessionScope } from "./types.js";
 
 const FALLBACK_DEFAULT_AGENT_ID = "main";
+export const SESSION_ROUTING_CHANGED_ERROR_REASON = "session-routing-changed";
 
 /** Builds the canonical main session key for an agent. */
 function buildMainSessionKey(agentId: string, mainKey?: string): string {
@@ -25,6 +26,20 @@ export function resolveMainSessionKey(cfg?: {
   const defaultAgentId =
     agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
   return buildMainSessionKey(defaultAgentId, cfg?.session?.mainKey);
+}
+
+/** Stable fingerprint for the config values that canonicalize chat session keys. */
+export function resolveSessionRoutingContract(cfg?: {
+  session?: { scope?: SessionScope; mainKey?: string };
+  agents?: { list?: Array<{ id?: string; default?: boolean }> };
+}): string {
+  const agents = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
+  const defaultAgentId =
+    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
+  const scope = cfg?.session?.scope ?? "per-sender";
+  return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultAgentId)].join(
+    "|",
+  );
 }
 
 export { resolveAgentIdFromSessionKey };

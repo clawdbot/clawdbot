@@ -122,10 +122,13 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });
   });
 
-  it("merges legacy account block coalescing over channel nested config", () => {
+  it("merges flat account block coalescing over channel nested config for SDK-plugin configs", () => {
+    // No bundled schema accepts flat blockStreamingCoalesce anymore, but the
+    // resolver keeps the account-level flat read for external SDK plugin
+    // configs until the deprecation window closes.
     const cfg = {
       channels: {
-        imessage: {
+        mattermost: {
           streaming: { block: { coalesce: { minChars: 25, maxChars: 80, idleMs: 5 } } },
           accounts: {
             personal: {
@@ -139,7 +142,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     expect(
       resolveEffectiveBlockStreamingConfig({
         cfg,
-        provider: "imessage",
+        provider: "mattermost",
         accountId: "personal",
       }).coalescing,
     ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });

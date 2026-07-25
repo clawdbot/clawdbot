@@ -27,7 +27,7 @@ import {
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 /** Dependencies injected into config recovery observation for testable filesystem behavior. */
-export type ObserveRecoveryDeps = {
+type ObserveRecoveryDeps = {
   fs: {
     promises: {
       stat(path: string): Promise<{
@@ -108,6 +108,50 @@ type ConfigStatMetadataSource =
     } & Record<string, unknown>)
   | null;
 
+function formatConfigPermissionHardeningWarning(params: {
+  configPath: string;
+  context: string;
+  error: unknown;
+}): string {
+  const detail = params.error instanceof Error ? params.error.message : String(params.error);
+  return `Config permission hardening failed (${params.context}): ${params.configPath}: ${detail}`;
+}
+
+async function chmodConfigBestEffort(params: {
+  deps: ObserveRecoveryDeps;
+  configPath: string;
+  context: string;
+}): Promise<void> {
+  try {
+    await params.deps.fs.promises.chmod?.(params.configPath, 0o600);
+  } catch (error) {
+    params.deps.logger.warn(
+      formatConfigPermissionHardeningWarning({
+        configPath: params.configPath,
+        context: params.context,
+        error,
+      }),
+    );
+  }
+}
+
+function chmodConfigBestEffortSync(params: {
+  deps: ObserveRecoveryDeps;
+  configPath: string;
+  context: string;
+}): void {
+  try {
+    params.deps.fs.chmodSync?.(params.configPath, 0o600);
+  } catch (error) {
+    params.deps.logger.warn(
+      formatConfigPermissionHardeningWarning({
+        configPath: params.configPath,
+        context: params.context,
+        error,
+      }),
+    );
+  }
+}
 type ConfigReadRecoveryParams = {
   deps: ObserveRecoveryDeps;
   configPath: string;
@@ -196,7 +240,6 @@ function createConfigObserveAuditAppendParams(
   params: ConfigObserveAuditRecordParams,
 ) {
   return {
-    fs: deps.fs,
     env: deps.env,
     homedir: deps.homedir,
     record: createConfigObserveAuditRecord(params),
@@ -526,7 +569,7 @@ function readConfigFingerprintForPathSync(
   }
 }
 
-export function resolveLastKnownGoodConfigPath(configPath: string): string {
+function resolveLastKnownGoodConfigPath(configPath: string): string {
   return `${configPath}.last-good`;
 }
 
@@ -635,7 +678,11 @@ export async function maybeRecoverSuspiciousConfigRead(
       encoding: "utf-8",
       mode: 0o600,
     });
-    await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+    await chmodConfigBestEffort({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "backup restore",
+    });
     restoredFromBackup = true;
   } catch (error) {
     restoreError = error;
@@ -745,9 +792,11 @@ export function maybeRecoverSuspiciousConfigReadSync(
       encoding: "utf-8",
       mode: 0o600,
     });
-    try {
-      params.deps.fs.chmodSync?.(params.configPath, 0o600);
-    } catch {}
+    chmodConfigBestEffortSync({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "backup restore",
+    });
     restoredFromBackup = true;
   } catch (error) {
     restoreError = error;
@@ -823,7 +872,11 @@ export async function promoteConfigSnapshotToLastKnownGood(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await deps.fs.promises.chmod?.(lastGoodPath, 0o600).catch(() => {});
+  await chmodConfigBestEffort({
+    deps,
+    configPath: lastGoodPath,
+    context: "last-known-good promotion",
+  });
   const healthState = await readConfigHealthState(deps);
   const entry = getConfigHealthEntry(healthState, snapshot.path);
   await writeConfigHealthState(
@@ -889,17 +942,20 @@ export async function recoverConfigFromLastKnownGood(params: {
     stat: stat as ConfigStatMetadataSource,
     observedAt: now,
   });
-  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
+  const clobberedPath = await preserveConfigSnapshotAsClobbered({
     deps,
-    configPath: snapshot.path,
-    raw: snapshot.raw,
+    snapshot,
     observedAt: now,
   });
   await deps.fs.promises.writeFile(snapshot.path, backupRaw, {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await deps.fs.promises.chmod?.(snapshot.path, 0o600).catch(() => {});
+  await chmodConfigBestEffort({
+    deps,
+    configPath: snapshot.path,
+    context: "last-known-good recovery",
+  });
   const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
   deps.logger.warn(
     `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
@@ -929,3 +985,20 @@ export async function recoverConfigFromLastKnownGood(params: {
   );
   return true;
 }
+
+export async function preserveConfigSnapshotAsClobbered(params: {
+  deps: ObserveRecoveryDeps;
+  snapshot: ConfigFileSnapshot;
+  observedAt?: string;
+}): Promise<string | null> {
+  if (!params.snapshot.exists || typeof params.snapshot.raw !== "string") {
+    return null;
+  }
+  return await persistBoundedClobberedConfigSnapshot({
+    deps: params.deps,
+    configPath: params.snapshot.path,
+    raw: params.snapshot.raw,
+    observedAt: params.observedAt ?? new Date().toISOString(),
+  });
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,22 +1,39 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import {
+  isWellFormedApprovalId,
+  type ApprovalDecision,
+  type ApprovalGetResult,
+  type ApprovalKind,
+  type ApprovalResolveResult,
+  type ApprovalSnapshot,
+} from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
+  SESSION_EXEC_OVERRIDES_NOTE,
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
+  mergeExecApprovalsSocketDefaults,
+  normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  saveExecApprovals,
+  updateExecApprovals,
   type ExecApprovalsAgent,
+  type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -26,12 +43,37 @@ import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-type ExecApprovalsSnapshot = {
+type FileExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
+  resolvedDefaults?: Required<ExecApprovalsDefaults>;
 };
+
+type NativeExecApprovalAction = "allow" | "deny" | "prompt";
+type NativeExecApprovalRule = {
+  pattern: string;
+  action: NativeExecApprovalAction;
+  shells?: string[];
+  description?: string;
+  enabled?: boolean;
+};
+type NativeExecApprovalPolicy = {
+  defaultAction?: NativeExecApprovalAction;
+  rules: NativeExecApprovalRule[];
+};
+type NativeExecApprovalsSnapshot =
+  | {
+      enabled: true;
+      hash: string;
+      baseHash?: string;
+      defaultAction: NativeExecApprovalAction;
+      rules: NativeExecApprovalRule[];
+      constraints?: Record<string, boolean>;
+    }
+  | { enabled: false; message?: string };
+type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprovalsSnapshot;
 
 type ConfigSnapshotLike = {
   config?: OpenClawConfig;
@@ -54,23 +96,47 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   file?: string;
   stdin?: boolean;
   agent?: string;
+  reason?: string;
 };
+
+type PendingApprovalCliEntry = {
+  id: string;
+  kind: ApprovalKind;
+  agentId: string | null;
+  sessionKey: string | null;
+  createdAtMs: number;
+  expiresAtMs: number;
+  summary: string;
+};
+
+const APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
+const PENDING_APPROVAL_SUMMARY_MAX_LENGTH = 96;
+const APPROVAL_ID_TOKEN_PREFIX = "id64_";
+const APPROVAL_TERMINAL_UNSAFE_CHAR =
+  /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
 
 async function readStdin(
   stream: NodeJS.ReadableStream = process.stdin,
   maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
 ): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.byteLength;
-    if (total > maxBytes) {
-      throw new Error(`Exec approvals stdin exceeds ${maxBytes} bytes.`);
-    }
-    chunks.push(buffer);
+  const bytes = await readByteStreamWithLimit(stream, {
+    maxBytes,
+    onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
+  });
+  return bytes.toString("utf8");
+}
+
+async function readApprovalsFile(filePath: string): Promise<string> {
+  // Explicit CLI file inputs have historically followed symlinks and readable
+  // special files. Pin that opened target while bounding the bytes consumed.
+  const handle = await fs.open(filePath, "r");
+  try {
+    return (await readFileDescriptorBounded(handle.fd, EXEC_APPROVALS_STDIN_MAX_BYTES)).toString(
+      "utf8",
+    );
+  } finally {
+    await handle.close();
   }
-  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
@@ -104,9 +170,122 @@ function loadSnapshotLocal(): ExecApprovalsSnapshot {
   };
 }
 
-function saveSnapshotLocal(file: ExecApprovalsFile): ExecApprovalsSnapshot {
-  saveExecApprovals(file);
-  return loadSnapshotLocal();
+function isFileApprovalsSnapshot(
+  snapshot: ExecApprovalsSnapshot,
+): snapshot is FileExecApprovalsSnapshot {
+  return "file" in snapshot;
+}
+
+function isNativeApprovalsSnapshot(
+  snapshot: ExecApprovalsSnapshot,
+): snapshot is NativeExecApprovalsSnapshot {
+  return "enabled" in snapshot;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseNativeAction(value: unknown, label: string): NativeExecApprovalAction {
+  if (value === "allow" || value === "deny" || value === "prompt") {
+    return value;
+  }
+  return exitWithError(`${label} must be allow, deny, or prompt.`);
+}
+
+function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
+  if (!isRecord(value)) {
+    exitWithError("Host-native exec approvals JSON must be an object.");
+  }
+  const unknownKeys = Object.keys(value).filter(
+    (key) => key !== "defaultAction" && key !== "rules",
+  );
+  if (unknownKeys.length > 0) {
+    exitWithError(`Unknown host-native exec approvals field: ${unknownKeys[0]}.`);
+  }
+  const defaultAction =
+    value.defaultAction === undefined
+      ? undefined
+      : parseNativeAction(value.defaultAction, "defaultAction");
+  if (!Array.isArray(value.rules)) {
+    exitWithError("Host-native exec approvals rules must be an array.");
+  }
+  const rules = value.rules?.map((entry, index) => {
+    if (!isRecord(entry)) {
+      exitWithError(`Host-native exec approval rule ${index + 1} must be an object.`);
+    }
+    const unknownRuleKeys = Object.keys(entry).filter(
+      (key) =>
+        key !== "pattern" &&
+        key !== "action" &&
+        key !== "shells" &&
+        key !== "description" &&
+        key !== "enabled",
+    );
+    if (unknownRuleKeys.length > 0) {
+      exitWithError(
+        `Unknown host-native exec approval rule ${index + 1} field: ${unknownRuleKeys[0]}.`,
+      );
+    }
+    const pattern = normalizeOptionalString(entry.pattern);
+    if (!pattern) {
+      exitWithError(`Host-native exec approval rule ${index + 1} requires pattern.`);
+    }
+    const action = parseNativeAction(
+      entry.action,
+      `Host-native exec approval rule ${index + 1} action`,
+    );
+    let shells: string[] | undefined;
+    if (entry.shells !== undefined) {
+      if (!Array.isArray(entry.shells)) {
+        exitWithError(`Host-native exec approval rule ${index + 1} shells must be an array.`);
+      }
+      shells = entry.shells.map((shell) => {
+        const normalized = typeof shell === "string" ? shell.trim() : "";
+        if (!normalized) {
+          exitWithError(
+            `Host-native exec approval rule ${index + 1} shells must be non-empty strings.`,
+          );
+        }
+        return normalized;
+      });
+    }
+    if (entry.description !== undefined && typeof entry.description !== "string") {
+      exitWithError(`Host-native exec approval rule ${index + 1} description must be a string.`);
+    }
+    if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") {
+      exitWithError(`Host-native exec approval rule ${index + 1} enabled must be a boolean.`);
+    }
+    return {
+      pattern,
+      action,
+      ...(shells ? { shells } : {}),
+      ...(entry.description !== undefined ? { description: entry.description } : {}),
+      ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+    };
+  });
+  return {
+    ...(defaultAction ? { defaultAction } : {}),
+    rules,
+  };
+}
+
+async function saveSnapshotLocal(
+  file: ExecApprovalsFile,
+  baseHash: string,
+): Promise<ExecApprovalsSnapshot> {
+  const snapshot = await updateExecApprovals({
+    baseHash,
+    update: (current) =>
+      mergeExecApprovalsSocketDefaults({
+        normalized: normalizeExecApprovals(file),
+        current,
+      }),
+  });
+  if (!snapshot) {
+    throw new Error("Exec approvals changed; reload and retry.");
+  }
+  return snapshot;
 }
 
 async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
@@ -137,11 +316,12 @@ function requireTrimmedNonEmpty(value: string, message: string): string {
 }
 
 async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
-  snapshot: ExecApprovalsSnapshot;
+  snapshot: FileExecApprovalsSnapshot | NativeExecApprovalsSnapshot;
   nodeId: string | null;
   source: ApprovalsTargetSource;
   targetLabel: string;
   baseHash: string;
+  kind: "file" | "native";
 }> {
   // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
@@ -149,25 +329,44 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
     defaultRuntime.log(theme.muted("Writing local approvals."));
   }
   const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
-  const baseHash = snapshot.hash;
+  if (isNativeApprovalsSnapshot(snapshot) && !snapshot.enabled) {
+    exitWithError(
+      "Host-native exec approvals are disabled on this node and cannot be configured remotely.",
+    );
+  }
+  const baseHash = "hash" in snapshot ? snapshot.hash : undefined;
   if (!baseHash) {
     exitWithError("Exec approvals hash missing; reload and retry.");
   }
-  return { snapshot, nodeId, source, targetLabel, baseHash };
+  const kind = isNativeApprovalsSnapshot(snapshot) ? "native" : "file";
+  return { snapshot, nodeId, source, targetLabel, baseHash, kind };
 }
 
-async function saveSnapshotTargeted(params: {
+type SaveSnapshotTargetedParams = {
   opts: ExecApprovalsCliOpts;
   source: ApprovalsTargetSource;
   nodeId: string | null;
-  file: ExecApprovalsFile;
   baseHash: string;
   targetLabel: string;
-}): Promise<void> {
-  const next =
-    params.source === "local"
-      ? saveSnapshotLocal(params.file)
-      : await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
+} & ({ file: ExecApprovalsFile } | { native: NativeExecApprovalPolicy });
+
+async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise<void> {
+  let next: ExecApprovalsSnapshot;
+  if ("native" in params) {
+    if (params.source !== "node" || !params.nodeId) {
+      exitWithError("Host-native exec approvals can only target a node.");
+    }
+    await callGatewayFromCli("exec.approvals.node.set", params.opts, {
+      nodeId: params.nodeId,
+      native: params.native,
+      baseHash: params.baseHash,
+    });
+    next = await loadSnapshot(params.opts, params.nodeId);
+  } else if (params.source === "local") {
+    next = await saveSnapshotLocal(params.file, params.baseHash);
+  } else {
+    next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
+  }
   if (params.opts.json) {
     defaultRuntime.writeJson(next, 0);
     return;
@@ -179,8 +378,344 @@ async function saveSnapshotTargeted(params: {
 function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
-  const safe = sanitizeForLog(firstLine);
-  return safe.length > 300 ? `${safe.slice(0, 300)}...` : safe;
+  const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
+  return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
+}
+
+function isApprovalDecision(value: string): value is ApprovalDecision {
+  return (APPROVAL_DECISIONS as readonly string[]).includes(value);
+}
+
+function shortenPendingApprovalSummary(value: string): string {
+  if (value.length <= PENDING_APPROVAL_SUMMARY_MAX_LENGTH) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, PENDING_APPROVAL_SUMMARY_MAX_LENGTH - 3)}...`;
+}
+
+function escapeApprovalTextForTerminal(value: string): string {
+  let escaped = "";
+  for (const char of value) {
+    if (char === "\\") {
+      escaped += "\\\\";
+      continue;
+    }
+    if (APPROVAL_TERMINAL_UNSAFE_CHAR.test(char)) {
+      escaped += `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
+      continue;
+    }
+    escaped += char;
+  }
+  return escaped;
+}
+
+// Gateway-minted ids are UUID-shaped, but explicit ids from an agent host are
+// stored verbatim, so hostile ids (ANSI escapes, controls) are possible. Show
+// the raw id when it is terminal-safe; wrap only unsafe ids in a copyable
+// token that `resolve` decodes.
+// Leading hyphen excluded: a raw `-x`/`--flag` id could not be pasted into
+// `approvals resolve <id>` without Commander eating it as an option.
+const APPROVAL_ID_TERMINAL_SAFE_RE = /^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,127}$/;
+
+// Tokens encode UTF-16 code units, not UTF-8: ids are opaque JS strings and
+// UTF-8 replaces lone surrogates with U+FFFD, which would let two distinct
+// ids collide into one token on this remote-execution surface.
+function formatApprovalIdForTerminal(value: string): string {
+  if (APPROVAL_ID_TERMINAL_SAFE_RE.test(value)) {
+    return value;
+  }
+  return `${APPROVAL_ID_TOKEN_PREFIX}${Buffer.from(value, "utf16le").toString("base64url")}`;
+}
+
+function decodeDisplayedApprovalId(value: string): string | null {
+  if (!value.startsWith(APPROVAL_ID_TOKEN_PREFIX)) {
+    return null;
+  }
+  const encoded = value.slice(APPROVAL_ID_TOKEN_PREFIX.length);
+  if (!encoded || !/^[a-zA-Z0-9_-]+$/.test(encoded)) {
+    return null;
+  }
+  const decoded = Buffer.from(encoded, "base64url").toString("utf16le");
+  return Buffer.from(decoded, "utf16le").toString("base64url") === encoded ? decoded : null;
+}
+
+function readPendingApprovalEntry(
+  value: unknown,
+  kind: ApprovalKind,
+): PendingApprovalCliEntry | null {
+  if (!isRecord(value) || !isRecord(value.request)) {
+    return null;
+  }
+  // Approval ids are opaque and stored verbatim by the gateway — never trim
+  // them, or two ids differing only in whitespace collapse into one display
+  // form and resolving could target the wrong request. Whitespace-bearing ids
+  // fail the terminal-safe charset and render as exact-round-trip id64 tokens.
+  // Ill-formed (lone-surrogate) ids are skipped outright: the unified
+  // approval.get/resolve schema rejects them, so listing one would advertise
+  // a token that can never be resolved.
+  const id = typeof value.id === "string" && isWellFormedApprovalId(value.id) ? value.id : null;
+  const createdAtMs = value.createdAtMs;
+  const expiresAtMs = value.expiresAtMs;
+  if (
+    !id ||
+    typeof createdAtMs !== "number" ||
+    !Number.isFinite(createdAtMs) ||
+    typeof expiresAtMs !== "number" ||
+    !Number.isFinite(expiresAtMs)
+  ) {
+    return null;
+  }
+  const request = value.request;
+  const agentId = normalizeOptionalString(request.agentId) ?? null;
+  const sessionKey = normalizeOptionalString(request.sessionKey) ?? null;
+  const command = typeof request.command === "string" && request.command ? request.command : null;
+  const title = typeof request.title === "string" && request.title ? request.title : null;
+  const description =
+    typeof request.description === "string" && request.description ? request.description : null;
+  const prose = title && description ? `${title}: ${description}` : (title ?? description);
+  // System-agent approvals stay on their reviewer-safe presentation (title,
+  // description); the raw operation is host-local by contract and must not
+  // leak into terminals, scripts, or logs.
+  const summarySource =
+    kind === "exec"
+      ? command
+      : kind === "plugin" && command
+        ? `${prose ? `${prose} — ` : ""}Command: ${command}`
+        : prose;
+  return {
+    id,
+    kind,
+    agentId,
+    sessionKey,
+    createdAtMs,
+    expiresAtMs,
+    summary: summarySource ?? "(summary unavailable)",
+  };
+}
+
+function readPendingApprovalList(value: unknown, kind: ApprovalKind): PendingApprovalCliEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid ${kind} approval list response.`);
+  }
+  return value.flatMap((entry) => {
+    const parsed = readPendingApprovalEntry(entry, kind);
+    return parsed ? [parsed] : [];
+  });
+}
+
+async function loadPendingApprovals(
+  opts: ExecApprovalsCliOpts,
+): Promise<PendingApprovalCliEntry[]> {
+  // The owner-specific list methods retain requester filtering unless the caller is an admin.
+  // Request admin explicitly so this operator command cannot silently omit live approvals.
+  const listCall = (method: string) =>
+    callGatewayFromCli(method, opts, {}, { scopes: [ADMIN_SCOPE] });
+  const [exec, plugin, systemAgent] = await Promise.all([
+    listCall("exec.approval.list"),
+    listCall("plugin.approval.list"),
+    listCall("openclaw.approval.list"),
+  ]);
+  return [
+    ...readPendingApprovalList(exec, "exec"),
+    ...readPendingApprovalList(plugin, "plugin"),
+    ...readPendingApprovalList(systemAgent, "system-agent"),
+  ].toSorted((a, b) => b.createdAtMs - a.createdAtMs);
+}
+
+function formatPendingAgentSession(entry: PendingApprovalCliEntry): string {
+  const parts = [entry.agentId, entry.sessionKey].filter((value): value is string =>
+    Boolean(value),
+  );
+  return parts.length > 0 ? escapeApprovalTextForTerminal(parts.join(" / ")) : "-";
+}
+
+function renderPendingApprovals(entries: PendingApprovalCliEntry[]): void {
+  if (entries.length === 0) {
+    defaultRuntime.log(theme.muted("No pending approvals."));
+    return;
+  }
+  const now = Date.now();
+  defaultRuntime.log(`${theme.heading("Pending approvals")} ${theme.muted(`(${entries.length})`)}`);
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "ID", header: "ID", minWidth: 16, flex: true },
+        { key: "Kind", header: "Kind", minWidth: 12 },
+        { key: "AgentSession", header: "Agent / Session", minWidth: 16, flex: true },
+        { key: "Requested", header: "Requested", minWidth: 12 },
+        { key: "Expires", header: "Expires In", minWidth: 10 },
+        { key: "Summary", header: "Command / Summary", minWidth: 20, flex: true },
+      ],
+      rows: entries.map((entry) => {
+        const summary = escapeApprovalTextForTerminal(entry.summary);
+        return {
+          ID: formatApprovalIdForTerminal(entry.id),
+          Kind: entry.kind,
+          AgentSession: formatPendingAgentSession(entry),
+          Requested: formatTimeAgo(Math.max(0, now - entry.createdAtMs)),
+          Expires: formatTimeAgo(Math.max(0, entry.expiresAtMs - now), { suffix: false }),
+          Summary: shortenPendingApprovalSummary(summary),
+        };
+      }),
+    }).trimEnd(),
+  );
+  defaultRuntime.log(theme.heading("Full request text"));
+  for (const entry of entries) {
+    defaultRuntime.log(
+      `${formatApprovalIdForTerminal(entry.id)}: ${escapeApprovalTextForTerminal(entry.summary)}`,
+    );
+  }
+}
+
+function approvalRecordedDecision(approval: ApprovalSnapshot): ApprovalDecision | null {
+  return "decision" in approval && isApprovalDecision(approval.decision) ? approval.decision : null;
+}
+
+function formatResolver(approval: ApprovalResolveResult["approval"]): string {
+  const resolver = approval.resolver;
+  if (!resolver) {
+    return "unknown resolver";
+  }
+  return resolver.id
+    ? `${resolver.kind}:${escapeApprovalTextForTerminal(resolver.id)}`
+    : resolver.kind;
+}
+
+function describeTerminalApprovalFailure(approval: ApprovalResolveResult["approval"]): string {
+  const id = formatApprovalIdForTerminal(approval.id);
+  if (approval.status === "expired") {
+    return `Approval ${id} expired.`;
+  }
+  if (approval.status === "cancelled") {
+    return `Approval ${id} was cancelled (${approval.reason}).`;
+  }
+  return `Approval ${id} did not settle to a recorded decision.`;
+}
+
+async function resolvePendingApproval(
+  idInput: string,
+  decisionInput: string,
+  opts: ExecApprovalsCliOpts,
+): Promise<void> {
+  // Never trim the id: `pending --json` emits ids verbatim, and a
+  // whitespace-bearing id fed back through a script must target exactly that
+  // approval, not its trimmed sibling.
+  if (idInput.length === 0) {
+    exitWithError("Approval id required.");
+  }
+  const rawId = idInput;
+  const decision = requireTrimmedNonEmpty(decisionInput, "Decision required.");
+  if (!isApprovalDecision(decision)) {
+    exitWithError(`Decision must be one of: ${APPROVAL_DECISIONS.join(", ")}.`);
+  }
+  const reason = opts.reason === undefined ? null : normalizeOptionalString(opts.reason);
+  if (opts.reason !== undefined && !reason) {
+    exitWithError("Reason must not be empty.");
+  }
+
+  // No explicit device identity: operator.admin authorizes resolution on its
+  // own (canReviewOperatorApproval), and forcing a local identity onto a
+  // loopback token/password session can trigger pairing for an otherwise
+  // authorized credential.
+  const approvalCallOptions = {
+    scopes: [ADMIN_SCOPE, APPROVALS_SCOPE] as OperatorScope[],
+  };
+
+  const lookupOne = async (id: string, tolerateNotFound = false) => {
+    try {
+      return (await callGatewayFromCli(
+        "approval.get",
+        opts,
+        { id },
+        approvalCallOptions,
+      )) as ApprovalGetResult;
+    } catch (error) {
+      if (
+        tolerateNotFound &&
+        formatErrorMessage(error).toLowerCase().includes("approval not found")
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  };
+
+  const decodedId = decodeDisplayedApprovalId(rawId);
+  let id = rawId;
+  let lookup: ApprovalGetResult;
+  if (decodedId && decodedId !== rawId) {
+    const [rawLookup, decodedLookup] = await Promise.all([
+      lookupOne(rawId, true),
+      lookupOne(decodedId, true),
+    ]);
+    if (rawLookup && decodedLookup) {
+      exitWithError(
+        "Approval id is ambiguous: it matches both a raw id and a displayed id token. This CLI cannot resolve it safely.",
+      );
+    }
+    if (rawLookup) {
+      lookup = rawLookup;
+    } else if (decodedLookup) {
+      id = decodedId;
+      lookup = decodedLookup;
+    } else {
+      exitWithError("Approval not found.");
+    }
+  } else {
+    lookup = expectDefined(await lookupOne(rawId), "approval lookup result");
+  }
+  const displayId = formatApprovalIdForTerminal(id);
+  const current = lookup.approval;
+  if (current.status === "pending") {
+    const allowedDecisions = current.presentation.allowedDecisions as readonly ApprovalDecision[];
+    if (!allowedDecisions.includes(decision)) {
+      exitWithError(
+        `Decision ${decision} is not allowed for ${current.presentation.kind} approvals; allowed decisions: ${allowedDecisions.join(", ")}.`,
+      );
+    }
+  }
+
+  const result = (await callGatewayFromCli(
+    "approval.resolve",
+    opts,
+    {
+      id,
+      kind: current.presentation.kind,
+      decision,
+    },
+    approvalCallOptions,
+  )) as ApprovalResolveResult;
+  const recordedDecision = approvalRecordedDecision(result.approval);
+  if (!recordedDecision) {
+    exitWithError(describeTerminalApprovalFailure(result.approval));
+  }
+  if (recordedDecision !== decision) {
+    exitWithError(
+      `Approval ${displayId} was already resolved with ${recordedDecision} by ${formatResolver(result.approval)}.`,
+    );
+  }
+
+  if (opts.json) {
+    defaultRuntime.writeJson(
+      {
+        ...result,
+        alreadyResolved: !result.applied,
+        ...(reason ? { cliReason: reason } : {}),
+      },
+      0,
+    );
+    return;
+  }
+  const settled = result.applied
+    ? `resolved ${recordedDecision}`
+    : `already resolved (same decision: ${recordedDecision})`;
+  const reasonSuffix = reason
+    ? `; CLI reason: ${shortenPendingApprovalSummary(escapeApprovalTextForTerminal(reason))}`
+    : "";
+  defaultRuntime.log(
+    `Approval ${displayId} ${settled} by ${formatResolver(result.approval)}${reasonSuffix}.`,
+  );
 }
 
 async function loadConfigForApprovalsTarget(params: {
@@ -211,13 +746,23 @@ async function loadConfigForApprovalsTarget(params: {
 function buildEffectivePolicyReport(params: {
   configLoad: ConfigLoadResult;
   source: ApprovalsTargetSource;
-  approvals: ExecApprovalsFile;
+  approvals?: ExecApprovalsFile;
+  resolvedDefaults?: Required<ExecApprovalsDefaults>;
   hostPath: string;
+  nativePolicy: boolean;
 }): EffectivePolicyReport {
   const cfg = params.configLoad.config;
   const timeoutNote = params.configLoad.timedOut
     ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
     : null;
+  if (!params.approvals) {
+    return {
+      scopes: [],
+      note: params.nativePolicy
+        ? "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply."
+        : "Approvals file unavailable.",
+    };
+  }
   if (params.source === "node") {
     if (!cfg) {
       return {
@@ -227,13 +772,23 @@ function buildEffectivePolicyReport(params: {
           "Gateway config unavailable. Node output above shows host approvals state only, and final runtime policy still intersects with gateway tools.exec.",
       };
     }
+    if (!params.resolvedDefaults) {
+      return {
+        scopes: [],
+        note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
+      };
+    }
     return {
       scopes: collectExecPolicyScopeSnapshots({
         cfg,
         approvals: params.approvals,
         hostPath: params.hostPath,
+        hostDefaults: params.resolvedDefaults,
+        hostDefaultSource: "node-reported resolved defaults",
       }),
-      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      note:
+        "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy. " +
+        SESSION_EXEC_OVERRIDES_NOTE,
     };
   }
   if (!cfg) {
@@ -248,7 +803,9 @@ function buildEffectivePolicyReport(params: {
       approvals: params.approvals,
       hostPath: params.hostPath,
     }),
-    note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+    note:
+      "Effective exec policy is the host approvals file intersected with requested tools.exec policy. " +
+      SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
 
@@ -290,6 +847,10 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
 }
 
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
+  if (isNativeApprovalsSnapshot(snapshot)) {
+    renderNativeApprovalsSnapshot(snapshot, targetLabel);
+    return;
+  }
   const rich = isRich();
   const heading = (text: string) => (rich ? theme.heading(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
@@ -372,6 +933,59 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   );
 }
 
+function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, targetLabel: string) {
+  const rich = isRich();
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  const rules = snapshot.enabled ? snapshot.rules : [];
+  const summaryRows = [
+    { Field: "Target", Value: targetLabel },
+    { Field: "Kind", Value: "host-native" },
+    { Field: "Enabled", Value: snapshot.enabled ? "yes" : "no" },
+    { Field: "Hash", Value: snapshot.enabled ? snapshot.hash : "unavailable" },
+    {
+      Field: "Default",
+      Value: snapshot.enabled ? snapshot.defaultAction : (snapshot.message ?? "unavailable"),
+    },
+    { Field: "Rules", Value: String(rules.length) },
+  ];
+  defaultRuntime.log(heading("Approvals"));
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "Field", header: "Field", minWidth: 8 },
+        { key: "Value", header: "Value", minWidth: 24, flex: true },
+      ],
+      rows: summaryRows,
+    }).trimEnd(),
+  );
+  if (rules.length === 0) {
+    defaultRuntime.log("");
+    defaultRuntime.log(muted("No host-native rules."));
+    return;
+  }
+  defaultRuntime.log("");
+  defaultRuntime.log(heading("Rules"));
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+        { key: "Action", header: "Action", minWidth: 8 },
+        { key: "Shells", header: "Shells", minWidth: 10, flex: true },
+        { key: "Enabled", header: "Enabled", minWidth: 7 },
+      ],
+      rows: rules.map((rule) => ({
+        Pattern: rule.pattern,
+        Action: rule.action,
+        Shells: rule.shells?.join(", ") || "all",
+        Enabled: rule.enabled === false ? "no" : "yes",
+      })),
+    }).trimEnd(),
+  );
+}
+
 async function saveSnapshot(
   opts: ExecApprovalsCliOpts,
   nodeId: string | null,
@@ -422,9 +1036,14 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   agent: ExecApprovalsAgent;
   allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
 }> {
-  const { snapshot, nodeId, source, targetLabel, baseHash } =
+  const { snapshot, nodeId, source, targetLabel, baseHash, kind } =
     await loadWritableSnapshotTarget(opts);
-  const file = snapshot.file ?? { version: 1 };
+  if (kind === "native" || !isFileApprovalsSnapshot(snapshot)) {
+    exitWithError(
+      "Host-native node approvals do not support allowlist mutations; use approvals set --node with host-native JSON.",
+    );
+  }
+  const file = snapshot.file;
   file.version = 1;
 
   const agentKey = resolveAgentKey(opts.agent);
@@ -491,12 +1110,44 @@ export function registerExecApprovalsCli(program: Command) {
   const approvals = program
     .command("approvals")
     .alias("exec-approvals")
-    .description("Manage exec approvals (gateway or node host)")
+    .description("Manage approval policy and pending requests")
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
+
+  const pendingCmd = approvals
+    .command("pending")
+    .description("List pending exec, plugin, and system-agent approvals")
+    .action(async (opts: ExecApprovalsCliOpts) => {
+      try {
+        const entries = await loadPendingApprovals(opts);
+        if (opts.json) {
+          defaultRuntime.writeJson({ approvals: entries }, 0);
+          return;
+        }
+        renderPendingApprovals(entries);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(pendingCmd);
+
+  const resolveCmd = approvals
+    .command("resolve <id> <decision>")
+    .description("Resolve a pending approval")
+    .option("--reason <text>", "Add a local note to the CLI confirmation")
+    .action(async (id: string, decision: string, opts: ExecApprovalsCliOpts) => {
+      try {
+        await resolvePendingApproval(id, decision, opts);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(resolveCmd);
 
   const getCmd = approvals
     .command("get")
@@ -506,12 +1157,18 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       try {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-        const configLoad = await loadConfigForApprovalsTarget({ opts, source });
+        const nativePolicy = isNativeApprovalsSnapshot(snapshot);
+        const configLoad = nativePolicy
+          ? { config: null, timedOut: false }
+          : await loadConfigForApprovalsTarget({ opts, source });
+        const fileSnapshot = isFileApprovalsSnapshot(snapshot) ? snapshot : null;
         const effectivePolicy = buildEffectivePolicyReport({
           configLoad,
           source,
-          approvals: snapshot.file,
-          hostPath: snapshot.path,
+          approvals: fileSnapshot?.file,
+          resolvedDefaults: fileSnapshot?.resolvedDefaults,
+          hostPath: fileSnapshot?.path ?? "",
+          nativePolicy,
         });
         if (opts.json) {
           defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
@@ -548,14 +1205,31 @@ export function registerExecApprovalsCli(program: Command) {
         if (opts.file && opts.stdin) {
           exitWithError("Use either --file or --stdin (not both).");
         }
-        const { source, nodeId, targetLabel, baseHash } = await loadWritableSnapshotTarget(opts);
-        const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
-        let file: ExecApprovalsFile;
+        const { source, nodeId, targetLabel, baseHash, kind } =
+          await loadWritableSnapshotTarget(opts);
+        const raw = opts.stdin ? await readStdin() : await readApprovalsFile(String(opts.file));
+        let input: unknown;
         try {
-          file = JSON5.parse(raw);
+          input = JSON5.parse(raw);
         } catch (err) {
           exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
         }
+        if (kind === "native") {
+          const native = normalizeNativePolicyInput(input);
+          await saveSnapshotTargeted({
+            opts,
+            source,
+            nodeId,
+            native,
+            baseHash,
+            targetLabel,
+          });
+          return;
+        }
+        if (!isRecord(input)) {
+          exitWithError("Exec approvals JSON must be an object.");
+        }
+        const file = input as ExecApprovalsFile;
         file.version = 1;
         await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
       } catch (err) {
@@ -634,5 +1308,7 @@ export function registerExecApprovalsCli(program: Command) {
 }
 
 export const testing = {
+  formatCliError,
   readStdin,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
@@ -14,6 +13,7 @@ import { sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
 import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
+import { resolveReactionParticipant } from "./reaction-participant.js";
 
 export async function maybeSendAckReaction(params: {
   cfg: OpenClawConfig;
@@ -40,14 +40,19 @@ export async function maybeSendAckReaction(params: {
     return null;
   }
 
-  const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
+  const ackConfig = params.cfg.messages?.ackReaction;
+  const scope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
+  if (scope === "off" || scope === "none") {
+    return null;
+  }
   const emoji = resolveWhatsAppAckEmoji({
     cfg: params.cfg,
     agentId: params.agentId,
     ackConfig,
   });
-  const directEnabled = ackConfig?.direct ?? true;
-  const groupMode = ackConfig?.group ?? "mentions";
+  const directEnabled = scope === "all" || scope === "direct";
+  const groupMode =
+    scope === "all" || scope === "group-all" ? "always" : scope === "direct" ? "never" : "mentions";
   const isGroup = admission.conversation.kind === "group";
   const conversationIdForCheck = admission.conversation.id;
 
@@ -67,7 +72,7 @@ export async function maybeSendAckReaction(params: {
       isGroup,
       directEnabled,
       groupMode,
-      wasMentioned: params.msg.wasMentioned === true,
+      wasMentioned: (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
       groupActivated: activation === "always",
     });
 
@@ -79,11 +84,11 @@ export async function maybeSendAckReaction(params: {
     { chatId: params.msg.platform.chatJid, messageId: params.msg.event.id, emoji },
     "sending ack reaction",
   );
-  const sender = getSenderIdentity(params.msg);
+  const participant = resolveReactionParticipant(params.msg);
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(participant ? { participant } : {}),
     accountId,
     cfg: params.cfg,
   };

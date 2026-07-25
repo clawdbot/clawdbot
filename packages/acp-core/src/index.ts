@@ -8,6 +8,7 @@ export * from "./record-shared.js";
 export * from "./session-interaction-mode.js";
 export * from "./session-lineage-meta.js";
 export * from "./session.js";
+export * from "./structured-auth-redaction.js";
 export * from "./types.js";
 export * from "./runtime/error-text.js";
 export * from "./runtime/errors.js";

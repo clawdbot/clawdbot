@@ -161,6 +161,14 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
   throw new Error("Unable to load facade activation check runtime");
 }
 
+// Async twin of loadFacadeActivationCheckRuntime for async call sites: dynamic
+// import resolves the source graph under vitest where the sync createRequire/jiti
+// candidates cannot, and warms the shared memo so subsequent sync loads reuse it.
+async function loadFacadeActivationCheckRuntimeAsync(): Promise<FacadeActivationCheckRuntimeModule> {
+  facadeActivationCheckRuntimeModule ??= await import("./facade-activation-check.runtime.js");
+  return facadeActivationCheckRuntimeModule;
+}
+
 function setFacadeActivationCheckRuntimeForTest(module: FacadeActivationCheckRuntimeModule): void {
   facadeActivationCheckRuntimeModule = module;
 }
@@ -247,6 +255,22 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
   env?: NodeJS.ProcessEnv;
 }): T | null {
   const access = loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
+    buildFacadeActivationCheckParams(params),
+  );
+  if (!access.allowed) {
+    return null;
+  }
+  return loadBundledPluginPublicSurfaceModuleSync<T>(params);
+}
+
+/** Async variant of tryLoadActivatedBundledPluginPublicSurfaceModuleSync for async call sites. */
+export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends object>(params: {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<T | null> {
+  const runtime = await loadFacadeActivationCheckRuntimeAsync();
+  const access = runtime.resolveBundledPluginPublicSurfaceAccess(
     buildFacadeActivationCheckParams(params),
   );
   if (!access.allowed) {

@@ -13,7 +13,7 @@ const openaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
 ];
 
-export const expectedAugmentedOpenaiCodexCatalogEntries = [
+const expectedAugmentedOpenaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
   { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
   { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },

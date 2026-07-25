@@ -47,6 +47,7 @@ export interface GatewayContext {
   onReady?: (data: unknown) => void;
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
+  onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   log?: {
     info: (msg: string) => void;
     error: (msg: string) => void;
@@ -143,6 +144,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     onReady: ctx.onReady,
     onResumed: ctx.onResumed,
     onError: ctx.onError,
+    onDisconnected: ctx.onDisconnected,
     log: accountLogger,
     runtime,
     adapters: createEngineAdapters(),

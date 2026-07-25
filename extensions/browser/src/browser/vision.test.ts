@@ -2,12 +2,12 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
-  describeBrowserScreenshot,
-  neutralizeMediaDirectives,
-} from "./vision.js";
+import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.js";
+
+const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
+  "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
 type DescribeFn = ReturnType<typeof vi.fn>;
 
@@ -54,7 +54,9 @@ describe("describeBrowserScreenshot", () => {
         {
           cfg: {
             tools: {
-              media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+              media: {
+                models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+              },
             },
           },
           filePath,
@@ -77,9 +79,7 @@ describe("describeBrowserScreenshot", () => {
         cfg: {
           tools: {
             media: {
-              image: {
-                models: [{ provider: "openai", model: "gpt-vision" }],
-              },
+              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
             },
           },
         },
@@ -115,7 +115,9 @@ describe("describeBrowserScreenshot", () => {
       maxSide: 800,
     });
     expect(saveMediaBuffer).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
-    expect(describeResult.mock.calls[0][0].filePath).toBe("/tmp/resized.jpg");
+    expect(
+      expectDefined(describeResult.mock.calls[0]?.[0], "browser vision request").filePath,
+    ).toBe("/tmp/resized.jpg");
   });
 
   it("returns null when image understanding is skipped or not configured", async () => {
@@ -139,7 +141,9 @@ describe("describeBrowserScreenshot", () => {
       {
         cfg: {
           tools: {
-            media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+            media: {
+              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+            },
           },
         },
         filePath: "/tmp/screenshot.png",
@@ -148,7 +152,9 @@ describe("describeBrowserScreenshot", () => {
       makeDeps(describeLocal),
     );
 
-    expect(describeLocal.mock.calls[0][0].activeModel).toBeUndefined();
+    expect(
+      expectDefined(describeLocal.mock.calls[0]?.[0], "local browser vision request").activeModel,
+    ).toBeUndefined();
   });
 });
 

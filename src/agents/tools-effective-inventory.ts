@@ -116,12 +116,14 @@ function applyProviderTransportNormalization(params: {
 }): ProviderRuntimeModel {
   const normalized = normalizeProviderTransportWithPlugin({
     provider: params.provider,
+    modelId: params.runtimeModel.id,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
+      modelId: params.runtimeModel.id,
       api: params.runtimeModel.api,
       baseUrl: params.runtimeModel.baseUrl,
     },
@@ -150,12 +152,14 @@ function resolveConfiguredFallbackApi(
 
 function resolveDynamicRuntimeModelContext(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   provider: string;
   modelId: string;
 }): { modelApi?: string; runtimeModel?: ProviderRuntimeModel } {
   const runtimeModel = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   }).model as ProviderRuntimeModel | undefined;
   if (!runtimeModel) {
@@ -233,6 +237,7 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   if (!bundledStaticModel) {
     return resolveDynamicRuntimeModelContext({
       cfg: params.cfg,
+      agentId,
       agentDir: params.agentDir,
       workspaceDir,
       provider,
@@ -255,7 +260,8 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   };
 }
 
-function resolveEffectiveModelCompat(params: {
+/** Resolves compatibility metadata explicitly configured for a provider/model pair. */
+export function resolveConfiguredModelCompat(params: {
   cfg: OpenClawConfig;
   modelProvider?: string;
   modelId?: string;
@@ -306,7 +312,7 @@ export function resolveEffectiveToolInventory(
           modelProvider: params.modelProvider,
           modelId: params.modelId,
         });
-  const modelCompat = resolveEffectiveModelCompat({
+  const modelCompat = resolveConfiguredModelCompat({
     cfg: params.cfg,
     modelProvider: params.modelProvider,
     modelId: params.modelId,

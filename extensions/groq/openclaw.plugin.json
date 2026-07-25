@@ -27,6 +27,22 @@
       }
     ]
   },
+  "providerAuthChoices": [
+    {
+      "provider": "groq",
+      "method": "api-key",
+      "choiceId": "groq-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Groq API key",
+      "choiceHint": "Fast OpenAI-compatible inference",
+      "groupId": "groq",
+      "groupLabel": "Groq",
+      "optionKey": "groqApiKey",
+      "cliFlag": "--groq-api-key",
+      "cliOption": "--groq-api-key <key>",
+      "cliDescription": "Groq API key"
+    }
+  ],
   "modelCatalog": {
     "providers": {
       "groq": {
@@ -166,7 +182,7 @@
       }
     },
     "discovery": {
-      "groq": "static"
+      "groq": "refreshable"
     }
   },
   "contracts": {

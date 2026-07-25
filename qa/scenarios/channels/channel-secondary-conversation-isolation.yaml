@@ -1,0 +1,78 @@
+title: Channel secondary conversation isolation
+
+scenario:
+  id: channel-secondary-conversation-isolation
+  surface: channels
+  coverage:
+    primary:
+      - channels.room-session-group-messages
+    secondary:
+      - agent-runtime.session-turn-ordering
+  objective: Verify a reply in a secondary conversation stays isolated from the primary conversation.
+  successCriteria:
+    - The primary conversation receives only its marker.
+    - The secondary conversation receives only its marker.
+  docsRefs:
+    - docs/concepts/session.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    profiles: { "matrix:adapter": 6, "matrix:all": 19, "matrix:transport": 18 }
+    kind: flow
+    summary: Send sequential turns to primary and secondary channel conversations and assert isolation.
+    transportPolicy:
+      requireGroupMention: true
+    config:
+      primaryConversationId: primary
+      primaryMarker: QA-PRIMARY-CONVERSATION-OK
+      secondaryConversationId: secondary
+      secondaryMarker: QA-SECONDARY-CONVERSATION-OK
+
+flow:
+  steps:
+    - name: isolates primary and secondary conversations
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id: { ref: config.primaryConversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw reply exactly: ${config.primaryMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.primaryConversationId }
+              kind: group
+            textIncludes: { ref: config.primaryMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: primaryOutbound
+        - sendInbound:
+            conversation:
+              id: { ref: config.secondaryConversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw reply exactly: ${config.secondaryMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.secondaryConversationId }
+              kind: group
+            textIncludes: { ref: config.secondaryMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: secondaryOutbound
+        - assert:
+            expr: "!String(primaryOutbound.text ?? '').includes(config.secondaryMarker) && !String(secondaryOutbound.text ?? '').includes(config.primaryMarker)"
+            message:
+              expr: "`secondary conversation leaked into primary route; transcript=${formatTransportTranscript(state)}`"
+      detailsExpr: "`${primaryOutbound.conversation.id} -> ${secondaryOutbound.conversation.id}`"

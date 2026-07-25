@@ -1,0 +1,59 @@
+title: Telegram compact tools command reply
+
+scenario:
+  id: telegram-tools-compact-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify Telegram renders the compact model-tool inventory.
+  successCriteria:
+    - The compact tools command reaches native command dispatch.
+    - The joined reply includes exec and the verbose-mode hint.
+  codeRefs:
+    - src/auto-reply/reply/commands-tools.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles:
+      {
+        "telegram:adapter": 5,
+        "telegram:all": 4,
+        "telegram:mock-release": 4,
+        "telegram:release": 4,
+      }
+    kind: flow
+    channel: telegram
+    summary: Request compact tools through Telegram and verify inventory text.
+    config:
+      expectedAny: [exec, Use /tools verbose for descriptions.]
+
+flow:
+  steps:
+    - name: compact tools renders inventory
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text:
+              expr: "transport.id === 'telegram' ? '/tools@openclaw compact' : '/tools compact'"
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: exec
+            timeoutMs: 60000
+        - call: sleep
+          args: [1000]
+        - set: joinedReply
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).map((message) => message.text).join('\\n')"
+        - assert:
+            expr: "config.expectedAny.every((needle) => joinedReply.includes(needle))"
+            message:
+              expr: "`tools reply missing expected text: ${joinedReply}`"
+      detailsExpr: joinedReply

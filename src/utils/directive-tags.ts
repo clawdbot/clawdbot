@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
@@ -63,7 +64,9 @@ function normalizeDirectiveWhitespace(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 
-  return normalized.replace(blockPlaceholderRe, (_, i) => blocks[Number(i)]);
+  return normalized.replace(blockPlaceholderRe, (_, i) =>
+    expectDefined(blocks[Number(i)], "blocks entry at number(i)"),
+  );
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -98,7 +101,13 @@ function stripUnsafeReplyDirectiveChars(value: string): string {
   const chars: string[] = [];
   for (const ch of value) {
     const code = ch.charCodeAt(0);
-    if ((code >= 0 && code <= 31) || code === 127 || ch === "[" || ch === "]") {
+    if (
+      (code >= 0 && code <= 31) ||
+      code === 127 ||
+      (code >= 0x80 && code <= 0x9f) ||
+      ch === "[" ||
+      ch === "]"
+    ) {
       continue;
     }
     chars.push(ch);
@@ -115,8 +124,9 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
   if (!sanitized) {
     return undefined;
   }
-  if (sanitized.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
-    return sanitized.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH);
+  const chars = Array.from(sanitized);
+  if (chars.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
+    return chars.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH).join("");
   }
   return sanitized;
 }
@@ -221,7 +231,7 @@ export function parseInlineDirectives(
     if (idRaw === undefined) {
       sawCurrent = true;
     } else {
-      const id = idRaw.trim();
+      const id = sanitizeReplyDirectiveId(idRaw);
       if (id) {
         lastExplicitId = id;
       }

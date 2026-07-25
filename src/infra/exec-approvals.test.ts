@@ -67,13 +67,13 @@ describe("exec approvals allowlist evaluation", () => {
       ok: true,
       segments: [
         {
-          raw: "jq .foo",
-          argv: ["jq", ".foo"],
+          raw: "head -n 1",
+          argv: ["head", "-n", "1"],
           resolution: makeMockCommandResolution({
             execution: makeMockExecutableResolution({
-              rawExecutable: "jq",
-              resolvedPath: "/usr/bin/jq",
-              executableName: "jq",
+              rawExecutable: "head",
+              resolvedPath: "/usr/bin/head",
+              executableName: "head",
             }),
           }),
         },
@@ -82,7 +82,7 @@ describe("exec approvals allowlist evaluation", () => {
     const result = evaluateExecAllowlist({
       analysis,
       allowlist: [],
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       cwd: "/tmp",
     });
     // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
@@ -238,13 +238,13 @@ describe("exec approvals allowlist evaluation", () => {
       }),
     };
     const safeBinSegment = {
-      raw: "jq .foo",
-      argv: ["jq", ".foo"],
+      raw: "head -n 1",
+      argv: ["head", "-n", "1"],
       resolution: makeMockCommandResolution({
         execution: makeMockExecutableResolution({
-          rawExecutable: "jq",
-          resolvedPath: "/usr/bin/jq",
-          executableName: "jq",
+          rawExecutable: "head",
+          resolvedPath: "/usr/bin/head",
+          executableName: "head",
         }),
       }),
     };
@@ -256,7 +256,7 @@ describe("exec approvals allowlist evaluation", () => {
     const result = evaluateExecAllowlist({
       analysis,
       allowlist: [{ pattern: "/usr/bin/tool" }],
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       cwd: "/tmp",
     });
     if (process.platform === "win32") {

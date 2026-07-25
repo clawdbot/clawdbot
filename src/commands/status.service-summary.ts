@@ -33,9 +33,10 @@ function normalizeServiceWrapperPath(
 export async function readServiceStatusSummary(
   service: GatewayService,
   fallbackLabel: string,
+  timeoutMs?: number,
 ): Promise<ServiceStatusSummary> {
   try {
-    const state = await readGatewayServiceState(service, { env: process.env });
+    const state = await readGatewayServiceState(service, { env: process.env, timeoutMs });
     const layout = await summarizeGatewayServiceLayout(state.command);
     const wrapperPath = normalizeServiceWrapperPath(state.command);
     const managedByOpenClaw = state.installed;

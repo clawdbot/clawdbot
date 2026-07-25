@@ -26,43 +26,30 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "mimo-v2-flash",
-            "name": "Xiaomi MiMo V2 Flash",
-            "input": ["text"],
-            "contextWindow": 262144,
-            "maxTokens": 8192,
+            "id": "mimo-v2.5",
+            "name": "Xiaomi MiMo V2.5",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.0028,
               "cacheWrite": 0
             }
           },
           {
-            "id": "mimo-v2-pro",
-            "name": "Xiaomi MiMo V2 Pro",
+            "id": "mimo-v2.5-pro",
+            "name": "Xiaomi MiMo V2.5 Pro",
             "input": ["text"],
             "reasoning": true,
             "contextWindow": 1048576,
-            "maxTokens": 32000,
+            "maxTokens": 131072,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "mimo-v2-omni",
-            "name": "Xiaomi MiMo V2 Omni",
-            "input": ["text", "image"],
-            "reasoning": true,
-            "contextWindow": 262144,
-            "maxTokens": 32000,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 0.435,
+              "output": 0.87,
+              "cacheRead": 0.0036,
               "cacheWrite": 0
             }
           }
@@ -112,8 +99,8 @@
       }
     },
     "discovery": {
-      "xiaomi": "static",
-      "xiaomi-token-plan": "runtime"
+      "xiaomi": "refreshable",
+      "xiaomi-token-plan": "refreshable"
     }
   },
   "providerEndpoints": [
@@ -128,17 +115,15 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["xiaomi"]
-  },
-  "providerAuthEnvVars": {
-    "xiaomi": ["XIAOMI_API_KEY"],
-    "xiaomi-token-plan": ["XIAOMI_TOKEN_PLAN_API_KEY"]
+    "speechProviders": ["xiaomi"],
+    "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
   "providerAuthChoices": [
     {
       "provider": "xiaomi",
       "method": "api-key",
       "choiceId": "xiaomi-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi API key (Pay-as-you-go)",
       "groupId": "xiaomi",
       "groupLabel": "Xiaomi",
@@ -152,6 +137,7 @@
       "provider": "xiaomi-token-plan",
       "method": "token-plan-ams",
       "choiceId": "xiaomi-token-plan-ams",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi Token Plan (Europe)",
       "choiceHint": "Endpoint preset: token-plan-ams.xiaomimimo.com/v1",
       "groupId": "xiaomi",
@@ -166,6 +152,7 @@
       "provider": "xiaomi-token-plan",
       "method": "token-plan-cn",
       "choiceId": "xiaomi-token-plan-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi Token Plan (China)",
       "choiceHint": "Endpoint preset: token-plan-cn.xiaomimimo.com/v1",
       "groupId": "xiaomi",
@@ -180,6 +167,7 @@
       "provider": "xiaomi-token-plan",
       "method": "token-plan-sgp",
       "choiceId": "xiaomi-token-plan-sgp",
+      "appGuidedSecret": true,
       "choiceLabel": "Xiaomi Token Plan (Singapore)",
       "choiceHint": "Endpoint preset: token-plan-sgp.xiaomimimo.com/v1",
       "groupId": "xiaomi",

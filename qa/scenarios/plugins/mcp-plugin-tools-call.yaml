@@ -5,9 +5,8 @@ scenario:
   surface: mcp
   coverage:
     primary:
-      - plugins.mcp-tools
-    secondary:
-      - tools.invocation
+      - plugins.tool-plugin-mcp-tools
+      - plugins.tool-plugin-invocation
   objective: Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.
   successCriteria:
     - Plugin tools MCP server lists memory_search.
@@ -17,9 +16,15 @@ scenario:
     - docs/cli/mcp.md
     - docs/gateway/protocol.md
   codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
     - src/mcp/plugin-tools-serve.ts
-    - src/mcp/plugin-tools-mcp-client.test.ts
+    - src/mcp/plugin-tools-handlers.ts
   execution:
-    kind: vitest
-    path: src/mcp/plugin-tools-mcp-client.test.ts
-    summary: Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.
+    kind: script
+    path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    summary: Registers a fixture plugin, starts the real plugin-tools stdio server, and calls its tool with a real MCP client.
+    args:
+      - --scenario
+      - mcp-plugin-tools-call
+      - --artifact-base
+      - ${outputDir}

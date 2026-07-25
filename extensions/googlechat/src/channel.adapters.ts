@@ -9,7 +9,6 @@ import {
   defineChannelMessageAdapter,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import {
   composeAccountWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
@@ -20,26 +19,25 @@ import {
   listResolvedDirectoryUserEntriesFromAllowFrom,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
   type ResolvedGoogleChatAccount,
-  chunkTextForOutbound,
-  readRemoteMediaBuffer,
   isGoogleChatUserTarget,
-  loadOutboundMediaFromUrl,
   missingTargetError,
   normalizeGoogleChatTarget,
   PAIRING_APPROVED_MESSAGE,
-  resolveChannelMediaMaxBytes,
   resolveGoogleChatAccount,
   resolveGoogleChatOutboundSpace,
   type OpenClawConfig,
 } from "./channel.deps.runtime.js";
+import {
+  formatGoogleChatTextChunks,
+  GOOGLE_CHAT_FORMAT_PROFILE,
+  sanitizeGoogleChatText,
+} from "./format.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
@@ -90,8 +88,8 @@ const collectGoogleChatSecurityWarnings = composeAccountWarningCollectors<
 >(
   collectGoogleChatGroupPolicyWarnings,
   (account) =>
-    account.config.dm?.policy === "open" &&
-    '- Google Chat DMs are open to anyone. Set channels.googlechat.dm.policy="pairing" or "allowlist".',
+    account.config.dmPolicy === "open" &&
+    '- Google Chat DMs are open to anyone. Set channels.googlechat.dmPolicy="pairing" or "allowlist".',
 );
 
 export const googlechatGroupsAdapter = {
@@ -103,7 +101,7 @@ export const googlechatDirectoryAdapter = createChannelDirectoryAdapter({
     listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedGoogleChatAccount>({
       ...params,
       resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
-      resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+      resolveAllowFrom: (account) => account.config.allowFrom,
       normalizeId: (entry) => normalizeGoogleChatTarget(entry) ?? entry,
     }),
   listGroups: async (params) =>
@@ -117,9 +115,9 @@ export const googlechatDirectoryAdapter = createChannelDirectoryAdapter({
 export const googlechatSecurityAdapter = {
   dm: {
     channelKey: "googlechat",
-    resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dm?.policy,
-    resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
-    allowFromPathSuffix: "dm.",
+    resolvePolicy: (account: ResolvedGoogleChatAccount) => account.config.dmPolicy,
+    resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.allowFrom,
+    allowFromPathSuffix: "",
     normalizeEntry: (raw: string) => formatGoogleChatAllowFromEntry(raw),
   },
   collectWarnings: collectGoogleChatSecurityWarnings,
@@ -174,7 +172,7 @@ export const googlechatPairingTextAdapter = {
     accountId?: string | null;
   }) => {
     const account = resolveGoogleChatAccount({ cfg, accountId });
-    if (account.credentialSource === "none") {
+    if (account.credentialSource === "none" || account.tokenStatus === "configured_unavailable") {
       return;
     }
     const user = normalizeGoogleChatTarget(id) ?? id;
@@ -192,14 +190,10 @@ export const googlechatPairingTextAdapter = {
 export const googlechatOutboundAdapter = {
   base: {
     deliveryMode: "direct" as const,
-    chunker: chunkTextForOutbound,
+    chunker: (text: string, limit: number) => formatGoogleChatTextChunks(text, limit),
     chunkerMode: "markdown" as const,
-    textChunkLimit: 4000,
-    // Google Chat's plain-text pass does not remove assistant scaffolding.
-    // Run the canonical delivery sanitizer first so internal tool traces are
-    // dropped before channel formatting.
-    sanitizeText: ({ text }: { text: string }) =>
-      sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
+    textChunkLimit: GOOGLE_CHAT_FORMAT_PROFILE.chunk.limit,
+    sanitizeText: ({ text }: { text: string }) => sanitizeGoogleChatText(text),
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
@@ -260,92 +254,6 @@ export const googlechatOutboundAdapter = {
         receipt: createGoogleChatSendReceipt({ messageId, chatId: space, kind: "text" }),
       };
     },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId,
-      replyToId,
-      threadId,
-    }: {
-      cfg: OpenClawConfig;
-      to: string;
-      text?: string;
-      mediaUrl?: string;
-      mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
-      mediaLocalRoots?: OutboundMediaLoadOptions["mediaLocalRoots"];
-      mediaReadFile?: OutboundMediaLoadOptions["mediaReadFile"];
-      accountId?: string | null;
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    }) => {
-      if (!mediaUrl) {
-        throw new Error("Google Chat mediaUrl is required.");
-      }
-      const account = resolveGoogleChatAccount({
-        cfg,
-        accountId,
-      });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread =
-        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
-      const maxBytes = resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg: cfgLocal, accountId: accountIdLocal }) =>
-          (
-            cfgLocal.channels?.googlechat as
-              | { accounts?: Record<string, { mediaMaxMb?: number }>; mediaMaxMb?: number }
-              | undefined
-          )?.accounts?.[accountIdLocal]?.mediaMaxMb ??
-          (cfgLocal.channels?.googlechat as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
-        accountId,
-      });
-      const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
-      const loaded = /^https?:\/\//i.test(mediaUrl)
-        ? await readRemoteMediaBuffer({
-            url: mediaUrl,
-            maxBytes: effectiveMaxBytes,
-          })
-        : await loadOutboundMediaFromUrl(mediaUrl, {
-            maxBytes: effectiveMaxBytes,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-          });
-      const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
-        await loadGoogleChatChannelRuntime();
-      const upload = await uploadGoogleChatAttachment({
-        account,
-        space,
-        filename: loaded.fileName ?? "attachment",
-        buffer: loaded.buffer,
-        contentType: loaded.contentType,
-      });
-      const result = await sendGoogleChatMessage({
-        account,
-        space,
-        text,
-        thread,
-        attachments: upload.attachmentUploadToken
-          ? [
-              {
-                attachmentUploadToken: upload.attachmentUploadToken,
-                contentName: loaded.fileName,
-              },
-            ]
-          : undefined,
-      });
-      const messageId = result?.messageName ?? "";
-      return {
-        messageId,
-        chatId: space,
-        receipt: createGoogleChatSendReceipt({ messageId, chatId: space, kind: "media" }),
-      };
-    },
   },
 };
 
@@ -354,13 +262,11 @@ export const googlechatMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
-      media: true,
       thread: true,
       messageSendingHooks: true,
     },
   },
   send: {
     text: googlechatOutboundAdapter.attachedResults.sendText,
-    media: googlechatOutboundAdapter.attachedResults.sendMedia,
   },
 });

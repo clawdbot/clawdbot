@@ -1,4 +1,6 @@
 // Feishu plugin module implements comment dispatcher behavior.
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -11,6 +13,12 @@ import {
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
+import {
+  createFeishuPartialReplyDeliveryError,
+  createFeishuReplyDeliveryResult,
+  noVisibleFeishuReplyDelivery,
+  type FeishuReplyDeliverySource,
+} from "./reply-delivery-result.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 type CreateFeishuCommentReplyDispatcherParams = {
@@ -45,7 +53,7 @@ export function createFeishuCommentReplyDispatcher(
       fallbackLimit: 4000,
     },
   );
-  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu");
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu", params.accountId);
   const typingReaction = createCommentTypingReactionLifecycle({
     cfg: params.cfg,
     fileToken: params.fileToken,
@@ -55,53 +63,78 @@ export function createFeishuCommentReplyDispatcher(
     runtime: params.runtime,
   });
 
-  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
-    core.channel.reply.createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
-      humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
-      onReplyStart: async () => {
-        await typingReaction.start();
-      },
-      deliver: async (payload: ReplyPayload, info) => {
-        if (info.kind !== "final") {
-          return;
+  const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
+    responsePrefix: prefixContext.responsePrefix,
+    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+    humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
+    onReplyStart: async () => {
+      await typingReaction.start();
+    },
+    onCleanup: () => {
+      void typingReaction.cleanup();
+    },
+  };
+  const delivery: ChannelInboundTurnPlan["delivery"] = {
+    observeMessageSent: true,
+    deliver: async (payload: ReplyPayload, info) => {
+      if (info.kind !== "final") {
+        return noVisibleFeishuReplyDelivery;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      if (!reply.hasText) {
+        if (reply.hasMedia) {
+          params.runtime.log?.(
+            `feishu[${params.accountId ?? "default"}]: comment reply ignored media-only payload for comment=${params.commentId}`,
+          );
         }
-        const reply = resolveSendableOutboundReplyParts(payload);
-        if (!reply.hasText) {
-          if (reply.hasMedia) {
-            params.runtime.log?.(
-              `feishu[${params.accountId ?? "default"}]: comment reply ignored media-only payload for comment=${params.commentId}`,
-            );
-          }
-          return;
-        }
-        const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
-        for (const chunk of chunks) {
-          await deliverCommentThreadText(client, {
+        return noVisibleFeishuReplyDelivery;
+      }
+      const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
+      const results: FeishuReplyDeliverySource[] = [];
+      const acceptedChunks: string[] = [];
+      for (const chunk of chunks) {
+        try {
+          const result = await deliverCommentThreadText(client, {
             file_token: params.fileToken,
             file_type: params.fileType,
             comment_id: params.commentId,
             content: chunk,
             is_whole_comment: params.isWholeComment,
           });
+          results.push({
+            messageId:
+              result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id,
+          });
+          acceptedChunks.push(chunk);
+        } catch (error: unknown) {
+          throw createFeishuPartialReplyDeliveryError(
+            error,
+            createFeishuReplyDeliveryResult({
+              results,
+              visibleReplySent: results.length > 0,
+              content: acceptedChunks.join(""),
+              kind: "text",
+            }),
+          );
         }
-      },
-      onError: (err, info) => {
-        params.runtime.error?.(
-          `feishu[${params.accountId ?? "default"}]: comment dispatcher failed kind=${info.kind} comment=${params.commentId}: ${String(err)}`,
-        );
-      },
-      onCleanup: () => {
-        void typingReaction.cleanup();
-      },
-    });
+      }
+      return createFeishuReplyDeliveryResult({
+        results,
+        visibleReplySent: results.length > 0,
+        content: reply.text,
+        kind: "text",
+      });
+    },
+    onError: (err, info) => {
+      params.runtime.error?.(
+        `feishu[${params.accountId ?? "default"}]: comment dispatcher failed kind=${info.kind} comment=${params.commentId}: ${String(err)}`,
+      );
+    },
+  };
 
   return {
-    dispatcher,
-    replyOptions,
-    markDispatchIdle,
-    markRunComplete,
+    dispatcherOptions,
+    delivery,
     startTypingReaction: typingReaction.start,
     cleanupTypingReaction: typingReaction.cleanup,
   };

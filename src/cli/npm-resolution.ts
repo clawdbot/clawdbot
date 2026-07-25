@@ -4,28 +4,6 @@ import {
   type NpmSpecResolution as NpmResolutionMetadata,
 } from "../infra/install-source-utils.js";
 
-/** Choose the install-record spec for an npm package, optionally pinning to the resolved version. */
-export function resolvePinnedNpmSpec(params: {
-  rawSpec: string;
-  pin: boolean;
-  resolvedSpec?: string;
-}): { recordSpec: string; pinWarning?: string; pinNotice?: string } {
-  const recordSpec = params.pin && params.resolvedSpec ? params.resolvedSpec : params.rawSpec;
-  if (!params.pin) {
-    return { recordSpec };
-  }
-  if (!params.resolvedSpec) {
-    return {
-      recordSpec,
-      pinWarning: "Could not resolve exact npm version for --pin; storing original npm spec.",
-    };
-  }
-  return {
-    recordSpec,
-    pinNotice: `Pinned npm install record to ${params.resolvedSpec}.`,
-  };
-}
-
 /** Build the npm section of a plugin install record. */
 export function buildNpmInstallRecordFields(params: {
   spec: string;
@@ -53,30 +31,6 @@ export function buildNpmInstallRecordFields(params: {
   };
 }
 
-/** Resolve and log npm pinning decisions before constructing the persisted install record. */
-export function resolvePinnedNpmInstallRecord(params: {
-  rawSpec: string;
-  pin: boolean;
-  installPath: string;
-  version?: string;
-  resolution?: NpmResolutionMetadata;
-  log: (message: string) => void;
-  warn: (message: string) => void;
-}): ReturnType<typeof buildNpmInstallRecordFields> {
-  const pinInfo = resolvePinnedNpmSpec({
-    rawSpec: params.rawSpec,
-    pin: params.pin,
-    resolvedSpec: params.resolution?.resolvedSpec,
-  });
-  logPinnedNpmSpecMessages(pinInfo, params.log, params.warn);
-  return buildNpmInstallRecordFields({
-    spec: pinInfo.recordSpec,
-    installPath: params.installPath,
-    version: params.version,
-    resolution: params.resolution,
-  });
-}
-
 /** CLI adapter for npm install-record pinning with styled warning output. */
 export function resolvePinnedNpmInstallRecordForCli(
   rawSpec: string,
@@ -87,27 +41,19 @@ export function resolvePinnedNpmInstallRecordForCli(
   log: (message: string) => void,
   warnFormat: (message: string) => string,
 ): ReturnType<typeof buildNpmInstallRecordFields> {
-  return resolvePinnedNpmInstallRecord({
-    rawSpec,
-    pin,
+  const resolvedSpec = resolution?.resolvedSpec;
+  const recordSpec = pin && resolvedSpec ? resolvedSpec : rawSpec;
+  if (pin) {
+    if (resolvedSpec) {
+      log(`Pinned npm install record to ${resolvedSpec}.`);
+    } else {
+      log(warnFormat("Could not resolve exact npm version for --pin; storing original npm spec."));
+    }
+  }
+  return buildNpmInstallRecordFields({
+    spec: recordSpec,
     installPath,
     version,
     resolution,
-    log,
-    warn: (message) => log(warnFormat(message)),
   });
-}
-
-/** Emit any user-facing notice or warning from npm pin resolution. */
-export function logPinnedNpmSpecMessages(
-  pinInfo: { pinWarning?: string; pinNotice?: string },
-  log: (message: string) => void,
-  logWarn: (message: string) => void,
-): void {
-  if (pinInfo.pinWarning) {
-    logWarn(pinInfo.pinWarning);
-  }
-  if (pinInfo.pinNotice) {
-    log(pinInfo.pinNotice);
-  }
 }

@@ -9,7 +9,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId, normalizeAgentId } from "./sess
 
 // Agent-to-channel coverage summary for diagnostics and background checks. It
 // samples configured channels/accounts and explicit bindings.
-export type ChannelRouteTarget = {
+type ChannelRouteTarget = {
   agentId: string;
   channels: string[];
 };

@@ -90,15 +90,18 @@ function formatDiscordChannelUnresolved(entry: DiscordChannelLogEntry): string {
   ]);
 }
 
-function formatDiscordUserResolved(entry: DiscordUserLogEntry): string {
+function formatDiscordUserResolved(entry: DiscordUserLogEntry): string | null {
   const displayName = entry.name?.trim();
   const target = displayName || entry.id;
   const base = formatResolvedBase(entry.input, target);
-  return formatResolutionLogDetails(base, [
-    displayName && entry.id ? `id:${entry.id}` : undefined,
+  const formatted = formatResolutionLogDetails(base, [
+    // Repeating the id is only useful when the input was not already that id.
+    displayName && entry.id && entry.id !== entry.input ? `id:${entry.id}` : undefined,
     entry.guildName ? `guild:${entry.guildName}` : undefined,
     entry.note,
   ]);
+  // An id that resolved to itself with no metadata carries no information.
+  return formatted === entry.input ? null : formatted;
 }
 
 function formatDiscordUserUnresolved(entry: DiscordUserLogEntry): string {

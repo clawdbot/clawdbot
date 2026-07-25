@@ -45,12 +45,12 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
 
@@ -146,7 +146,56 @@ jobs:
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
             export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
           fi
-          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          pnpm_install_artifacts_ready() {
+            test -s "$PNPM_CONFIG_MODULES_DIR/.modules.yaml" &&
+              test -x "$PNPM_CONFIG_MODULES_DIR/.bin/oxfmt" &&
+              test -f "$PNPM_CONFIG_MODULES_DIR/typescript/package.json"
+          }
+          run_pnpm_install() {
+            local log_file="$RUNNER_TEMP/openclaw-pnpm-install.log"
+            local pnpm_pid
+            local done_seen=0
+            rm -f "$log_file"
+            setsid pnpm "${install_args[@]}" > >(tee "$log_file") 2>&1 &
+            pnpm_pid=$!
+            while kill -0 "$pnpm_pid" 2>/dev/null; do
+              if grep -qE '^Done in .+ using pnpm v' "$log_file"; then
+                done_seen=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$done_seen" = 1 ]; then
+              for _ in {1..10}; do
+                if ! kill -0 "$pnpm_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              if kill -0 "$pnpm_pid" 2>/dev/null; then
+                # pnpm 11 may finish successfully but retain its event loop on Linux CI.
+                # https://github.com/pnpm/pnpm/issues/12297
+                echo "::warning::pnpm printed its completion marker but did not exit; terminating it after the grace period"
+                kill -TERM -- "-$pnpm_pid" 2>/dev/null || true
+                for _ in {1..10}; do
+                  if ! kill -0 "$pnpm_pid" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 1
+                done
+                kill -KILL -- "-$pnpm_pid" 2>/dev/null || true
+                wait "$pnpm_pid" 2>/dev/null || true
+                if pnpm_install_artifacts_ready; then
+                  echo "pnpm install artifacts verified after exit-hang termination"
+                  return 0
+                fi
+                echo "::error::pnpm exit-hang termination left incomplete install artifacts"
+                return 1
+              fi
+            fi
+            wait "$pnpm_pid"
+          }
+          run_pnpm_install || run_pnpm_install
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             rm -rf node_modules
             ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
@@ -190,7 +239,8 @@ jobs:
           PNPM
           sudo chmod 0755 /usr/local/bin/pnpm
 
-      - name: Ensure Docker is running
+      - &crabbox_ensure_docker_step
+        name: Ensure Docker is running
         shell: bash
         run: |
           set -euo pipefail
@@ -222,11 +272,17 @@ jobs:
           if ! docker buildx version >/dev/null 2>&1; then
             arch="$(uname -m)"
             case "$arch" in
-              aarch64|arm64) buildx_arch=arm64 ;;
-              x86_64|amd64) buildx_arch=amd64 ;;
+              aarch64|arm64)
+                buildx_arch=arm64
+                buildx_sha256=c4248d6cbc4a619a7e0b4609c11e509ad4ac0b475e1c64817c0ac20c5d90c766
+                ;;
+              x86_64|amd64)
+                buildx_arch=amd64
+                buildx_sha256=d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
+                ;;
               *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
             esac
-            buildx_version="${DOCKER_BUILDX_VERSION:-v0.15.1}"
+            buildx_version="v0.35.0"
             mkdir -p "$HOME/.docker/cli-plugins"
             curl --fail --show-error --location \
               --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
@@ -236,6 +292,7 @@ jobs:
               --retry-all-errors \
               "https://github.com/docker/buildx/releases/download/${buildx_version}/buildx-${buildx_version}.linux-${buildx_arch}" \
               -o "$HOME/.docker/cli-plugins/docker-buildx"
+            echo "${buildx_sha256}  $HOME/.docker/cli-plugins/docker-buildx" | sha256sum -c -
             chmod 0755 "$HOME/.docker/cli-plugins/docker-buildx"
           fi
 
@@ -337,12 +394,12 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
 
@@ -570,12 +627,14 @@ jobs:
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        env:
+          PNPM_HOME: ${{ runner.temp }}/pnpm-home
         with:
           install-bun: "false"
           use-actions-cache: "false"
@@ -612,59 +671,7 @@ jobs:
           PNPM
           sudo chmod 0755 /usr/local/bin/pnpm
 
-      - name: Ensure Docker is running
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! command -v docker >/dev/null 2>&1; then
-            echo "docker not found; installing fallback engine"
-            curl --fail --show-error --location \
-              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
-              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
-              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
-              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
-              --retry-all-errors \
-              https://get.docker.com | sudo sh
-          fi
-
-          if command -v systemctl >/dev/null 2>&1; then
-            sudo systemctl start docker || true
-          elif command -v service >/dev/null 2>&1; then
-            sudo service docker start || true
-          fi
-
-          if [ -S /var/run/docker.sock ]; then
-            sudo usermod -aG docker "$USER" || true
-            # The runner process keeps its original groups; grant this
-            # ephemeral runner session access without requiring a relogin.
-            sudo chmod 666 /var/run/docker.sock
-          fi
-
-          if ! docker buildx version >/dev/null 2>&1; then
-            arch="$(uname -m)"
-            case "$arch" in
-              aarch64|arm64) buildx_arch=arm64 ;;
-              x86_64|amd64) buildx_arch=amd64 ;;
-              *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
-            esac
-            buildx_version="${DOCKER_BUILDX_VERSION:-v0.15.1}"
-            mkdir -p "$HOME/.docker/cli-plugins"
-            curl --fail --show-error --location \
-              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
-              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
-              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
-              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
-              --retry-all-errors \
-              "https://github.com/docker/buildx/releases/download/${buildx_version}/buildx-${buildx_version}.linux-${buildx_arch}" \
-              -o "$HOME/.docker/cli-plugins/docker-buildx"
-            chmod 0755 "$HOME/.docker/cli-plugins/docker-buildx"
-          fi
-
-          docker version
-          docker buildx version
-          docker compose version || true
-
+      - *crabbox_ensure_docker_step
       - name: Ensure SSH is available
         shell: bash
         run: |

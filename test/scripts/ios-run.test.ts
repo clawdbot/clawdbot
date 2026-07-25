@@ -53,6 +53,16 @@ if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" || -n "\${CUSTOM_SIMULATOR
 fi
 `,
   );
+  writeFileSync(
+    path.join(scriptsDir, "ios-write-swift-filelist.mjs"),
+    `import { appendFileSync } from "node:fs";
+if (process.env.OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET || process.env.CUSTOM_SIMULATOR_PUSH_PROOF_SECRET) {
+  appendFileSync(${JSON.stringify(logFile)}, "write-swift-filelist-proof-env leaked\\n");
+}
+appendFileSync(${JSON.stringify(logFile)}, "write-swift-filelist\\n");
+`,
+    "utf8",
+  );
   writeExecutable(
     path.join(binDir, "xcodegen"),
     `#!/usr/bin/env bash

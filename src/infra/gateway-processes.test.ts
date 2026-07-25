@@ -117,6 +117,11 @@ describe("gateway-processes", () => {
       "run",
     ]);
     expect(readGatewayProcessArgsSync(124)).toBeNull();
+    expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-o", "command=", "-p", "123"], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: 1_000,
+    });
   });
 
   it("falls back from powershell to wmic for windows process args", () => {
@@ -175,6 +180,33 @@ describe("gateway-processes", () => {
     );
   });
 
+  it("swallows ESRCH when a verified gateway process exits before the signal", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw esrchErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).not.toThrow();
+    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
+  });
+
+  it("re-throws non-ESRCH kill errors", () => {
+    setPlatform("linux");
+    readFileSyncMock.mockReturnValue("node\0gateway\0");
+    parseProcCmdlineMock.mockReturnValue(["node", "gateway"]);
+    isGatewayArgvMock.mockReturnValue(true);
+    const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw epermErr;
+    });
+
+    expect(() => signalVerifiedGatewayPidSync(500, "SIGTERM")).toThrow("permission denied");
+  });
+
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
     setPlatform("linux");
     findGatewayPidsOnPortSyncMock.mockReturnValue([process.pid, 200, 200, 300, -1]);
@@ -217,7 +249,10 @@ describe("gateway-processes", () => {
         status: 0,
         stdout: [
           "Proto  Local Address          Foreign Address        State           PID",
-          "TCP    0.0.0.0:18789         0.0.0.0:0              LISTENING       200",
+          "TCP    127.0.0.1:18789       127.0.0.1:0            ABHOEREN       998",
+          "TCP    127.0.0.1:18789       127.0.0.1:54321        HERGESTELLT    999",
+          "TCP    0.0.0.0:18789         0.0.0.0:0              ABHOEREN       200",
+          "TCP    [::]:18789            [::]:0                 ABHOEREN       200",
         ].join("\r\n"),
       })
       .mockReturnValueOnce({
@@ -231,6 +266,7 @@ describe("gateway-processes", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
     expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsSystem32ExePath("netstat.exe"));
+    expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual(["-ano"]);
     expect(spawnSyncMock.mock.calls[2]?.[0]).toBe(getWindowsPowerShellExePath());
   });
 

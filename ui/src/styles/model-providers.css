@@ -1,0 +1,209 @@
+/* Model Providers settings page leftovers; provider usage details reuse
+   provider-usage-* styles from usage.css and .provider-brand-icon from
+   components.css. Structural surfaces come from settings.css. */
+
+.model-providers__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.model-providers__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.model-providers__icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+}
+
+.model-providers__icon.provider-brand-icon--fallback {
+  font-size: 12px;
+}
+
+.model-providers__no-stats,
+.model-providers__local-cost-detail {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.model-providers__local-cost {
+  display: grid;
+  gap: var(--space-1);
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding-top: var(--space-3);
+}
+
+.model-providers__global-metrics {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.model-providers__global-metrics-title {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.model-providers__layout,
+.model-providers__fallbacks,
+.model-providers__inline-form,
+.model-providers__probe {
+  display: grid;
+  gap: 12px;
+}
+
+.model-providers__credentials {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-providers__credentials strong {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
+
+.model-providers__card-actions,
+.model-providers__form-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-providers__card-actions {
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.model-providers__inline-form,
+.model-providers__confirm,
+.model-providers__probe {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+}
+
+.model-providers__confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.model-providers__probe {
+  font-size: 12px;
+}
+
+.model-providers__probe--success {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+}
+
+.model-providers__probe--error {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+.model-providers__probe-summary,
+.model-providers__probe-target,
+.model-providers__fallback-heading,
+.model-providers__fallback-row,
+.model-providers__defaults-heading,
+.model-providers__add-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-providers__probe-target {
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+
+.model-providers__probe-target small {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+
+.model-providers__default-grid,
+.model-providers__add-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.model-providers__fallbacks {
+  margin-top: 16px;
+}
+
+.model-providers__fallback-heading {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.model-providers__fallback-row {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+}
+
+.model-providers__fallback-row code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-providers__fallback-add {
+  max-width: 520px;
+}
+
+.model-providers__add-form {
+  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
+}
+
+.model-providers__card .callout,
+.model-providers__add .callout {
+  margin-top: 10px;
+}
+
+@media (max-width: 700px) {
+  .model-providers__default-grid,
+  .model-providers__add-form {
+    grid-template-columns: 1fr;
+  }
+
+  .model-providers__credentials,
+  .model-providers__confirm,
+  .model-providers__defaults-heading,
+  .model-providers__add-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .model-providers__credentials strong {
+    text-align: left;
+  }
+}

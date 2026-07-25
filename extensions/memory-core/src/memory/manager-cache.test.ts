@@ -4,8 +4,9 @@ import {
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
-  type ManagedCache,
 } from "./manager-cache.js";
+
+type ManagedCache<T> = ReturnType<typeof resolveSingletonManagedCache<T>>;
 
 function createDeferred<T = void>(): {
   promise: Promise<T>;

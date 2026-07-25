@@ -12,48 +12,7 @@ const {
   resolveRoute,
   runDocsLinkAuditCli,
   sanitizeDocsConfigForEnglishOnly,
-} = (await import("../../scripts/docs-link-audit.mjs")) as unknown as {
-  normalizeRoute: (route: string) => string;
-  prepareAnchorAuditDocsDir: (sourceDir?: string) => string;
-  prepareMirroredDocsDir: (
-    sourceDir?: string,
-    options?: {
-      resolveClawHubRepoPathImpl?: (value?: string, options?: { required?: boolean }) => string;
-      syncClawHubDocsTreeImpl?: (
-        targetDocsDir: string,
-        options?: { repoPath?: string; required?: boolean },
-      ) => unknown;
-    },
-  ) => {
-    cleanup: () => void;
-    dir: string;
-    mirroredClawHub: boolean;
-  };
-  resolveRoute: (
-    route: string,
-    options?: { redirects?: Map<string, string>; routes?: Set<string> },
-  ) => { ok: boolean; terminal: string; loop?: boolean };
-  runDocsLinkAuditCli: (options?: {
-    args?: string[];
-    nodeVersion?: string;
-    spawnSyncImpl?: (
-      command: string,
-      args: string[],
-      options: { cwd: string; env?: NodeJS.ProcessEnv; shell?: boolean; stdio: string },
-    ) => { status: number | null; error?: { code?: string } };
-    env?: NodeJS.ProcessEnv;
-    nodeExecPath?: string;
-    npmExecPath?: string;
-    prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
-    cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
-    prepareMirroredDocsDirImpl?: (sourceDir?: string) => {
-      cleanup: () => void;
-      dir: string;
-      mirroredClawHub: boolean;
-    };
-  }) => number;
-  sanitizeDocsConfigForEnglishOnly: (value: unknown) => unknown;
-};
+} = await import("../../scripts/docs-link-audit.mjs");
 
 describe("docs-link-audit", () => {
   function tempEntries(prefix: string): Set<string> {
@@ -256,7 +215,7 @@ describe("docs-link-audit", () => {
     expect(mirroredCleaned).toBe(true);
   });
 
-  it("uses Mintlify through pnpm dlx for anchor validation", () => {
+  it("uses a pinned Mintlify package through npm for anchor validation", () => {
     let invocation:
       | {
           command: string;
@@ -266,16 +225,13 @@ describe("docs-link-audit", () => {
       | undefined;
     let cleanedDir: string | undefined;
     const anchorDocsDir = path.join(os.tmpdir(), "docs-link-audit-anchor");
-    const fakePnpm = path.join(anchorDocsDir, "pnpm.cjs");
     fs.mkdirSync(anchorDocsDir, { recursive: true });
-    fs.writeFileSync(fakePnpm, "#!/usr/bin/env node\n", { mode: 0o755 });
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
       env: { ...process.env, OPENCLAW_DOCS_LINK_SENTINEL: "1" },
       nodeExecPath: "/opt/node/bin/node",
       nodeVersion: "22.21.1",
-      npmExecPath: fakePnpm,
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -290,8 +246,16 @@ describe("docs-link-audit", () => {
 
     expect(exitCode).toBe(0);
     expect(invocation).toEqual({
-      command: "/opt/node/bin/node",
-      args: [fakePnpm, "dlx", "mint", "broken-links", "--check-anchors"],
+      command: "npm",
+      args: [
+        "exec",
+        "--yes",
+        "--package=mint@4.2.715",
+        "--",
+        "mint",
+        "broken-links",
+        "--check-anchors",
+      ],
       options: expect.objectContaining({
         cwd: anchorDocsDir,
         env: expect.objectContaining({ OPENCLAW_DOCS_LINK_SENTINEL: "1" }),
@@ -310,15 +274,12 @@ describe("docs-link-audit", () => {
     }> = [];
     let cleanedDir: string | undefined;
     const anchorDocsDir = path.join(os.tmpdir(), "docs-link-audit-anchor");
-    const fakePnpm = path.join(anchorDocsDir, "pnpm.cjs");
     fs.mkdirSync(anchorDocsDir, { recursive: true });
-    fs.writeFileSync(fakePnpm, "#!/usr/bin/env node\n", { mode: 0o755 });
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
       nodeExecPath: "/opt/node/bin/node",
       nodeVersion: "25.3.0",
-      npmExecPath: fakePnpm,
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -353,9 +314,11 @@ describe("docs-link-audit", () => {
       args: [
         "exec",
         "--using=22",
-        "node",
-        fakePnpm,
-        "dlx",
+        "npm",
+        "exec",
+        "--yes",
+        "--package=mint@4.2.715",
+        "--",
         "mint",
         "broken-links",
         "--check-anchors",

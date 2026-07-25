@@ -30,6 +30,14 @@
             "id": "deepseek-v4-pro",
             "name": "DeepSeek V4 Pro",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "minimal": "high",
+              "low": "high",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -49,6 +57,14 @@
             "id": "deepseek-v4-flash",
             "name": "DeepSeek V4 Flash",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "minimal": "high",
+              "low": "high",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -84,6 +100,7 @@
       "provider": "opencode-go",
       "method": "api-key",
       "choiceId": "opencode-go",
+      "appGuidedSecret": true,
       "choiceLabel": "OpenCode Go catalog",
       "groupId": "opencode",
       "groupLabel": "OpenCode",

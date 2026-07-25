@@ -34,11 +34,10 @@ vi.mock("../config/paths.js", () => ({
     env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
 }));
 
-const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+const { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
 const { triggerOpenClawRestart } = await import("./restart.js");
 
-let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
 
 beforeEach(() => {
@@ -46,20 +45,13 @@ beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
-
-  currentTimeMs = 0;
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
   resolveGatewayPortMock.mockReturnValue(18789);
-  testing.setSleepSyncOverride((ms) => {
-    currentTimeMs += ms;
-  });
-  testing.setDateNowOverride(() => currentTimeMs);
+  vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
 });
 
 afterEach(() => {
   envSnapshot.restore();
-  testing.setSleepSyncOverride(null);
-  testing.setDateNowOverride(null);
   vi.restoreAllMocks();
 });
 

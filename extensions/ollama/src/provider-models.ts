@@ -1,9 +1,9 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -11,6 +11,7 @@ import {
   OLLAMA_DEFAULT_MAX_TOKENS,
   OLLAMA_GLM52_CLOUD_MODEL_ID,
   OLLAMA_GLM52_CONTEXT_WINDOW,
+  OLLAMA_LOCAL_CONTEXT_TOKENS,
 } from "./defaults.js";
 
 export type OllamaTagModel = {
@@ -22,6 +23,7 @@ export type OllamaTagModel = {
   details?: {
     family?: string;
     parameter_size?: string;
+    quantization_level?: string;
   };
 };
 
@@ -102,7 +104,7 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
-export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
   if (typeof parameters !== "string" || !parameters.trim()) {
     return undefined;
   }
@@ -113,7 +115,11 @@ export function parseOllamaNumCtxParameter(parameters: unknown): number | undefi
     if (!match) {
       continue;
     }
-    const parsed = Number.parseInt(match[1], 10);
+    const rawValue = match[1];
+    if (!rawValue) {
+      continue;
+    }
+    const parsed = Number.parseInt(rawValue, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       lastValue = parsed;
     }
@@ -138,8 +144,9 @@ export async function queryOllamaModelShowInfo(
         method: "POST",
         headers,
         body: JSON.stringify({ name: modelName }),
-        signal: AbortSignal.timeout(3000),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: 3000,
       policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
       auditContext: "ollama-provider-models.show",
     });
@@ -249,6 +256,37 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
+type OllamaModelSource = "cloud" | "local";
+
+function parseOllamaModelSourceSuffix(
+  modelName: string,
+): { base: string; source: OllamaModelSource } | undefined {
+  const sourceSeparator = modelName.lastIndexOf(":");
+  if (sourceSeparator < 0) {
+    return undefined;
+  }
+  const source = modelName.slice(sourceSeparator + 1);
+  if (source === "cloud" || source === "local") {
+    return { base: modelName.slice(0, sourceSeparator), source };
+  }
+  if (!source.includes("/") && source.endsWith("-cloud")) {
+    return {
+      base: modelName.slice(0, sourceSeparator + 1) + source.slice(0, -"-cloud".length),
+      source: "cloud",
+    };
+  }
+  return undefined;
+}
+
+export function isOllamaCloudModel(modelName: string | undefined): boolean {
+  const normalized = modelName?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const parsed = parseOllamaModelSourceSuffix(normalized);
+  return parsed?.source === "cloud" && parseOllamaModelSourceSuffix(parsed.base) === undefined;
+}
+
 export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
@@ -296,9 +334,35 @@ export function buildOllamaModelDefinition(
   };
 }
 
+export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
+  if (isOllamaCloudModel(model.id) || typeof model.contextWindow !== "number") {
+    return model;
+  }
+  return {
+    ...model,
+    // Local Ollama allocates KV cache from num_ctx. Keep native metadata, but cap
+    // setup-assistant and typical agent turns at 32k; config overlays remain authoritative.
+    contextTokens: Math.min(OLLAMA_LOCAL_CONTEXT_TOKENS, model.contextWindow),
+  };
+}
+
+export function capLocalOllamaProviderContext(provider: ModelProviderConfig): ModelProviderConfig {
+  return {
+    ...provider,
+    models: provider.models?.map(capLocalOllamaModelContext),
+  };
+}
+
+/** Optional test hooks so discovery can exercise the real guarded-fetch owner. */
+type OllamaModelsFetchDeps = {
+  fetchImpl?: typeof fetch;
+  lookupFn?: LookupFn;
+};
+
 export async function fetchOllamaModels(
   baseUrl: string,
   opts?: { apiKey?: string },
+  deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
@@ -306,10 +370,13 @@ export async function fetchOllamaModels(
       url: `${apiBase}/api/tags`,
       init: {
         headers: opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : undefined,
-        signal: AbortSignal.timeout(5000),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: 5000,
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: "ollama-provider-models.tags",
+      ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+      ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
     });
     try {
       if (!response.ok) {
@@ -351,8 +418,4 @@ export async function buildOllamaProvider(
       buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
     ),
   };
-}
-
-export function resetOllamaModelShowInfoCacheForTest(): void {
-  ollamaModelShowInfoCache.clear();
 }

@@ -1,8 +1,9 @@
 // Qqbot plugin module implements inbound context behavior.
 import type { ChannelIngressDecision } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EngineAdapters } from "../adapter/index.js";
 import type { QQBotGroupCommandLevel } from "../config/group.js";
-import type { GroupActivationMode, SessionStoreReader } from "../group/activation.js";
+import type { GroupActivationMode } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import type { GroupMessageGateResult } from "../group/message-gating.js";
 import type { QueuedMessage } from "./message-queue.js";
@@ -33,7 +34,12 @@ export interface InboundGroupInfo {
 
 export interface InboundContext {
   event: QueuedMessage;
-  route: { sessionKey: string; accountId: string; agentId?: string };
+  route: {
+    sessionKey: string;
+    accountId: string;
+    agentId?: string;
+    dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  };
   isGroupChat: boolean;
   peerId: string;
   qualifiedTarget: string;
@@ -69,7 +75,7 @@ export interface InboundContext {
 
 export interface InboundPipelineDeps {
   account: GatewayAccount;
-  cfg: unknown;
+  cfg: OpenClawConfig;
   log?: EngineLogger;
   runtime: GatewayPluginRuntime;
   startTyping: (event: QueuedMessage) => Promise<{
@@ -77,7 +83,6 @@ export interface InboundPipelineDeps {
     keepAlive: TypingKeepAlive | null;
   }>;
   groupHistories?: Map<string, HistoryEntry[]>;
-  sessionStoreReader?: SessionStoreReader;
   allowTextCommands?: boolean;
   isControlCommand?: (content: string) => boolean;
   resolveGroupIntroHint?: (params: {

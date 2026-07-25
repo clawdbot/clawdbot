@@ -17,9 +17,9 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { maskApiKey } from "../../security/secret-mask.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
-import { maskApiKey } from "../../utils/mask-api-key.js";
 
 /** Controls how much auth provenance is shown in directive status output. */
 export type ModelAuthDetailMode = "compact" | "verbose";

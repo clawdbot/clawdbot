@@ -6,7 +6,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../routing/session-key.js";
@@ -28,6 +28,7 @@ import {
 } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import {
   hasSubagentRunEnded,
   isLiveUnendedSubagentRun,
@@ -81,7 +82,12 @@ export function resolveSessionEntryForKey(params: {
   const storePath = resolveStorePathForKey(params.cfg, parsed);
   let store = params.cache.get(storePath);
   if (!store) {
-    store = loadSessionStore(storePath);
+    store = Object.fromEntries(
+      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
     params.cache.set(storePath, store);
   }
   return {
@@ -103,7 +109,7 @@ export function buildLatestSubagentRunIndex(
       continue;
     }
     const existing = latestByChildSessionKey.get(childSessionKey);
-    if (!existing || entry.createdAt > existing.createdAt) {
+    if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
       latestByChildSessionKey.set(childSessionKey, entry);
     }
   }

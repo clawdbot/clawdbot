@@ -1,128 +1,80 @@
-// Gateway model catalog cache.
-// Serves model catalogs with stale-while-refresh behavior for Gateway surfaces.
+// Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
+import type {
+  GatewayModelCatalogOwnerSnapshot,
+  GatewayModelCatalogSnapshot,
+} from "./server-model-catalog.types.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
+export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
-type LoadModelCatalog = (params: {
+type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
+  agentId?: string;
+  agentDir?: string;
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
-}) => Promise<GatewayModelChoice[]>;
+  workspaceDir?: string;
+}) => Promise<GatewayModelCatalogOwnerSnapshot>;
 type LoadGatewayModelCatalogParams = {
+  agentId?: string;
+  agentDir?: string;
   getConfig?: () => GatewayModelCatalogConfig;
-  loadModelCatalog?: LoadModelCatalog;
+  loadPublishedPreparedModelCatalogOwnerSnapshot?: LoadPublishedPreparedModelCatalogOwnerSnapshot;
   readOnly?: boolean;
+  workspaceDir?: string;
 };
 
-type GatewayModelCatalogCache = {
-  lastSuccessfulCatalog: GatewayModelChoice[] | null;
-  inFlightRefresh: Promise<GatewayModelChoice[]> | null;
-  staleGeneration: number;
-  appliedGeneration: number;
-};
+async function resolveLoader(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<LoadPublishedPreparedModelCatalogOwnerSnapshot> {
+  if (params?.loadPublishedPreparedModelCatalogOwnerSnapshot) {
+    return params.loadPublishedPreparedModelCatalogOwnerSnapshot;
+  }
+  const { loadPublishedPreparedModelCatalogOwnerSnapshot } =
+    await import("../agents/prepared-model-catalog.js");
+  return loadPublishedPreparedModelCatalogOwnerSnapshot;
+}
 
-const loadModelCatalogModule = async () => await import("../agents/model-catalog.js");
+// Isolated gateway tests share process module state with lifecycle-owner tests.
+export async function resetPreparedModelCatalogForTest(): Promise<void> {
+  const [{ resetPreparedModelRuntimeSnapshotsForTest }, { resetModelCatalogBuilderCacheForTest }] =
+    await Promise.all([
+      import("../agents/prepared-model-runtime.test-support.js"),
+      import("../agents/model-catalog.js"),
+    ]);
+  resetPreparedModelRuntimeSnapshotsForTest();
+  resetModelCatalogBuilderCacheForTest();
+}
 
-function createGatewayModelCatalogCache(): GatewayModelCatalogCache {
+async function loadGatewayModelCatalogOwnerSnapshot(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelCatalogOwnerSnapshot> {
+  const loadOwner = await resolveLoader(params);
+  return await loadOwner({
+    ...(params?.agentId ? { agentId: params.agentId } : {}),
+    ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+    config: (params?.getConfig ?? getRuntimeConfig)(),
+    readOnly: params?.readOnly !== false,
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+}
+
+export async function loadGatewayModelCatalogSnapshot(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelCatalogSnapshot> {
+  const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
   return {
-    lastSuccessfulCatalog: null,
-    inFlightRefresh: null,
-    staleGeneration: 0,
-    appliedGeneration: 0,
+    ...owner.modelCatalog,
+    ...(owner.agentId ? { agentId: owner.agentId } : {}),
+    agentDir: owner.agentDir,
+    ...(owner.workspaceDir ? { workspaceDir: owner.workspaceDir } : {}),
+    config: owner.config,
   };
 }
 
-const readOnlyModelCatalogCache = createGatewayModelCatalogCache();
-const fullModelCatalogCache = createGatewayModelCatalogCache();
-
-function resolveGatewayModelCatalogCache(
-  params?: LoadGatewayModelCatalogParams,
-): GatewayModelCatalogCache {
-  return params?.readOnly === false ? fullModelCatalogCache : readOnlyModelCatalogCache;
-}
-
-function resetGatewayModelCatalogState(): void {
-  for (const cache of [readOnlyModelCatalogCache, fullModelCatalogCache]) {
-    cache.lastSuccessfulCatalog = null;
-    cache.inFlightRefresh = null;
-    cache.staleGeneration = 0;
-    cache.appliedGeneration = 0;
-  }
-}
-
-function isGatewayModelCatalogStale(cache: GatewayModelCatalogCache): boolean {
-  return cache.appliedGeneration < cache.staleGeneration;
-}
-
-async function resolveLoadModelCatalog(
-  params?: LoadGatewayModelCatalogParams,
-): Promise<LoadModelCatalog> {
-  if (params?.loadModelCatalog) {
-    return params.loadModelCatalog;
-  }
-  const { loadModelCatalog } = await loadModelCatalogModule();
-  return loadModelCatalog;
-}
-
-function startGatewayModelCatalogRefresh(
-  params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelChoice[]> {
-  const cache = resolveGatewayModelCatalogCache(params);
-  const config = (params?.getConfig ?? getRuntimeConfig)();
-  const readOnly = params?.readOnly !== false;
-  const refreshGeneration = cache.staleGeneration;
-  const refresh = resolveLoadModelCatalog(params)
-    .then((loadModelCatalog) => loadModelCatalog({ config, readOnly }))
-    .then((catalog) => {
-      if ((readOnly || catalog.length > 0) && refreshGeneration === cache.staleGeneration) {
-        cache.lastSuccessfulCatalog = catalog;
-        cache.appliedGeneration = cache.staleGeneration;
-      }
-      return catalog;
-    })
-    .finally(() => {
-      if (cache.inFlightRefresh === refresh) {
-        cache.inFlightRefresh = null;
-      }
-    });
-  cache.inFlightRefresh = refresh;
-  return refresh;
-}
-
-/** Mark cached model catalogs stale after config/plugin reload changes. */
-export function markGatewayModelCatalogStaleForReload(): void {
-  readOnlyModelCatalogCache.staleGeneration += 1;
-  fullModelCatalogCache.staleGeneration += 1;
-}
-
-// Test-only escape hatch: model catalog is cached at module scope for the
-// process lifetime, which is fine for the real gateway daemon, but makes
-// isolated unit tests harder. Keep this intentionally obscure.
-export async function resetModelCatalogCacheForTest(): Promise<void> {
-  resetGatewayModelCatalogState();
-  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
-    await loadModelCatalogModule();
-  resetModelCatalogCacheForTestLocal();
-}
-
-/** Load the Gateway model catalog, returning cached data while stale refreshes run. */
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {
-  const cache = resolveGatewayModelCatalogCache(params);
-  const isStale = isGatewayModelCatalogStale(cache);
-  if (!isStale && cache.lastSuccessfulCatalog !== null) {
-    return cache.lastSuccessfulCatalog;
-  }
-  if (isStale && cache.lastSuccessfulCatalog !== null) {
-    if (!cache.inFlightRefresh) {
-      void startGatewayModelCatalogRefresh(params).catch(() => undefined);
-    }
-    return cache.lastSuccessfulCatalog;
-  }
-  if (cache.inFlightRefresh) {
-    return await cache.inFlightRefresh;
-  }
-  return await startGatewayModelCatalogRefresh(params);
+  return (await loadGatewayModelCatalogSnapshot(params)).entries;
 }

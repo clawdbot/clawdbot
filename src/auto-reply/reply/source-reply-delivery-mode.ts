@@ -22,6 +22,17 @@ export type SourceReplyDeliveryModeContext = {
   BotUsername?: string;
 };
 
+function toSessionStableDeliveryModeContext(
+  ctx: SourceReplyDeliveryModeContext,
+): SourceReplyDeliveryModeContext {
+  return {
+    ChatType: ctx.ChatType,
+    Provider: ctx.Provider,
+    Surface: ctx.Surface,
+    ExplicitDeliverRoute: ctx.ExplicitDeliverRoute,
+  };
+}
+
 /** Returns true when the turn explicitly invoked a source-visible command. */
 export function isExplicitSourceReplyCommand(
   ctx: SourceReplyDeliveryModeContext,
@@ -107,6 +118,7 @@ export function resolveSourceReplyDeliveryMode(params: {
 /** Full source-reply suppression decision consumed by run and hook code. */
 type SourceReplyVisibilityPolicy = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
+  sessionStableSourceReplyDeliveryMode: SourceReplyDeliveryMode;
   sendPolicyDenied: boolean;
   suppressAutomaticSourceDelivery: boolean;
   suppressDelivery: boolean;
@@ -137,6 +149,16 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     messageToolAvailable: params.messageToolAvailable,
     defaultVisibleReplies: params.defaultVisibleReplies,
   });
+  const hasTurnDeliveryOverride =
+    params.requested !== undefined || isExplicitSourceReplyCommand(params.ctx, params.cfg);
+  const sessionStableSourceReplyDeliveryMode = hasTurnDeliveryOverride
+    ? sourceReplyDeliveryMode
+    : resolveSourceReplyDeliveryMode({
+        cfg: params.cfg,
+        ctx: toSessionStableDeliveryModeContext(params.ctx),
+        messageToolAvailable: params.messageToolAvailable,
+        defaultVisibleReplies: params.defaultVisibleReplies,
+      });
   const sendPolicyDenied = params.sendPolicy === "deny";
   const suppressAutomaticSourceDelivery = sourceReplyDeliveryMode === "message_tool_only";
   const suppressDelivery = sendPolicyDenied || suppressAutomaticSourceDelivery;
@@ -148,6 +170,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
 
   return {
     sourceReplyDeliveryMode,
+    sessionStableSourceReplyDeliveryMode,
     sendPolicyDenied,
     suppressAutomaticSourceDelivery,
     suppressDelivery,

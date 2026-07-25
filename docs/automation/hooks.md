@@ -6,14 +6,14 @@ read_when:
 title: "Hooks"
 ---
 
-Hooks are small scripts that run when something happens inside the Gateway. They can be discovered from directories and inspected with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, legacy handler, or extra hook directory.
+Hooks are small scripts that run inside the Gateway when agent events fire: commands like `/new`, `/reset`, `/stop`, session compaction, gateway lifecycle, and message flow. They are discovered from directories and managed with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, legacy handler, or extra hook directory.
 
 There are two kinds of hooks in OpenClaw:
 
-- **Internal hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
+- **Internal hooks** (this page): run inside the Gateway when agent events fire.
 - **Webhooks**: external HTTP endpoints that let other systems trigger work in OpenClaw. See [Webhooks](/automation/cron-jobs#webhooks).
 
-Hooks can also be bundled inside plugins. `openclaw hooks list` shows both standalone hooks and plugin-managed hooks.
+Hooks can also be bundled inside plugins. `openclaw hooks list` shows both standalone hooks and plugin-managed hooks (displayed as `plugin:<id>`).
 
 ## Choose the right surface
 
@@ -45,6 +45,14 @@ openclaw hooks info session-memory
 
 ## Event types
 
+Hooks subscribe to a specific key from this table, or to a bare family name
+(`command`, `session`, `agent`, `gateway`, `message`) to receive every action
+in that family. OpenClaw core emits nothing else, so any other name is almost
+always a typo that leaves the hook silently dead (only a plugin emitting a
+custom event could fire it). The hook loader logs a warning for such names
+(for example `command:nwe`), and `openclaw hooks info <name>` flags them, so a
+hook that never runs is diagnosable.
+
 | Event                    | When it fires                                              |
 | ------------------------ | ---------------------------------------------------------- |
 | `command:new`            | `/new` command issued                                      |
@@ -61,7 +69,7 @@ openclaw hooks info session-memory
 | `message:received`       | Inbound message from any channel                           |
 | `message:transcribed`    | After audio transcription completes                        |
 | `message:preprocessed`   | After media and link preprocessing completes or is skipped |
-| `message:sent`           | Outbound message delivered                                 |
+| `message:sent`           | Outbound send attempted (`context.success` has the result) |
 
 ## Writing hooks
 
@@ -69,11 +77,13 @@ openclaw hooks info session-memory
 
 Each hook is a directory containing two files:
 
-```
+```text
 my-hook/
 ├── HOOK.md          # Metadata + documentation
 └── handler.ts       # Handler implementation
 ```
+
+The handler file can be `handler.ts`, `handler.js`, `index.ts`, or `index.js`.
 
 ### HOOK.md format
 
@@ -100,6 +110,8 @@ Detailed documentation goes here.
 | `os`       | Required platforms (e.g., `["darwin", "linux"]`)     |
 | `requires` | Required `bins`, `anyBins`, `env`, or `config` paths |
 | `always`   | Bypass eligibility checks (boolean)                  |
+| `hookKey`  | Config key override (defaults to the hook name)      |
+| `homepage` | Docs URL shown by `openclaw hooks info`              |
 | `install`  | Installation methods                                 |
 
 ### Handler implementation
@@ -120,28 +132,32 @@ const handler = async (event) => {
 export default handler;
 ```
 
-Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push replies here on replyable surfaces only), and `context` (event-specific data). Agent and tool plugin hook contexts can also include `trace`, a read-only W3C-compatible diagnostic trace context that plugins may pass into structured logs for OTEL correlation.
+Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages`, and `context` (event-specific data). Typed plugin hook contexts for agent and tool hooks can also include `trace`, a read-only W3C-compatible diagnostic trace context that plugins may pass into structured logs for OTEL correlation.
 
-`event.messages` is only delivered automatically on replyable surfaces such as
-`command:*` and `message:received`. Lifecycle-only events such as
-`agent:bootstrap`, `session:*`, `gateway:*`, or `message:sent` do not have a
-reply channel and ignore pushed messages.
+Strings pushed to `event.messages` are delivered back to the chat only for
+`command:new` and `command:reset` (routed as a reply to the originating
+conversation) and for `session:compact:before` / `session:compact:after`
+(sent as compaction status notices). All other events, including
+`command:stop`, `message:*`, `agent:bootstrap`, `session:patch`, and
+`gateway:*`, ignore pushed messages.
 
 ### Event context highlights
 
-**Command events** (`command:new`, `command:reset`): `context.sessionEntry`, `context.previousSessionEntry`, `context.commandSource`, `context.workspaceDir`, `context.cfg`.
+**Command events** (`command:new`, `command:reset`): `context.sessionEntry`, `context.previousSessionEntry`, `context.commandSource`, `context.senderId`, `context.workspaceDir`, `context.cfg`.
 
-**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
+**Command events** (`command:stop`): `context.sessionEntry`, `context.sessionId`, `context.commandSource`, `context.senderId`.
 
-**Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
+**Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.media` (ordered staged attachment facts), `context.originalMedia` plus `context.mediaStagingPending` when remote media is not locally staged yet, and `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries. Legacy media aliases inside `metadata` are deprecated.
 
-**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
+**Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`, plus `context.error` when sending failed.
+
+**Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, and `context.media`. `context.mediaPath` and `context.mediaType` remain deprecated aliases for the first fact.
 
 **Message events** (`message:preprocessed`): `context.bodyForAgent` (final enriched body), `context.from`, `context.channelId`.
 
 **Bootstrap events** (`agent:bootstrap`): `context.bootstrapFiles` (mutable array), `context.agentId`.
 
-**Session patch events** (`session:patch`): `context.sessionEntry`, `context.patch` (only changed fields), `context.cfg`. Only privileged clients can trigger patch events.
+**Session patch events** (`session:patch`): `context.sessionEntry`, `context.patch` (only changed fields), `context.cfg`. Only privileged clients can trigger patch events; the context is a clone, so handlers cannot mutate the live session entry.
 
 **Compaction events**: `session:compact:before` includes `messageCount`, `tokenCount`. `session:compact:after` adds `compactedCount`, `summaryLength`, `tokensBefore`, `tokensAfter`.
 
@@ -181,11 +197,11 @@ Between the `gateway:shutdown` (or `gateway:pre-restart`) event and the rest of 
 
 ## Hook discovery
 
-Hooks are discovered from these directories, in order of increasing override precedence:
+Hooks are discovered from four sources:
 
 1. **Bundled hooks**: shipped with OpenClaw
-2. **Plugin hooks**: hooks bundled inside installed plugins
-3. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces). Extra directories from `hooks.internal.load.extraDirs` share this precedence.
+2. **Plugin hooks**: bundled inside installed plugins; can override bundled hooks with the same name
+3. **Managed hooks**: `~/.openclaw/hooks/` (user-installed, shared across workspaces); can override bundled and plugin hooks. Extra directories from `hooks.internal.load.extraDirs` share this precedence.
 4. **Workspace hooks**: `<workspace>/hooks/` (per-agent, disabled by default until explicitly enabled)
 
 Workspace hooks can add new hook names but cannot override bundled, managed, or plugin-provided hooks with the same name.
@@ -200,7 +216,7 @@ Hook packs are npm packages that export hooks via `openclaw.hooks` in `package.j
 openclaw plugins install <path-or-spec>
 ```
 
-Npm specs are registry-only (package name + optional exact version or dist-tag). Git/URL/file specs and semver ranges are rejected.
+Npm specs are registry-only (package name + optional exact version or dist-tag). Git/URL/file specs and semver ranges are rejected. The older `openclaw hooks install` and `openclaw hooks update` commands are deprecated aliases for `openclaw plugins install` / `openclaw plugins update`.
 
 ## Bundled hooks
 
@@ -222,7 +238,7 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs with the configured model. Requires `workspace.dir` to be configured.
+Extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
 
 <a id="bootstrap-extra-files"></a>
 
@@ -243,13 +259,13 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
 }
 ```
 
-Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+`patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
 
 <a id="command-logger"></a>
 
 ### command-logger details
 
-Logs every slash command to `~/.openclaw/logs/commands.log`.
+Logs every slash command as a JSON line (timestamp, action, session key, sender ID, source) to `~/.openclaw/logs/commands.log`.
 
 <a id="compaction-notifier"></a>
 
@@ -261,7 +277,7 @@ Sends short status messages into the current conversation when OpenClaw starts a
 
 ### boot-md details
 
-Runs `BOOT.md` from the active workspace when the gateway starts.
+Runs `BOOT.md` at gateway startup for each configured agent scope, if the file exists in that agent's resolved workspace.
 
 ## Plugin hooks
 
@@ -293,7 +309,7 @@ For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 }
 ```
 
-Per-hook environment variables:
+Per-hook environment values satisfy a hook's `requires.env` eligibility checks (alongside the process environment), and handlers can read them from their hook config entry:
 
 ```json
 {
@@ -377,7 +393,7 @@ Check for missing binaries (PATH), environment variables, config values, or OS c
 
 1. Verify the hook is enabled: `openclaw hooks list`
 2. Restart your gateway process so hooks reload.
-3. Check gateway logs: `./scripts/clawlog.sh | grep hook`
+3. Check gateway logs: `openclaw logs --follow | grep -i hook`
 
 ## Related
 

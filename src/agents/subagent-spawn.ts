@@ -5,52 +5,72 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
-import {
-  resolveChannelDefaultBindingPlacement,
-  resolveInboundConversationResolution,
-} from "../channels/conversation-resolution.js";
 import { routeFromBindingRecord, routeToDeliveryFields } from "../channels/route-projection.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
 } from "../channels/thread-bindings-messages.js";
 import {
-  formatThreadBindingDisabledError,
-  formatThreadBindingSpawnDisabledError,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  GatewayDrainingError,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../process/gateway-work-admission.js";
+import {
+  isIncognitoSessionKey,
+  isValidAgentId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
+import type { FastMode } from "../shared/fast-mode.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
+import { resolveFastModeState } from "./fast-mode.js";
 import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
+import { supportsModelTools } from "./model-tool-support.js";
+import {
+  runSpawnPipeline,
+  type SpawnBackendAdapter,
+  summarizeSpawnError,
+} from "./spawn-pipeline.js";
+import {
+  mintSpawnSessionKey,
+  prepareSpawnThreadBinding,
+  resolveSpawnAdmission,
+  resolveSpawnMode,
+  resolveSpawnSandboxError,
+} from "./spawn-plan.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
@@ -60,20 +80,20 @@ import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
-import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
-import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import {
+  applySubagentLaunchAuthorization,
+  type SubagentLaunchAuthorization,
+} from "./subagent-launch-authorization.js";
+import {
+  completeCollectorLaunchCleanup,
+  listSwarmRunsForGroup,
+  settleFailedQueuedSubagentLaunch,
+  startQueuedSubagentRun,
+} from "./subagent-registry.js";
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
-import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
-import { normalizeSubagentTaskName } from "./subagent-task-name.js";
-export {
-  SUBAGENT_SPAWN_ACCEPTED_NOTE,
-  SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
-} from "./subagent-spawn-accepted-note.js";
-import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -82,8 +102,6 @@ import {
 import {
   ADMIN_SCOPE,
   AGENT_LANE_SUBAGENT,
-  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
-  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -93,37 +111,31 @@ import {
   getSessionBindingService,
   getRuntimeConfig,
   hasInProcessGatewayContext,
-  loadSessionStore,
-  mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  pruneLegacyStoreKeys,
   ensureContextEnginesInitialized,
+  loadPreparedModelCatalog,
   resolveAgentConfig,
   resolveContextEngine,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
-  updateSessionStore,
-  isAdminOnlyMethod,
+  loadSessionEntry,
+  upsertSessionEntry,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
+import { normalizeSubagentTaskName } from "./subagent-task-name.js";
+import { resolveSwarmConfig } from "./swarm-config.js";
+import { validateStructuredOutputSchema } from "./swarm-output-schema.js";
+import { activateSwarmRun, removeQueuedSwarmRun, reserveSwarmRun } from "./swarm-scheduler.js";
 
-export {
-  SUBAGENT_SPAWN_CONTEXT_MODES,
-  SUBAGENT_SPAWN_MODES,
-  SUBAGENT_SPAWN_SANDBOX_MODES,
-} from "./subagent-spawn.types.js";
-export type {
-  SpawnSubagentContextMode,
-  SpawnSubagentMode,
-  SpawnSubagentSandboxMode,
-} from "./subagent-spawn.types.js";
+export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);
@@ -137,8 +149,8 @@ type SubagentSpawnDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
+  loadPreparedModelCatalog: typeof loadPreparedModelCatalog;
   resolveContextEngine: typeof resolveContextEngine;
-  updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -149,8 +161,8 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   getRuntimeConfig,
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
+  loadPreparedModelCatalog,
   resolveContextEngine,
-  updateSessionStore,
 };
 
 let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
@@ -158,13 +170,21 @@ const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
-export type SpawnSubagentParams = {
+type SpawnSubagentParams = {
   task: string;
   label?: string;
   agentId?: string;
   model?: string;
   taskName?: string;
   thinking?: string;
+  fastMode?: FastMode;
+  collect?: boolean;
+  outputSchema?: Record<string, unknown>;
+  groupId?: string;
+  /** Host bridge identity used to recover a replay-safe collector launch. */
+  swarmLaunchReplayKey?: string;
+  /** Canonical request hash checked before reusing a host-reserved collector. */
+  swarmLaunchRequestFingerprint?: string;
   cwd?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
@@ -183,14 +203,18 @@ export type SpawnSubagentParams = {
   attachMountPath?: string;
 };
 
-export type SpawnSubagentContext = {
+type SpawnSubagentContext = {
   agentSessionKey?: string;
+  requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  currentMessageId?: string | number;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -200,11 +224,13 @@ export type SpawnSubagentContext = {
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  requesterRunId?: string;
 };
 
-export type SpawnSubagentResult = {
+type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
+  sessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
@@ -223,47 +249,60 @@ export type SpawnSubagentResult = {
   };
 };
 
-export { splitModelRef } from "./subagent-spawn-plan.js";
-
-async function updateSubagentSessionStore(
-  storePath: string,
-  mutator: Parameters<typeof updateSessionStore>[1],
-) {
-  return await subagentSpawnDeps.updateSessionStore(storePath, mutator);
-}
-
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
+  authorization?: SubagentLaunchAuthorization,
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
-  // (sessions.patch / sessions.delete → admin, agent → write).  When each call
+  // (sessions.delete → admin, agent → write). When each call
   // independently negotiates least-privilege scopes the first connection pairs
   // at a lower tier and every subsequent higher-tier call triggers a
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
-  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" -> write) keep their least-privilege scope. Apply the trusted
+  // launch authorization before resolving the request's required scope.
+  const authorizedParams =
+    params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
+      ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)
+      : params.params;
+  const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
+    params.method,
+    authorizedParams,
+  );
+  const allowModelOverride = authorization !== undefined;
+  const hasInProcessGateway = subagentSpawnDeps.hasInProcessGatewayContext();
+  const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
+  const scopes =
+    params.scopes ??
+    (leastPrivilegeScopes.includes(ADMIN_SCOPE) || needsOutOfProcessModelOverrideAuth
+      ? [ADMIN_SCOPE]
+      : undefined);
   const request = {
     ...params,
+    params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
   if (
-    subagentSpawnDeps.hasInProcessGatewayContext() &&
+    hasInProcessGateway &&
     request.params != null &&
     typeof request.params === "object" &&
     !Array.isArray(request.params)
   ) {
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
+    // Agent launches are host-owned even when the parent request came from CLI/HTTP.
+    // Reusing that external identity makes collector preflight treat the launch as spoofed.
+    const forceSyntheticClient = request.method === "agent" || scopes != null;
     return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
       request.method,
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
-        ...(scopes != null ? { forceSyntheticClient: true } : {}),
-        timeoutMs: request.timeoutMs,
+        ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
+        ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
+        ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
     );
@@ -293,6 +332,40 @@ function buildResolvedSubagentModelMetadata(
   };
 }
 
+async function resolveCollectorOutputModelError(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  targetAgentDir: string;
+  workspaceDir?: string;
+  resolvedModel?: string;
+}): Promise<string | undefined> {
+  const selected = splitModelRef(params.resolvedModel);
+  const fallback = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.targetAgentId,
+  });
+  const provider = selected.provider ?? fallback.provider;
+  const model = selected.model ?? fallback.model;
+  if (!provider || !model) {
+    return undefined;
+  }
+  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
+  try {
+    catalog = await subagentSpawnDeps.loadPreparedModelCatalog({
+      config: params.cfg,
+      agentDir: params.targetAgentDir,
+      workspaceDir: params.workspaceDir,
+    });
+  } catch (error) {
+    return `sessions_spawn could not verify outputSchema model capabilities: ${summarizeError(error)}`;
+  }
+  const entry = findModelCatalogEntry(catalog, { provider, modelId: model });
+  if (!entry || supportsModelTools(entry)) {
+    return undefined;
+  }
+  return `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`;
+}
+
 function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
   const runTimeoutMs = resolveSubagentRunTimerDelayMs(runTimeoutSeconds) ?? 0;
   if (runTimeoutMs <= 0) {
@@ -316,8 +389,23 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.subagentControlScope === "children" || patch.subagentControlScope === "none") {
     entry.subagentControlScope = patch.subagentControlScope;
   }
+  if (patch.inheritedToolPolicyVersion === 1) {
+    entry.inheritedToolPolicyVersion = 1;
+  }
+  if (patch.incognito === true) {
+    entry.incognito = true;
+  }
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
+  }
+  if (
+    typeof patch.completionOwnerSessionKey === "string" &&
+    patch.completionOwnerSessionKey.trim()
+  ) {
+    entry.completionOwnerSessionKey = patch.completionOwnerSessionKey.trim();
+  }
+  if (typeof patch.parentSessionKey === "string" && patch.parentSessionKey.trim()) {
+    entry.parentSessionKey = patch.parentSessionKey.trim();
   }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
@@ -335,6 +423,18 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
+  }
+  if (patch.fastMode === true || patch.fastMode === false || patch.fastMode === "auto") {
+    entry.fastMode = patch.fastMode;
+  }
+  if (typeof patch.swarmGroupId === "string" && patch.swarmGroupId.trim()) {
+    entry.swarmGroupId = patch.swarmGroupId.trim();
+  }
+  if (patch.swarmCollector === true) {
+    entry.swarmCollector = true;
+  }
+  if (patch.swarmOutputSchema && typeof patch.swarmOutputSchema === "object") {
+    entry.swarmOutputSchema = patch.swarmOutputSchema as Record<string, unknown>;
   }
   if (typeof patch.model === "string" && patch.model.trim()) {
     const { provider, model } = splitModelRef(patch.model.trim());
@@ -377,34 +477,20 @@ async function persistInitialChildSessionRuntimeModel(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await updateSubagentSessionStore(target.storePath, (store) => {
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: target.canonicalKey,
-        candidates: target.storeKeys,
-      });
-      store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
+    await upsertSessionEntry(
+      {
+        storePath: target.storePath,
+        sessionKey: target.canonicalKey,
+      },
+      {
         model,
         ...(provider ? { modelProvider: provider } : {}),
-      });
-    });
+      },
+    );
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
   }
-}
-
-function resolveStoreEntryByKeys(
-  store: Record<string, SessionEntry>,
-  keys: readonly string[],
-): SessionEntry | undefined {
-  for (const key of keys) {
-    const entry = store[key];
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
 }
 
 function readRequesterThinkingLevel(params: {
@@ -418,8 +504,11 @@ function readRequesterThinkingLevel(params: {
       cfg: params.cfg,
       key: params.requesterInternalKey,
     });
-    const store = loadSessionStore(target.storePath, { clone: false });
-    entry = resolveStoreEntryByKeys(store, target.storeKeys);
+    entry = loadSessionEntry({
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      clone: false,
+    });
   } catch {
     entry = undefined;
   }
@@ -463,6 +552,53 @@ function readRequesterThinkingLevel(params: {
   });
 }
 
+function readRequesterFastMode(params: {
+  cfg: OpenClawConfig;
+  requesterInternalKey: string;
+  requesterAgentId?: string;
+}): FastMode {
+  let entry: SessionEntry | undefined;
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+    });
+    entry = loadSessionEntry({
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+      clone: false,
+    });
+  } catch {
+    entry = undefined;
+  }
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.requesterAgentId,
+  });
+  const normalizedOverride = entry
+    ? normalizeStoredOverrideModel({
+        providerOverride: entry.providerOverride,
+        modelOverride: entry.modelOverride,
+      })
+    : {};
+  const selectedModel = entry
+    ? resolvePersistedSelectedModelRef({
+        defaultProvider: defaultModel.provider,
+        runtimeProvider: entry.modelProvider,
+        runtimeModel: entry.model,
+        overrideProvider: normalizedOverride.providerOverride,
+        overrideModel: normalizedOverride.modelOverride,
+      })
+    : undefined;
+  return resolveFastModeState({
+    cfg: params.cfg,
+    provider: selectedModel?.provider ?? defaultModel.provider,
+    model: selectedModel?.model ?? defaultModel.model,
+    agentId: params.requesterAgentId,
+    sessionEntry: entry,
+  }).mode;
+}
+
 type PreparedSpawnContext =
   | {
       status: "ok";
@@ -504,7 +640,6 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
     if (params.targetAgentId !== params.requesterAgentId) {
@@ -521,7 +656,6 @@ async function prepareSubagentSessionContext(params: {
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
-      sessionsDir,
     });
     if (forkedResult.status === "missing-parent") {
       throw new Error(
@@ -624,11 +758,13 @@ async function prepareContextEngineSubagentSpawn(params: {
 
 async function rollbackPreparedContextEngine(
   preparation?: SubagentSpawnPreparation,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await preparation?.rollback();
+    return true;
   } catch {
     // Best-effort cleanup only.
+    return false;
   }
 }
 
@@ -662,7 +798,7 @@ async function cleanupProvisionalSession(
     emitLifecycleHooks?: boolean;
     deleteTranscript?: boolean;
   },
-): Promise<void> {
+): Promise<boolean> {
   try {
     await callSubagentGateway({
       method: "sessions.delete",
@@ -673,8 +809,28 @@ async function cleanupProvisionalSession(
       },
       timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
+    return true;
   } catch {
     // Best-effort cleanup only.
+    return false;
+  }
+}
+
+async function waitForProvisionalSessionDeletion(
+  childSessionKey: string,
+  options?: {
+    emitLifecycleHooks?: boolean;
+    deleteTranscript?: boolean;
+  },
+): Promise<void> {
+  for (;;) {
+    if (await cleanupProvisionalSession(childSessionKey, options)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
+      timer.unref?.();
+    });
   }
 }
 
@@ -683,29 +839,56 @@ async function cleanupFailedSpawnBeforeAgentStart(params: {
   attachmentAbsDir?: string;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
-}): Promise<void> {
+  waitForSessionDeletion?: boolean;
+}): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {
+  let attachmentsRemoved = true;
   if (params.attachmentAbsDir) {
     try {
       await fs.rm(params.attachmentAbsDir, { recursive: true, force: true });
     } catch {
-      // Best-effort cleanup only.
+      attachmentsRemoved = false;
     }
   }
-  await cleanupProvisionalSession(params.childSessionKey, {
+  const sessionCleanupOptions = {
     emitLifecycleHooks: params.emitLifecycleHooks,
     deleteTranscript: params.deleteTranscript,
-  });
+  };
+  if (params.waitForSessionDeletion) {
+    await waitForProvisionalSessionDeletion(params.childSessionKey, sessionCleanupOptions);
+    return { attachmentsRemoved, sessionDeleted: true };
+  }
+  return {
+    attachmentsRemoved,
+    sessionDeleted: await cleanupProvisionalSession(params.childSessionKey, sessionCleanupOptions),
+  };
 }
 
-function resolveSpawnMode(params: {
-  requestedMode?: SpawnSubagentMode;
-  threadRequested: boolean;
-}): SpawnSubagentMode {
-  if (params.requestedMode === "run" || params.requestedMode === "session") {
-    return params.requestedMode;
+async function terminateAcceptedCollectorRun(params: {
+  childSessionKey: string;
+  gatewayRunId: string;
+}): Promise<void> {
+  for (;;) {
+    try {
+      await callSubagentGateway({
+        method: "chat.abort",
+        params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
+        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+      });
+      return;
+    } catch {
+      if (
+        await cleanupProvisionalSession(params.childSessionKey, {
+          deleteTranscript: true,
+        })
+      ) {
+        return;
+      }
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
+      timer.unref?.();
+    });
   }
-  // Thread-bound spawns should default to persistent sessions.
-  return params.threadRequested ? "session" : "run";
 }
 
 function resolveSubagentContextMode(params: {
@@ -741,236 +924,6 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
-function buildThreadBindingUnavailableError(mode: SpawnSubagentMode): string {
-  if (mode === "session") {
-    return (
-      'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
-      "This request is not running on a channel that can bind a subagent thread. " +
-      'Use mode="run" for one-shot subagent work, or sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.'
-    );
-  }
-  return (
-    "thread=true is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). " +
-    "This request is not running on a channel that can bind a subagent thread. " +
-    "Retry without thread=true, or re-run sessions_spawn from a channel that supports threads."
-  );
-}
-
-type PreparedSubagentThreadBinding = {
-  channel: string;
-  accountId: string;
-  placement: "current" | "child";
-  conversationId: string;
-  parentConversationId?: string;
-};
-
-function resolvePlacementWithoutChannelPlugin(params: {
-  capabilities: { placements: Array<"current" | "child"> };
-}): "current" | "child" {
-  return params.capabilities.placements.includes("child") ? "child" : "current";
-}
-
-function resolveSubagentSpawnChannelAccountId(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  accountId?: string;
-}): string | undefined {
-  const channel = normalizeOptionalLowercaseString(params.channel);
-  const explicitAccountId = normalizeOptionalString(params.accountId);
-  if (explicitAccountId) {
-    return explicitAccountId;
-  }
-  if (!channel) {
-    return undefined;
-  }
-  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
-  return normalizeOptionalString(channels?.[channel]?.defaultAccount) ?? "default";
-}
-
-function resolveConversationRefForThreadBinding(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
-}): { conversationId: string; parentConversationId?: string } | null {
-  const resolution = resolveInboundConversationResolution({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    to: params.to,
-    threadId: params.threadId,
-    isGroup: true,
-  });
-  return resolution?.canonical ?? null;
-}
-
-function resolveRequesterBoundConversationRef(params: {
-  requesterSessionKey?: string;
-  channel: string;
-  accountId: string;
-  fallback?: { conversationId: string; parentConversationId?: string } | null;
-}): { conversationId: string; parentConversationId?: string } | null | undefined {
-  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
-  if (!requesterSessionKey) {
-    return undefined;
-  }
-  const activeBindings = getSessionBindingService()
-    .listBySession(requesterSessionKey)
-    .filter(
-      (record) =>
-        record.status !== "ended" &&
-        record.conversation.channel === params.channel &&
-        (record.conversation.accountId ?? params.accountId) === params.accountId,
-    );
-  if (activeBindings.length === 0) {
-    return undefined;
-  }
-  if (activeBindings.length === 1) {
-    const conversation = activeBindings[0].conversation;
-    return {
-      conversationId: conversation.conversationId,
-      ...(conversation.parentConversationId
-        ? { parentConversationId: conversation.parentConversationId }
-        : {}),
-    };
-  }
-  if (params.fallback?.conversationId) {
-    const matched = activeBindings.filter(
-      (record) =>
-        record.conversation.conversationId === params.fallback?.conversationId &&
-        normalizeOptionalString(record.conversation.parentConversationId) ===
-          normalizeOptionalString(params.fallback?.parentConversationId),
-    );
-    if (matched.length === 1) {
-      const conversation = matched[0].conversation;
-      return {
-        conversationId: conversation.conversationId,
-        ...(conversation.parentConversationId
-          ? { parentConversationId: conversation.parentConversationId }
-          : {}),
-      };
-    }
-  }
-  return null;
-}
-
-function prepareSubagentThreadBinding(params: {
-  cfg: OpenClawConfig;
-  mode: SpawnSubagentMode;
-  requesterSessionKey?: string;
-  requester: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-}): { ok: true; binding: PreparedSubagentThreadBinding } | { ok: false; error: string } {
-  const channel = normalizeOptionalLowercaseString(params.requester.channel);
-  if (!channel) {
-    return {
-      ok: false,
-      error: buildThreadBindingUnavailableError(params.mode),
-    };
-  }
-
-  const accountId = resolveSubagentSpawnChannelAccountId({
-    cfg: params.cfg,
-    channel,
-    accountId: params.requester.accountId,
-  });
-  const policy = resolveThreadBindingSpawnPolicy({
-    cfg: params.cfg,
-    channel,
-    accountId,
-    kind: "subagent",
-  });
-  if (!policy.enabled) {
-    return {
-      ok: false,
-      error: formatThreadBindingDisabledError({
-        channel: policy.channel,
-        accountId: policy.accountId,
-        kind: "subagent",
-      }),
-    };
-  }
-  if (!policy.spawnEnabled) {
-    return {
-      ok: false,
-      error: formatThreadBindingSpawnDisabledError({
-        channel: policy.channel,
-        accountId: policy.accountId,
-        kind: "subagent",
-      }),
-    };
-  }
-
-  const bindingService = getSessionBindingService();
-  const capabilities = bindingService.getCapabilities({
-    channel: policy.channel,
-    accountId: policy.accountId,
-  });
-  if (!capabilities.adapterAvailable) {
-    return {
-      ok: false,
-      error: buildThreadBindingUnavailableError(params.mode),
-    };
-  }
-  const pluginPlacement = resolveChannelDefaultBindingPlacement(policy.channel);
-  const placementToUse =
-    pluginPlacement ??
-    resolvePlacementWithoutChannelPlugin({
-      capabilities,
-    });
-  if (!capabilities.bindSupported || !capabilities.placements.includes(placementToUse)) {
-    return {
-      ok: false,
-      error: `Thread bindings do not support ${placementToUse} placement for ${policy.channel}.`,
-    };
-  }
-
-  const fallbackConversationRef = resolveConversationRefForThreadBinding({
-    cfg: params.cfg,
-    channel: policy.channel,
-    accountId: policy.accountId,
-    to: params.requester.to,
-    threadId: params.requester.threadId,
-  });
-  const requesterConversationRef = resolveRequesterBoundConversationRef({
-    requesterSessionKey: params.requesterSessionKey,
-    channel: policy.channel,
-    accountId: policy.accountId,
-    fallback: fallbackConversationRef,
-  });
-  if (requesterConversationRef === null) {
-    return {
-      ok: false,
-      error: `Could not resolve a unique ${policy.channel} requester conversation for subagent thread spawn.`,
-    };
-  }
-  const conversationRef = requesterConversationRef ?? fallbackConversationRef;
-  if (!conversationRef?.conversationId) {
-    return {
-      ok: false,
-      error: `Could not resolve a ${policy.channel} conversation for subagent thread spawn.`,
-    };
-  }
-
-  return {
-    ok: true,
-    binding: {
-      channel: policy.channel,
-      accountId: policy.accountId,
-      placement: placementToUse,
-      conversationId: conversationRef.conversationId,
-      ...(conversationRef.parentConversationId
-        ? { parentConversationId: conversationRef.parentConversationId }
-        : {}),
-    },
-  };
-}
-
 async function bindThreadForSubagentSpawn(params: {
   cfg: OpenClawConfig;
   childSessionKey: string;
@@ -991,11 +944,16 @@ async function bindThreadForSubagentSpawn(params: {
       error: string;
     }
 > {
-  const prepared = prepareSubagentThreadBinding({
+  const prepared = prepareSpawnThreadBinding({
     cfg: params.cfg,
+    kind: "subagent",
     mode: params.mode,
+    bindingService: getSessionBindingService(),
     requesterSessionKey: params.requesterSessionKey,
-    requester: params.requester,
+    channel: params.requester.channel,
+    accountId: params.requester.accountId,
+    to: params.requester.to,
+    threadId: params.requester.threadId,
   });
   if (!prepared.ok) {
     return {
@@ -1081,7 +1039,7 @@ export async function spawnSubagentDirect(
   }
   const taskName = taskNameResult.taskName;
   const label = params.label?.trim() || "";
-  const requestedAgentId = params.agentId?.trim();
+  let requestedAgentId = params.agentId?.trim();
 
   // Reject malformed agentId before normalizeAgentId can mangle it.
   // Without this gate, error-message strings like "Agent not found: xyz" pass
@@ -1101,6 +1059,12 @@ export async function spawnSubagentDirect(
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
   });
+  if (params.collect && (requestThreadBinding || spawnMode === "session")) {
+    return {
+      status: "error",
+      error: "sessions_spawn collect=true requires mode=run and thread=false.",
+    };
+  }
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
@@ -1115,7 +1079,9 @@ export async function spawnSubagentDirect(
       : params.cleanup === "keep" || params.cleanup === "delete"
         ? params.cleanup
         : "keep";
-  const expectsCompletionMessage = params.expectsCompletionMessage !== false;
+  const expectsCompletionMessage = params.collect
+    ? false
+    : params.expectsCompletionMessage !== false;
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();
 
@@ -1153,611 +1119,883 @@ export async function spawnSubagentDirect(
     completionOwnerKey: ctx.completionOwnerKey,
   });
 
-  const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
-  const maxSpawnDepth =
-    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  if (callerDepth >= maxSpawnDepth) {
-    return {
-      status: "forbidden",
-      error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxSpawnDepth})`,
-    };
-  }
-
-  const maxChildren =
-    cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
-  const activeChildren = countActiveRunsForSession(requesterInternalKey);
-  if (activeChildren >= maxChildren) {
-    return {
-      status: "forbidden",
-      error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
-    };
-  }
-
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
-  const requireAgentId =
-    resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
-    cfg.agents?.defaults?.subagents?.requireAgentId ??
-    false;
-  if (requireAgentId && !requestedAgentId?.trim()) {
+  const swarmConfig = resolveSwarmConfig(cfg, requesterAgentId);
+  const hasSwarmParams =
+    params.collect !== undefined ||
+    params.outputSchema !== undefined ||
+    params.fastMode !== undefined ||
+    params.groupId !== undefined;
+  if (hasSwarmParams && !swarmConfig.enabled) {
+    return {
+      status: "forbidden",
+      error: "sessions_spawn swarm parameters require tools.swarm.enabled=true.",
+    };
+  }
+  if (params.outputSchema && !params.collect) {
+    return { status: "error", error: "sessions_spawn outputSchema requires collect=true." };
+  }
+  if (params.groupId !== undefined && !params.collect) {
+    return { status: "error", error: "sessions_spawn groupId requires collect=true." };
+  }
+  if (params.outputSchema) {
+    const schemaError = validateStructuredOutputSchema(params.outputSchema);
+    if (schemaError) {
+      return { status: "error", error: schemaError };
+    }
+  }
+
+  const usingDefaultAgentId =
+    params.collect === true && !requestedAgentId && Boolean(swarmConfig.defaultAgentId);
+  if (usingDefaultAgentId) {
+    requestedAgentId = swarmConfig.defaultAgentId;
+    if (!isValidAgentId(requestedAgentId)) {
+      return {
+        status: "error",
+        error: `tools.swarm.defaultAgentId contains invalid agentId "${requestedAgentId}".`,
+      };
+    }
+  }
+  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const configuredAgentIds = resolveConfiguredAgentIds(cfg);
+  const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
+  const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
+  const swarmGroupId = params.collect
+    ? (explicitSwarmGroupId ??
+      (requesterRunId ? `swarm:${requesterInternalKey}:${requesterRunId}` : undefined))
+    : undefined;
+  const swarmSchedulerGroupKey = swarmGroupId
+    ? JSON.stringify([requesterInternalKey, swarmGroupId])
+    : undefined;
+  const resolveAdmission = () => {
+    const collectorRuns = params.collect
+      ? swarmGroupId
+        ? listSwarmRunsForGroup(swarmGroupId, requesterInternalKey)
+        : []
+      : undefined;
+    return resolveSpawnAdmission({
+      cfg,
+      collector: collectorRuns
+        ? {
+            liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
+            totalChildren: collectorRuns.length,
+            maxChildrenPerGroup: swarmConfig.maxChildrenPerGroup,
+            maxTotalPerGroup: swarmConfig.maxTotalPerGroup,
+          }
+        : undefined,
+      requesterSessionKey: requesterInternalKey,
+      requesterAgentId,
+      targetAgentId,
+      requestedAgentId,
+      configuredAgentIds,
+    });
+  };
+  const admission = resolveAdmission();
+  if (!admission.ok) {
     return {
       status: "forbidden",
       error:
-        "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
+        usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
+          ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
+          : admission.error,
     };
   }
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
-  const requestedCwd = normalizeOptionalString(params.cwd);
-  const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
-  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
-    agentGroupId: ctx.agentGroupId,
-    agentGroupChannel: ctx.agentGroupChannel,
-    agentGroupSpace: ctx.agentGroupSpace,
-    workspaceDir: ctx.workspaceDir,
-  });
-  const inheritedWorkspaceDir =
-    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
-  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
-    config: cfg,
-    targetAgentId,
-    explicitWorkspaceDir: inheritedWorkspaceDir,
-  });
-  const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
-    accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
-    ...(ctx.agentThreadId != null && ctx.agentThreadId !== ""
-      ? { threadId: ctx.agentThreadId }
-      : {}),
-  });
-  let childSessionOrigin = resolveRequesterOriginForChild({
-    cfg,
-    targetAgentId,
-    requesterAgentId,
-    requesterChannel: ctx.agentChannel,
-    requesterAccountId: ctx.agentAccountId,
-    requesterTo: ctx.agentTo,
-    requesterThreadId: ctx.agentThreadId,
-    requesterGroupSpace: ctx.agentGroupSpace,
-    requesterMemberRoleIds: ctx.agentMemberRoleIds,
-  });
-  const targetPolicy = resolveSubagentTargetPolicy({
-    requesterAgentId,
-    targetAgentId,
-    requestedAgentId,
-    allowAgents:
-      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-      cfg?.agents?.defaults?.subagents?.allowAgents,
-    configuredAgentIds: resolveConfiguredAgentIds(cfg),
-  });
-  if (!targetPolicy.ok) {
+  if (params.collect && !swarmGroupId) {
     return {
-      status: "forbidden",
-      error: targetPolicy.error,
+      status: "error",
+      error: "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
     };
   }
-  const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
-  const requesterRuntime = resolveSandboxRuntimeStatus({
-    cfg,
-    sessionKey: requesterInternalKey,
-  });
-  const childRuntime = resolveSandboxRuntimeStatus({
-    cfg,
-    sessionKey: childSessionKey,
-  });
-  if (!childRuntime.sandboxed && (requesterRuntime.sandboxed || sandboxMode === "require")) {
-    if (requesterRuntime.sandboxed) {
+  const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
+  const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
+  const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
+  // Registry and Gateway identities are global, while host replay keys are requester-scoped.
+  const childIdem = swarmLaunchReplayKey
+    ? `swarm_${crypto
+        .createHash("sha256")
+        .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
+        .digest("hex")
+        .slice(0, 32)}`
+    : crypto.randomUUID();
+  let childRunId: string = childIdem;
+  let swarmReservationPending = false;
+  if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
+    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
+    if (
+      !reserveSwarmRun({
+        groupId: swarmSchedulerGroupKey,
+        runId: childRunId,
+        maxConcurrent: swarmConfig.maxConcurrent,
+        activeRunIds: groupRuns
+          .filter((entry) => entry.execution?.status === "running")
+          .map((entry) => entry.schedulerSlotId ?? entry.runId),
+      })
+    ) {
+      return { status: "error", error: "sessions_spawn could not reserve swarm FIFO order." };
+    }
+    swarmReservationPending = true;
+  }
+  try {
+    const requestedCwd = normalizeOptionalString(params.cwd);
+    const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+    const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
+      agentGroupId: ctx.agentGroupId,
+      agentGroupChannel: ctx.agentGroupChannel,
+      agentGroupSpace: ctx.agentGroupSpace,
+      workspaceDir: ctx.workspaceDir,
+    });
+    const inheritedWorkspaceDir =
+      targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
+    const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
+      config: cfg,
+      targetAgentId,
+      explicitWorkspaceDir: inheritedWorkspaceDir,
+    });
+    const requesterOrigin = normalizeDeliveryContext({
+      channel: ctx.agentChannel,
+      accountId: ctx.agentAccountId,
+      to: ctx.agentTo,
+      ...(ctx.agentThreadId != null && ctx.agentThreadId !== ""
+        ? { threadId: ctx.agentThreadId }
+        : {}),
+    });
+    let childSessionOrigin = resolveRequesterOriginForChild({
+      cfg,
+      targetAgentId,
+      requesterAgentId,
+      requesterChannel: ctx.agentChannel,
+      requesterAccountId: ctx.agentAccountId,
+      requesterTo: ctx.agentTo,
+      requesterThreadId: ctx.agentThreadId,
+      requesterGroupSpace: ctx.agentGroupSpace,
+      requesterMemberRoleIds: ctx.agentMemberRoleIds,
+    });
+    const incognito = isIncognitoSessionKey(requesterInternalKey);
+    const mintedChildSessionKey = mintSpawnSessionKey({ targetAgentId, backend: "subagent" });
+    const childSessionKey = incognito
+      ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
+      : mintedChildSessionKey;
+    const requesterRuntime = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: requesterInternalKey,
+    });
+    const childRuntime = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: childSessionKey,
+    });
+    const sandboxError = resolveSpawnSandboxError({
+      backend: "subagent",
+      requesterSandboxed: requesterRuntime.sandboxed,
+      childSandboxed: childRuntime.sandboxed,
+      sandbox: sandboxMode,
+    });
+    if (sandboxError) {
+      return { status: "forbidden", error: sandboxError };
+    }
+    const spawnedWorkspaceCwd = spawnedWorkspaceDir
+      ? resolveUserPath(spawnedWorkspaceDir)
+      : undefined;
+    if (childRuntime.sandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
       return {
         status: "forbidden",
         error:
-          "Sandboxed sessions cannot spawn unsandboxed subagents. Set a sandboxed target agent or use the same agent runtime.",
+          "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
       };
     }
-    return {
-      status: "forbidden",
-      error:
-        'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
-    };
-  }
-  const spawnedWorkspaceCwd = spawnedWorkspaceDir
-    ? resolveUserPath(spawnedWorkspaceDir)
-    : undefined;
-  if (childRuntime.sandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
-    return {
-      status: "forbidden",
-      error:
-        "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
-    };
-  }
-  const childDepth = callerDepth + 1;
-  const spawnedByKey = requesterInternalKey;
-  const childCapabilities = resolveSubagentCapabilities({
-    depth: childDepth,
-    maxSpawnDepth,
-  });
-  const targetAgentDir = resolveAgentDir(cfg, targetAgentId);
-  const requesterAgentConfig = resolveAgentConfig(cfg, requesterAgentId);
-  const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-  const callerThinkingRaw = readRequesterThinkingLevel({
-    cfg,
-    requesterInternalKey,
-    requesterAgentId,
-  });
-  const plan = resolveSubagentModelAndThinkingPlan({
-    cfg,
-    targetAgentId,
-    requesterAgentConfig,
-    targetAgentConfig,
-    modelOverride,
-    thinkingOverrideRaw,
-    callerThinkingRaw,
-  });
-  if (plan.status === "error") {
-    return {
-      status: "error",
-      error: plan.error,
-    };
-  }
-  const { resolvedModel, thinkingOverride } = plan;
-  const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
-  const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
-    try {
-      const target = resolveGatewaySessionStoreTarget({
+    const spawnedByKey = requesterInternalKey;
+    const targetAgentDir = resolveAgentDir(cfg, targetAgentId);
+    const requesterAgentConfig = resolveAgentConfig(cfg, requesterAgentId);
+    const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+    const callerThinkingRaw = readRequesterThinkingLevel({
+      cfg,
+      requesterInternalKey,
+      requesterAgentId,
+    });
+    const inheritedFastMode =
+      swarmConfig.enabled && params.fastMode === undefined
+        ? readRequesterFastMode({
+            cfg,
+            requesterInternalKey,
+            requesterAgentId,
+          })
+        : params.fastMode;
+    const plan = resolveSubagentModelAndThinkingPlan({
+      cfg,
+      targetAgentId,
+      requesterAgentConfig,
+      targetAgentConfig,
+      modelOverride,
+      thinkingOverrideRaw,
+      callerThinkingRaw,
+      fastMode: inheritedFastMode,
+    });
+    if (plan.status === "error") {
+      return {
+        status: "error",
+        error: plan.error,
+      };
+    }
+    const { resolvedModel, thinkingOverride } = plan;
+    const resolvedLaunchModel = splitModelRef(resolvedModel);
+    const launchAuthorization: SubagentLaunchAuthorization | undefined =
+      modelOverride?.trim() && resolvedLaunchModel.model
+        ? {
+            modelOverride: {
+              ...(resolvedLaunchModel.provider ? { provider: resolvedLaunchModel.provider } : {}),
+              model: resolvedLaunchModel.model,
+            },
+          }
+        : undefined;
+    if (params.outputSchema) {
+      const outputModelError = await resolveCollectorOutputModelError({
         cfg,
-        key: childSessionKey,
+        targetAgentId,
+        targetAgentDir,
+        workspaceDir: spawnedWorkspaceDir,
+        resolvedModel,
       });
-      await updateSubagentSessionStore(target.storePath, (store) => {
-        pruneLegacyStoreKeys({
-          store,
-          canonicalKey: target.canonicalKey,
-          candidates: target.storeKeys,
-        });
-        store[target.canonicalKey] = mergeSessionEntry(
-          store[target.canonicalKey],
-          buildDirectChildSessionPatch(patch),
+      if (outputModelError) {
+        return { status: "error", error: outputModelError, childSessionKey };
+      }
+    }
+    const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
+    let childCreationEntry: SessionEntry | undefined;
+    const patchChildSession = async (
+      patch: Record<string, unknown>,
+      creationStamp?: ReturnType<typeof buildSessionCreationStamp>,
+    ): Promise<string | undefined> => {
+      try {
+        const target = incognito
+          ? {
+              agentId: targetAgentId,
+              canonicalKey: childSessionKey,
+              storeKeys: [childSessionKey],
+              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: targetAgentId }),
+            }
+          : resolveGatewaySessionStoreTarget({
+              cfg,
+              key: childSessionKey,
+            });
+        const updatedEntry = await upsertSessionEntry(
+          {
+            storePath: target.storePath,
+            sessionKey: target.canonicalKey,
+          },
+          { ...buildDirectChildSessionPatch(patch), ...creationStamp },
         );
+        childCreationEntry ??= updatedEntry ?? undefined;
+        return undefined;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        return `child session patch failed: ${message}`;
+      }
+    };
+
+    const initialChildSessionPatch: Record<string, unknown> = {
+      spawnedBy: spawnedByKey,
+      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+      // Navigation and control lineage commit with the creation stamp so a
+      // launch failure cannot leave a durable but parentless child row.
+      parentSessionKey: spawnedByKey,
+      ...(spawnedWorkspaceDir ? { spawnedWorkspaceDir } : {}),
+      ...(spawnedCwd ? { spawnedCwd } : {}),
+      ...admission.childSessionPatch,
+      inheritedToolPolicyVersion: 1,
+      ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+      ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+      ...plan.initialSessionPatch,
+      ...(swarmGroupId ? { swarmGroupId } : {}),
+      ...(params.collect ? { swarmCollector: true } : {}),
+      ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
+      ...(incognito ? { incognito: true } : {}),
+    };
+
+    const initialPatchError = await patchChildSession(
+      initialChildSessionPatch,
+      buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: requesterInternalKey },
+      }),
+    );
+    if (initialPatchError) {
+      return {
+        status: "error",
+        error: initialPatchError,
+        childSessionKey,
+      };
+    }
+    const preparedSpawnContext = await prepareSubagentSessionContext({
+      cfg,
+      contextMode,
+      requesterAgentId,
+      targetAgentId,
+      requesterInternalKey,
+      childSessionKey,
+    });
+    if (preparedSpawnContext.status === "error") {
+      await cleanupProvisionalSession(childSessionKey, {
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
       });
-      return undefined;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      return `child session patch failed: ${message}`;
-    }
-  };
-
-  const initialChildSessionPatch: Record<string, unknown> = {
-    spawnDepth: childDepth,
-    subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
-    subagentControlScope: childCapabilities.controlScope,
-    ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
-    ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
-    ...plan.initialSessionPatch,
-  };
-
-  const initialPatchError = await patchChildSession(initialChildSessionPatch);
-  if (initialPatchError) {
-    return {
-      status: "error",
-      error: initialPatchError,
-      childSessionKey,
-    };
-  }
-  const preparedSpawnContext = await prepareSubagentSessionContext({
-    cfg,
-    contextMode,
-    requesterAgentId,
-    targetAgentId,
-    requesterInternalKey,
-    childSessionKey,
-  });
-  if (preparedSpawnContext.status === "error") {
-    await cleanupProvisionalSession(childSessionKey, {
-      emitLifecycleHooks: false,
-      deleteTranscript: true,
-    });
-    return {
-      status: "error",
-      error: preparedSpawnContext.error,
-      childSessionKey,
-    };
-  }
-  if (resolvedModel) {
-    const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
-      cfg,
-      childSessionKey,
-      resolvedModel,
-    });
-    if (runtimeModelPersistError) {
-      try {
-        await callSubagentGateway({
-          method: "sessions.delete",
-          params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-        });
-      } catch {
-        // Best-effort cleanup only.
-      }
       return {
         status: "error",
-        error: runtimeModelPersistError,
+        error: preparedSpawnContext.error,
         childSessionKey,
       };
     }
-    modelApplied = true;
-  }
-  if (requestThreadBinding) {
-    const bindResult = await bindThreadForSubagentSpawn({
-      cfg,
-      childSessionKey,
-      agentId: targetAgentId,
-      label: label || undefined,
-      mode: spawnMode,
-      requesterSessionKey: ownership.threadBindingRequesterSessionKey,
-      requester: {
-        channel: childSessionOrigin?.channel,
-        accountId: childSessionOrigin?.accountId,
-        to: childSessionOrigin?.to,
-        threadId: childSessionOrigin?.threadId,
-      },
-    });
-    if (bindResult.status === "error") {
-      try {
-        await callSubagentGateway({
-          method: "sessions.delete",
-          params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-        });
-      } catch {
-        // Best-effort cleanup only.
-      }
-      return {
-        status: "error",
-        error: bindResult.error,
+    if (resolvedModel) {
+      const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
+        cfg,
         childSessionKey,
-      };
-    }
-    threadBindingReady = true;
-    hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
-    childSessionOrigin =
-      mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
-  }
-  const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
-
-  let childSystemPrompt = buildSubagentSystemPrompt({
-    requesterSessionKey,
-    requesterOrigin: childSessionOrigin,
-    childSessionKey,
-    label: label || undefined,
-    task,
-    acpEnabled: isAcpRuntimeSpawnAvailable({
-      config: cfg,
-      sandboxed: childRuntime.sandboxed,
-    }),
-    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
-      surface: "subagent",
-    }),
-    childDepth,
-    maxSpawnDepth,
-  });
-
-  let retainOnSessionKeep = false;
-  let attachmentsReceipt:
-    | {
-        count: number;
-        totalBytes: number;
-        files: SubagentAttachmentReceiptFile[];
-        relDir: string;
-      }
-    | undefined;
-  let attachmentAbsDir: string | undefined;
-  let attachmentRootDir: string | undefined;
-
-  const materializedAttachments = await materializeSubagentAttachments({
-    config: cfg,
-    targetAgentId,
-    workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
-    attachments: params.attachments,
-    mountPathHint,
-  });
-  if (materializedAttachments && materializedAttachments.status !== "ok") {
-    await cleanupProvisionalSession(childSessionKey, {
-      emitLifecycleHooks: threadBindingReady,
-      deleteTranscript: true,
-    });
-    return {
-      status: materializedAttachments.status,
-      error: materializedAttachments.error,
-    };
-  }
-  if (materializedAttachments?.status === "ok") {
-    retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
-    attachmentsReceipt = materializedAttachments.receipt;
-    attachmentAbsDir = materializedAttachments.absDir;
-    attachmentRootDir = materializedAttachments.rootDir;
-    childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
-  }
-
-  const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
-    ? "lightweight"
-    : undefined;
-
-  const childTaskMessage = buildSubagentInitialUserMessage({
-    childDepth,
-    maxSpawnDepth,
-    persistentSession: spawnMode === "session",
-    task,
-  });
-
-  const spawnedMetadata = normalizeSpawnedRunMetadata({
-    spawnedBy: spawnedByKey,
-    ...toolSpawnMetadata,
-    workspaceDir: spawnedWorkspaceDir,
-  });
-  const spawnLineagePatchError = await patchChildSession({
-    spawnedBy: spawnedByKey,
-    ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
-    ...(spawnedCwd ? { spawnedCwd } : {}),
-  });
-  if (spawnLineagePatchError) {
-    await cleanupFailedSpawnBeforeAgentStart({
-      childSessionKey,
-      attachmentAbsDir,
-      emitLifecycleHooks: threadBindingReady,
-      deleteTranscript: true,
-    });
-    return {
-      status: "error",
-      error: spawnLineagePatchError,
-      childSessionKey,
-    };
-  }
-  const contextEnginePrepareResult =
-    params.lightContext && preparedSpawnContext.mode === "isolated"
-      ? ({ status: "ok", preparation: undefined } as const)
-      : await prepareContextEngineSubagentSpawn({
-          cfg,
-          context: preparedSpawnContext,
-          requesterInternalKey,
+        resolvedModel,
+      });
+      if (runtimeModelPersistError) {
+        try {
+          await callSubagentGateway({
+            method: "sessions.delete",
+            params: { key: childSessionKey, emitLifecycleHooks: false },
+            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+          });
+        } catch {
+          // Best-effort cleanup only.
+        }
+        return {
+          status: "error",
+          error: runtimeModelPersistError,
           childSessionKey,
-          runTimeoutSeconds,
-        });
-  if (contextEnginePrepareResult.status === "error") {
-    await cleanupFailedSpawnBeforeAgentStart({
-      childSessionKey,
-      attachmentAbsDir,
-      emitLifecycleHooks: threadBindingReady,
-      deleteTranscript: true,
-    });
-    return {
-      status: "error",
-      error: contextEnginePrepareResult.error,
-      childSessionKey,
-    };
-  }
-  const contextEnginePreparation = contextEnginePrepareResult.preparation;
+        };
+      }
+      modelApplied = true;
+    }
+    if (requestThreadBinding) {
+      const bindResult = await bindThreadForSubagentSpawn({
+        cfg,
+        childSessionKey,
+        agentId: targetAgentId,
+        label: label || undefined,
+        mode: spawnMode,
+        requesterSessionKey: ownership.threadBindingRequesterSessionKey,
+        requester: {
+          channel: childSessionOrigin?.channel,
+          accountId: childSessionOrigin?.accountId,
+          to: childSessionOrigin?.to,
+          threadId: childSessionOrigin?.threadId,
+        },
+      });
+      if (bindResult.status === "error") {
+        try {
+          await callSubagentGateway({
+            method: "sessions.delete",
+            params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
+            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+          });
+        } catch {
+          // Best-effort cleanup only.
+        }
+        return {
+          status: "error",
+          error: bindResult.error,
+          childSessionKey,
+        };
+      }
+      threadBindingReady = true;
+      hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
+      childSessionOrigin =
+        mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
+    }
+    const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 
-  const childIdem = crypto.randomUUID();
-  let childRunId: string = childIdem;
-  const deliverInitialChildRunDirectly =
-    requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
-  const shouldAnnounceCompletion = deliverInitialChildRunDirectly
-    ? false
-    : expectsCompletionMessage;
-  try {
+    let childSystemPrompt = buildSubagentSystemPrompt({
+      requesterSessionKey,
+      requesterOrigin: childSessionOrigin,
+      childSessionKey,
+      label: label || undefined,
+      task,
+      acpEnabled: isAcpRuntimeSpawnAvailable({
+        config: cfg,
+        sandboxed: childRuntime.sandboxed,
+      }),
+      nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+        surface: "subagent",
+      }),
+      childDepth,
+      maxSpawnDepth,
+    });
+    if (params.outputSchema) {
+      childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
+    }
+
+    let retainOnSessionKeep = false;
+    let attachmentsReceipt:
+      | {
+          count: number;
+          totalBytes: number;
+          files: SubagentAttachmentReceiptFile[];
+          relDir: string;
+        }
+      | undefined;
+    let attachmentAbsDir: string | undefined;
+    let attachmentRootDir: string | undefined;
+
+    const materializedAttachments = await materializeSubagentAttachments({
+      config: cfg,
+      targetAgentId,
+      workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
+      attachments: params.attachments,
+      mountPathHint,
+    });
+    if (materializedAttachments && materializedAttachments.status !== "ok") {
+      await cleanupProvisionalSession(childSessionKey, {
+        emitLifecycleHooks: threadBindingReady,
+        deleteTranscript: true,
+      });
+      return {
+        status: materializedAttachments.status,
+        error: materializedAttachments.error,
+      };
+    }
+    if (materializedAttachments?.status === "ok") {
+      retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
+      attachmentsReceipt = materializedAttachments.receipt;
+      attachmentAbsDir = materializedAttachments.absDir;
+      attachmentRootDir = materializedAttachments.rootDir;
+      childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
+    }
+
+    const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
+      ? "lightweight"
+      : undefined;
+
+    const childTaskMessage = buildSubagentInitialUserMessage({
+      childDepth,
+      maxSpawnDepth,
+      persistentSession: spawnMode === "session",
+      task,
+    });
+    const spawnedMetadata = normalizeSpawnedRunMetadata({
+      spawnedBy: spawnedByKey,
+      ...toolSpawnMetadata,
+      workspaceDir: spawnedWorkspaceDir,
+    });
+
+    if (childCreationEntry) {
+      recordSessionCreated({
+        sessionKey: childSessionKey,
+        agentId: targetAgentId,
+        entry: childCreationEntry,
+      });
+    }
+    recordSubagentSpawned({
+      childSessionKey,
+      childRunId,
+      requesterSessionKey: requesterInternalKey,
+      agentId: targetAgentId,
+    });
+    const deliverInitialChildRunDirectly =
+      requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
+    const shouldAnnounceCompletion = deliverInitialChildRunDirectly
+      ? false
+      : expectsCompletionMessage;
+    const progressOrigin = {
+      channel: requesterOrigin?.channel,
+      accountId: requesterOrigin?.accountId,
+      to: ctx.currentMessagingTarget ?? requesterOrigin?.to,
+      threadId: requesterOrigin?.threadId,
+      channelId: ctx.currentChannelId,
+      messageId: ctx.currentMessageId,
+    };
     const {
       spawnedBy: _spawnedBy,
       workspaceDir: _workspaceDir,
       ...publicSpawnedMetadata
     } = spawnedMetadata;
-    const response = await callSubagentGateway({
-      method: "agent",
-      params: {
-        message: childTaskMessage,
-        sessionKey: childSessionKey,
-        channel: childSessionOrigin?.channel,
-        to: childSessionOrigin?.to ?? undefined,
-        accountId: childSessionOrigin?.accountId ?? undefined,
-        threadId:
-          childSessionOrigin?.threadId != null
-            ? stringifyRouteThreadId(childSessionOrigin.threadId)
-            : undefined,
-        idempotencyKey: childIdem,
-        deliver: deliverInitialChildRunDirectly,
-        lane: AGENT_LANE_SUBAGENT,
-        disableMessageTool: true,
-        cleanupBundleMcpOnRunEnd: spawnMode !== "session",
-        extraSystemPrompt: childSystemPrompt,
-        thinking: thinkingOverride,
-        timeout: runTimeoutSeconds,
-        label: label || undefined,
-        ...(bootstrapContextMode
-          ? {
-              bootstrapContextMode,
-              bootstrapContextRunKind: "default" as const,
-            }
-          : {}),
-        ...publicSpawnedMetadata,
-      },
+    const childLaunchRequest: Record<string, unknown> = {
+      message: childTaskMessage,
+      sessionKey: childSessionKey,
+      ...(params.collect
+        ? {}
+        : {
+            channel: childSessionOrigin?.channel,
+            to: childSessionOrigin?.to ?? undefined,
+            accountId: childSessionOrigin?.accountId ?? undefined,
+            threadId:
+              childSessionOrigin?.threadId != null
+                ? stringifyRouteThreadId(childSessionOrigin.threadId)
+                : undefined,
+          }),
+      idempotencyKey: childIdem,
+      deliver: deliverInitialChildRunDirectly,
+      lane: AGENT_LANE_SUBAGENT,
+      disableMessageTool: true,
+      swarmCollector: params.collect === true,
+      swarmOutputSchema: params.outputSchema,
+      cleanupBundleMcpOnRunEnd: spawnMode !== "session",
+      extraSystemPrompt: childSystemPrompt,
+      thinking: thinkingOverride,
+      timeout: runTimeoutSeconds,
+      label: label || undefined,
+      ...(bootstrapContextMode
+        ? {
+            bootstrapContextMode,
+            bootstrapContextRunKind: "default" as const,
+          }
+        : {}),
+      ...publicSpawnedMetadata,
+    };
+    const childLaunch = {
+      request: childLaunchRequest,
+      ...(launchAuthorization ? { authorization: launchAuthorization } : {}),
       timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-    });
-    const runId = readGatewayRunId(response);
-    if (runId) {
-      childRunId = runId;
-    }
-  } catch (err) {
-    await rollbackPreparedContextEngine(contextEnginePreparation);
-    if (attachmentAbsDir) {
-      try {
-        await fs.rm(attachmentAbsDir, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup only.
-      }
-    }
-    let emitLifecycleHooks = false;
-    if (threadBindingReady) {
-      const hasEndedHook = hookRunner?.hasHooks("subagent_ended") === true;
-      let endedHookEmitted = false;
-      if (hasEndedHook) {
+    };
+    const queuedLaunch =
+      params.collect && swarmSchedulerGroupKey
+        ? {
+            ...childLaunch,
+            schedulerGroupKey: swarmSchedulerGroupKey,
+            maxConcurrent: swarmConfig.maxConcurrent,
+          }
+        : undefined;
+    const launchChildRun = async () =>
+      await callSubagentGateway(
+        {
+          method: "agent",
+          params: childLaunch.request,
+          timeoutMs: childLaunch.timeoutMs,
+        },
+        childLaunch.authorization,
+      );
+
+    // "spawned"/"started" hooks mean an accepted Gateway run. Direct runs emit
+    // after the shared pipeline; queued collectors emit from the scheduler start.
+    const emitSpawnLifecycleHooks = async (hookRunId: string) => {
+      if (hookRunner?.hasHooks("subagent_progress")) {
         try {
-          await hookRunner?.runSubagentEnded(
+          await hookRunner.runSubagentProgress(
             {
-              targetSessionKey: childSessionKey,
-              targetKind: "subagent",
-              reason: "spawn-failed",
-              sendFarewell: true,
-              accountId: childSessionOrigin?.accountId,
-              runId: childRunId,
-              outcome: "error",
-              error: "Session failed to start",
+              phase: "started",
+              runId: hookRunId,
+              childSessionKey,
+              requester: progressOrigin,
             },
             {
-              runId: childRunId,
+              runId: hookRunId,
               childSessionKey,
               requesterSessionKey: requesterInternalKey,
             },
           );
-          endedHookEmitted = true;
         } catch {
-          // Spawn should still return an actionable error even if cleanup hooks fail.
+          // Presentation hooks are best-effort after durable registration.
         }
       }
-      emitLifecycleHooks = !endedHookEmitted;
-    }
-    // Always delete the provisional child session after a failed spawn attempt.
-    // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
-    try {
-      await callSubagentGateway({
-        method: "sessions.delete",
-        params: {
-          key: childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks,
-        },
-        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-      });
-    } catch {
-      // Best-effort only.
-    }
-    const messageText = summarizeError(err);
-    return {
-      status: "error",
-      error: messageText,
-      childSessionKey,
-      runId: childRunId,
-    };
-  }
-
-  try {
-    registerSubagentRun({
-      runId: childRunId,
-      childSessionKey,
-      controllerSessionKey: ownership.controllerSessionKey,
-      requesterSessionKey: ownership.completionRequesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: ownership.completionRequesterDisplayKey,
-      task,
-      taskName,
-      agentId: targetAgentId,
-      requesterAgentId,
-      cleanup,
-      label: label || undefined,
-      model: resolvedModel,
-      agentDir: targetAgentDir,
-      workspaceDir: spawnedMetadata.workspaceDir,
-      runTimeoutSeconds,
-      expectsCompletionMessage: shouldAnnounceCompletion,
-      spawnMode,
-      attachmentsDir: attachmentAbsDir,
-      attachmentsRootDir: attachmentRootDir,
-      retainAttachmentsOnKeep: retainOnSessionKeep,
-    });
-  } catch (err) {
-    await rollbackPreparedContextEngine(contextEnginePreparation);
-    if (attachmentAbsDir) {
-      try {
-        await fs.rm(attachmentAbsDir, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup only.
+      if (hookRunner?.hasHooks("subagent_spawned")) {
+        try {
+          await hookRunner.runSubagentSpawned(
+            {
+              runId: hookRunId,
+              childSessionKey,
+              agentId: targetAgentId,
+              label: label || undefined,
+              requester: {
+                channel: requesterOrigin?.channel,
+                accountId: requesterOrigin?.accountId,
+                to: requesterOrigin?.to,
+                threadId: requesterOrigin?.threadId,
+              },
+              threadRequested: requestThreadBinding,
+              mode: spawnMode,
+              ...resolvedModelMetadata,
+            },
+            {
+              runId: hookRunId,
+              childSessionKey,
+              requesterSessionKey: requesterInternalKey,
+            },
+          );
+        } catch {
+          // Spawn stays accepted if lifecycle presentation fails.
+        }
       }
-    }
-    try {
-      await callSubagentGateway({
-        method: "sessions.delete",
-        params: {
-          key: childSessionKey,
+    };
+    type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
+    const adapter: SpawnBackendAdapter<SubagentBackendState> = {
+      async initialize() {
+        const result =
+          params.lightContext && preparedSpawnContext.mode === "isolated"
+            ? ({ status: "ok", preparation: undefined } as const)
+            : await prepareContextEngineSubagentSpawn({
+                cfg,
+                context: preparedSpawnContext,
+                requesterInternalKey,
+                childSessionKey,
+                runTimeoutSeconds,
+              });
+        if (result.status === "error") {
+          throw new Error(result.error);
+        }
+        return { contextEnginePreparation: result.preparation };
+      },
+      async dispatchTurn() {
+        if (params.collect) {
+          return { runId: childIdem };
+        }
+        const response = await launchChildRun();
+        return { runId: readGatewayRunId(response) ?? childIdem };
+      },
+      async cleanupOnFailure({ phase, state }) {
+        if (phase === "initialize") {
+          await cleanupFailedSpawnBeforeAgentStart({
+            childSessionKey,
+            attachmentAbsDir,
+            emitLifecycleHooks: threadBindingReady,
+            deleteTranscript: true,
+          });
+          return;
+        }
+        await rollbackPreparedContextEngine(state?.contextEnginePreparation);
+        if (attachmentAbsDir) {
+          try {
+            await fs.rm(attachmentAbsDir, { recursive: true, force: true });
+          } catch {
+            // Best-effort cleanup only.
+          }
+        }
+        let emitLifecycleHooks = threadBindingReady;
+        if (phase === "dispatch" && threadBindingReady) {
+          let endedHookEmitted = false;
+          if (hookRunner?.hasHooks("subagent_ended")) {
+            try {
+              await hookRunner.runSubagentEnded(
+                {
+                  targetSessionKey: childSessionKey,
+                  targetKind: "subagent",
+                  reason: "spawn-failed",
+                  sendFarewell: true,
+                  accountId: childSessionOrigin?.accountId,
+                  runId: childIdem,
+                  outcome: "error",
+                  error: "Session failed to start",
+                },
+                {
+                  runId: childIdem,
+                  childSessionKey,
+                  requesterSessionKey: requesterInternalKey,
+                },
+              );
+              endedHookEmitted = true;
+            } catch {
+              // Spawn cleanup continues even when presentation hooks fail.
+            }
+          }
+          emitLifecycleHooks = !endedHookEmitted;
+        }
+        await cleanupProvisionalSession(childSessionKey, {
+          emitLifecycleHooks,
           deleteTranscript: true,
-          emitLifecycleHooks: threadBindingReady,
-        },
-        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-      });
-    } catch {
-      // Best-effort cleanup only.
+        });
+      },
+    };
+    const pipelineResult = await runSpawnPipeline({
+      adapter,
+      progressOrigin,
+      progressSessionKey: requesterInternalKey,
+      buildRegistration: (_state, runId) => {
+        if (params.collect) {
+          const latestAdmission = resolveAdmission();
+          if (!latestAdmission.ok) {
+            throw Object.assign(new Error(latestAdmission.error), {
+              spawnStatus: "forbidden" as const,
+            });
+          }
+        }
+        return {
+          runId,
+          requesterTurnRunId: ctx.requesterTurnRunId,
+          childSessionKey,
+          controllerSessionKey: ownership.controllerSessionKey,
+          requesterSessionKey: ownership.completionRequesterSessionKey,
+          requesterOrigin,
+          progressOrigin,
+          requesterDisplayKey: ownership.completionRequesterDisplayKey,
+          task,
+          taskName,
+          agentId: targetAgentId,
+          requesterAgentId,
+          cleanup,
+          label: label || undefined,
+          model: resolvedModel,
+          agentDir: targetAgentDir,
+          workspaceDir: spawnedMetadata.workspaceDir,
+          runTimeoutSeconds,
+          expectsCompletionMessage: shouldAnnounceCompletion,
+          spawnMode,
+          collect: params.collect === true,
+          swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
+          swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
+          swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
+          swarmLaunchRequestFingerprint: params.collect
+            ? params.swarmLaunchRequestFingerprint
+            : undefined,
+          outputSchema: params.outputSchema,
+          groupId: swarmGroupId,
+          queuedLaunch,
+          queued: params.collect === true,
+          attachmentsDir: attachmentAbsDir,
+          attachmentsRootDir: attachmentRootDir,
+          retainAttachmentsOnKeep: retainOnSessionKeep,
+        };
+      },
+    });
+    if (!pipelineResult.ok) {
+      const runId = pipelineResult.runId ?? childIdem;
+      const spawnStatus =
+        pipelineResult.error && typeof pipelineResult.error === "object"
+          ? (pipelineResult.error as { spawnStatus?: unknown }).spawnStatus
+          : undefined;
+      return {
+        status: spawnStatus === "forbidden" ? "forbidden" : "error",
+        error:
+          pipelineResult.phase === "register" && spawnStatus !== "forbidden"
+            ? `Failed to register subagent run: ${summarizeSpawnError(pipelineResult.error)}`
+            : summarizeSpawnError(pipelineResult.error),
+        childSessionKey,
+        ...(pipelineResult.phase === "initialize" ? {} : { runId }),
+      };
     }
+    childRunId = pipelineResult.runId;
+    if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
+      let launchTerminationConfirmed = false;
+      activateSwarmRun({
+        groupId: swarmSchedulerGroupKey,
+        runId: childRunId,
+        start: async () => {
+          await runWithGatewayIndependentRootWorkContinuation(async () => {
+            const response = await launchChildRun();
+            const gatewayRunId = readGatewayRunId(response) ?? childRunId;
+            try {
+              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
+                throw new Error(
+                  "collector registry row could not transition from queued to running",
+                );
+              }
+            } catch (error) {
+              await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
+              launchTerminationConfirmed = true;
+              throw error;
+            }
+            await emitSpawnLifecycleHooks(gatewayRunId);
+          });
+        },
+        onStartFailure: async (error) => {
+          if (error instanceof GatewayDrainingError) {
+            return false;
+          }
+          const launchError = summarizeError(error);
+          const [contextRollback, sessionCleanup] = await Promise.allSettled([
+            rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
+            cleanupFailedSpawnBeforeAgentStart({
+              childSessionKey,
+              attachmentAbsDir,
+              emitLifecycleHooks: threadBindingReady,
+              deleteTranscript: true,
+              // A launch RPC can fail after acceptance. Keep the FIFO slot until
+              // deleting the child session proves no accepted run remains active.
+              waitForSessionDeletion: !launchTerminationConfirmed,
+            }),
+          ]);
+          for (;;) {
+            try {
+              settleFailedQueuedSubagentLaunch(childRunId, launchError);
+              break;
+            } catch {
+              // The child is stopped; retry only the durable terminal write.
+              await new Promise<void>((resolve) => {
+                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
+                timer.unref?.();
+              });
+            }
+          }
+          const cleanupComplete =
+            contextRollback.status === "fulfilled" &&
+            contextRollback.value &&
+            sessionCleanup.status === "fulfilled" &&
+            sessionCleanup.value.attachmentsRemoved &&
+            sessionCleanup.value.sessionDeleted;
+          if (cleanupComplete) {
+            emitSessionLifecycleEvent({
+              sessionKey: childSessionKey,
+              reason: "delete",
+              parentSessionKey: requesterInternalKey,
+            });
+            completeCollectorLaunchCleanup(childRunId);
+          }
+          return true;
+        },
+      });
+      swarmReservationPending = false;
+      emitSessionLifecycleEvent({
+        sessionKey: childSessionKey,
+        reason: "create",
+        parentSessionKey: requesterInternalKey,
+        label: label || undefined,
+      });
+      const acceptedNote = resolveSubagentSpawnAcceptedNote({
+        spawnMode,
+        agentSessionKey: ctx.agentSessionKey,
+      });
+      return {
+        status: "accepted",
+        childSessionKey,
+        sessionKey: childSessionKey,
+        runId: childRunId,
+        mode: spawnMode,
+        taskName,
+        note: preparedSpawnContext.forkFallbackNote
+          ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
+          : acceptedNote,
+        ...resolvedModelMetadata,
+        modelApplied: resolvedModel ? modelApplied : undefined,
+        attachments: attachmentsReceipt,
+      };
+    }
+
+    await emitSpawnLifecycleHooks(childRunId);
+
+    // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
+    emitSessionLifecycleEvent({
+      sessionKey: childSessionKey,
+      reason: "create",
+      parentSessionKey: requesterInternalKey,
+      label: label || undefined,
+    });
+
+    const acceptedNote = resolveSubagentSpawnAcceptedNote({
+      spawnMode,
+      agentSessionKey: ctx.agentSessionKey,
+    });
     return {
-      status: "error",
-      error: `Failed to register subagent run: ${summarizeError(err)}`,
+      status: "accepted",
       childSessionKey,
       runId: childRunId,
+      mode: spawnMode,
+      taskName,
+      note: preparedSpawnContext.forkFallbackNote
+        ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
+        : acceptedNote,
+      ...resolvedModelMetadata,
+      modelApplied: resolvedModel ? modelApplied : undefined,
+      attachments: attachmentsReceipt,
     };
-  }
-
-  if (hookRunner?.hasHooks("subagent_spawned")) {
-    try {
-      await hookRunner.runSubagentSpawned(
-        {
-          runId: childRunId,
-          childSessionKey,
-          agentId: targetAgentId,
-          label: label || undefined,
-          requester: {
-            channel: requesterOrigin?.channel,
-            accountId: requesterOrigin?.accountId,
-            to: requesterOrigin?.to,
-            threadId: requesterOrigin?.threadId,
-          },
-          threadRequested: requestThreadBinding,
-          mode: spawnMode,
-          ...resolvedModelMetadata,
-        },
-        {
-          runId: childRunId,
-          childSessionKey,
-          requesterSessionKey: requesterInternalKey,
-        },
-      );
-    } catch {
-      // Spawn should still return accepted if spawn lifecycle hooks fail.
+  } finally {
+    if (swarmReservationPending) {
+      removeQueuedSwarmRun(childRunId);
     }
   }
-
-  // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
-  emitSessionLifecycleEvent({
-    sessionKey: childSessionKey,
-    reason: "create",
-    parentSessionKey: requesterInternalKey,
-    label: label || undefined,
-  });
-
-  const acceptedNote = resolveSubagentSpawnAcceptedNote({
-    spawnMode,
-    agentSessionKey: ctx.agentSessionKey,
-  });
-  return {
-    status: "accepted",
-    childSessionKey,
-    runId: childRunId,
-    mode: spawnMode,
-    taskName,
-    note: preparedSpawnContext.forkFallbackNote
-      ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
-      : acceptedNote,
-    ...resolvedModelMetadata,
-    modelApplied: resolvedModel ? modelApplied : undefined,
-    attachments: attachmentsReceipt,
-  };
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<SubagentSpawnDeps>) {
     subagentSpawnDeps = overrides
       ? {
@@ -1767,4 +2005,8 @@ export const testing = {
       : defaultSubagentSpawnDeps;
   },
 };
-export { testing as __testing };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

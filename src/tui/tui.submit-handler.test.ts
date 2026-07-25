@@ -54,7 +54,7 @@ describe("createEditorSubmitHandler", () => {
   it("preserves normal message drafts when chat is busy", () => {
     const { editor, sendMessage, handleCommand, handleBangLine, onBlockedMessageSubmit, onSubmit } =
       createSubmitHarness({
-        canSubmitMessage: () => false,
+        admitMessage: () => "pending",
       });
 
     onSubmit("  wait, use c++ instead  ");
@@ -64,16 +64,18 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
   });
 
   it("passes the submitted text to the busy gate", () => {
-    const canSubmitMessage = vi.fn((value: string) => value === "please stop");
-    const { sendMessage, onSubmit } = createSubmitHarness({ canSubmitMessage });
+    const admitMessage = vi.fn((value: string) =>
+      value === "please stop" ? ("allowed" as const) : ("pending" as const),
+    );
+    const { sendMessage, onSubmit } = createSubmitHarness({ admitMessage });
 
     onSubmit("please stop");
 
-    expect(canSubmitMessage).toHaveBeenCalledWith("please stop");
+    expect(admitMessage).toHaveBeenCalledWith("please stop");
     expect(sendMessage).toHaveBeenCalledWith("please stop");
   });
 
@@ -88,7 +90,8 @@ describe("createEditorSubmitHandler", () => {
       handleCommand: vi.fn(),
       sendMessage,
       handleBangLine: vi.fn(),
-      canSubmitMessage: () => false,
+      onSubmitError: vi.fn(),
+      admitMessage: () => "pending",
       onBlockedMessageSubmit,
     });
 
@@ -96,13 +99,13 @@ describe("createEditorSubmitHandler", () => {
 
     expect(editor.getText()).toBe("wait, use c++ instead");
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", "pending");
   });
 
   it("continues to route slash commands while chat is busy", () => {
     const { editor, handleCommand, sendMessage, onBlockedMessageSubmit, onSubmit } =
       createSubmitHarness({
-        canSubmitMessage: () => false,
+        admitMessage: () => "pending",
       });
 
     onSubmit("/abort");
@@ -122,6 +125,30 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.addToHistory).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["local shell", "!false", "handleBangLine"],
+    ["command", "/broken", "handleCommand"],
+    ["message", "hello", "sendMessage"],
+  ] as const)("reports rejected %s handlers", async (action, input, handler) => {
+    const harness = createSubmitHarness();
+    harness[handler].mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    harness.onSubmit(input);
+    await Promise.resolve();
+
+    expect(harness.onSubmitError).toHaveBeenCalledWith(action, expect.any(Error));
+  });
+
+  it("reports synchronous submit handler failures", () => {
+    const harness = createSubmitHarness();
+    harness.handleCommand.mockImplementationOnce(() => {
+      throw new Error("command exploded");
+    });
+
+    expect(() => harness.onSubmit("/broken")).not.toThrow();
+    expect(harness.onSubmitError).toHaveBeenCalledWith("command", expect.any(Error));
   });
 });
 

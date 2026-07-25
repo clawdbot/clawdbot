@@ -31,7 +31,7 @@ type CollectPluginConfigContractMatches = (input: {
  * Plugin config contract data used to extend core dangerous-flag detection.
  * Tests and snapshot callers can inject prepared contracts to avoid manifest discovery.
  */
-export type DangerousConfigFlagContractInputs = {
+type DangerousConfigFlagContractInputs = {
   configContractsById?: ReadonlyMap<string, PluginConfigContractMetadata>;
   collectPluginConfigContractMatches?: CollectPluginConfigContractMatches;
 };

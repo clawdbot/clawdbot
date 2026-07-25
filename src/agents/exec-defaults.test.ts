@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { canExecRequestNode, resolveExecDefaults } from "./exec-defaults.js";
+import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
 
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
@@ -227,9 +227,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("keeps legacy security overrides ahead of higher-scope normalized mode", () => {
-    // Legacy security/ask overrides are still a shipped config shape. They win
-    // when scoped directly to the agent that is being resolved.
+  it("keeps agent mode overrides ahead of the global mode", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -244,8 +242,7 @@ describe("resolveExecDefaults", () => {
                 id: "agent-a",
                 tools: {
                   exec: {
-                    security: "full",
-                    ask: "off",
+                    mode: "full",
                   },
                 },
               },
@@ -262,7 +259,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("preserves mode-derived security for partial legacy agent overrides", () => {
+  it("derives security fields from an agent mode override", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -277,7 +274,7 @@ describe("resolveExecDefaults", () => {
                 id: "agent-a",
                 tools: {
                   exec: {
-                    ask: "off",
+                    mode: "allowlist",
                   },
                 },
               },
@@ -294,18 +291,30 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("blocks node advertising in helper calls when sandbox is available", () => {
+  it("blocks node skill eligibility for deny policy and preserves node bindings", () => {
     expect(
-      canExecRequestNode({
+      resolveNodeExecEligibility({
         cfg: {
           tools: {
             exec: {
-              host: "auto",
+              host: "node",
+              mode: "deny",
+              node: "build-mac",
             },
           },
         },
-        sandboxAvailable: true,
       }),
-    ).toBe(false);
+    ).toEqual({ canExec: false, node: "build-mac" });
+  });
+
+  it("blocks node skill eligibility when the gateway denies system.run", () => {
+    expect(
+      resolveNodeExecEligibility({
+        cfg: {
+          gateway: { nodes: { commands: { deny: [" system.run "] } } },
+          tools: { exec: { host: "node", mode: "full" } },
+        },
+      }),
+    ).toEqual({ canExec: false });
   });
 });

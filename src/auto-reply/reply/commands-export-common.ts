@@ -4,17 +4,21 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-/** Resolved session entry and transcript file targeted by an export command. */
+/** Resolved session entry and scoped transcript identity targeted by an export command. */
 interface ExportCommandSessionTarget {
+  agentId: string;
   entry: SessionEntry;
+  sessionId: string;
   sessionFile: string;
+  sessionKey: string;
+  storePath: string;
 }
 
 const MAX_EXPORT_COMMAND_OUTPUT_PATH_CHARS = 512;
@@ -48,20 +52,34 @@ export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | ReplyPayload {
   const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
+  if (!targetAgentId) {
+    return { text: `❌ Failed to resolve agent for session: ${params.sessionKey}` };
+  }
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[params.sessionKey] as SessionEntry | undefined;
-  if (!entry?.sessionId) {
+  const entry = loadSessionEntryReadOnly({
+    storePath,
+    sessionKey: params.sessionKey,
+    clone: false,
+  });
+  const sessionId = entry?.sessionId;
+  if (!sessionId) {
     return { text: `❌ Session not found: ${params.sessionKey}` };
   }
 
   try {
     const sessionFile = resolveSessionFilePath(
-      entry.sessionId,
+      sessionId,
       entry,
       resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
     );
-    return { entry, sessionFile };
+    return {
+      agentId: targetAgentId,
+      entry,
+      sessionFile,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+    };
   } catch (err) {
     return {
       text: `❌ Failed to resolve session file: ${formatErrorMessage(err)}`,

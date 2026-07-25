@@ -4,15 +4,32 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildCommitmentExtractionPrompt,
   parseCommitmentExtractionOutput,
   persistCommitmentExtractionResult,
-  validateCommitmentCandidates,
 } from "./extraction.js";
-import { loadCommitmentStore } from "./store.js";
+import { validateCommitmentCandidates } from "./extraction.test-support.js";
+import { readCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentCandidate, CommitmentExtractionItem } from "./types.js";
+
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: () => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  }),
+}));
 
 describe("commitment extraction", () => {
   const tmpDirs: string[] = [];
@@ -20,6 +37,7 @@ describe("commitment extraction", () => {
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     stateDirEnvSnapshot?.restore();
@@ -33,11 +51,7 @@ describe("commitment extraction", () => {
     tmpDirs.push(tmpDir);
     stateDirEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
-    return {
-      commitments: {
-        enabled: true,
-      },
-    };
+    return {};
   }
 
   function item(overrides?: Partial<CommitmentExtractionItem>): CommitmentExtractionItem {
@@ -153,7 +167,7 @@ describe("commitment extraction", () => {
   });
 
   it("rejects disabled, low-confidence, and non-future candidates", () => {
-    const cfg: OpenClawConfig = { commitments: { enabled: true } };
+    const cfg: OpenClawConfig = {};
     const valid = validateCommitmentCandidates({
       cfg,
       items: [item()],
@@ -170,6 +184,55 @@ describe("commitment extraction", () => {
     });
 
     expect(valid.map((entry) => entry.candidate.dedupeKey)).toEqual(["interview:2026-04-30"]);
+  });
+
+  it("rejects calendar-invalid due timestamps", () => {
+    const valid = validateCommitmentCandidates({
+      items: [item()],
+      result: {
+        candidates: [
+          candidate({
+            dedupeKey: "invalid-earliest",
+            dueWindow: { earliest: "2026-04-31T17:00:00.000Z" },
+          }),
+          candidate({
+            dedupeKey: "invalid-latest",
+            dueWindow: {
+              earliest: "2026-04-30T17:00:00.000Z",
+              latest: "2026-04-31T23:00:00.000Z",
+            },
+          }),
+        ],
+      },
+      nowMs,
+    });
+
+    const validCandidate = expectSingleValidCandidate(valid);
+    expect(validCandidate.candidate.dedupeKey).toBe("invalid-latest");
+    expect(validCandidate.earliestMs).toBe(Date.parse("2026-04-30T17:00:00.000Z"));
+    expect(validCandidate.latestMs).toBe(validCandidate.earliestMs + 12 * 60 * 60 * 1000);
+  });
+
+  it("accepts calendar-valid leap-day, offset, and lowercase RFC 3339 timestamps", () => {
+    const valid = validateCommitmentCandidates({
+      items: [item()],
+      result: {
+        candidates: [
+          candidate({
+            dedupeKey: "leap-day-offset",
+            dueWindow: {
+              earliest: "2028-02-29t09:00:00-08:00",
+              latest: "2028-02-29t20:00:00z",
+            },
+          }),
+        ],
+      },
+      nowMs,
+    });
+
+    const validCandidate = expectSingleValidCandidate(valid);
+    expect(validCandidate.earliestMs).toBe(Date.parse("2028-02-29t09:00:00-08:00"));
+    expect(validCandidate.latestMs).toBe(Date.parse("2028-02-29t20:00:00z"));
   });
 
   it("clamps inferred due time to at least one heartbeat interval after write time", () => {
@@ -224,13 +287,13 @@ describe("commitment extraction", () => {
       },
       nowMs: nowMs + 1_000,
     });
-    const store = await loadCommitmentStore();
+    const commitments = readCommitmentsForTest();
 
     expect(created).toHaveLength(1);
     expect(deduped).toHaveLength(0);
-    expect(store.commitments).toHaveLength(1);
-    expect(store.commitments[0]?.reason).toBe("Updated reason");
-    expect(store.commitments[0]?.confidence).toBe(0.97);
-    expect(store.commitments[0]?.status).toBe("pending");
+    expect(commitments).toHaveLength(1);
+    expect(commitments[0]?.reason).toBe("Updated reason");
+    expect(commitments[0]?.confidence).toBe(0.97);
+    expect(commitments[0]?.status).toBe("pending");
   });
 });

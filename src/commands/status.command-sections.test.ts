@@ -172,6 +172,42 @@ describe("status.command-sections", () => {
     ]);
   });
 
+  it("shows fallback-specific wording for auto-fallback model mismatches", () => {
+    const lines = buildStatusModelSelectionLines({
+      recent: [
+        {
+          key: "agent:main:telegram:chat-2",
+          kind: "direct",
+          updatedAt: 1,
+          age: 5_000,
+          model: "qwen3.6-blue",
+          configuredModel: "minimax/MiniMax-M3",
+          selectedModel: "ollama/qwen3.6-blue:35b-a3b",
+          modelSelectionReason: "fallback selected",
+          runtime: "OpenClaw Default",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          flags: [],
+        },
+      ],
+      shortenText: (value) => value,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(lines).toEqual([
+      "warn(Session agent:main:telegram:chat-2 is running ollama/qwen3.6-blue:35b-a3b (auto fallback); config primary is minimax/MiniMax-M3.)",
+      "  Configured default: minimax/MiniMax-M3",
+      "  Session selected: ollama/qwen3.6-blue:35b-a3b",
+      "  Reason: fallback selected",
+      "  Action: check provider availability or retry with /model",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    ]);
+  });
+
   it("maps health channel detail lines into status rows", () => {
     const rows = buildStatusHealthRows({
       health: { durationMs: 42 } as HealthSummary,

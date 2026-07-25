@@ -72,6 +72,10 @@ describe("parsePostContent", () => {
     expect(result.textContent).toBe("Before ![image] after\n![image]");
     expect(result.imageKeys).toEqual(["img_1", "img_2"]);
     expect(result.mentionedOpenIds).toStrictEqual([]);
+    expect(
+      parsePostContent(content, { renderMediaPlaceholders: false, emptyTextFallback: "" })
+        .textContent,
+    ).toBe("Before  after");
   });
 
   it("supports locale wrappers", () => {

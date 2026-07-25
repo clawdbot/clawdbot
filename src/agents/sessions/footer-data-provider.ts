@@ -3,7 +3,7 @@
  *
  * Watches git metadata and exposes current branch/repository state without blocking rendering.
  */
-import { type ExecFileException, execFile, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   type FSWatcher,
@@ -13,6 +13,7 @@ import {
   watchFile,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { runExec } from "../../process/exec.js";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.js";
 
 type GitPaths = {
@@ -81,25 +82,17 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
 }
 
 /** Ask git for the current branch asynchronously. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
-  return new Promise((resolvePromise) => {
-    execFile(
+async function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
+  try {
+    const { stdout } = await runExec(
       "git",
       ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
-      {
-        cwd: repoDir,
-        encoding: "utf8",
-      },
-      (error: ExecFileException | null, stdout: string) => {
-        if (error) {
-          resolvePromise(null);
-          return;
-        }
-        const branch = stdout.trim();
-        resolvePromise(branch || null);
-      },
+      { cwd: repoDir, logOutput: false },
     );
-  });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /**

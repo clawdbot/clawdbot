@@ -9,7 +9,12 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import {
+  asFiniteNumber,
+  asObject,
+  resolveSpeechProviderApiKey,
+  trimToUndefined,
+} from "openclaw/plugin-sdk/speech-core";
 import {
   azureSpeechTTS,
   DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
@@ -87,7 +92,7 @@ function normalizeAzureSpeechProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.azure-speech.apiKey",
+      path: "tts.providers.azure-speech.apiKey",
     }),
     region,
     endpoint,
@@ -175,8 +180,8 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-function resolveApiKey(config: AzureSpeechProviderConfig): string | undefined {
-  return config.apiKey ?? readAzureSpeechEnvApiKey();
+function resolveApiKey(...candidates: Array<string | undefined>): string | undefined {
+  return resolveSpeechProviderApiKey(...candidates, readAzureSpeechEnvApiKey());
 }
 
 function resolveTimeoutMs(config: AzureSpeechProviderConfig, timeoutMs: number): number {
@@ -250,7 +255,9 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       const config = req.providerConfig
         ? readAzureSpeechProviderConfig(req.providerConfig)
         : undefined;
-      const apiKey = req.apiKey ?? (config ? resolveApiKey(config) : readAzureSpeechEnvApiKey());
+      const requestValue = req.apiKey;
+      const configValue = config?.apiKey;
+      const apiKey = resolveApiKey(requestValue, configValue);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
@@ -259,17 +266,19 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         baseUrl: req.baseUrl ?? config?.baseUrl,
         endpoint: config?.endpoint,
         region: config?.region ?? readAzureSpeechEnvRegion(),
-        timeoutMs: config?.timeoutMs,
+        timeoutMs: config?.timeoutMs ?? req.timeoutMs,
       });
     },
     isConfigured: ({ providerConfig }) => {
       const config = readAzureSpeechProviderConfig(providerConfig);
-      return Boolean(resolveApiKey(config) && (config.baseUrl || config.region || config.endpoint));
+      return Boolean(
+        resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
+      );
     },
     synthesize: async (req) => {
       const config = readAzureSpeechProviderConfig(req.providerConfig);
       const overrides = readAzureSpeechOverrides(req.providerOverrides);
-      const apiKey = resolveApiKey(config);
+      const apiKey = resolveApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
@@ -298,7 +307,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const config = readAzureSpeechProviderConfig(req.providerConfig);
       const overrides = readAzureSpeechOverrides(req.providerOverrides);
-      const apiKey = resolveApiKey(config);
+      const apiKey = resolveApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }

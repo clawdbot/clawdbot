@@ -1,4 +1,5 @@
 // Matrix tests cover events plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -981,8 +982,9 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       });
 
       await vi.advanceTimersByTimeAsync(500);
+      const verification = expectDefined(verifications[0], "Matrix verification summary");
       verifications[0] = {
-        ...verifications[0],
+        ...verification,
         sas: {
           decimal: [1234, 5678, 9012],
           emoji: [
@@ -1841,3 +1843,4 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

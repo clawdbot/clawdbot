@@ -1,0 +1,32 @@
+title: Matrix stale sync replay is absorbed by inbound dedupe
+scenario:
+  id: matrix-stale-sync-replay-dedupe
+  surface: channels
+  coverage:
+    primary:
+      - matrix.conversation-routing-and-delivery
+  execution:
+    profiles: { "matrix:all": 32, "matrix:transport": 31 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: stale-sync
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Stale Sync Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-restart.js
+  call: runStaleSyncReplayDedupeScenario
+  args:
+    - expr: "scenarioContext"

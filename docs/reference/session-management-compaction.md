@@ -1,121 +1,67 @@
 ---
 summary: "Deep dive: session store + transcripts, lifecycle, and (auto)compaction internals"
 read_when:
-  - You need to debug session ids, transcript JSONL, or sessions.json fields
+  - You need to debug session ids, transcript events, or session row fields
   - You are changing auto-compaction behavior or adding "pre-compaction" housekeeping
   - You want to implement memory flushes or silent system turns
 title: "Session management deep dive"
 ---
 
-OpenClaw manages sessions end-to-end across these areas:
+A single **Gateway process** owns session state end-to-end. UIs (macOS app, web Control UI, TUI) query the Gateway for session lists and token counts. In remote mode, session files live on the remote host, so checking your local Mac's files will not reflect what the Gateway is using.
 
-- **Session routing** (how inbound messages map to a `sessionKey`)
-- **Session store** (`sessions.json`) and what it tracks
-- **Transcript persistence** (`*.jsonl`) and its structure
-- **Transcript hygiene** (provider-specific fixups before runs)
-- **Context limits** (context window vs tracked tokens)
-- **Compaction** (manual and auto-compaction) and where to hook pre-compaction work
-- **Silent housekeeping** (memory writes that should not produce user-visible output)
-
-If you want a higher-level overview first, start with:
-
-- [Session management](/concepts/session)
-- [Compaction](/concepts/compaction)
-- [Memory overview](/concepts/memory)
-- [Memory search](/concepts/memory-search)
-- [Session pruning](/concepts/session-pruning)
-- [Transcript hygiene](/reference/transcript-hygiene)
-
----
-
-## Source of truth: the Gateway
-
-OpenClaw is designed around a single **Gateway process** that owns session state.
-
-- UIs (macOS app, web Control UI, TUI) should query the Gateway for session lists and token counts.
-- In remote mode, session files are on the remote host; "checking your local Mac files" won't reflect what the Gateway is using.
-
----
+Overview docs first: [Session management](/concepts/session), [Compaction](/concepts/compaction), [Memory overview](/concepts/memory), [Memory search](/concepts/memory-search), [Session pruning](/concepts/session-pruning), [Transcript hygiene](/reference/transcript-hygiene), full config reference at [Agent config](/gateway/config-agents).
 
 ## Two persistence layers
 
-OpenClaw persists sessions in two layers:
+1. **Session rows (per-agent SQLite)** - key/value map `sessionKey -> SessionEntry`. Mutable runtime state owned by the Gateway. Tracks metadata: current session id, last activity, toggles, token counters.
+2. **Transcript events (per-agent SQLite)** - append-only, tree-structured (entries have `id` + `parentId`). Stores the conversation, tool calls, and compaction summaries; rebuilds model context for future turns. Compaction checkpoints are metadata over the compacted successor transcript - a new compaction does not write a second `.checkpoint.*.jsonl` copy.
 
-1. **Session store (`sessions.json`)**
-   - Key/value map: `sessionKey -> SessionEntry`
-   - Small, mutable, safe to edit (or delete entries)
-   - Tracks session metadata (current session id, last activity, toggles, token counters, etc.)
+Older installs may still have `sessions.json` files under the agent `sessions/`
+directory. Treat those files as legacy session-row migration inputs or explicit
+offline-maintenance targets. Gateway startup and `openclaw doctor --fix` import
+hot legacy rows and transcript history into the per-agent SQLite store
+automatically. Run `openclaw doctor --session-sqlite inspect
+--session-sqlite-all-agents`, then follow the [Doctor migration
+sequence](/cli/doctor#session-sqlite-migration), when you need explicit
+inspection or validation evidence. If a migration fails after legacy transcript
+artifacts were archived, use the Doctor recovery mode from that sequence.
+Recovery uses migration manifests, restores only the affected archived support
+artifacts, prepares a sanitized GitHub issue report when requested, and does not
+make active runtime read JSONL files again.
 
-2. **Transcript (`<sessionId>.jsonl`)**
-   - Append-only transcript with tree structure (entries have `id` + `parentId`)
-   - Stores the actual conversation + tool calls + compaction summaries
-   - Used to rebuild the model context for future turns
-   - Compaction checkpoints are metadata over the compacted successor
-     transcript. New compactions do not write a second `.checkpoint.*.jsonl`
-     copy.
-
-Gateway history readers should avoid materializing the whole transcript unless
-the surface explicitly needs arbitrary historical access. First-page history,
-embedded chat history, restart recovery, and token/usage checks use bounded tail
-reads. Full transcript scans go through the async transcript index, which is
-cached by file path plus `mtimeMs`/`size` and shared across concurrent readers.
-
----
+Gateway history readers avoid materializing the whole transcript unless the surface needs arbitrary historical access. First-page history, embedded chat history, restart recovery, and token/usage checks use bounded tail reads from SQLite. Full transcript scans go through the async transcript index and are shared across concurrent readers.
 
 ## On-disk locations
 
-Per agent, on the Gateway host:
+Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 
-- Store: `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- Transcripts: `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
-  - Telegram topic sessions: `.../<sessionId>-topic-<threadId>.jsonl`
-
-OpenClaw resolves these via `src/config/sessions.ts`.
-
----
+- Runtime session row store: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Runtime transcript rows: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Legacy/archive transcript artifacts: `~/.openclaw/agents/<agentId>/sessions/`
+- Legacy row migration input: `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 
 ## Store maintenance and disk controls
 
-Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json`, transcript artifacts, and trajectory sidecars:
+`session.maintenance` controls automatic maintenance for SQLite session rows, SQLite transcript rows, archive artifacts, and trajectory sidecars:
 
-- `mode`: `enforce` (default) or `warn`
-- `pruneAfter`: stale-entry age cutoff (default `30d`)
-- `maxEntries`: cap entries in `sessions.json` (default `500`)
-- Short-lived gateway model-run probe retention is fixed at `24h`, but it is pressure-gated: it only removes stale strict probe rows when session-entry maintenance/cap pressure is reached. This applies only to strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` and runs before global stale-entry cleanup/capping when it runs.
-- `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
-- `maxDiskBytes`: optional sessions-directory budget
-- `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
+| Key                     | Default               | Notes                                                                                       |
+| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
+| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
+| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
+| `maxEntries`            | `500`                 | cap on session entries                                                                      |
+| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
+| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false` disables                                            |
+| `highWaterBytes`        | 80% of `maxDiskBytes` | target after budget cleanup                                                                 |
 
-Normal Gateway writes flow through a per-store session writer that serializes in-process mutations without taking a runtime file lock. Hot-path patch helpers borrow the validated mutable cache while they hold that writer slot, so large `sessions.json` files are not cloned or reread for every metadata update. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`; direct whole-store saves are compatibility and offline-maintenance tools. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue; `--store <path>` is the explicit offline repair path for direct file maintenance. `maxEntries` cleanup is still batched for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not prune or cap entries during Gateway startup; use writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately and prunes old unreferenced transcript, checkpoint, and trajectory artifacts even when no disk budget is configured.
+Reset advances the live `sessionKey -> sessionId` mapping but keeps the previous SQLite session, transcript, trajectory, and search rows. That history remains searchable under the same session key; ordinary entry and session lists show only the new live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it writes and verifies a compressed transcript archive (`*.jsonl.deleted.<timestamp>.zst` when zstd is available) before removing the deleted session's rows.
 
-Maintenance keeps durable external conversation pointers such as group sessions
-and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
-heartbeat, ACP, and sub-agents can still be removed when they exceed the
-configured age, count, or disk budget. Gateway model-run probe sessions use the
-separate `24h` model-run retention only when their key exactly matches
-`agent:*:explicit:model-run-<uuid>`; other explicit sessions are not part of
-that retention. The model-run cleanup is applied only under session-entry cap
-pressure. Isolated cron runs keep their own `cron.sessionRetention` control,
-independent of model-run probe retention.
+`maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total.
 
-OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
+Gateway model-run probe sessions (keys matching `agent:*:explicit:model-run-<uuid>`) get a separate, fixed `24h` retention. This pruning is pressure-gated: it only runs when session-entry maintenance/cap pressure is reached, and only before the global stale-entry cleanup/cap step. Other explicit sessions do not use this retention.
 
-Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
-`session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
-ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
-longer on slow machines. `session.writeLock.staleMs` controls when an existing lock can be
-reclaimed as stale; the default is `1800000` ms. `session.writeLock.maxHoldMs` controls the
-in-process watchdog release threshold; the default is `300000` ms. Emergency env overrides are
-`OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`, `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`, and
-`OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`.
+When combined physical usage exceeds `maxDiskBytes`, `mode: "enforce"` first reclaims checkpointable database space, then removes the oldest retained reset/delete archives. If usage is still above `highWaterBytes`, it walks historical SQLite sessions by `sessions.updated_at`, oldest first. Historical means the session id is not referenced by a live session entry, a route target, or an admitted/in-flight run. For each victim, cleanup writes, fsyncs, and reads back the compressed archive before a write transaction removes the session row and its transcript, trajectory, active, index, and FTS projections. This includes sessions that contain trajectory events but no transcript events. Cleanup rechecks route, entry, and admission references at deletion time, remeasures physical usage after each archive or session victim, and stops at `highWaterBytes`.
 
-Enforcement order for disk budget cleanup (`mode: "enforce"`):
-
-1. Remove oldest archived, orphan transcript, or orphan trajectory artifacts first.
-2. If still above the target, evict oldest session entries and their transcript/trajectory files.
-3. Keep going until usage is at or below `highWaterBytes`.
-
-In `mode: "warn"`, OpenClaw reports potential evictions but does not mutate the store/files.
+Committed writes and deletion first land in the WAL. Cleanup checkpoints it so the WAL can shrink immediately, then uses incremental vacuum to return eligible free tail pages from the main file; pages that are not yet reclaimable stay in the main file and therefore remain counted on the next physical measurement. `mode: "warn"` reports the current physical overage without checkpointing, writing an archive, or deleting rows.
 
 Run maintenance on demand:
 
@@ -124,358 +70,241 @@ openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --enforce
 ```
 
----
+Maintenance keeps durable external conversation pointers such as group sessions and thread-scoped chat sessions, but synthetic runtime entries (cron, hooks, heartbeat, ACP, sub-agents) can still be removed once they exceed the configured age, count, or disk budget. Isolated cron runs use a separate `cron.sessionRetention` control, independent of model-run probe retention.
+
+Normal Gateway writes flow through the session accessor, which serializes per-agent SQLite mutations through the runtime writer path. Runtime code should prefer the accessor helpers in `src/config/sessions/session-accessor.ts`; legacy `sessions.json` helpers are migration and offline-maintenance tools. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue; `--store <path>` is the explicit offline repair path for a selected legacy store and always stays local (as does `--dry-run`). `maxEntries` cleanup is batched for production-sized stores, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it down. Reads never prune or cap entries during Gateway startup - only writes or `openclaw sessions cleanup --enforce` do, and the latter also applies the cap immediately and prunes old unreferenced legacy transcript, checkpoint, and trajectory artifacts even with no disk budget configured.
+
+OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The current schema rejects the legacy `session.maintenance.rotateBytes` key, and `openclaw doctor --fix` removes it from older configs.
+
+Transcript mutations use the session write queue for the SQLite transcript target:
+
+Session write locks use fixed production defaults. The corresponding
+`OPENCLAW_SESSION_WRITE_LOCK_*` environment variables remain available for
+process-level diagnostics and emergency overrides.
+
+### Downgrading After The SQLite Flip
+
+Restore archived legacy transcript artifacts before running an older
+file-backed OpenClaw version:
+
+```bash
+openclaw doctor --session-sqlite restore --session-sqlite-all-agents
+```
+
+The migration leaves legacy `sessions.json` files in place for support and
+rollback, but hot transcript JSONL files that were imported into SQLite are
+renamed into `session-sqlite-import-archive/`. Older file-backed runtimes follow
+the `sessionFile` paths in `sessions.json`, so they need those artifacts restored
+before startup. Restore uses migration manifests, moves only recorded archived
+artifacts whose original paths are missing, and leaves the SQLite database in
+place for forward recovery.
+
+Sessions created after the SQLite flip are SQLite-only and will not appear to an
+older file-backed runtime. If you re-upgrade after a downgrade, run the Doctor
+inspection and validation sequence again so OpenClaw can verify restored legacy
+artifacts before importing.
 
 ## Cron sessions and run logs
 
-Isolated cron runs also create session entries/transcripts, and they have dedicated retention controls:
+Isolated cron runs create their own session entries/transcripts with dedicated retention:
 
-- `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
-- `cron.runLog.keepLines` prunes retained SQLite run-history rows per cron job (default: `2000`). `cron.runLog.maxBytes` remains accepted for older file-backed run logs.
+- `cron.sessionRetention` (default `"24h"`) prunes old isolated cron run sessions from the store; `false` disables.
+- Run history keeps the newest 2000 terminal rows per cron job. Lost rows retain their 24-hour cleanup window.
 
-When cron force-creates a new isolated run session, it sanitizes the previous
-`cron:<jobId>` session entry before writing the new row. It carries safe
-preferences such as thinking/fast/verbose settings, labels, and explicit
-user-selected model/auth overrides. It drops ambient conversation context such
-as channel/group routing, send or queue policy, elevation, origin, and ACP
-runtime binding so a fresh isolated run cannot inherit stale delivery or
-runtime authority from an older run.
-
----
+When cron force-creates a new isolated run session, it sanitizes the previous `cron:<jobId>` session entry before writing the new row: it carries safe preferences (thinking/fast/verbose/reasoning settings, labels, display name) and explicit user-selected model/auth overrides, but drops ambient conversation context (channel/group routing, send/queue policy, elevation, origin, ACP runtime binding) so a fresh isolated run cannot inherit stale delivery or runtime authority from an older run.
 
 ## Session keys (`sessionKey`)
 
-A `sessionKey` identifies _which conversation bucket_ you're in (routing + isolation).
+A `sessionKey` identifies which conversation bucket you are in (routing + isolation). Canonical rules: [/concepts/session](/concepts/session).
 
-Common patterns:
-
-- Main/direct chat (per agent): `agent:<agentId>:<mainKey>` (default `main`)
-- Group: `agent:<agentId>:<channel>:group:<id>`
-- Room/channel (Discord/Slack): `agent:<agentId>:<channel>:channel:<id>` or `...:room:<id>`
-- Cron: `cron:<job.id>`
-- Webhook: `hook:<uuid>` (unless overridden)
-
-The canonical rules are documented at [/concepts/session](/concepts/session).
-
----
+| Pattern                      | Example                                                     |
+| ---------------------------- | ----------------------------------------------------------- |
+| Main/direct chat (per agent) | `agent:<agentId>:<mainKey>` (default `main`)                |
+| Group                        | `agent:<agentId>:<channel>:group:<id>`                      |
+| Room/channel (Discord/Slack) | `agent:<agentId>:<channel>:channel:<id>` or `...:room:<id>` |
+| Cron                         | `cron:<job.id>`                                             |
+| Webhook                      | `hook:<uuid>` (unless overridden)                           |
 
 ## Session ids (`sessionId`)
 
-Each `sessionKey` points at a current `sessionId` (the transcript file that continues the conversation).
-
-Rules of thumb:
+Each `sessionKey` points at a current `sessionId` (the SQLite transcript identity that continues the conversation). Decision logic lives in `initSessionState()` in `src/auto-reply/reply/session.ts`.
 
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
-- **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
-- **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
-- **Control UI reconnect resume** can preserve the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. Ordinary stale sends still create a new `sessionId`.
-- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
-- **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
+- **No automatic reset** is the default. The current `sessionId` continues while compaction keeps the active model context bounded.
+- **Daily reset** (`session.reset.mode: "daily"`) creates a new `sessionId` on the next message after the configured local-hour boundary (`session.reset.atHour`, default `4`).
+- **Idle expiry** (`session.reset.mode: "idle"` with `session.reset.idleMinutes`, or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. If daily and idle are both configured, whichever expires first wins.
+- **Control UI reconnect resume** preserves the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. This is a one-shot signal; ordinary stale sends still create a new `sessionId`.
+- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
+- **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large (over a fixed internal cap, currently 100K tokens), OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. Sizing is automatic and not configurable; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
+- **Operator forks**: `sessions.create { parentSessionKey, fork: true }` creates a new session whose transcript branches from the parent's current state (same fork machinery as subagent spawns, including the size cap above). The fork is refused while the parent has an active run, inherits the parent's model selection unless one is passed explicitly, and marks the child `forkedFromParent` with fresh token counters.
 
-Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
+## Session store schema
 
----
+The runtime store keeps `SessionEntry` values in per-agent SQLite. The value type is `SessionEntry` in `src/config/sessions.ts`. Key fields (not exhaustive):
 
-## Session store schema (`sessions.json`)
+- `sessionId`: current transcript id used to address SQLite transcript rows
+- `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset freshness uses this. Legacy rows may derive it from the JSONL session header.
+- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset freshness uses this so heartbeat, cron, and exec events do not keep sessions alive. Legacy rows without this field fall back to the recovered session start time.
+- `updatedAt`: last store-row mutation timestamp, used for listing/pruning/bookkeeping - not the daily/idle freshness authority.
+- `archivedAt`: optional archive timestamp. Archived sessions stay in the store with their transcript intact and are excluded from normal active listings.
+- `pinnedAt`: optional pin timestamp. Active pinned sessions sort ahead of unpinned sessions; archiving a session clears its pin.
+- Codex thread interop: both fields follow the Codex thread-management shape - the `archived`/`pinned` booleans on the wire are always derived from the timestamp and stamped server-side, matching Codex `threads.archived_at` semantics and camelCase serialization. OpenClaw timestamps are epoch milliseconds while Codex uses epoch seconds, so bridges convert at the `codex` plugin seam. Codex has no pin API yet (`thread/archive`/`thread/unarchive` only); pinned state stays OpenClaw-side until one exists, at which point the matching shape lets bound sessions round-trip pin state mechanically.
+- Codex supervision lists only non-archived native threads. A Gateway-local `idle` or `notLoaded` activity-unknown thread can be archived through native `thread/archive` only after the operator explicitly confirms that no other Codex process owns it; the plugin performs a fresh process-local status read first, and the thread then disappears from the catalog. That read cannot prove that another App Server process is not using the thread. OpenClaw refuses to archive active and error rows, and paired-node archive is unavailable until the node bridge can own the full streamed thread lifecycle. Unarchiving in a native Codex client makes the thread eligible to appear again.
+- `lastReadAt` / `markedUnreadAt`: read-state timestamps stamped server-side by `sessions.patch { unread }` - `unread: false` records a read (sets `lastReadAt`, clears `markedUnreadAt`); `unread: true` marks the session unread until the next read. Session rows expose a derived `unread` boolean: explicitly marked unread, or read before the latest activity. Sessions never marked read stay `unread: false`, so existing installs do not light up on upgrade.
+- `lastActivityAt`: timestamp of the last completed agent run that counts as unread-worthy activity (user, channel, and cron runs). Heartbeat and internal-event turns, plus metadata patches, do not update it; `updatedAt` is not an activity signal.
+- `sessionFile`: legacy marker retained for migration/archive compatibility; active runtime uses SQLite identity
+- `chatType`: `direct | group | room`
+- `provider`, `subject`, `room`, `space`, `displayName`: group/channel labeling metadata
+- Toggles: `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`, `sendPolicy` (per-session override)
+- Model selection: `providerOverride`, `modelOverride`, `authProfileOverride`
+- Token counters (best-effort/provider-dependent): `inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`
+- `compactionCount`: how many times auto-compaction completed for this session key
+- `memoryFlushAt` / `memoryFlushCompactionCount`: timestamp and compaction count of the last pre-compaction memory flush
 
-The store's value type is `SessionEntry` in `src/config/sessions.ts`.
+The Gateway is the authority: it may rewrite or rehydrate entries as sessions
+run. For legacy file-backed installs, migrate with
+`openclaw doctor --session-sqlite import --session-sqlite-all-agents` instead of
+editing `sessions.json` and expecting runtime to keep reading that file.
 
-Key fields (not exhaustive):
+## Transcript event structure
 
-- `sessionId`: current transcript id (filename is derived from this unless `sessionFile` is set)
-- `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
-  freshness uses this. Legacy rows may derive it from the JSONL session header.
-- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
-  freshness uses this so heartbeat, cron, and exec events do not keep sessions
-  alive. Legacy rows without this field fall back to the recovered session start
-  time for idle freshness.
-- `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
-  bookkeeping. It is not the authority for daily/idle reset freshness.
-- `sessionFile`: optional explicit transcript path override
-- `chatType`: `direct | group | room` (helps UIs and send policy)
-- `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling
-- Toggles:
-  - `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`
-  - `sendPolicy` (per-session override)
-- Model selection:
-  - `providerOverride`, `modelOverride`, `authProfileOverride`
-- Token counters (best-effort / provider-dependent):
-  - `inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`
-- `compactionCount`: how often auto-compaction completed for this session key
-- `memoryFlushAt`: timestamp for the last pre-compaction memory flush
-- `memoryFlushCompactionCount`: compaction count when the last flush ran
+Transcripts are managed by the OpenClaw session accessor and exposed to runtime code through identity-based helpers. The event stream is append-only:
 
-The store is safe to edit, but the Gateway is the authority: it may rewrite or rehydrate entries as sessions run.
-
----
-
-## Transcript structure (`*.jsonl`)
-
-Transcripts are managed by `openclaw/plugin-sdk/agent-sessions`'s `SessionManager`.
-
-The file is JSONL:
-
-- First line: session header (`type: "session"`, includes `id`, `cwd`, `timestamp`, optional `parentSession`)
-- Then: session entries with `id` + `parentId` (tree)
+- First entry: session header - `type: "session"`, `id`, `cwd`, `timestamp`, optional `parentSession`.
+- Then: entries with `id` + `parentId` (tree structure).
 
 Notable entry types:
 
 - `message`: user/assistant/toolResult messages
-- `custom_message`: extension-injected messages that _do_ enter model context (can be hidden from UI)
-- `custom`: extension state that does _not_ enter model context
+- `custom_message`: extension-injected message that _does_ enter model context (rendered in the TUI when `display: true`, hidden entirely when `display: false`)
+- `custom`: extension state that does _not_ enter model context (for persisting extension state across reloads)
 - `compaction`: persisted compaction summary with `firstKeptEntryId` and `tokensBefore`
 - `branch_summary`: persisted summary when navigating a tree branch
 
-OpenClaw intentionally does **not** "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
-
----
+OpenClaw intentionally does not "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
 
 ## Context windows vs tracked tokens
 
-Two different concepts matter:
+Two different concepts:
 
-1. **Model context window**: hard cap per model (tokens visible to the model)
-2. **Session store counters**: rolling stats written into `sessions.json` (used for /status and dashboards)
+1. **Model context window**: hard cap per model (tokens visible to the model). Comes from the model catalog and can be overridden via config.
+2. **Session store counters**: rolling stats written into the session row (used for `/status` and dashboards). `contextTokens` is a runtime estimate/reporting value - do not treat it as a strict guarantee.
 
-If you're tuning limits:
-
-- The context window comes from the model catalog (and can be overridden via config).
-- `contextTokens` in the store is a runtime estimate/reporting value; don't treat it as a strict guarantee.
-
-For more, see [/token-use](/reference/token-use).
-
----
+More on limits: [/reference/token-use](/reference/token-use).
 
 ## Compaction: what it is
 
-Compaction summarizes older conversation into a persisted `compaction` entry in the transcript and keeps recent messages intact.
+Compaction summarizes older conversation into a persisted `compaction` entry in the transcript and keeps recent messages intact. After compaction, future turns see the compaction summary plus messages after `firstKeptEntryId`. Compaction is **persistent**, unlike session pruning - see [/concepts/session-pruning](/concepts/session-pruning).
 
-After compaction, future turns see:
+Embedded OpenClaw compaction inherits the session thinking level by default. Set `agents.defaults.compaction.thinkingLevel` to use a separate level for summary calls; the runtime clamps it to each concrete compaction model or fallback. Native Codex app-server compaction owns its compact request and cannot accept a per-compaction thinking override, so OpenClaw warns and leaves that setting to Codex.
 
-- The compaction summary
-- Messages after `firstKeptEntryId`
+AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
-AGENTS.md section reinjection after compaction is opt-in via
-`agents.defaults.compaction.postCompactionSections`; when unset or `[]`,
-OpenClaw does not append AGENTS.md excerpts on top of the compaction summary.
+### Chunk boundaries and tool pairing
 
-Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
+When splitting a long transcript into compaction chunks, OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries:
 
-## Compaction chunk boundaries and tool pairing
-
-When OpenClaw splits a long transcript into compaction chunks, it keeps
-assistant tool calls paired with their matching `toolResult` entries.
-
-- If the token-share split lands between a tool call and its result, OpenClaw
-  shifts the boundary to the assistant tool-call message instead of separating
-  the pair.
-- If a trailing tool-result block would otherwise push the chunk over target,
-  OpenClaw preserves that pending tool block and keeps the unsummarized tail
-  intact.
+- If the token-share split would land between a tool call and its result, OpenClaw shifts the boundary to the assistant tool-call message instead of separating the pair.
+- If a trailing tool-result block would otherwise push the chunk over target, OpenClaw preserves that pending tool block and keeps the unsummarized tail intact.
 - Aborted/error tool-call blocks do not hold a pending split open.
 
----
+## When auto-compaction happens
 
-## When auto-compaction happens (OpenClaw runtime)
+Two triggers in the embedded OpenClaw agent:
 
-In the embedded OpenClaw agent, auto-compaction triggers in two cases:
+1. **Overflow recovery**: the model returns a context-overflow error (`request_too_large`, `context length exceeded`, `input exceeds the maximum number of tokens`, `input token count exceeds the maximum number of input tokens`, `input is too long for the model`, `ollama error: context length exceeded`, and other provider-shaped variants) - compact, then retry. When the provider reports the attempted token count, OpenClaw forwards that observed count into overflow-recovery compaction; if the provider confirms overflow but exposes no parseable count, OpenClaw passes a minimally over-budget synthetic count to compaction engines and diagnostics. If overflow recovery still fails, OpenClaw surfaces explicit guidance and preserves the current session mapping instead of silently rotating to a fresh session id - retry the message, run `/compact`, or run `/new`.
+2. **Threshold maintenance**: after a successful turn, when the current context exceeds the model window minus OpenClaw's built-in headroom for prompts and the next model output.
 
-1. **Overflow recovery**: the model returns a context overflow error
-   (`request_too_large`, `context length exceeded`, `input exceeds the maximum
-number of tokens`, `input token count exceeds the maximum number of input
-tokens`, `input is too long for the model`, `ollama error: context length
-exceeded`, and similar provider-shaped variants) → compact → retry.
-   When the provider reports the attempted token count, OpenClaw forwards that
-   observed count into overflow recovery compaction. If the provider confirms
-   overflow but does not expose a parseable count, OpenClaw passes a minimally
-   over-budget synthetic count to compaction engines and diagnostics.
-   If overflow recovery still fails, OpenClaw surfaces explicit guidance to the
-   user and preserves the current session mapping instead of silently rotating
-   the session key to a fresh session id. The next step is operator-controlled:
-   retry the message, run `/compact`, or run `/new` when a fresh session is
-   preferred.
-2. **Threshold maintenance**: after a successful turn, when:
+Two additional guards run outside these two triggers:
 
-`contextTokens > contextWindow - reserveTokens`
+- **Preflight local compaction**: set `agents.defaults.compaction.maxActiveTranscriptBytes` (bytes or a string like `"20mb"`) to trigger local compaction before opening the next run once the active transcript reaches that size. This is a size guard for local reopen cost, not raw archival - normal semantic compaction still runs, and it requires `truncateAfterCompaction` so the compacted summary becomes a new successor transcript.
+- **Mid-turn precheck**: set `agents.defaults.compaction.midTurnPrecheck.enabled: true` (default `false`) to add a tool-loop guard. After a tool result is appended and before the next model call, OpenClaw estimates prompt pressure using the same preflight budget logic used at turn start. If context no longer fits, the guard does not compact inline - it raises a structured mid-turn precheck signal, stops the current prompt submission, and lets the outer run loop use the existing recovery path (truncate oversized tool results when that is enough, or trigger the configured compaction mode and retry). Works with both `default` and `safeguard` compaction modes, including provider-backed safeguard compaction. Independent of `maxActiveTranscriptBytes`: the byte-size guard runs before a turn opens, mid-turn precheck runs later, after new tool results are appended.
 
-Where:
-
-- `contextWindow` is the model's context window
-- `reserveTokens` is headroom reserved for prompts + the next model output
-
-These are OpenClaw runtime semantics.
-
-OpenClaw can also trigger a preflight local compaction before opening the next
-run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
-active transcript file reaches that size. This is a file-size guard for local
-reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
-and it requires `truncateAfterCompaction` so the compacted summary can become a
-new successor transcript.
-
-For embedded OpenClaw runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
-adds an opt-in tool-loop guard. After a tool result is appended and before the
-next model call, OpenClaw estimates the prompt pressure using the same preflight
-budget logic used at turn start. If the context no longer fits, the guard does
-not compact inside OpenClaw runtime's `transformContext` hook. It raises a structured
-mid-turn precheck signal, stops the current prompt submission, and lets the
-outer run loop use the existing recovery path: truncate oversized tool results
-when that is enough, or trigger the configured compaction mode and retry. The
-option is disabled by default and works with both `default` and `safeguard`
-compaction modes, including provider-backed safeguard compaction.
-This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
-before a turn opens, while mid-turn precheck runs later in the embedded OpenClaw tool
-loop after new tool results have been appended.
-
----
-
-## Compaction settings (`reserveTokens`, `keepRecentTokens`)
-
-OpenClaw runtime's compaction settings live in agent settings:
+## Compaction settings
 
 ```json5
 {
-  compaction: {
-    enabled: true,
-    reserveTokens: 16384,
-    keepRecentTokens: 20000,
+  agents: {
+    defaults: {
+      compaction: {
+        enabled: true,
+        keepRecentTokens: 20000,
+      },
+    },
   },
 }
 ```
 
-OpenClaw also enforces a safety floor for embedded runs:
+OpenClaw enforces a built-in reserve for embedded runs and caps it against the active model context window so it cannot consume the whole prompt budget. This keeps small-context local models from entering compaction from the first token while leaving enough headroom for multi-turn housekeeping such as the memory flush.
 
-- If `compaction.reserveTokens < reserveTokensFloor`, OpenClaw bumps it.
-- Default floor is `20000` tokens.
-- Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
-- If it's already higher, OpenClaw leaves it alone.
-- Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
-  and keeps OpenClaw runtime's recent-tail cut point. Without an explicit keep budget,
-  manual compaction remains a hard checkpoint and rebuilt context starts from
-  the new summary.
-- Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
-  optional tool-loop precheck after new tool results and before the next model
-  call. This is a trigger only; summary generation still uses the configured
-  compaction path. It is independent of `maxActiveTranscriptBytes`, which is a
-  turn-start active-transcript byte-size guard.
-- Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
-  string such as `"20mb"` to run local compaction before a turn when the active
-  transcript gets large. This guard is active only when
-  `truncateAfterCompaction` is also enabled. Leave it unset or set `0` to
-  disable.
-- When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
-  OpenClaw rotates the active transcript to a compacted successor JSONL after
-  compaction. Branch/restore checkpoint actions use that compacted successor;
-  legacy pre-compaction checkpoint files remain readable while referenced.
+Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens` and keeps the runtime's recent-tail cut point. Without an explicit keep budget, manual compaction is a hard checkpoint and rebuilt context starts from the new summary.
 
-Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
-
-Implementation: `applyAgentCompactionSettingsFromConfig()` in `src/agents/agent-settings.ts`
-(called from embedded-runner turn and compaction setup paths).
-
----
+When `truncateAfterCompaction` is enabled, OpenClaw rotates the active transcript to a compacted successor after compaction. Branch/restore checkpoint actions use that compacted successor; legacy pre-compaction checkpoint files remain readable while referenced.
 
 ## Pluggable compaction providers
 
-Plugins can register a compaction provider via `registerCompactionProvider()` on the plugin API. When `agents.defaults.compaction.provider` is set to a registered provider id, the safeguard extension delegates summarization to that provider instead of the built-in `summarizeInStages` pipeline.
+Plugins register a compaction provider via `registerCompactionProvider()` on the plugin API. When `agents.defaults.compaction.provider` is set to a registered provider id, the safeguard extension delegates summarization to that provider instead of the built-in `summarizeInStages` pipeline.
 
-- `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization.
-- Setting a `provider` forces `mode: "safeguard"`.
-- Providers receive the same compaction instructions and identifier-preservation policy as the built-in path.
-- The safeguard still preserves recent-turn and split-turn suffix context after provider output.
-- Built-in safeguard summarization re-distills prior summaries with new messages
-  instead of preserving the full previous summary verbatim.
-- Safeguard mode enables summary quality audits by default; set
-  `qualityGuard.enabled: false` to skip retry-on-malformed-output behavior.
-- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
-- Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
+- `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization. Setting a `provider` forces `mode: "safeguard"`.
+- Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and the safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- Built-in safeguard summarization re-distills prior summaries with new messages instead of preserving the full previous summary verbatim.
+- Safeguard mode enables summary quality audits by default; set `qualityGuard.enabled: false` to skip retry-on-malformed-output behavior.
+- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
 
 Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.
 
----
-
 ## User-visible surfaces
 
-You can observe compaction and session state via:
-
-- `/status` (in any chat session)
+- `/status` in any chat session
 - `openclaw status` (CLI)
-- `openclaw sessions` / `sessions --json`
+- `openclaw sessions` / `openclaw sessions --json`
 - Gateway logs (`pnpm gateway:watch` or `openclaw logs --follow`): `embedded run auto-compaction start` + `complete`
-- Verbose mode: `🧹 Auto-compaction complete` + compaction count
-
----
+- Verbose mode: `🧹 Auto-compaction complete` plus the compaction count
 
 ## Silent housekeeping (`NO_REPLY`)
 
 OpenClaw supports "silent" turns for background tasks where the user should not see intermediate output.
 
-Convention:
+- The assistant starts its output with the exact silent token `NO_REPLY` / `no_reply` to mean "do not deliver a reply to the user." OpenClaw strips/suppresses this in the delivery layer.
+- Exact silent-token suppression is case-insensitive: `NO_REPLY` and `no_reply` both count when the whole payload is just the silent token.
+- As of `2026.1.10`, OpenClaw also suppresses draft/typing streaming when a partial chunk begins with `NO_REPLY`, so silent operations do not leak partial output mid-turn.
+- This is for true background/no-delivery turns only - it is not a shortcut for ordinary actionable user requests.
 
-- The assistant starts its output with the exact silent token `NO_REPLY` /
-  `no_reply` to indicate "do not deliver a reply to the user".
-- OpenClaw strips/suppresses this in the delivery layer.
-- Exact silent-token suppression is case-insensitive, so `NO_REPLY` and
-  `no_reply` both count when the whole payload is just the silent token.
-- This is for true background/no-delivery turns only; it is not a shortcut for
-  ordinary actionable user requests.
+## Pre-compaction memory flush
 
-As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a
-partial chunk begins with `NO_REPLY`, so silent operations don't leak partial
-output mid-turn.
+Before auto-compaction happens, OpenClaw can run a silent agentic turn that writes durable state to disk (for example `memory/YYYY-MM-DD.md` in the agent workspace) so compaction cannot erase critical context. It monitors session context usage, and once it crosses a soft threshold below the compaction threshold, it sends a silent "write memory now" directive using the exact silent token `NO_REPLY` / `no_reply` so the user sees nothing.
 
----
+Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agentsdefaultscompaction):
 
-## Pre-compaction "memory flush" (implemented)
-
-Goal: before auto-compaction happens, run a silent agentic turn that writes durable
-state to disk (e.g. `memory/YYYY-MM-DD.md` in the agent workspace) so compaction can't
-erase critical context.
-
-OpenClaw uses the **pre-threshold flush** approach:
-
-1. Monitor session context usage.
-2. When it crosses a "soft threshold" (below OpenClaw runtime's compaction threshold), run a silent
-   "write memory now" directive to the agent.
-3. Use the exact silent token `NO_REPLY` / `no_reply` so the user sees
-   nothing.
-
-Config (`agents.defaults.compaction.memoryFlush`):
-
-- `enabled` (default: `true`)
-- `model` (optional exact provider/model override for the flush turn, for example `ollama/qwen3:8b`)
-- `softThresholdTokens` (default: `4000`)
-- `prompt` (user message for the flush turn)
-- `systemPrompt` (extra system prompt appended for the flush turn)
+| Key                         | Default          | Notes                                                                                                                                  |
+| --------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                   | `true`           |                                                                                                                                        |
+| `model`                     | unset            | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                   |
+| `softThresholdTokens`       | `4000`           | gap below the compaction threshold that triggers a flush                                                                               |
+| `forceFlushTranscriptBytes` | unset (disabled) | force a flush once the transcript file reaches this byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
 
 Notes:
 
-- The default prompt/system prompt include a `NO_REPLY` hint to suppress
-  delivery.
-- When `model` is set, the flush turn uses that model without inheriting the
-  active session fallback chain, so local-only housekeeping does not silently
-  fall back to a paid conversation model.
-- The flush runs once per compaction cycle (tracked in `sessions.json`).
-- The flush runs only for embedded OpenClaw sessions (CLI backends skip it).
+- The built-in prompt and system prompt include a `NO_REPLY` hint to suppress delivery.
+- When `model` is set, the flush turn uses that model without inheriting the active session's fallback chain, so local-only housekeeping does not silently fall back to a paid conversation model on failure.
+- The flush runs once per compaction cycle (tracked in the session row).
+- The flush runs only for embedded OpenClaw sessions; CLI backends and heartbeat turns skip it.
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
-OpenClaw also exposes a `session_before_compact` hook in the extension API, but OpenClaw's
-flush logic lives on the Gateway side today.
-
----
+OpenClaw exposes a `session_before_compact` hook in the extension API, but the flush logic above lives on the Gateway side (`src/auto-reply/reply/memory-flush.ts`, `src/auto-reply/reply/agent-runner-memory.ts`), not on that hook.
 
 ## Troubleshooting checklist
 
-- Session key wrong? Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
-- Store vs transcript mismatch? Confirm the Gateway host and the store path from `openclaw status`.
-- Compaction spam? Check:
-  - model context window (too small)
-  - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
-  - tool-result bloat: enable/tune session pruning
-- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you're on a build that includes the streaming suppression fix.
+- **Session key wrong?** Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
+- **Store vs transcript mismatch?** Confirm the Gateway host and the store path from `openclaw status`.
+- **Compaction spam?** Check the model's context window (too small forces frequent compaction) and tool-result bloat (tune session pruning).
+- **Every prompt seems to overflow on a small local model?** Confirm the provider reports the correct model context window. OpenClaw can cap the effective reserve only when that window is known.
+- **Silent turns leaking?** Confirm the reply starts with the exact silent token `NO_REPLY` (case-insensitive) and you are on a build that includes the streaming-suppression fix (`2026.1.10`+).
 
 ## Related
 
 - [Session management](/concepts/session)
 - [Session pruning](/concepts/session-pruning)
 - [Context engine](/concepts/context-engine)
+- [Agent config reference](/gateway/config-agents)

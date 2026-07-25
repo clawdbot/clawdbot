@@ -1,21 +1,22 @@
 // Msteams plugin module implements monitor handler behavior.
-import {
-  isRecord,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { formatUnknownError } from "./errors.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
+import type { MSTeamsIngressDispatchResult, MSTeamsIngressLifecycle } from "./msteams-ingress.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
-export type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
-import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 
 export type MSTeamsActivityHandler = {
   onMessage: (
-    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+    handler: (
+      context: unknown,
+      next: () => Promise<void>,
+      turnAdoptionLifecycle?: MSTeamsIngressLifecycle,
+    ) => Promise<MSTeamsIngressDispatchResult | void>,
   ) => MSTeamsActivityHandler;
   onMembersAdded: (
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
@@ -26,50 +27,11 @@ export type MSTeamsActivityHandler = {
   onReactionsRemoved: (
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
-  run?: (context: unknown) => Promise<void>;
+  run?: (
+    context: unknown,
+    turnAdoptionLifecycle?: MSTeamsIngressLifecycle,
+  ) => Promise<MSTeamsIngressDispatchResult | void>;
 };
-
-function extractAdaptiveCardSubmittedData(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  const action = isRecord(value.action) ? value.action : undefined;
-  if (action && normalizeOptionalLowercaseString(action.type) === "action.submit" && "data" in action) {
-    return action.data;
-  }
-  return value;
-}
-
-function readMSTeamsImBackValue(value: unknown): string | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const msteams = isRecord(value.msteams) ? value.msteams : undefined;
-  if (!msteams || normalizeOptionalLowercaseString(msteams.type) !== "imback") {
-    return null;
-  }
-  return normalizeOptionalString(msteams.value) ?? null;
-}
-
-function serializeAdaptiveCardActionValue(value: unknown): string | null {
-  const submittedValue = extractAdaptiveCardSubmittedData(value);
-  if (typeof submittedValue === "string") {
-    const trimmed = submittedValue.trim();
-    return trimmed ? trimmed : null;
-  }
-  const imBackValue = readMSTeamsImBackValue(submittedValue);
-  if (imBackValue) {
-    return imBackValue;
-  }
-  if (submittedValue == null) {
-    return null;
-  }
-  try {
-    return JSON.stringify(submittedValue);
-  } catch {
-    return null;
-  }
-}
 
 async function isInvokeAuthorized(params: {
   context: MSTeamsTurnContext;
@@ -185,37 +147,53 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   // Wrap the original run method to intercept invokes
   const originalRun = handler.run;
   if (originalRun) {
-    handler.run = async (context: unknown) => {
+    handler.run = async (context: unknown, turnAdoptionLifecycle?: MSTeamsIngressLifecycle) => {
       const ctx = context as MSTeamsTurnContext;
       // Non-poll adaptiveCard/action invokes get dispatched here as text so the
       // agent can react. Poll votes are intercepted in monitor.ts's
       // app.on("card.action") handler which returns the InvokeResponse to Teams.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
-        const text = serializeAdaptiveCardActionValue(ctx.activity?.value);
+        const text = serializeMSTeamsAdaptiveCardActionValue(ctx.activity?.value);
         if (text) {
-          await handleTeamsMessage({
-            ...ctx,
-            activity: {
-              ...ctx.activity,
-              type: "message",
-              text,
+          return await handleTeamsMessage(
+            {
+              ...ctx,
+              activity: {
+                ...ctx.activity,
+                type: "message",
+                text,
+              },
             },
-          });
+            turnAdoptionLifecycle,
+          );
         }
         return;
       }
 
-      return originalRun.call(handler, context);
+      return originalRun.call(handler, context, turnAdoptionLifecycle);
     };
   }
 
-  handler.onMessage(async (context, next) => {
+  handler.onMessage(async (context, next, turnAdoptionLifecycle) => {
+    let nextRan = false;
+    const runNext = async () => {
+      nextRan = true;
+      await next();
+    };
     try {
-      await handleTeamsMessage(context as MSTeamsTurnContext);
+      const result = await handleTeamsMessage(context as MSTeamsTurnContext, turnAdoptionLifecycle);
+      await runNext();
+      return result;
     } catch (err) {
+      if (turnAdoptionLifecycle) {
+        throw err;
+      }
       deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
     }
-    await next();
+    if (!nextRan) {
+      await runNext();
+    }
+    return undefined;
   });
 
   handler.onMembersAdded(async (context, next) => {

@@ -20,10 +20,12 @@ import {
 } from "./client/storage.js";
 import type { MatrixAuth, MatrixStoragePaths } from "./client/types.js";
 import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
+} from "./thread-bindings-shared.js";
+import {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
 } from "./thread-bindings.js";
 
 const sendMessageMatrixMock = vi.hoisted(() =>

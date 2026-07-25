@@ -14,6 +14,38 @@
         "api": "openai-completions",
         "models": [
           {
+            "id": "command-a-plus-05-2026",
+            "name": "Command A+",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": false,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "minimal": "high",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
             "id": "command-a-03-2025",
             "name": "Command A",
             "input": ["text"],
@@ -30,12 +62,96 @@
               "supportsUsageInStreaming": false,
               "maxTokensField": "max_tokens"
             }
+          },
+          {
+            "id": "command-a-reasoning-08-2025",
+            "name": "Command A Reasoning",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": false,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "minimal": "high",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "command-a-vision-07-2025",
+            "name": "Command A Vision",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": false,
+              "supportsTools": false,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "north-mini-code-1-0",
+            "name": "North Mini Code 1.0",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 256000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": false,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "reasoningEffortMap": {
+                "off": "none",
+                "none": "none",
+                "minimal": "high",
+                "low": "high",
+                "medium": "high",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
           }
         ]
       }
     },
     "discovery": {
-      "cohere": "static"
+      "cohere": "refreshable"
     }
   },
   "setup": {
@@ -51,6 +167,7 @@
       "provider": "cohere",
       "method": "api-key",
       "choiceId": "cohere-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Cohere API key",
       "groupId": "cohere",
       "groupLabel": "Cohere",

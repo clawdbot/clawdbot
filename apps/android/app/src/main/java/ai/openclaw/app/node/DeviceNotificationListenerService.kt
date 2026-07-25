@@ -4,6 +4,7 @@ import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.allowsPackage
 import ai.openclaw.app.isWithinQuietHours
+import ai.openclaw.app.takeUtf16Safe
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
@@ -27,7 +28,7 @@ private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
 internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
   // Notification extras can include long previews; cap before sending over node events.
-  return normalized.take(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
+  return normalized.takeUtf16Safe(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
 }
 
 /**

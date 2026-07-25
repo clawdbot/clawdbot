@@ -18,6 +18,8 @@ type QaProviderModelParamsInput = {
 
 type QaProviderGatewayModelsInput = {
   providerBaseUrl: string;
+  primaryModel?: string;
+  alternateModel?: string;
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
 };
 

@@ -125,9 +125,7 @@ enum TailscaleServeGatewayDiscovery {
     private static func displayName(hostName: String?, dnsName: String) -> String {
         if let hostName {
             let trimmed = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         return dnsName
             .split(separator: ".")

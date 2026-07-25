@@ -3,6 +3,7 @@
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringArrayParam, readStringParam } from "../../agents/tools/common.js";
@@ -62,10 +63,6 @@ type StructuredAttachmentMode = "selected" | "all";
 
 function readMediaParam(args: Record<string, unknown>, key: string): string | undefined {
   return readStringParam(args, key, { trim: false });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function resolveMediaParamEntry(
@@ -399,7 +396,7 @@ async function hydrateSendBufferMediaParams(params: {
 }
 
 /** Media access policy used when hydrating attachment action parameters. */
-export type AttachmentMediaPolicy =
+type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
       sandboxRoot: string;

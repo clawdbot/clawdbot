@@ -10,25 +10,42 @@ title: "Logging"
 OpenClaw has two main log surfaces:
 
 - **File logs** (JSON lines) written by the Gateway.
-- **Console output** shown in terminals and the Gateway Debug UI.
+- **Console output** in the terminal running the Gateway.
 
 The Control UI **Logs** tab tails the gateway file log. This page explains where
 logs live, how to read them, and how to configure log levels and formats.
 
 ## Where logs live
 
-By default, the Gateway writes a rolling log file under:
+By default, the Gateway writes a rolling log file per day. The default profile
+keeps the historical path:
 
 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
 
-The date uses the gateway host's local timezone.
+Named profiles use a profile-qualified filename in the same directory:
 
-Each file rotates when it reaches `logging.maxFileBytes` (default: 100 MB).
-OpenClaw keeps up to five numbered archives beside the active file, such as
-`openclaw-YYYY-MM-DD.1.log`, and keeps writing to a fresh active log instead of
-suppressing diagnostics.
+`/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`
 
-You can override this in `~/.openclaw/openclaw.json`:
+The filename profile segment is lowercase and limited to letters, numbers, and
+dashes. Simple lowercase names stay readable, so the `--dev` shorthand writes
+`openclaw-dev-YYYY-MM-DD.log`. Case, underscores, and literal dashes use a
+reversible dash escape so distinct profile names never share a log file.
+Oversized values set directly through the environment use a bounded hash suffix
+to stay within filesystem filename limits. An explicit `logging.file` overrides
+these defaults.
+
+The date uses the gateway host's local timezone. When `/tmp/openclaw` is unsafe
+or unavailable (and always on Windows), OpenClaw uses a user-scoped
+`openclaw-<uid>` directory under the OS temp dir instead. Dated log files are
+pruned after 24 hours.
+
+Each file rotates when the next write would exceed `logging.maxFileBytes`
+(default: 100 MB). OpenClaw keeps up to five numbered archives beside the
+active file, such as `openclaw-YYYY-MM-DD.1.log` or
+`openclaw-dev-YYYY-MM-DD.1.log`, and keeps writing to a fresh active log instead
+of suppressing diagnostics.
+
+You can override the path in `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -42,43 +59,58 @@ You can override this in `~/.openclaw/openclaw.json`:
 
 ### CLI: live tail (recommended)
 
-Use the CLI to tail the gateway log file via RPC:
+Tail the gateway log file via RPC:
 
 ```bash
 openclaw logs --follow
+openclaw --dev logs --follow
+openclaw --profile work logs --follow
 ```
 
-Useful current options:
+The root profile selector resolves the same profile-specific file used by the
+Gateway, including CLI fallback reads when local RPC is unavailable.
 
-- `--local-time`: render timestamps in your local timezone
-- `--url <url>` / `--token <token>` / `--timeout <ms>`: standard Gateway RPC flags
-- `--expect-final`: agent-backed RPC final-response wait flag (accepted here via the shared client layer)
+Options:
+
+| Flag                | Default  | Behavior                                                                              |
+| ------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `--follow`          | off      | Keep tailing; reconnects with backoff on disconnect                                   |
+| `--limit <n>`       | `200`    | Max lines per fetch                                                                   |
+| `--max-bytes <n>`   | `250000` | Max bytes to read per fetch                                                           |
+| `--interval <ms>`   | `1000`   | Poll interval while following                                                         |
+| `--json`            | off      | Line-delimited JSON (one event per line)                                              |
+| `--plain`           | off      | Force plain text in TTY sessions                                                      |
+| `--no-color`        | —        | Disable ANSI colors                                                                   |
+| `--utc`             | off      | Render timestamps in UTC (local time is default)                                      |
+| `--local-time`      | off      | Accepted compatibility spelling for the local-time default; no effect beyond it       |
+| `--url` / `--token` | —        | Standard Gateway RPC flags                                                            |
+| `--timeout <ms>`    | `30000`  | Gateway RPC timeout                                                                   |
+| `--expect-final`    | off      | Agent-backed RPC final-response wait flag (accepted here via the shared client layer) |
 
 Output modes:
 
 - **TTY sessions**: pretty, colorized, structured log lines.
 - **Non-TTY sessions**: plain text.
-- `--json`: line-delimited JSON (one log event per line).
-- `--plain`: force plain text in TTY sessions.
-- `--no-color`: disable ANSI colors.
 
 When you pass an explicit `--url`, the CLI does not auto-apply config or
-environment credentials; include `--token` yourself if the target Gateway
-requires auth.
+environment credentials; include `--token` yourself, or the call fails with
+`gateway url override requires explicit credentials`.
 
 In JSON mode, the CLI emits `type`-tagged objects:
 
-- `meta`: stream metadata (file, cursor, size)
+- `meta`: stream metadata (file, source, sourceKind, service, cursor, size)
 - `log`: parsed log entry
 - `notice`: truncation / rotation hints
 - `raw`: unparsed log line
+- `error`: gateway connection failures (written to stderr)
 
 If the implicit local loopback Gateway asks for pairing, closes during connect,
 or times out before `logs.tail` answers, `openclaw logs` falls back to the
 configured Gateway file log automatically. Explicit `--url` targets do not use
 this fallback. `openclaw logs --follow` is stricter: on Linux it uses the active
-user-systemd Gateway journal by PID when available, and otherwise keeps retrying
-the live Gateway instead of following a potentially stale side-by-side file.
+user-systemd Gateway journal by PID when available, and otherwise retries the
+live Gateway with backoff instead of following a potentially stale side-by-side
+file.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -98,6 +130,9 @@ To filter channel activity (WhatsApp/Telegram/etc), use:
 ```bash
 openclaw channels logs --channel whatsapp
 ```
+
+`--channel` defaults to `all`; `--lines <n>` (default 200) and `--json` are also
+available.
 
 ## Log formats
 
@@ -158,7 +193,7 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 {
   "logging": {
     "level": "info",
-    "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
+    "file": "/path/to/openclaw.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
     "redactSensitive": "tools",
@@ -169,7 +204,9 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 
 ### Log levels
 
-- `logging.level`: **file logs** (JSONL) level.
+Levels: `silent`, `fatal`, `error`, `warn`, `info`, `debug`, `trace`.
+
+- `logging.level`: **file logs** (JSONL) level (default: `info`).
 - `logging.consoleLevel`: **console** verbosity level.
 
 You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g. `OPENCLAW_LOG_LEVEL=debug`). The env var takes precedence over the config file, so you can raise verbosity for a single run without editing `openclaw.json`. You can also pass the global CLI option **`--log-level <level>`** (for example, `openclaw --log-level debug gateway run`), which overrides the environment variable for that command.
@@ -265,8 +302,8 @@ OTLP log records, persisted session transcript text, or Control UI tool
 event payloads (tool start args, partial/final result payloads, derived
 exec output, and patch summaries):
 
-- `logging.redactSensitive`: `off` | `tools` (default: `tools`)
-- `logging.redactPatterns`: list of regex strings to override the default set. Custom patterns apply on top of the built-in defaults for Control UI tool payloads, so adding a pattern never weakens redaction of values already caught by the defaults.
+- Sensitive-value redaction is always enabled.
+- `logging.redactPatterns`: list of regex strings that replaces the default set for log/transcript output. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
 
 File logs and session transcripts stay JSONL, but matching secret values are
 masked before the line or message is written to disk. Redaction is best-effort:
@@ -277,25 +314,22 @@ The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential
 when they appear as JSON fields, URL parameters, CLI flags, or assignments.
 
-`logging.redactSensitive: "off"` only disables this general log/transcript
-policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI
-clients, support bundles, diagnostics observers, approval prompts, or agent
-tools. Examples include Control UI tool-call events, `sessions_history` output,
-diagnostics support exports, provider error observations, exec approval command
-display, and Gateway WebSocket protocol logs. Custom `logging.redactPatterns`
-can still add project-specific patterns on those surfaces.
+OpenClaw also redacts safety-boundary payloads shown to UI clients, support
+bundles, diagnostics observers, approval prompts, or agent tools. Custom
+`logging.redactPatterns` can add project-specific patterns on those surfaces.
 
 ## Diagnostics and OpenTelemetry
 
 Diagnostics are structured, machine-readable events for model runs and
 message-flow telemetry (webhooks, queueing, session state). They do **not**
 replace logs — they feed metrics, traces, and exporters. Events are emitted
-in-process whether or not you export them.
+in-process by default (set `diagnostics.enabled: false` to turn them off);
+exporting them is separate.
 
 Two adjacent surfaces:
 
 - **OpenTelemetry export** — send metrics, traces, and logs over OTLP/HTTP to
-  any OpenTelemetry-compatible collector or backend (Grafana, Datadog,
+  any OpenTelemetry-compatible collector or backend (Datadog, Grafana,
   Honeycomb, New Relic, Tempo, etc.). Full configuration, signal catalog,
   metric/span names, env vars, and privacy model live on a dedicated page:
   [OpenTelemetry export](/gateway/opentelemetry).
@@ -304,14 +338,6 @@ Two adjacent surfaces:
   and support wildcards (`telegram.*`, `*`). Configure under `diagnostics.flags`
   or via the `OPENCLAW_DIAGNOSTICS=...` env override. Full guide:
   [Diagnostics flags](/diagnostics/flags).
-
-To enable diagnostics events for plugins or custom sinks without OTLP export:
-
-```json5
-{
-  diagnostics: { enabled: true },
-}
-```
 
 For OTLP export to a collector, see [OpenTelemetry export](/gateway/opentelemetry).
 

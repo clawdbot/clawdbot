@@ -1,0 +1,32 @@
+title: Matrix lane resumes after homeserver restart
+scenario:
+  id: matrix-homeserver-restart-resume
+  surface: channels
+  coverage:
+    primary:
+      - matrix.conversation-routing-and-delivery
+  execution:
+    profiles: { "matrix:all": 34, "matrix:transport": 33 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: homeserver
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Homeserver Restart Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-restart.js
+  call: runHomeserverRestartResumeScenario
+  args:
+    - expr: "scenarioContext"

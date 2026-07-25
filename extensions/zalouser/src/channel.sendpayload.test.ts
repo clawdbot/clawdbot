@@ -193,6 +193,59 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(result.messageId).toBe("zlu-code");
   });
 
+  it("forwards internal chunk progress through the outbound adapter", async () => {
+    mockedSend.mockImplementationOnce(async (_threadId, _text, options) => {
+      const onDeliveryResult = options?.onDeliveryResult;
+      if (!onDeliveryResult) {
+        throw new Error("missing progress callback");
+      }
+      await onDeliveryResult({ ok: true, messageId: "zlu-part-1" } as never);
+      await onDeliveryResult({ ok: true, messageId: "zlu-part-2" } as never);
+      return { ok: true, messageId: "zlu-part-2" } as never;
+    });
+    const onDeliveryResult = vi.fn();
+    const sendPayload = requireZalouserSendPayload();
+
+    await sendPayload({
+      ...baseCtx({ text: "chunked internally" }),
+      to: "987654321",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "zlu-part-1",
+      "zlu-part-2",
+    ]);
+  });
+
+  it("forwards internal chunk progress through the message adapter", async () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "zalouser", messageId: "zlu-message-part" }],
+      kind: "text",
+    });
+    mockedSend.mockImplementationOnce(async (_threadId, _text, options) => {
+      const onDeliveryResult = options?.onDeliveryResult;
+      if (!onDeliveryResult) {
+        throw new Error("missing progress callback");
+      }
+      await onDeliveryResult({ ok: true, messageId: "zlu-message-part", receipt } as never);
+      return { ok: true, messageId: "zlu-message-part", receipt } as never;
+    });
+    const onDeliveryResult = vi.fn();
+    const sendText = requireZalouserTextSender(requireZalouserMessageAdapter());
+
+    await sendText({
+      cfg: {},
+      to: "user:987654321",
+      text: "chunked internally",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("zlu-message-part");
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt).toBe(receipt);
+  });
+
   it("declares message adapter durable text and media with receipt proofs", async () => {
     mockedSend.mockImplementation(async (_threadId, _text, opts: { mediaUrl?: string } = {}) =>
       opts.mediaUrl

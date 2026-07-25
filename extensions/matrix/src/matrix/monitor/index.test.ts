@@ -49,14 +49,15 @@ const hoisted = vi.hoisted(() => {
   const accountConfig = {
     dm: {},
   };
-  const inboundDeduper = {
-    claimEvent: vi.fn(() => true),
-    commitEvent: vi.fn(async () => undefined),
-    releaseEvent: vi.fn(),
-    flush: vi.fn(async () => undefined),
-    stop: vi.fn(async () => undefined),
+  const inboundReplayClaim = {
+    keys: ["test"] as const,
+    commit: vi.fn(async () => true),
+    release: vi.fn(),
   };
-  const createMatrixInboundEventDeduper = vi.fn(async () => inboundDeduper);
+  const inboundDeduper = {
+    claim: vi.fn(async () => ({ kind: "claimed" as const, handle: inboundReplayClaim })),
+  };
+  const createMatrixInboundEventDeduper = vi.fn(() => inboundDeduper);
   const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
@@ -120,6 +121,7 @@ const hoisted = vi.hoisted(() => {
     getMemberDisplayName,
     getRoomInfo,
     inboundDeduper,
+    inboundReplayClaim,
     logger,
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
     releaseSharedClientInstance,
@@ -189,32 +191,6 @@ vi.mock("../../runtime-api.js", () => {
       groupPolicy: "allowlist",
       providerMissingFallbackApplied: false,
     }),
-    resolveChannelEntryMatch: ({
-      entries,
-      keys,
-      wildcardKey,
-    }: {
-      entries: Record<string, unknown>;
-      keys: string[];
-      wildcardKey: string;
-    }) => {
-      for (const key of keys) {
-        if (Object.hasOwn(entries, key)) {
-          return {
-            entry: entries[key],
-            key,
-            wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-            wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-          };
-        }
-      }
-      return {
-        entry: undefined,
-        key: undefined,
-        wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-        wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-      };
-    },
     resolveDefaultGroupPolicy: () => "allowlist",
     resolveOutboundSendDep: () => null,
     resolveThreadBindingFarewellText: () => null,
@@ -372,10 +348,6 @@ vi.mock("./inbound-dedupe.js", () => ({
   createMatrixInboundEventDeduper: hoisted.createMatrixInboundEventDeduper,
 }));
 
-vi.mock("./legacy-crypto-restore.js", () => ({
-  maybeRestoreLegacyMatrixBackup: vi.fn(),
-}));
-
 vi.mock("./room-info.js", () => ({
   createMatrixRoomInfoResolver: vi.fn(() => ({
     getRoomInfo: hoisted.getRoomInfo,
@@ -391,12 +363,11 @@ vi.mock("./startup.js", () => ({
   runMatrixStartupMaintenance: hoisted.runMatrixStartupMaintenance,
 }));
 
-let matrixMonitorTesting: typeof import("./index.js").testing;
 let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 
 describe("monitorMatrixProvider", () => {
   beforeAll(async () => {
-    ({ testing: matrixMonitorTesting, monitorMatrixProvider } = await import("./index.js"));
+    ({ monitorMatrixProvider } = await import("./index.js"));
   });
 
   async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -467,6 +438,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.accountConfig.dm = {};
+    delete (hoisted.accountConfig as { streaming?: unknown }).streaming;
     delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
@@ -503,12 +475,12 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.client.stopSyncWithoutPersist.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.claimEvent.mockReset().mockReturnValue(true);
-    hoisted.inboundDeduper.commitEvent.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.releaseEvent.mockReset();
-    hoisted.inboundDeduper.flush.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
-    hoisted.createMatrixInboundEventDeduper.mockReset().mockResolvedValue(hoisted.inboundDeduper);
+    hoisted.inboundDeduper.claim
+      .mockReset()
+      .mockResolvedValue({ kind: "claimed" as const, handle: hoisted.inboundReplayClaim });
+    hoisted.inboundReplayClaim.commit.mockReset().mockResolvedValue(true);
+    hoisted.inboundReplayClaim.release.mockReset();
+    hoisted.createMatrixInboundEventDeduper.mockReset().mockReturnValue(hoisted.inboundDeduper);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
@@ -518,6 +490,8 @@ describe("monitorMatrixProvider", () => {
 
   it.each([
     [undefined, "off", false],
+    // Scalar/boolean spellings stay honored for schema-open account entries
+    // until the flat-key deprecation window closes; doctor migrates them.
     [false, "off", false],
     [true, "partial", true],
     ["off", "off", false],
@@ -540,13 +514,21 @@ describe("monitorMatrixProvider", () => {
       false,
     ],
     [{ mode: "off", preview: { toolProgress: true } }, "off", false],
-  ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
+  ] satisfies Array<
+    [MatrixConfig["streaming"] | MatrixStreamingMode | boolean, MatrixStreamingMode, boolean]
+  >)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
-    (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
-      expect(matrixMonitorTesting.resolveMatrixStreamingMode(streaming)).toBe(expectedMode);
-      expect(matrixMonitorTesting.resolveMatrixPreviewToolProgressEnabled(streaming)).toBe(
-        expectedPreviewToolProgressEnabled,
-      );
+    async (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
+      (hoisted.accountConfig as { streaming?: unknown }).streaming = streaming;
+
+      await startMonitorAndAbortAfterStartup();
+
+      const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+        streaming?: MatrixStreamingMode;
+        previewToolProgressEnabled?: boolean;
+      };
+      expect(handlerParams.streaming).toBe(expectedMode);
+      expect(handlerParams.previewToolProgressEnabled).toBe(expectedPreviewToolProgressEnabled);
     },
   );
 
@@ -728,7 +710,9 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("releases the prepared client when startup fails before later resources exist", async () => {
-    hoisted.createMatrixInboundEventDeduper.mockRejectedValue(new Error("deduper failed"));
+    hoisted.createMatrixInboundEventDeduper.mockImplementation(() => {
+      throw new Error("deduper failed");
+    });
 
     await expect(
       monitorMatrixProvider({
@@ -737,7 +721,6 @@ describe("monitorMatrixProvider", () => {
     ).rejects.toThrow("deduper failed");
 
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "persist");
-    expect(hoisted.inboundDeduper.stop).not.toHaveBeenCalled();
     expectLastStatusFields({
       accountId: "default",
       connected: false,
@@ -909,9 +892,6 @@ describe("monitorMatrixProvider", () => {
       hoisted.callOrder.push("release-client");
       return true;
     });
-    hoisted.inboundDeduper.stop.mockImplementation(async () => {
-      hoisted.callOrder.push("stop-deduper");
-    });
 
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
     await waitForCallOrderEntry("start-client");
@@ -923,7 +903,7 @@ describe("monitorMatrixProvider", () => {
     const roomMessagePromise = onRoomMessage("!room:example.org", { event_id: "$event" });
     abortController.abort();
     await waitForCallOrderEntry("pause-client");
-    expect(hoisted.callOrder).not.toContain("stop-deduper");
+    expect(hoisted.callOrder).not.toContain("stop-manager");
 
     if (resolveHandler === null) {
       throw new Error("expected in-flight handler to be pending");
@@ -942,9 +922,6 @@ describe("monitorMatrixProvider", () => {
       hoisted.callOrder.indexOf("stop-manager"),
     );
     expect(hoisted.callOrder.indexOf("stop-manager")).toBeLessThan(
-      hoisted.callOrder.indexOf("stop-deduper"),
-    );
-    expect(hoisted.callOrder.indexOf("stop-deduper")).toBeLessThan(
       hoisted.callOrder.indexOf("release-client"),
     );
   });

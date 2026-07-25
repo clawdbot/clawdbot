@@ -1,5 +1,10 @@
 // Matrix plugin module implements session store metadata behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./target-ids.js";
 
 function trimMaybeString(value: unknown): string | undefined {
@@ -26,38 +31,17 @@ function resolveMatrixSessionAccountId(value: unknown): string | undefined {
 
 function resolveMatrixStoredRoomId(params: {
   deliveryTo?: unknown;
-  lastTo?: unknown;
   originNativeChannelId?: unknown;
   originTo?: unknown;
 }): string | undefined {
   return (
     resolveMatrixRoomTargetId(params.deliveryTo) ??
-    resolveMatrixRoomTargetId(params.lastTo) ??
     resolveMatrixRoomTargetId(params.originNativeChannelId) ??
     resolveMatrixRoomTargetId(params.originTo)
   );
 }
 
-type MatrixStoredSessionEntryLike = {
-  deliveryContext?: {
-    channel?: unknown;
-    to?: unknown;
-    accountId?: unknown;
-  };
-  origin?: {
-    provider?: unknown;
-    from?: unknown;
-    to?: unknown;
-    nativeChannelId?: unknown;
-    nativeDirectUserId?: unknown;
-    accountId?: unknown;
-    chatType?: unknown;
-  };
-  lastChannel?: unknown;
-  lastTo?: unknown;
-  lastAccountId?: unknown;
-  chatType?: unknown;
-};
+type MatrixStoredSessionEntryLike = Pick<SessionEntry, "chatType" | "delivery">;
 
 export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryLike): {
   channel?: string;
@@ -68,32 +52,27 @@ export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryL
   if (!entry) {
     return null;
   }
-  const channel =
-    trimMaybeString(entry.deliveryContext?.channel) ??
-    trimMaybeString(entry.lastChannel) ??
-    trimMaybeString(entry.origin?.provider);
+  const deliveryContext = deliveryContextFromSession(entry);
+  const origin = sessionDeliveryOrigin(entry);
+  const channel = trimMaybeString(deliveryContext?.channel) ?? trimMaybeString(origin?.provider);
   const accountId =
-    resolveMatrixSessionAccountId(
-      entry.deliveryContext?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
-    ) ?? undefined;
+    resolveMatrixSessionAccountId(deliveryContext?.accountId ?? origin?.accountId) ?? undefined;
   const roomId = resolveMatrixStoredRoomId({
-    deliveryTo: entry.deliveryContext?.to,
-    lastTo: entry.lastTo,
-    originNativeChannelId: entry.origin?.nativeChannelId,
-    originTo: entry.origin?.to,
+    deliveryTo: deliveryContext?.to,
+    originNativeChannelId: origin?.nativeChannelId,
+    originTo: origin?.to,
   });
   const chatType =
-    trimMaybeString(entry.origin?.chatType) ?? trimMaybeString(entry.chatType) ?? undefined;
+    trimMaybeString(origin?.chatType) ?? trimMaybeString(entry.chatType) ?? undefined;
   const directUserId =
     chatType === "direct"
-      ? (trimMaybeString(entry.origin?.nativeDirectUserId) ??
+      ? (trimMaybeString(origin?.nativeDirectUserId) ??
         resolveMatrixDirectUserId({
-          from: trimMaybeString(entry.origin?.from),
+          from: trimMaybeString(origin?.from),
           to:
             (roomId ? `room:${roomId}` : undefined) ??
-            trimMaybeString(entry.deliveryContext?.to) ??
-            trimMaybeString(entry.lastTo) ??
-            trimMaybeString(entry.origin?.to),
+            trimMaybeString(deliveryContext?.to) ??
+            trimMaybeString(origin?.to),
           chatType,
         }))
       : undefined;

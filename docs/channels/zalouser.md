@@ -6,32 +6,27 @@ read_when:
 title: "Zalo personal"
 ---
 
-Status: experimental. This integration automates a **personal Zalo account** via native `zca-js` inside OpenClaw.
+Status: experimental. This integration automates a **personal Zalo account** via native `zca-js`, in-process, with no external CLI binary.
 
 <Warning>
 This is an unofficial integration and may result in account suspension or ban. Use at your own risk.
 </Warning>
 
-## Bundled plugin
+## Install
 
-Zalo Personal ships as a bundled plugin in current OpenClaw releases, so normal
-packaged builds do not need a separate install.
+Zalo Personal is an official external plugin, not bundled in core. Install it before use:
 
-If you are on an older build or a custom install that excludes Zalo Personal,
-install the npm package directly:
+```bash
+openclaw plugins install @openclaw/zalouser
+```
 
-- Install via CLI: `openclaw plugins install @openclaw/zalouser`
-- Pinned version: `openclaw plugins install @openclaw/zalouser@2026.5.2`
-- Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
+- Pin a version: `openclaw plugins install @openclaw/zalouser@<version>`
+- From a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 
-No external `zca`/`openzca` CLI binary is required.
+## Quick setup
 
-## Quick setup (beginner)
-
-1. Ensure the Zalo Personal plugin is available.
-   - Current packaged OpenClaw releases already bundle it.
-   - Older/custom installs can add it manually with the commands above.
+1. Install the plugin (above).
 2. Login (QR, on the Gateway machine):
    - `openclaw channels login --channel zalouser`
    - Scan the QR code with the Zalo mobile app.
@@ -53,18 +48,16 @@ No external `zca`/`openzca` CLI binary is required.
 
 ## What it is
 
-- Runs entirely in-process via `zca-js`.
-- Uses native event listeners to receive inbound messages.
+- Runs entirely in-process via the `zca-js` library (no external `zca`/`openzca` binary).
+- Uses native event listeners (`message`, `error`) to receive inbound messages.
 - Sends replies directly through the JS API (text/media/link).
-- Designed for "personal account" use cases where Zalo Bot API is not available.
+- Designed for "personal account" use cases where the Zalo Bot API is not available.
 
 ## Naming
 
-Channel id is `zalouser` to make it explicit this automates a **personal Zalo user account** (unofficial). We keep `zalo` reserved for a potential future official Zalo API integration.
+Channel id is `zalouser` to make it explicit this automates a **personal Zalo user account** (unofficial). `zalo` is reserved for a potential future official Zalo API integration.
 
 ## Finding IDs (directory)
-
-Use the directory CLI to discover peers/groups and their IDs:
 
 ```bash
 openclaw directory self --channel zalouser
@@ -74,12 +67,19 @@ openclaw directory groups list --channel zalouser --query "work"
 
 ## Limits
 
-- Outbound text is chunked to ~2000 characters (Zalo client limits).
-- Streaming is blocked by default.
+- Outbound text is chunked to 2000 characters (Zalo client limit).
+- Streaming is not supported.
+- Completed inbound message ids are retained for 30 days, bounded to the 1000 most recent entries per account.
+
+## Inbound durability
+
+OpenClaw stores each raw `zca-js` message callback before processing it. Pending messages resume from the account queue after a Gateway restart, and processing stays serialized per direct chat or group.
+
+The `zca-js` socket listener does not expose a delivery acknowledgement or automatically replay old messages after reconnect. The durable queue therefore protects the local crash window after a callback reaches OpenClaw; it cannot recover a message the socket never delivered. Replay tombstones are mostly a safeguard against a repeated callback with the same Zalo message id.
 
 ## Access control (DMs)
 
-`channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
+`channels.zalouser.dmPolicy`: `pairing | allowlist | open | disabled` (default: `pairing`).
 
 `channels.zalouser.allowFrom` should use stable Zalo user IDs. It can also reference static sender access groups (`accessGroup:<name>`). During interactive setup, entered names can be resolved to IDs using the plugin's in-process contact lookup.
 
@@ -92,18 +92,16 @@ Approve via:
 
 ## Group access (optional)
 
-- Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
-- Restrict to an allowlist with:
-  - `channels.zalouser.groupPolicy = "allowlist"`
-  - `channels.zalouser.groups` (keys should be stable group IDs; names are resolved to IDs on startup only when `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled)
-  - `channels.zalouser.groupAllowFrom` (controls which senders in allowed groups can trigger the bot; static sender access groups can be referenced with `accessGroup:<name>`)
+- Default: `channels.zalouser.groupPolicy = "allowlist"` (groups require an explicit allowlist entry).
+- Open all groups: `channels.zalouser.groupPolicy = "open"`.
 - Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
+- With `groupPolicy = "allowlist"`:
+  - `channels.zalouser.groups` keys should be stable group IDs; names resolve to IDs on startup only when `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled.
+  - `channels.zalouser.groupAllowFrom` controls which senders in allowed groups can trigger the bot; static sender access groups can be referenced with `accessGroup:<name>`.
 - The configure wizard can prompt for group allowlists.
-- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping only when `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled.
 - Group allowlist matching is ID-only by default. Unresolved names are ignored for auth unless `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled.
 - `channels.zalouser.dangerouslyAllowNameMatching: true` is a break-glass compatibility mode that re-enables mutable startup name resolution and runtime group-name matching.
-- If `groupAllowFrom` is unset, runtime falls back to `allowFrom` for group sender checks.
-- Sender checks apply to both normal group messages and control commands (for example `/new`, `/reset`).
+- `groupAllowFrom` does **not** fall back to `allowFrom` for normal group messages: leaving it empty on an allowlisted group opens that group to any sender. Authorized control commands (for example `/new`) are the exception; command sender checks fall back to `allowFrom` when `groupAllowFrom` is empty.
 
 Example:
 
@@ -114,23 +112,27 @@ Example:
       groupPolicy: "allowlist",
       groupAllowFrom: ["1471383327500481391"],
       groups: {
-        "123456789": { allow: true },
-        "Work Chat": { allow: true },
+        "123456789": { enabled: true },
+        "Work Chat": { enabled: true },
       },
     },
   },
 }
 ```
 
+<Note>
+`channels.zalouser.groups.<id>.allow` is a legacy field name; current config uses `enabled`. `openclaw doctor --fix` migrates `allow` to `enabled` automatically.
+</Note>
+
 ### Group mention gating
 
 - `channels.zalouser.groups.<group>.requireMention` controls whether group replies require a mention.
-- Resolution order: exact group id/name -> normalized group slug -> `*` -> default (`true`).
-- This applies both to allowlisted groups and open group mode.
+- Resolution order: group id -> `group:<id>` alias -> group name/slug (name-based candidates only apply when `dangerouslyAllowNameMatching: true`) -> `*` -> default (`true`).
+- Applies both to allowlisted groups and open group mode.
 - Quoting a bot message counts as an implicit mention for group activation.
 - Authorized control commands (for example `/new`) can bypass mention gating.
-- When a group message is skipped because mention is required, OpenClaw stores it as pending group history and includes it on the next processed group message.
-- Group history limit defaults to `messages.groupChat.historyLimit` (fallback `50`). You can override per account with `channels.zalouser.historyLimit`.
+- When a group message is skipped because a mention is required, OpenClaw stores it as pending group history and includes it on the next processed group message.
+- Group history limit: `channels.zalouser.historyLimit`, then `messages.groupChat.historyLimit`, then a fallback of `50`.
 
 Example:
 
@@ -140,8 +142,8 @@ Example:
     zalouser: {
       groupPolicy: "allowlist",
       groups: {
-        "*": { allow: true, requireMention: true },
-        "Work Chat": { allow: true, requireMention: false },
+        "*": { enabled: true, requireMention: true },
+        "Work Chat": { enabled: true, requireMention: false },
       },
     },
   },
@@ -168,21 +170,21 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 
 ## Environment variables
 
-The Zalo Personal plugin can also read profile selection from environment variables:
+Profile selection can also come from environment variables:
 
-- `ZALOUSER_PROFILE`: profile name to use when no `profile` is set in channel or account config.
-- `ZCA_PROFILE`: legacy fallback profile name, used only when `ZALOUSER_PROFILE` is not set.
+| Var                | Purpose                                                                    |
+| ------------------ | -------------------------------------------------------------------------- |
+| `ZALOUSER_PROFILE` | Profile name to use when no `profile` is set in channel or account config. |
+| `ZCA_PROFILE`      | Legacy fallback, used only when `ZALOUSER_PROFILE` is not set.             |
 
-Profile names select the saved Zalo login credentials in OpenClaw state. Resolution order is:
+Profile names select the saved Zalo login credentials in OpenClaw state. Resolution order:
 
 1. Explicit `profile` in config.
 2. `ZALOUSER_PROFILE`.
 3. `ZCA_PROFILE`.
 4. The account id for non-default accounts, or `default` for the default account.
 
-For multi-account setups, prefer setting `profile` on each account in config so
-one environment variable does not make multiple accounts share the same login
-session.
+For multi-account setups, prefer setting `profile` on each account in config so one environment variable does not make multiple accounts share the same login session.
 
 ## Typing, reactions, and delivery acknowledgements
 
@@ -203,15 +205,14 @@ session.
 
 - Use numeric IDs in `allowFrom`/`groupAllowFrom` and stable group IDs in `groups`. If you intentionally need exact friend/group names, enable `channels.zalouser.dangerouslyAllowNameMatching: true`.
 
-**Upgraded from old CLI-based setup:**
+**Upgraded from an old external `zca`/CLI-based setup:**
 
-- Remove any old external `zca` process assumptions.
-- The channel now runs fully in OpenClaw without external CLI binaries.
+- Remove any external `zca` process assumptions; the channel now runs fully in-process via `zca-js`, with no external CLI binary.
 
 ## Related
 
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Security](/gateway/security) — access model and hardening
+- [Channels Overview](/channels) - all supported channels
+- [Pairing](/channels/pairing) - DM authentication and pairing flow
+- [Groups](/channels/groups) - group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Security](/gateway/security) - access model and hardening

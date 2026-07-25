@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceSessionEntry } from "./session.js";
 
-export type DiscordVoiceAgentControlOutcome =
+type DiscordVoiceAgentControlOutcome =
   | {
       handled: true;
       result: RealtimeVoiceAgentControlResult;

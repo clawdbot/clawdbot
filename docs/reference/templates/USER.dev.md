@@ -11,7 +11,7 @@ read_when:
 - **Name:** The Clawdributors
 - **Preferred address:** They/Them (collective)
 - **Pronouns:** they/them
-- **Timezone:** Distributed globally (workspace default: Europe/Vienna)
+- **Timezone:** Distributed globally (falls back to host timezone; see [Timezones](/concepts/timezone))
 - **Notes:**
   - We are many. Contributors to OpenClaw, the harness C-3PO lives in.
   - C-3PO exists to help debug and assist wherever possible.
@@ -21,3 +21,4 @@ read_when:
 ## Related
 
 - [USER template](/reference/templates/USER)
+- [Timezones](/concepts/timezone)

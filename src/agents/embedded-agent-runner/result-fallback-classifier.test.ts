@@ -50,6 +50,62 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies structured provider upstream_error payloads as fallback-worthy", () => {
+    const rawError =
+      '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}';
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai-compatible",
+      model: "primary-model",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: rawError,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
+      reason: "server_error",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
+  it("classifies structured provider overloaded_error payloads as fallback-worthy", () => {
+    const rawError =
+      '{"error":{"message":"Provider overloaded","type":"overloaded_error","param":"","code":null}}';
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai-compatible",
+      model: "primary-model",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: rawError,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
+      reason: "overloaded",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
   it("classifies generic external runner failure text as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",

@@ -1,6 +1,3 @@
-// Model Catalog Core module implements configured model refs behavior.
-import { normalizeProviderId } from "./provider-id.js";
-
 // Collects configured model references from OpenClaw config-shaped objects.
 
 /** Narrow unknown values to plain records. */
@@ -17,10 +14,8 @@ export type ConfiguredModelRef = {
 /** Agent config keys that can contain direct model references. */
 export const AGENT_MODEL_CONFIG_KEYS = [
   "model",
+  "utilityModel",
   "imageModel",
-  "imageGenerationModel",
-  "videoGenerationModel",
-  "musicGenerationModel",
   "voiceModel",
   "pdfModel",
 ] as const;
@@ -58,6 +53,10 @@ export function collectConfiguredModelRefs(
     for (const key of AGENT_MODEL_CONFIG_KEYS) {
       collectModelConfig(`${path}.${key}`, agent[key]);
     }
+    const mediaModels = isRecord(agent.mediaModels) ? agent.mediaModels : {};
+    for (const capability of ["image", "video", "music"] as const) {
+      collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability]);
+    }
     pushModelRef(
       `${path}.heartbeat.model`,
       isRecord(agent.heartbeat) ? agent.heartbeat.model : undefined,
@@ -83,9 +82,9 @@ export function collectConfiguredModelRefs(
   const root = isRecord(config) ? config : {};
   const agents = isRecord(root.agents) ? root.agents : {};
   collectFromAgent("agents.defaults", agents.defaults);
-  if (Array.isArray(agents.list)) {
-    for (const [index, entry] of agents.list.entries()) {
-      collectFromAgent(`agents.list.${index}`, entry);
+  if (isRecord(agents.entries)) {
+    for (const [agentId, entry] of Object.entries(agents.entries)) {
+      collectFromAgent(`agents.entries.${agentId}`, entry);
     }
   }
   if (options.includeChannelModelOverrides !== false) {
@@ -107,12 +106,7 @@ export function collectConfiguredModelRefs(
     }
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
-  pushModelRef(
-    "messages.tts.summaryModel",
-    isRecord(root.messages) && isRecord(root.messages.tts)
-      ? root.messages.tts.summaryModel
-      : undefined,
-  );
+  pushModelRef("tts.summaryModel", isRecord(root.tts) ? root.tts.summaryModel : undefined);
   pushModelRef(
     "channels.discord.voice.model",
     isRecord(root.channels) &&
@@ -130,14 +124,4 @@ export function collectConfiguredModelRefValues(
   options?: { includeChannelModelOverrides?: boolean },
 ): string[] {
   return collectConfiguredModelRefs(config, options).map((ref) => ref.value);
-}
-
-/** Extract a normalized provider id from a provider/model reference. */
-export function extractProviderFromModelRef(value: string): string | null {
-  const trimmed = value.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0) {
-    return null;
-  }
-  return normalizeProviderId(trimmed.slice(0, slash));
 }

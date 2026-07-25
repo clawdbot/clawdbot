@@ -41,9 +41,9 @@
             "contextWindow": 1000000,
             "maxTokens": 131072,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.26,
               "cacheWrite": 0
             }
           },
@@ -55,9 +55,9 @@
             "contextWindow": 202800,
             "maxTokens": 131100,
             "cost": {
-              "input": 1.2,
-              "output": 4,
-              "cacheRead": 0.24,
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.26,
               "cacheWrite": 0
             }
           },
@@ -125,8 +125,8 @@
             "contextWindow": 200000,
             "maxTokens": 131072,
             "cost": {
-              "input": 0.07,
-              "output": 0.4,
+              "input": 0,
+              "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
             }
@@ -139,7 +139,7 @@
             "contextWindow": 200000,
             "maxTokens": 128000,
             "cost": {
-              "input": 0.06,
+              "input": 0.07,
               "output": 0.4,
               "cacheRead": 0.01,
               "cacheWrite": 0
@@ -169,7 +169,7 @@
             "cost": {
               "input": 0.3,
               "output": 0.9,
-              "cacheRead": 0,
+              "cacheRead": 0.05,
               "cacheWrite": 0
             }
           },
@@ -225,7 +225,7 @@
             "cost": {
               "input": 0.6,
               "output": 1.8,
-              "cacheRead": 0,
+              "cacheRead": 0.11,
               "cacheWrite": 0
             }
           }
@@ -241,7 +241,7 @@
       }
     },
     "discovery": {
-      "zai": "static"
+      "zai": "refreshable"
     }
   },
   "modelPricing": {
@@ -261,6 +261,7 @@
       "provider": "zai",
       "method": "api-key",
       "choiceId": "zai-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Z.AI API key",
       "groupId": "zai",
       "groupLabel": "Z.AI",
@@ -274,6 +275,7 @@
       "provider": "zai",
       "method": "coding-global",
       "choiceId": "zai-coding-global",
+      "appGuidedSecret": true,
       "choiceLabel": "Coding-Plan-Global",
       "choiceHint": "GLM Coding Plan Global (api.z.ai)",
       "groupId": "zai",
@@ -288,6 +290,7 @@
       "provider": "zai",
       "method": "coding-cn",
       "choiceId": "zai-coding-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "Coding-Plan-CN",
       "choiceHint": "GLM Coding Plan CN (open.bigmodel.cn)",
       "groupId": "zai",
@@ -302,6 +305,7 @@
       "provider": "zai",
       "method": "global",
       "choiceId": "zai-global",
+      "appGuidedSecret": true,
       "choiceLabel": "Global",
       "choiceHint": "Z.AI Global (api.z.ai)",
       "groupId": "zai",
@@ -316,6 +320,7 @@
       "provider": "zai",
       "method": "cn",
       "choiceId": "zai-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "CN",
       "choiceHint": "Z.AI CN (open.bigmodel.cn)",
       "groupId": "zai",
@@ -328,7 +333,8 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["zai"]
+    "mediaUnderstandingProviders": ["zai"],
+    "usageProviders": ["zai"]
   },
   "mediaUnderstandingProviderMetadata": {
     "zai": {

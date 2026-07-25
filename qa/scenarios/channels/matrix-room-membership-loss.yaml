@@ -1,0 +1,32 @@
+title: Matrix room membership loss recovers after re-invite
+scenario:
+  id: matrix-room-membership-loss
+  surface: channels
+  coverage:
+    primary:
+      - matrix.conversation-routing-and-delivery
+  execution:
+    profiles: { "matrix:all": 33, "matrix:transport": 32 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: membership
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Membership Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runMembershipLossScenario
+  args:
+    - expr: "scenarioContext"

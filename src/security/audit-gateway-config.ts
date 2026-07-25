@@ -17,7 +17,7 @@ import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 
 type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
 
-export type CollectGatewayConfigFindingsOptions = {
+type CollectGatewayConfigFindingsOptions = {
   collectDangerousConfigFlags?: CollectDangerousConfigFlags;
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
@@ -257,25 +257,15 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
+  if (cfg.mcp?.apps?.enabled === true) {
     findings.push({
-      checkId: "gateway.control_ui.insecure_auth",
+      checkId: "mcp.apps.enabled",
       severity: "warn",
-      title: "Control UI insecure auth toggle enabled",
+      title: "MCP Apps UI bridge enabled",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
-      remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
-    });
-  }
-
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    findings.push({
-      checkId: "gateway.control_ui.device_auth_disabled",
-      severity: "critical",
-      title: "DANGEROUS: Control UI device auth disabled",
-      detail:
-        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
-      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+        "mcp.apps.enabled=true allows configured MCP servers to provide interactive HTML. Views are CSP-restricted and origin-isolated, but they can call app-visible tools on their owning MCP server while the session runtime remains active.",
+      remediation:
+        "Keep this enabled only for MCP servers you trust. Disable with `openclaw config set mcp.apps.enabled false --strict-json` when it is not needed.",
     });
   }
 
@@ -360,6 +350,34 @@ export function collectGatewayConfigFindings(
           "Enable this only when a same-host reverse proxy is the intended trust boundary. " +
           "Keep direct Gateway access private to the host and require the proxy to strip or overwrite identity headers.",
       });
+    }
+
+    if (trustedProxyConfig?.deviceAutoApprove?.enabled === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_device_auto_approve",
+        severity: "warn",
+        title: "Trusted-proxy browser device auto-approval enabled",
+        detail:
+          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new Control UI and WebChat device pairing entirely to the reverse-proxy identity.",
+        remediation:
+          "Enable this only when the proxy is the exclusive Gateway ingress, strongly authenticates users, overwrites identity headers, and restricts access with allowUsers.",
+      });
+
+      if (
+        trustedProxyConfig.deviceAutoApprove.scopes?.some(
+          (scope) => scope.trim() === "operator.admin",
+        )
+      ) {
+        findings.push({
+          checkId: "gateway.trusted_proxy_device_auto_approve_admin",
+          severity: "critical",
+          title: "Trusted-proxy device auto-approval allows full admin",
+          detail:
+            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+          remediation:
+            "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+        });
+      }
     }
 
     const allowUsers = trustedProxyConfig?.allowUsers ?? [];

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/qianfan-provider",
-  "version": "2026.6.10",
+  "version": "2026.7.2",
   "description": "OpenClaw Qianfan provider plugin.",
   "repository": {
     "type": "git",
@@ -21,10 +21,10 @@
       "minHostVersion": ">=2026.6.8"
     },
     "compat": {
-      "pluginApi": ">=2026.6.10"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.10",
+      "openclawVersion": "2026.7.2",
       "bundledDist": false
     },
     "release": {

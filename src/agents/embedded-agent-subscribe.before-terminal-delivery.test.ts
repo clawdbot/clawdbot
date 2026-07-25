@@ -218,6 +218,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     await subscription.waitForPendingEvents();
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Fallback answer." }),
+      { assistantMessageIndex: 1 },
     );
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
   });
@@ -253,6 +254,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Accepted answer." }),
+      { assistantMessageIndex: 1 },
     );
   });
 });

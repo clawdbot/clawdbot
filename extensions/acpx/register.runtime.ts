@@ -9,6 +9,7 @@ import {
   type AcpRuntime,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
 
 const ACPX_BACKEND_ID = "acpx";
@@ -26,12 +27,7 @@ type DeferredServiceState = {
   startPromise: Promise<AcpRuntime> | null;
 };
 
-let serviceModulePromise: Promise<RealAcpxServiceModule> | null = null;
-
-function loadServiceModule(): Promise<RealAcpxServiceModule> {
-  serviceModulePromise ??= import("./src/service.js");
-  return serviceModulePromise;
-}
+const loadServiceModule = createLazyRuntimeModule(() => import("./src/service.js"));
 
 async function startRealService(state: DeferredServiceState): Promise<AcpRuntime> {
   if (state.realRuntime) {

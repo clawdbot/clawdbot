@@ -5,6 +5,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -20,14 +21,9 @@ export type ConfigurablePlugin = {
   jsonSchema?: JsonSchemaObject;
 };
 
-type PluginMetadataSnapshotModule = typeof import("../plugins/plugin-metadata-snapshot.js");
-
-let pluginMetadataSnapshotModulePromise: Promise<PluginMetadataSnapshotModule> | undefined;
-
-function loadPluginMetadataSnapshotModule(): Promise<PluginMetadataSnapshotModule> {
-  pluginMetadataSnapshotModulePromise ??= import("../plugins/plugin-metadata-snapshot.js");
-  return pluginMetadataSnapshotModulePromise;
-}
+const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
+  () => import("../plugins/plugin-metadata-snapshot.js"),
+);
 
 type JsonSchemaProperty = {
   type?: string;
@@ -81,6 +77,15 @@ function formatCurrentValue(value: unknown): string {
     return value.join(", ");
   }
   return JSON.stringify(value);
+}
+
+function parseJsonNumberInput(value: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -278,8 +283,8 @@ async function promptPluginFields(params: {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;
         } else {
-          const parsed = Number(trimmed);
-          if (Number.isFinite(parsed)) {
+          const parsed = parseJsonNumberInput(trimmed);
+          if (parsed !== undefined && (schemaProp.type === "number" || Number.isInteger(parsed))) {
             setPathCreateStrict(updatedConfig, pathSegments, parsed);
             changed = true;
           }

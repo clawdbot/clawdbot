@@ -10,7 +10,7 @@ import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-st
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import {
-  collectSecretInputAssignment,
+  collectRuntimeSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -133,7 +133,7 @@ export function collectPluginConfigAssignments(params: {
 function collectConfiguredPluginSecretAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
-  secretPaths: ReadonlyArray<{ path: string; expected?: "string" }>;
+  secretPaths: ReadonlyArray<{ path: string; expected?: "string"; ownerKind?: "route" }>;
   active: boolean;
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
@@ -153,8 +153,8 @@ function collectConfiguredPluginSecretAssignments(params: {
 
       // SecretInput allows both explicit objects and inline env-template refs
       // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
-      // collectSecretInputAssignment ignores them.
-      collectSecretInputAssignment({
+      // collectRuntimeSecretInputAssignment ignores them.
+      collectRuntimeSecretInputAssignment({
         value: match.value,
         path: fullPath,
         expected: secretPath.expected ?? "string",
@@ -162,6 +162,17 @@ function collectConfiguredPluginSecretAssignments(params: {
         context: params.context,
         active: params.active,
         inactiveReason: `plugin "${params.pluginId}": ${params.inactiveReason}`,
+        ...(secretPath.ownerKind
+          ? {
+              owner: {
+                ownerKind: secretPath.ownerKind,
+                ownerId: fullPath,
+                requiredForGateway: false,
+                disposition: "isolate" as const,
+                contract: params.pluginConfig,
+              },
+            }
+          : {}),
         apply: createPluginConfigAssignmentApply(params.pluginConfig, match.path),
       });
     }

@@ -11,6 +11,7 @@ import {
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
+  readProviderJsonResponse,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -97,11 +98,11 @@ async function generateGeminiInlineDataText(params: {
   try {
     await assertOkOrThrowProviderError(res, params.httpErrorLabel);
 
-    const payload = (await res.json()) as {
+    const payload = await readProviderJsonResponse<{
       candidates?: Array<{
         content?: { parts?: Array<{ text?: string }> };
       }>;
-    };
+    }>(res, params.httpErrorLabel);
     const parts = payload.candidates?.[0]?.content?.parts ?? [];
     const text = parts
       .map((part) => part?.text?.trim())

@@ -1,16 +1,20 @@
 /** Public cron store load/save API backed by SQLite plus quarantine sidecars. */
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   assertCronStoreCanPersist,
@@ -26,18 +30,17 @@ import type {
 } from "./store/types.js";
 export type {
   CronConfigJobRuntimeEntry,
-  CronQuarantineFile,
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
 
-function resolveDefaultCronDir(): string {
-  return path.join(resolveConfigDir(), "cron");
+function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveConfigDir(env), "cron");
 }
 
-function resolveDefaultCronStorePath(): string {
-  return path.join(resolveDefaultCronDir(), "jobs.json");
+function resolveDefaultCronStorePath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveDefaultCronDir(env), "jobs.json");
 }
 
 /** Resolves the sidecar quarantine path used for invalid cron config rows. */
@@ -49,15 +52,25 @@ export function resolveCronQuarantinePath(storePath: string): string {
 }
 
 /** Resolves the cron jobs store path, expanding home-relative user input. */
-export function resolveCronJobsStorePath(storePath?: string) {
-  if (storePath?.trim()) {
-    const raw = storePath.trim();
+export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.ProcessEnv = process.env) {
+  const selected = storePath?.trim() || readCronStoreStatePath(env);
+  if (selected) {
+    const raw = selected.trim();
     if (raw.startsWith("~")) {
-      return path.resolve(expandHomePrefix(raw));
+      return path.resolve(expandHomePrefix(raw, { env }));
     }
     return path.resolve(raw);
   }
-  return resolveDefaultCronStorePath();
+  return resolveDefaultCronStorePath(env);
+}
+
+/** Resolves the active cron partition from runtime config and environment. */
+export function resolveCronJobsStorePathFromConfig(
+  cfg: { cron?: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const store = (cfg.cron as { store?: unknown } | undefined)?.store;
+  return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env);
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
@@ -76,6 +89,50 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
   };
+}
+
+function emptyLoadedCronStore(): LoadedCronStore {
+  return {
+    store: { version: 1, jobs: [] },
+    configJobs: [],
+    configJobIndexes: [],
+    configJobRuntimeEntries: [],
+    invalidConfigRows: [],
+  };
+}
+
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(tableName) !== undefined
+  );
+}
+
+/** Loads cron jobs from an existing SQLite store without creating or migrating state. */
+export async function loadCronJobsStoreWithConfigJobsReadOnly(
+  storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LoadedCronStore> {
+  const statePath = resolveOpenClawStateSqlitePath(env);
+  if (!fs.existsSync(statePath)) {
+    return emptyLoadedCronStore();
+  }
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  const db = openNodeSqliteDatabase(statePath, { readOnly: true });
+  try {
+    if (!tableExists(db, "cron_jobs")) {
+      return emptyLoadedCronStore();
+    }
+    const rows = loadCronRows(db, storeKey);
+    if (rows.length > 0) {
+      return loadedCronStoreFromRows(rows);
+    }
+    return emptyLoadedCronStore();
+  } finally {
+    db.close();
+  }
 }
 
 /** Loads only the persisted cron job store payload. */
@@ -130,6 +187,24 @@ export async function saveCronJobsStore(
   assertCronStoreCanPersist(store);
   runOpenClawStateWriteTransaction(({ db }) => {
     replaceCronRows(db, storeKey, store);
+  });
+}
+
+/** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
+export async function saveCronJobsStoreWithMetadata(
+  storePath: string,
+  store: CronStoreFile,
+  acquireMetadata: (db: DatabaseSync) => boolean,
+): Promise<boolean> {
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  assertCronStoreCanPersist(store);
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    if (!acquireMetadata(db)) {
+      return false;
+    }
+    replaceCronRows(db, storeKey, store);
+    return true;
   });
 }
 

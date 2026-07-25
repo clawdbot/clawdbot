@@ -43,6 +43,7 @@
       "provider": "gmi",
       "method": "api-key",
       "choiceId": "gmi-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "GMI Cloud API key",
       "choiceHint": "OpenAI-compatible GMI Cloud endpoint",
       "groupId": "gmi",
@@ -159,6 +160,9 @@
           }
         ]
       }
+    },
+    "discovery": {
+      "gmi": "refreshable"
     }
   }
 }

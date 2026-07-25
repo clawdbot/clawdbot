@@ -1,8 +1,17 @@
 // Qa Lab plugin module implements runtime tool fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readRuntimeToolCoverageMetadata } from "./runtime-tool-metadata.js";
+import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "./providers/shared/debug-request-cursor.js";
+import {
+  type QaRuntimeToolCoverageMetadata,
+  readRuntimeToolCoverageMetadata,
+} from "./runtime-tool-metadata.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -412,14 +421,17 @@ async function readSessionTranscriptBytes(
   if (!sessionId) {
     throw new Error(`session transcript entry not found for ${sessionKey}`);
   }
-  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
-  const sessionFile = readNonEmptyString(entry?.sessionFile);
-  const transcriptPath = sessionFile
-    ? path.isAbsolute(sessionFile)
-      ? sessionFile
-      : path.join(sessionsDir, sessionFile)
-    : path.join(sessionsDir, `${sessionId}.jsonl`);
-  const transcriptBytes = await fs.readFile(transcriptPath, "utf8");
+  const transcriptBytes = loadTranscriptEventsSync({
+    agentId: "qa",
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+    },
+    sessionId,
+    sessionKey,
+  })
+    .map((event) => JSON.stringify(event))
+    .join("\n");
   if (!transcriptBytes.trim()) {
     throw new Error(`session transcript is empty for ${sessionKey}`);
   }
@@ -457,31 +469,27 @@ function requestLinksPlannedToolOutput(
 
 function findPlannedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
-  requestCountBefore: number;
   promptSnippet: string;
   excludedPromptSnippet?: string;
   toolName: string;
 }) {
-  return params.requests
-    .slice(params.requestCountBefore)
-    .find(
-      (request) =>
-        requestMatchesPrompt(request, params.promptSnippet) &&
-        (!params.excludedPromptSnippet ||
-          !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
-        request.plannedToolName === params.toolName,
-    );
+  return params.requests.find(
+    (request) =>
+      requestMatchesPrompt(request, params.promptSnippet) &&
+      (!params.excludedPromptSnippet ||
+        !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
+      request.plannedToolName === params.toolName,
+  );
 }
 
 function findExecutedRequest(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
-  requestCountBefore: number;
   promptSnippet: string;
   excludedPromptSnippet?: string;
   toolName: string;
 }) {
   let plannedRequest: QaRuntimeToolFixtureRequest | undefined;
-  for (const request of params.requests.slice(params.requestCountBefore)) {
+  for (const request of params.requests) {
     if (!requestMatchesPrompt(request, params.promptSnippet)) {
       continue;
     }
@@ -553,6 +561,37 @@ function formatCodexNativeWorkspaceDetails(params: {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatReportOnlyMockDetails(params: {
+  toolName: string;
+  happyRequest: QaRuntimeToolFixtureRequest;
+  failureRequest: QaRuntimeToolFixtureRequest;
+}) {
+  return [
+    `${params.toolName} mock provider report-only: direct tool output is not required by this fixture`,
+    `${params.toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(params.happyRequest.plannedToolArgs)}`,
+    `${params.toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(params.failureRequest.plannedToolArgs)}`,
+  ].join("\n");
+}
+
+function isAsyncReportOnlyMockCoverage(metadata: QaRuntimeToolCoverageMetadata) {
+  return !metadata.required && /\basync\b/iu.test(metadata.action ?? "");
+}
+
+function plannedRequestHasDeniedInputFailure(request: QaRuntimeToolFixtureRequest) {
+  return (
+    isRecord(request.plannedToolArgs) &&
+    request.plannedToolArgs["__qaFailureMode"] === "denied-input"
+  );
+}
+
+function plannedRequestHasPrompt(request: QaRuntimeToolFixtureRequest) {
+  return (
+    isRecord(request.plannedToolArgs) &&
+    typeof request.plannedToolArgs.prompt === "string" &&
+    request.plannedToolArgs.prompt.trim().length > 0
+  );
 }
 
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
@@ -629,9 +668,8 @@ export async function runRuntimeToolFixture(
     `failure target=${toolName}`,
   );
   const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
-  const requestCountBefore = env.mock
-    ? readQaRuntimeToolFixtureRequests(await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`))
-        .length
+  const requestCursorBefore = env.mock
+    ? readQaMockRequestCursor(await deps.fetchJson(qaMockRequestCursorUrl(env.mock.baseUrl)))
     : 0;
 
   await deps.runAgentPrompt(env, {
@@ -706,22 +744,51 @@ export async function runRuntimeToolFixture(
   }
 
   const requests = readQaRuntimeToolFixtureRequests(
-    await deps.fetchJson(`${env.mock.baseUrl}/debug/requests`),
+    await deps.fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
   );
   const happyPlannedRequest = findPlannedRequest({
     requests,
-    requestCountBefore,
     promptSnippet,
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
   const happyRequest = findExecutedRequest({
     requests,
-    requestCountBefore,
     promptSnippet,
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
+  const failurePlannedRequest = findPlannedRequest({
+    requests,
+    promptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  const failureRequest = findExecutedRequest({
+    requests,
+    promptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  if (
+    isAsyncReportOnlyMockCoverage(metadata) &&
+    happyPlannedRequest &&
+    failurePlannedRequest &&
+    !happyRequest
+  ) {
+    if (!plannedRequestHasPrompt(happyPlannedRequest)) {
+      throw new Error(`expected mock happy-path prompt args for ${toolName}`);
+    }
+    if (!plannedRequestHasDeniedInputFailure(failurePlannedRequest)) {
+      throw new Error(`expected mock failure-path denied-input args for ${toolName}`);
+    }
+    if (failureRequest && !requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
+      throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
+    }
+    return formatReportOnlyMockDetails({
+      toolName,
+      happyRequest: happyPlannedRequest,
+      failureRequest: failurePlannedRequest,
+    });
+  }
   // Async runtime tools prove the start call here; completion is covered by
   // their task lifecycle scenarios.
   const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
@@ -749,18 +816,6 @@ export async function runRuntimeToolFixture(
     }
     throw new Error(`expected mock happy-path successful tool output for ${toolName}`);
   }
-  const failurePlannedRequest = findPlannedRequest({
-    requests,
-    requestCountBefore,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
-  const failureRequest = findExecutedRequest({
-    requests,
-    requestCountBefore,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
   if (!failureRequest) {
     if (dynamicExposureIntentionallyExcluded) {
       return formatCodexNativeWorkspaceDetails({
@@ -807,3 +862,4 @@ export async function runRuntimeToolFixture(
     .filter(Boolean)
     .join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

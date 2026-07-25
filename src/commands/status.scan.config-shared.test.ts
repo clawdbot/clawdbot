@@ -1,11 +1,7 @@
 // Status scan config tests cover scan command config loading and cold-start resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  loadStatusScanCommandConfig,
-  resolveStatusScanColdStart,
-  shouldSkipStatusScanMissingConfigFastPath,
-} from "./status.scan.config-shared.js";
+import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfigPath: vi.fn(),
@@ -21,20 +17,6 @@ describe("status.scan.config-shared", () => {
     mocks.resolveConfigPath.mockReturnValue(
       `/tmp/openclaw-status-scan-config-shared-missing-${process.pid}.json`,
     );
-  });
-
-  it("detects the test fast-path env toggle", () => {
-    expect(shouldSkipStatusScanMissingConfigFastPath({ ...process.env, VITEST: "true" })).toBe(
-      true,
-    );
-    expect(shouldSkipStatusScanMissingConfigFastPath({ ...process.env, NODE_ENV: "test" })).toBe(
-      true,
-    );
-    expect(shouldSkipStatusScanMissingConfigFastPath({})).toBe(false);
-  });
-
-  it("treats missing config as cold-start when fast-path bypass is disabled", () => {
-    expect(resolveStatusScanColdStart({ env: {}, allowMissingConfigFastPath: false })).toBe(true);
   });
 
   it("skips read/resolve on fast-json cold-start outside tests", async () => {

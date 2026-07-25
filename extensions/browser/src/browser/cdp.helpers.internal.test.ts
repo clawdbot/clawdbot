@@ -1,6 +1,7 @@
 // Browser tests cover cdp.helpers.internal plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { toErrorObject } from "../infra/errors.js";
 import { rawDataToString } from "../infra/ws.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -418,7 +419,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket(server.url, async (send) => {
           await send("Test.ok");
           const rejectRawString = () =>
-            Promise.reject(toLintErrorObject("raw-string-from-callback", "Non-Error rejection"));
+            Promise.reject(toErrorObject("raw-string-from-callback", "Non-Error rejection"));
           return rejectRawString();
         }),
       ).rejects.toThrow(/raw-string-from-callback/);
@@ -439,29 +440,6 @@ describe("cdp.helpers internal", () => {
           throw new Error("callback boom");
         }),
       ).rejects.toThrow(/callback boom/);
-    });
-
-    it("tolerates a ws.close() that throws in the cleanup finally", async () => {
-      // Force ws.close() to throw by wrapping withCdpSocket against a live
-      // server but monkey-patching the ws prototype momentarily. We do this
-      // via a callback that pre-empts close by calling terminate() first.
-      const server = await startWsServer();
-      wss = server.wss;
-      server.wss.on("connection", (socket) => {
-        socket.on("message", (raw) => {
-          const msg = JSON.parse(rawDataToString(raw)) as { id?: number };
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        });
-      });
-      // The fn throws AFTER sending so both the catch (closeWithError) and
-      // the finally ws.close() run. ws.close() on an already-closed socket
-      // is a no-op but exercises the try/catch in the finally.
-      await expect(
-        withCdpSocket(server.url, async (send) => {
-          await send("Test.ok");
-          throw new Error("fn post-send boom");
-        }),
-      ).rejects.toThrow(/fn post-send boom/);
     });
   });
 
@@ -494,6 +472,28 @@ describe("cdp.helpers internal", () => {
     // library then treats as an unhandled error event and hangs the
     // suite. The branch is c8-ignored in the source file with an
     // accompanying justification.
+  });
+
+  it("moves WebSocket URL userinfo into the Authorization header", async () => {
+    const server = await startWsServer();
+    wss = server.wss;
+    const authorization = new Promise<string | undefined>((resolve) => {
+      server.wss.once("connection", (socket, request) => {
+        resolve(request.headers.authorization);
+        socket.close();
+      });
+    });
+    const credentialedUrl = server.url.replace("ws://", "ws://alice:p%40ss@");
+    const ws = openCdpWebSocket(credentialedUrl, { handshakeTimeoutMs: 500 });
+
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+
+    expect(ws.url).toBe(server.url);
+    expect(await authorization).toBe(`Basic ${Buffer.from("alice:p@ss").toString("base64")}`);
+    ws.close();
   });
 });
 
@@ -548,6 +548,7 @@ describe("openCdpWebSocket option handling", () => {
     expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
       "ws://127.0.0.1:1/devtools/browser/X",
     );
+    expect(ws.url).toBe("ws://127.0.0.1:1/devtools/browser/X");
     expect(release).toHaveBeenCalledOnce();
     ws.once("error", () => {});
     ws.close();
@@ -574,17 +575,3 @@ describe("openCdpWebSocket option handling", () => {
     ws.close();
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

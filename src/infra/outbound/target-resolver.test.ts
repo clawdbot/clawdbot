@@ -1,14 +1,14 @@
 // Covers outbound target resolver id heuristics, directory cache/live fallback,
 // ambiguity modes, display formatting, and plugin normalized fallbacks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelDirectoryEntry } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
-let resolveMessagingTarget: TargetResolverModule["resolveMessagingTarget"];
+let resolveMessagingTarget: TargetResolverModule["resolveChannelTarget"];
 let formatTargetDisplay: TargetResolverModule["formatTargetDisplay"];
 
 const mocks = vi.hoisted(() => ({
@@ -28,7 +28,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => value,
 }));
 
-vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getLoadedChannelPlugin(...args),
 }));
 
@@ -39,8 +39,10 @@ vi.mock("../../plugins/runtime.js", () => ({
 }));
 
 beforeAll(async () => {
-  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
-    await import("./target-resolver.js"));
+  const targetResolver = await import("./target-resolver.js");
+  resetDirectoryCache = targetResolver.resetDirectoryCache;
+  resolveMessagingTarget = targetResolver.resolveChannelTarget;
+  formatTargetDisplay = targetResolver.formatTargetDisplay;
 });
 
 beforeEach(() => {
@@ -128,6 +130,83 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(second.target.to).toBe("123456789");
     expect(mocks.listGroups).toHaveBeenCalledTimes(1);
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse query-filtered directory misses for later target queries", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+        targetResolver: {
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    const listMatchingPeers = vi.fn(({ query }: { query?: string }) =>
+      query === "dm" ? [{ kind: "user", id: "+15551234567", name: "ops-dm" }] : [],
+    );
+    mocks.listPeers.mockImplementation(listMatchingPeers);
+    mocks.listPeersLive.mockImplementation(listMatchingPeers);
+    mocks.resolveTarget.mockResolvedValue(null);
+
+    const miss = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "alpha",
+    });
+    expect(miss.ok).toBe(false);
+
+    const hit = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "dm",
+    });
+
+    expect(hit.target).toEqual({
+      to: "+15551234567",
+      kind: "user",
+      display: "ops-dm",
+      source: "directory",
+      resolutionSource: "directory",
+    });
+    expect(mocks.listPeers).toHaveBeenCalledTimes(2);
+    expect(listMatchingPeers).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ query: "alpha" }),
+    );
+    expect(listMatchingPeers).toHaveBeenNthCalledWith(3, expect.objectContaining({ query: "dm" }));
+  });
+
+  it("does not fall back to plugin target resolution after directory errors", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      directory: {
+        listPeers: mocks.listPeers,
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+        targetResolver: {
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listPeers.mockRejectedValue(new Error("Alias ops is invalid."));
+    mocks.resolveTarget.mockResolvedValue({
+      to: "+15551234567",
+      kind: "user",
+      source: "directory",
+    });
+
+    await expect(
+      resolveMessagingTarget({
+        cfg,
+        channel: "richchat",
+        input: "ops",
+      }),
+    ).rejects.toThrow("Alias ops is invalid.");
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
   it("preserves configured directory entries before rejecting reserved literal targets", async () => {
@@ -528,6 +607,51 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.resolveTarget).toHaveBeenCalledOnce();
     expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
+  });
+
+  it("fails closed after directory and plugin misses unless normalized fallback is explicit", async () => {
+    mocks.listGroups.mockResolvedValue([]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+    mocks.resolveTarget.mockResolvedValue(null);
+
+    const rejected = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "missing",
+    });
+    expect(rejected.ok).toBe(false);
+
+    const fallback = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "missing",
+      unknownTargetMode: "normalized",
+    });
+    expect(fallback.target).toMatchObject({
+      to: "missing",
+      source: "normalized",
+      resolutionSource: "normalized",
+    });
+  });
+
+  it("fails closed when a name matches more than one directory destination", async () => {
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "channel:1", name: "general" },
+      { kind: "group", id: "channel:2", name: "general-archive" },
+    ] satisfies ChannelDirectoryEntry[]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "general",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.candidates).toHaveLength(2);
+      expect(result.error.message).toContain("Ambiguous");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
   it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {

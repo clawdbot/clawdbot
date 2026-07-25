@@ -6,10 +6,8 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-import {
-  setFalFetchGuardForTesting,
-  buildFalImageGenerationProvider,
-} from "./image-generation-provider.js";
+import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
+import { setFalFetchGuardForTesting } from "./test-support.js";
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
@@ -26,9 +24,10 @@ function expectFalJsonPost(params: { call: number; url: string; body: Record<str
   expect(JSON.parse(String(request.init?.body))).toEqual(params.body);
 }
 
-function expectFalDownload(params: { call: number; url: string }) {
+function expectFalDownload(params: { call: number; url: string; timeoutMs?: number }) {
   expect(fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0]).toEqual({
     url: params.url,
+    timeoutMs: params.timeoutMs ?? 30_000,
     policy: undefined,
     auditContext: "fal-image-download",
   });
@@ -41,7 +40,37 @@ describe("fal image-generation provider", () => {
 
   afterEach(() => {
     setFalFetchGuardForTesting(null);
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("publishes model-specific Grok and Nano Banana 2 Lite geometry", () => {
+    const geometry = buildFalImageGenerationProvider().capabilities.geometry;
+    const edit = buildFalImageGenerationProvider().capabilities.edit;
+    const grokRatios = geometry?.aspectRatiosByModel?.["xai/grok-imagine-image"];
+    const grokResolutions = geometry?.resolutionsByModel?.["xai/grok-imagine-image"];
+    const nanoResolutions = geometry?.resolutionsByModel?.["google/nano-banana-2-lite"];
+
+    expect(grokRatios).toContain("2:1");
+    expect(grokRatios).toContain("20:9");
+    expect(geometry?.aspectRatiosByModel?.["fal-ai/nano-banana"]).toContain("21:9");
+    expect(geometry?.aspectRatiosByModel?.["fal-ai/nano-banana"]).not.toContain("4:1");
+    expect(grokResolutions).toEqual(["1K", "2K"]);
+    expect(geometry?.aspectRatiosByModel?.["xai/grok-imagine-image/edit"]).toEqual(grokRatios);
+    expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality/edit"]).toEqual(
+      grokResolutions,
+    );
+    expect(nanoResolutions).toEqual([]);
+    expect(geometry?.resolutionsByModel?.["google/nano-banana-2-lite/edit"]).toEqual([]);
+    expect(edit.maxInputImages).toBe(1);
+    expect(edit.maxInputImagesByModel?.["fal-ai/nano-banana"]).toBe(3);
+    expect(edit.maxInputImagesByModelPrefix?.["fal-ai/nano-banana-"]).toBe(14);
+    expect(edit.maxInputImagesByModelPrefix?.["google/nano-banana-2-lite"]).toBe(14);
+    expect(edit.maxInputImagesByModelPrefix?.["xai/grok-imagine-image"]).toBe(3);
+    expect(edit.maxInputImagesByModelPrefix?.["openai/gpt-image-"]).toBe(10);
+    expect(geometry?.resolutionsByModel?.["xai/grok-imagine-image/quality"]).toEqual(
+      grokResolutions,
+    );
   });
 
   it("generates image buffers from the fal sync API", async () => {
@@ -115,6 +144,116 @@ describe("fal image-generation provider", () => {
       model: "fal-ai/flux/dev",
       metadata: { prompt: "draw a cat" },
     });
+  });
+
+  it("shares an explicit operation deadline across generated image downloads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T00:00:00Z"));
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockImplementation(async () => {
+      vi.advanceTimersByTime(5_000);
+      return {
+        apiKey: "fal-test-key",
+        source: "env",
+        mode: "api-key",
+      };
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(10_000);
+        return {
+          response: new Response(
+            JSON.stringify({
+              images: [
+                { url: "https://v3.fal.media/files/example/first.png" },
+                { url: "https://v3.fal.media/files/example/second.png" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+          release: vi.fn(async () => {}),
+        };
+      })
+      .mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(20_000);
+        return {
+          response: new Response(Buffer.from("first"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          }),
+          release: vi.fn(async () => {}),
+        };
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("second"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const result = await buildFalImageGenerationProvider().generateImage({
+      provider: "fal",
+      model: "fal-ai/flux/dev",
+      prompt: "draw two cats",
+      cfg: {},
+      timeoutMs: 180_000,
+      count: 2,
+    });
+
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs).toBe(175_000);
+    expectFalDownload({
+      call: 2,
+      url: "https://v3.fal.media/files/example/first.png",
+      timeoutMs: 165_000,
+    });
+    expectFalDownload({
+      call: 3,
+      url: "https://v3.fal.media/files/example/second.png",
+      timeoutMs: 145_000,
+    });
+    expect(result.images.map((image) => image.buffer.toString())).toEqual(["first", "second"]);
+  });
+
+  it("releases a timed-out generated image download", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    const releaseDownload = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/slow.png" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new DOMException("timed out", "TimeoutError"));
+            },
+          }),
+          { status: 200, headers: { "content-type": "image/png" } },
+        ),
+        release: releaseDownload,
+      });
+
+    await expect(
+      buildFalImageGenerationProvider().generateImage({
+        provider: "fal",
+        model: "fal-ai/flux/dev",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(releaseDownload).toHaveBeenCalledTimes(1);
   });
 
   it("rejects generated image downloads that exceed the configured media cap", async () => {
@@ -479,7 +618,10 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("routes Nano Banana 2 edits through /edit with NB2 geometry", async () => {
+  it.each([
+    { model: "fal-ai/nano-banana", resolution: undefined },
+    { model: "fal-ai/nano-banana-2", resolution: "2K" as const },
+  ])("routes $model edits through /edit with model geometry", async ({ model, resolution }) => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
@@ -510,11 +652,11 @@ describe("fal image-generation provider", () => {
     const provider = buildFalImageGenerationProvider();
     await provider.generateImage({
       provider: "fal",
-      model: "fal-ai/nano-banana-2",
+      model,
       prompt: "blend these references",
       cfg: {},
       aspectRatio: "9:16",
-      resolution: "2K",
+      ...(resolution ? { resolution } : {}),
       inputImages: [
         { buffer: Buffer.from("first"), mimeType: "image/png" },
         { buffer: Buffer.from("second"), mimeType: "image/png" },
@@ -523,11 +665,11 @@ describe("fal image-generation provider", () => {
 
     expectFalJsonPost({
       call: 1,
-      url: "https://fal.run/fal-ai/nano-banana-2/edit",
+      url: `https://fal.run/${model}/edit`,
       body: {
         prompt: "blend these references",
         aspect_ratio: "9:16",
-        resolution: "2K",
+        ...(resolution ? { resolution } : {}),
         num_images: 1,
         output_format: "png",
         image_urls: [
@@ -538,7 +680,18 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("rejects Nano Banana 2 edits above 14 reference images", async () => {
+  it.each([
+    {
+      model: "fal-ai/nano-banana",
+      inputCount: 4,
+      error: "fal Nano Banana supports at most 3 reference images",
+    },
+    {
+      model: "fal-ai/nano-banana-2",
+      inputCount: 15,
+      error: "fal Nano Banana 2 supports at most 14 reference images",
+    },
+  ])("rejects $model edits above its reference limit", async ({ model, inputCount, error }) => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
@@ -550,15 +703,15 @@ describe("fal image-generation provider", () => {
     await expect(
       provider.generateImage({
         provider: "fal",
-        model: "fal-ai/nano-banana-2",
+        model,
         prompt: "too many references",
         cfg: {},
-        inputImages: Array.from({ length: 15 }, () => ({
+        inputImages: Array.from({ length: inputCount }, () => ({
           buffer: Buffer.from("ref"),
           mimeType: "image/png",
         })),
       }),
-    ).rejects.toThrow("fal Nano Banana 2 supports at most 14 reference images");
+    ).rejects.toThrow(error);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
@@ -581,6 +734,375 @@ describe("fal image-generation provider", () => {
       }),
     ).rejects.toThrow("fal Nano Banana 2 supports aspectRatio values");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("routes Nano Banana 2 Lite edits through /edit with image_urls", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/nb2-lite-edited.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("nb2-lite-edited-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "google/nano-banana-2-lite",
+      prompt: "drive the man down the coastline",
+      cfg: {},
+      aspectRatio: "3:2",
+      inputImages: [
+        { buffer: Buffer.from("first"), mimeType: "image/png" },
+        { buffer: Buffer.from("second"), mimeType: "image/png" },
+      ],
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/google/nano-banana-2-lite/edit",
+      body: {
+        prompt: "drive the man down the coastline",
+        aspect_ratio: "3:2",
+        num_images: 1,
+        output_format: "png",
+        image_urls: [
+          `data:image/png;base64,${Buffer.from("first").toString("base64")}`,
+          `data:image/png;base64,${Buffer.from("second").toString("base64")}`,
+        ],
+      },
+    });
+  });
+
+  it("rejects Krea-only aspect ratios for Nano Banana 2 Lite", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "google/nano-banana-2-lite",
+        prompt: "unsupported ratio",
+        cfg: {},
+        aspectRatio: "2.35:1",
+      }),
+    ).rejects.toThrow("fal Nano Banana 2 Lite supports aspectRatio values");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["1K", "2K", "4K"] as const)(
+    "rejects %s resolution overrides for Nano Banana 2 Lite",
+    async (resolution) => {
+      vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+        apiKey: "fal-test-key",
+        source: "env",
+        mode: "api-key",
+      });
+      setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+      const provider = buildFalImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "fal",
+          model: "google/nano-banana-2-lite",
+          prompt: "unsupported resolution",
+          cfg: {},
+          aspectRatio: "1:1",
+          resolution,
+          inputImages: [{ buffer: Buffer.from("src"), mimeType: "image/png" }],
+        }),
+      ).rejects.toThrow("fal Nano Banana 2 Lite does not support resolution overrides");
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects Nano Banana 2 Lite edits above 14 reference images", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "google/nano-banana-2-lite",
+        prompt: "too many references",
+        cfg: {},
+        inputImages: Array.from({ length: 15 }, () => ({
+          buffer: Buffer.from("ref"),
+          mimeType: "image/png",
+        })),
+      }),
+    ).rejects.toThrow("fal Nano Banana 2 Lite supports at most 14 reference images");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "Nano Banana 2 Lite",
+      model: "google/nano-banana-2-lite",
+      aspectRatio: "3:2",
+      resolution: undefined,
+      expectedBody: {
+        prompt: "generate without references",
+        aspect_ratio: "3:2",
+        num_images: 1,
+        output_format: "png",
+      },
+    },
+    {
+      label: "Grok Imagine",
+      model: "xai/grok-imagine-image",
+      aspectRatio: "16:9",
+      resolution: "2K" as const,
+      expectedBody: {
+        prompt: "generate without references",
+        aspect_ratio: "16:9",
+        resolution: "2k",
+        num_images: 1,
+        output_format: "png",
+      },
+    },
+  ])("keeps $label text-to-image on its base endpoint", async (testCase) => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/generated.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("generated-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: testCase.model,
+      prompt: "generate without references",
+      cfg: {},
+      aspectRatio: testCase.aspectRatio,
+      resolution: testCase.resolution,
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: `https://fal.run/${testCase.model}`,
+      body: testCase.expectedBody,
+    });
+  });
+
+  it("routes Grok Imagine edits through /edit with lowercase resolution", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/grok-edited.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("grok-edited-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "xai/grok-imagine-image",
+      prompt: "make it more realistic",
+      cfg: {},
+      aspectRatio: "16:9",
+      resolution: "2K",
+      inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/jpeg" }],
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/xai/grok-imagine-image/edit",
+      body: {
+        prompt: "make it more realistic",
+        aspect_ratio: "16:9",
+        resolution: "2k",
+        num_images: 1,
+        output_format: "png",
+        image_urls: [`data:image/jpeg;base64,${Buffer.from("source").toString("base64")}`],
+      },
+    });
+  });
+
+  it("rejects 4K resolution for Grok Imagine edits", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "xai/grok-imagine-image",
+        prompt: "too big",
+        cfg: {},
+        aspectRatio: "1:1",
+        resolution: "4K",
+        inputImages: [{ buffer: Buffer.from("src"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("fal Grok Imagine supports resolution values: 1K, 2K");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Nano Banana ratios for Grok Imagine", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "xai/grok-imagine-image",
+        prompt: "unsupported ratio",
+        cfg: {},
+        aspectRatio: "21:9",
+      }),
+    ).rejects.toThrow("fal Grok Imagine supports aspectRatio values");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Grok Imagine edits above 3 reference images", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "xai/grok-imagine-image",
+        prompt: "too many references",
+        cfg: {},
+        inputImages: Array.from({ length: 4 }, () => ({
+          buffer: Buffer.from("ref"),
+          mimeType: "image/png",
+        })),
+      }),
+    ).rejects.toThrow("fal Grok Imagine supports at most 3 reference images");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit Grok Imagine /quality/edit model path", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/grok-explicit.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("grok-explicit-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "xai/grok-imagine-image/quality/edit",
+      prompt: "explicit edit endpoint",
+      cfg: {},
+      inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/xai/grok-imagine-image/quality/edit",
+      body: {
+        prompt: "explicit edit endpoint",
+        num_images: 1,
+        output_format: "png",
+        image_urls: [`data:image/png;base64,${Buffer.from("source").toString("base64")}`],
+      },
+    });
   });
 
   it("preserves exact custom Fal edit endpoints", async () => {
@@ -1094,3 +1616,4 @@ describe("fal image-generation provider", () => {
     expectFalDownload({ call: 2, url: "http://media.relay.internal/files/generated.png" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

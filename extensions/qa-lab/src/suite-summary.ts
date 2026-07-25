@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { QaSuiteArtifactError } from "./errors.js";
-import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
+import type { QaEvidenceSummaryJson, QaEvidenceTiming } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
@@ -12,6 +12,7 @@ type QaSuiteSummaryScenario = {
   status: "pass" | "fail" | "skip" | "skipped";
   steps: unknown[];
   details?: string;
+  timing?: QaEvidenceTiming;
   runtimeParity?: RuntimeParityResult;
 };
 
@@ -116,7 +117,7 @@ export function countQaSuiteFailedScenarios(
   return failed;
 }
 
-export function countQaSuiteFailedOrSkippedScenarios(
+function countQaSuiteFailedOrSkippedScenarios(
   scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
 ): number {
   let blocking = 0;
@@ -128,7 +129,7 @@ export function countQaSuiteFailedOrSkippedScenarios(
   return blocking;
 }
 
-export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
+function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
   if (!summary || typeof summary !== "object") {
     return null;
   }
@@ -161,9 +162,7 @@ export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): num
   return countedFailures;
 }
 
-export function readQaSuiteFailedOrSkippedScenarioCountFromSummary(
-  summary: unknown,
-): number | null {
+function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): number | null {
   if (!summary || typeof summary !== "object") {
     return null;
   }

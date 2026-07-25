@@ -76,7 +76,7 @@ describe("prompt composition invariants", () => {
     expect(always.bodyPrompt).toContain("[Bootstrap truncation warning]");
   });
 
-  it("keeps the group auto-reply prompt dynamic only across the first-turn intro boundary", () => {
+  it("keeps the group auto-reply prompt stable across the first-turn intro boundary", () => {
     const groupScenario = getScenario(fixture, "auto-reply-group");
     const first = getTurn(groupScenario, "t1");
     const steady = getTurn(groupScenario, "t2");
@@ -89,10 +89,10 @@ describe("prompt composition invariants", () => {
     expect(first.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
     expect(steady.systemPrompt).toContain("prefer delegating bounded side investigations early");
+    expect(steady.systemPrompt).toContain("Activation: trigger-only");
     expect(steady.systemPrompt).toContain('reply with exactly "NO_REPLY"');
     expect(steady.systemPrompt).not.toContain("## Silent Replies");
-    expect(steady.systemPrompt).not.toContain("Activation: trigger-only");
-    expect(first.systemPrompt).not.toBe(steady.systemPrompt);
+    expect(first.systemPrompt).toBe(steady.systemPrompt);
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
   });
 

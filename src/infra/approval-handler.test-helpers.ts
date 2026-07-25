@@ -6,6 +6,7 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-run
 // behavior instead of rebuilding the native adapter shape.
 export type ApprovalNativeRuntimeAdapterStubParams = {
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
+  shouldHandle?: ChannelApprovalNativeRuntimeAdapter["availability"]["shouldHandle"];
   buildResolvedResult?: ChannelApprovalNativeRuntimeAdapter["presentation"]["buildResolvedResult"];
   unbindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["unbindPending"];
   cancelDelivered?: NonNullable<
@@ -21,10 +22,10 @@ export function createApprovalNativeRuntimeAdapterStubs(
   params: ApprovalNativeRuntimeAdapterStubParams = {},
 ): ChannelApprovalNativeRuntimeAdapter {
   return {
-    resolveApprovalKind: params.resolveApprovalKind,
+    ...(params.resolveApprovalKind ? { resolveApprovalKind: params.resolveApprovalKind } : {}),
     availability: {
       isConfigured: vi.fn().mockReturnValue(true),
-      shouldHandle: vi.fn().mockReturnValue(true),
+      shouldHandle: params.shouldHandle ?? vi.fn().mockReturnValue(true),
     },
     presentation: {
       buildPendingPayload: vi.fn().mockResolvedValue({ text: "pending" }),

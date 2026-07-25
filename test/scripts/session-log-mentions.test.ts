@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   countSessionLogMentions,
@@ -61,7 +62,7 @@ describe("session log mention scanner", () => {
         }),
         JSON.stringify({
           role: "assistant",
-          content: "API.read MCP.fixture fixture__lookup_note",
+          content: 'API.read MCP.fixture fixture__lookup_note tools.search("lookup note")',
         }),
         "raw transcript fallback API.read",
         "",
@@ -75,12 +76,114 @@ describe("session log mention scanner", () => {
           apiFileRead: "API.read",
           mcpNamespace: "MCP.fixture",
           mcpTool: "fixture__lookup_note",
+          toolSearchPollution: 'tools.search("lookup note"',
         },
       }),
     ).resolves.toEqual({
       apiFileRead: 2,
       mcpNamespace: 1,
       mcpTool: 1,
+      toolSearchPollution: 1,
+    });
+  });
+
+  it("counts mentions from SQLite transcript rows", async () => {
+    const root = makeTempRoot();
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+    const db = new DatabaseSync(sqlitePath);
+    try {
+      db.exec(`
+        CREATE TABLE transcript_events (
+          session_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          event_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (session_id, seq)
+        );
+      `);
+      const insert = db.prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+      );
+      insert.run(
+        "sqlite-session",
+        1,
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: "Use API.read and MCP.fixture from the prompt.",
+          },
+        }),
+        1,
+      );
+      insert.run(
+        "sqlite-session",
+        2,
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: 'API.read MCP.fixture fixture__lookup_note tools.search("lookup note")',
+          },
+        }),
+        2,
+      );
+    } finally {
+      db.close();
+    }
+
+    await expect(
+      countSessionLogMentions({
+        sessionsDir,
+        needles: {
+          apiFileRead: "API.read",
+          mcpNamespace: "MCP.fixture",
+          mcpTool: "fixture__lookup_note",
+          toolSearchPollution: 'tools.search("lookup note"',
+        },
+      }),
+    ).resolves.toEqual({
+      apiFileRead: 1,
+      mcpNamespace: 1,
+      mcpTool: 1,
+      toolSearchPollution: 1,
+    });
+  });
+
+  it("rejects oversized SQLite transcript rows before counting them", async () => {
+    const root = makeTempRoot();
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const sqlitePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+    const db = new DatabaseSync(sqlitePath);
+    try {
+      db.exec(`
+        CREATE TABLE transcript_events (
+          session_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          event_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (session_id, seq)
+        );
+      `);
+      db.prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+      ).run("sqlite-session", 1, "API.read ".repeat(16), 1);
+    } finally {
+      db.close();
+    }
+
+    await expect(
+      countSessionLogMentions({
+        limits: { fileMaxBytes: 32, totalMaxBytes: 1024 },
+        sessionsDir,
+        needles: {
+          apiFileRead: "API.read",
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: expect.stringContaining("per-file limit"),
     });
   });
 

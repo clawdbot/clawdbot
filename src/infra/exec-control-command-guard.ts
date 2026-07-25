@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../utils/shell-argv.js";
@@ -9,9 +10,9 @@ type ParsedExecApprovalCommand = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-export type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
+type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
 
-export function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
+function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
   const normalized = raw.trimStart();
   const match = normalized.match(
     /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
@@ -20,7 +21,7 @@ export function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCo
     return null;
   }
   return {
-    approvalId: match[1],
+    approvalId: expectDefined(match[1], "exec control command guard regex capture 1"),
     decision:
       normalizeLowercaseStringOrEmpty(match[2]) === "always"
         ? "allow-always"
@@ -57,7 +58,7 @@ function stripOpenClawPackageRunner(argv: string[]): string[] {
   if (commandName === "npx" || commandName === "bunx") {
     let idx = 1;
     while (idx < argv.length) {
-      const token = argv[idx];
+      const token = expectDefined(argv[idx], "argv entry at idx");
       if (token === "--") {
         idx += 1;
         break;
@@ -77,7 +78,7 @@ function stripOpenClawPackageRunner(argv: string[]): string[] {
   return argv;
 }
 
-export function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
+function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   const argv = splitShellArgs(raw);
   if (!argv) {
     return false;

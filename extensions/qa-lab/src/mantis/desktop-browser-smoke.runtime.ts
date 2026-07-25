@@ -39,7 +39,7 @@ export type MantisDesktopBrowserSmokeOptions = {
   videoDurationSeconds?: number;
 };
 
-export type MantisDesktopBrowserSmokeResult = {
+type MantisDesktopBrowserSmokeResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;

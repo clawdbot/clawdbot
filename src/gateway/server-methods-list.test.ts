@@ -2,7 +2,14 @@
  * Tests the registered gateway server method list and exported method names.
  */
 import { describe, expect, it } from "vitest";
+import {
+  createCoreGatewayMethodDescriptors,
+  listCoreGatewayMethodNames,
+  STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+} from "./methods/core-descriptors.js";
+import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("GATEWAY_EVENTS", () => {
   it("advertises Talk event streams in hello features", () => {
@@ -10,17 +17,106 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.realtime.relay");
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
+
+  it("advertises node presence activity updates", () => {
+    expect(GATEWAY_EVENTS).toContain("node.presence");
+  });
+
+  it("advertises session observer digests", () => {
+    expect(GATEWAY_EVENTS).toContain("session.observer");
+  });
+
+  it("advertises question methods and events", () => {
+    expect(GATEWAY_EVENTS).toContain("question.requested");
+    expect(GATEWAY_EVENTS).toContain("question.resolved");
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "question.request",
+        "question.waitAnswer",
+        "question.resolve",
+        "question.get",
+        "question.list",
+      ]),
+    );
+  });
 });
 
 describe("listGatewayMethods", () => {
   it("advertises plugin surface refresh for capability rotation", () => {
+    expect(listGatewayMethods()).toContain("plugin.surface.refresh");
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
+  });
+
+  it("advertises node plugin tool catalog updates", () => {
+    expect(listGatewayMethods()).toContain("node.pluginTools.update");
+  });
+
+  it("advertises node skill catalog updates", () => {
+    expect(listGatewayMethods()).toContain("node.skills.update");
+  });
+
+  it("advertises unified approval lookup, history, and resolution", () => {
+    expect(listGatewayMethods()).toContain("approval.get");
+    expect(listGatewayMethods()).toContain("approval.history");
+    expect(listGatewayMethods()).toContain("approval.resolve");
+  });
+
+  it("appends new methods after model probing without shifting older method indices", () => {
+    expect(listGatewayMethods().slice(-22)).toEqual([
+      "models.probe",
+      "migrations.memory.plan",
+      "migrations.memory.apply",
+      "ui.command",
+      "approval.history",
+      "plugin.surface.refresh",
+      "conversations.list",
+      "session.discussion.info",
+      "session.discussion.open",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+      "sessions.observer.ask",
+      "sessions.observer.visibility",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
+    ]);
+    const methods = listGatewayMethods();
+    expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
+      methods.indexOf("node.describe") + 1,
+    );
+    expect(methods.indexOf("node.pluginTools.update")).toBe(
+      methods.indexOf("node.pluginSurface.refresh") + 1,
+    );
   });
 
   it("advertises ClawHub skill trust methods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("skills.securityVerdicts");
     expect(methods).toContain("skills.skillCard");
+  });
+
+  it("advertises Control UI GitHub previews", () => {
+    expect(listGatewayMethods()).toContain("controlUi.githubPreview");
+  });
+
+  it("advertises Control UI session pull request detection", () => {
+    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
+  });
+
+  it("advertises session workspace reveal", () => {
+    expect(listGatewayMethods()).toContain("sessions.files.reveal");
+    expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");
+  });
+
+  it("advertises the versioned activity audit method", () => {
+    expect(listGatewayMethods()).toContain("audit.activity.list");
+    expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
   });
 
   it("does not advertise hidden core handlers", () => {
@@ -33,6 +129,7 @@ describe("listGatewayMethods", () => {
 
   it("preserves the legacy advertised method order", () => {
     const methods = listGatewayMethods();
+    const coreMethods = listCoreGatewayMethodNames();
     expect(methods.slice(0, 5)).toEqual([
       "health",
       "diagnostics.stability",
@@ -47,11 +144,47 @@ describe("listGatewayMethods", () => {
       "exec.approvals.node.set",
       "exec.approval.get",
     ]);
+    expect(methods).toContain("tts.speak");
+    expect(coreMethods.slice(-29)).toEqual([
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+      "approval.get",
+      "approval.resolve",
+      "sessions.search",
+      "sessions.dispatch",
+      "sessions.reclaim",
+      "models.probe",
+      "migrations.memory.plan",
+      "migrations.memory.apply",
+      "ui.command",
+      "approval.history",
+      "plugin.surface.refresh",
+      "conversations.list",
+      "session.discussion.info",
+      "session.discussion.open",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+      "sessions.observer.ask",
+      "sessions.observer.visibility",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
+    ]);
+    expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
+    expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
+    expect(methods).toContain("talk.client.transcript");
+    expect(methods).toContain("talk.client.close");
     expect(methods).toContain("talk.client.toolCall");
     expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
@@ -61,8 +194,40 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.endTurn");
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
+    expect(methods).toContain("talk.session.acknowledgeMark");
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
+  });
+
+  it("advertises and wires cloud worker environment mutations", () => {
+    const methods = ["environments.create", "environments.destroy"] as const;
+    const advertisedMethods = listGatewayMethods();
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    for (const method of methods) {
+      expect(advertisedMethods).toContain(method);
+      expect(coreGatewayHandlers[method]).toEqual(expect.any(Function));
+      expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope: "operator.admin",
+        startup: "unavailable-until-sidecars",
+        controlPlaneWrite: true,
+      });
+    }
+  });
+
+  it("wires a dispatchable handler for every core descriptor", () => {
+    // A descriptor without a matching entry in the lazy handler routing table
+    // advertises a method that then dispatches as "unknown method" — exactly
+    // how terminal.attach/list/text and later sessions.dispatch first shipped
+    // broken. Aux methods are injected at server construction; assistant media
+    // is served by the control-ui handler.
+    const injectedElsewhere = new Set<string>([...GATEWAY_AUX_METHODS, "assistant.media.get"]);
+    const missing = listCoreGatewayMethodNames()
+      .filter((method) => !injectedElsewhere.has(method))
+      .filter((method) => typeof coreGatewayHandlers[method] !== "function");
+    expect(missing).toEqual([]);
   });
 });

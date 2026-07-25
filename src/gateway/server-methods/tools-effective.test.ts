@@ -1,5 +1,7 @@
 // Effective tools tests cover session-scoped tool inventory, MCP catalog state,
 // caching behavior, delivery context, and policy filtering.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
@@ -66,7 +68,17 @@ const runtimeMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./tools-effective.runtime.js", () => runtimeMocks);
+vi.mock("./tools-effective.runtime.js", () => ({
+  ...runtimeMocks,
+  loadSessionEntryReadOnly: runtimeMocks.loadSessionEntry,
+}));
+
+const nodePluginToolSnapshotMocks = vi.hoisted(() => ({
+  version: 1,
+  getConnectedNodePluginToolsVersion: vi.fn(() => nodePluginToolSnapshotMocks.version),
+}));
+
+vi.mock("../node-plugin-tool-snapshot.js", () => nodePluginToolSnapshotMocks);
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 type ToolsEffectivePayload = {
@@ -93,7 +105,10 @@ function createInvokeParams(params: Record<string, unknown>) {
   return {
     respond,
     invoke: async () =>
-      await toolsEffectiveHandlers["tools.effective"]({
+      await expectDefined(
+        toolsEffectiveHandlers["tools.effective"],
+        'toolsEffectiveHandlers["tools.effective"] test invariant',
+      )({
         params,
         respond: respond as never,
         context: { getRuntimeConfig: () => ({}) } as never,
@@ -224,6 +239,7 @@ describe("tools.effective handler", () => {
     vi.clearAllMocks();
     testing.resetToolsEffectiveCacheForTest();
     testing.resetToolsEffectiveNowForTest();
+    nodePluginToolSnapshotMocks.version = 1;
     runtimeMocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace-main");
     runtimeMocks.resolveAgentDir.mockReturnValue("/tmp/agents/main/agent");
     runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
@@ -342,6 +358,19 @@ describe("tools.effective handler", () => {
     expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
     expect(runtimeMocks.peekSessionMcpRuntime).toHaveBeenCalledTimes(2);
     expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledTimes(1);
+    expectResponsesOk(first.respond, second.respond);
+  });
+
+  it("recomputes fresh base inventory when connected node plugin tools change", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+
+    nodePluginToolSnapshotMocks.version = 2;
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
     expectResponsesOk(first.respond, second.respond);
   });
 
@@ -574,20 +603,82 @@ describe("tools.effective handler", () => {
     expect(firstRespondCall(respond)?.[0]).toBe(true);
   });
 
-  it("rejects agent ids that do not match the session agent", async () => {
+  it("rejects unknown agent ids before loading the session", async () => {
     const { respond, invoke } = createInvokeParams({
       sessionKey: "main:abc",
       agentId: "other",
     });
-    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
-      cfg: {},
-      canonicalKey: "main:abc",
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-      },
-    } as never);
+    // `other` is not configured, so the handler rejects before reaching
+    // loadSessionEntry; no session mock is queued here on purpose.
     await invoke();
     expectInvalidResponse(respond, 'unknown agent id "other"');
+    expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("loads global sessions with the requested agent id before matching session agent", async () => {
+    runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "work"]);
+    runtimeMocks.loadSessionEntry.mockImplementationOnce(
+      () =>
+        ({
+          cfg: {},
+          canonicalKey: "global",
+          entry: {
+            sessionId: "session-work-global",
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-4.1",
+          },
+          storePath: "/tmp/work/sessions.json",
+          store: {},
+          storeKeys: ["global"],
+        }) as never,
+    );
+    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("work");
+    runtimeMocks.resolveAgentDir.mockReturnValueOnce("/tmp/agents/work/agent");
+    runtimeMocks.resolveAgentWorkspaceDir.mockReturnValueOnce("/tmp/workspace-work");
+    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(makeCoreInventory());
+
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "global",
+      agentId: "work",
+    });
+    await invoke();
+
+    expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(runtimeMocks.resolveSessionAgentId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+      }),
+    );
+    const call = firstRespondCall(respond);
+    expect(call?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.agentId).toBe("work");
+    expect(runtimeMocks.resolveAgentDir).toHaveBeenCalledWith({}, "work");
+  });
+
+  it("does not let a requested agent override ownership of a non-global session key", async () => {
+    runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "work"]);
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "agent:main:abc",
+      entry: { sessionId: "session-main", updatedAt: 1 },
+    } as never);
+    // Persisted owner of the non-global key.
+    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("main");
+
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "agent:main:abc",
+      agentId: "work",
+    });
+    await invoke();
+
+    // Wiring guard: for a non-global key the requested agent must NOT be forwarded
+    // as the session-agent override, otherwise the real resolver would prefer
+    // "work" and silently pass the mismatch check below.
+    expect(runtimeMocks.resolveSessionAgentId).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
+    expectInvalidResponse(respond, 'agent id "work" does not match session agent "main"');
+    expect(runtimeMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
 });

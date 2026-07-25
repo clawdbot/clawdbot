@@ -1,12 +1,13 @@
 // Mistral tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  buildMistralCatalogModels,
-  buildMistralModelDefinition,
-  MISTRAL_DEFAULT_MODEL_ID,
-} from "./model-definitions.js";
+import { buildMistralModelDefinition, MISTRAL_DEFAULT_MODEL_ID } from "./model-definitions.js";
+import { buildMistralProvider } from "./provider-catalog.js";
 
-function catalogModelById(models: ReturnType<typeof buildMistralCatalogModels>, id: string) {
+function buildCatalogModels() {
+  return buildMistralProvider().models;
+}
+
+function catalogModelById(models: ReturnType<typeof buildCatalogModels>, id: string) {
   const model = models.find((candidate) => candidate.id === id);
   if (!model) {
     throw new Error(`expected Mistral catalog model ${id}`);
@@ -29,7 +30,7 @@ describe("mistral model definitions", () => {
   });
 
   it("prices cached Mistral input tokens at ten percent of standard input tokens", () => {
-    const models = buildMistralCatalogModels();
+    const models = buildCatalogModels();
 
     for (const model of models) {
       expect(model.cost.cacheRead).toBeCloseTo(model.cost.input * 0.1, 10);
@@ -47,7 +48,7 @@ describe("mistral model definitions", () => {
   });
 
   it("publishes a curated set of current Mistral catalog models", () => {
-    const models = buildMistralCatalogModels();
+    const models = buildCatalogModels();
     const codestral = catalogModelById(models, "codestral-latest");
     expect(codestral.input).toEqual(["text"]);
     expect(codestral.contextWindow).toBe(256000);
@@ -68,8 +69,21 @@ describe("mistral model definitions", () => {
     const smallLatest = catalogModelById(models, "mistral-small-latest");
     expect(smallLatest.reasoning).toBe(true);
     expect(smallLatest.input).toEqual(["text", "image"]);
-    expect(smallLatest.contextWindow).toBe(128000);
+    expect(smallLatest.contextWindow).toBe(262144);
     expect(smallLatest.maxTokens).toBe(16384);
+    expect(smallLatest.cost).toEqual({
+      input: 0.15,
+      output: 0.6,
+      cacheRead: 0.015,
+      cacheWrite: 0,
+    });
+
+    const small4 = catalogModelById(models, "mistral-small-2603");
+    expect(small4.reasoning).toBe(true);
+    expect(small4.input).toEqual(["text", "image"]);
+    expect(small4.contextWindow).toBe(262144);
+    expect(small4.maxTokens).toBe(16384);
+    expect(small4.cost).toEqual(smallLatest.cost);
 
     const pixtralLarge = catalogModelById(models, "pixtral-large-latest");
     expect(pixtralLarge.input).toEqual(["text", "image"]);

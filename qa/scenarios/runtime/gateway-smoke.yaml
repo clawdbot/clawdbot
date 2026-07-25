@@ -6,7 +6,6 @@ scenario:
   coverage:
     primary:
       - gateway.websocket-transport
-    secondary:
       - gateway.health-apis
       - gateway.hello-ok-snapshot
   objective: Exercise gateway health and WebSocket smoke assertions through QA Lab evidence.
@@ -19,8 +18,15 @@ scenario:
     - docs/gateway/index.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    - extensions/qa-lab/src/gateway-child.ts
     - test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts
-    summary: Vitest coverage for gateway health and WebSocket smoke checks.
+    kind: script
+    path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    summary: Starts a real Gateway child and exercises the Gateway smoke client against its WebSocket and health RPC surfaces.
+    args:
+      - --scenario
+      - gateway-smoke
+      - --artifact-base
+      - ${outputDir}

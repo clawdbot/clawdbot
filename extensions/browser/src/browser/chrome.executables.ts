@@ -24,6 +24,9 @@ const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 const BROWSER_VERSION_TIMEOUT_MS = 6000;
 const MAC_PLISTBUDDY_TIMEOUT_MS = 800;
+const WINDOWS_FILE_METADATA_TIMEOUT_MS = 4000;
+const DEFAULT_WINDOWS_PROGRAM_FILES = "C:\\Program Files";
+const DEFAULT_WINDOWS_PROGRAM_FILES_X86 = "C:\\Program Files (x86)";
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -78,7 +81,6 @@ const CHROMIUM_EXE_NAMES = new Set([
   "chromium.exe",
   "vivaldi.exe",
   "opera.exe",
-  "launcher.exe",
   "yandex.exe",
   "yandexbrowser.exe",
   // mac/linux names
@@ -321,11 +323,37 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   if (!exists(exePath)) {
     return null;
   }
-  const exeName = normalizeLowercaseStringOrEmpty(path.win32.basename(exePath));
+  const directPath = resolveDirectWindowsBrowserExecutable(exePath);
+  if (!directPath) {
+    return null;
+  }
+  const exeName = normalizeLowercaseStringOrEmpty(path.win32.basename(directPath));
   if (!CHROMIUM_EXE_NAMES.has(exeName)) {
     return null;
   }
-  return { kind: inferKindFromExecutableName(exeName), path: exePath };
+  return { kind: inferKindFromExecutableName(exeName), path: directPath };
+}
+
+/** Resolve launchers that hand off to another process into a directly owned browser binary. */
+function resolveDirectWindowsBrowserExecutable(executablePath: string): string | null {
+  if (normalizeLowercaseStringOrEmpty(path.win32.basename(executablePath)) !== "launcher.exe") {
+    return executablePath;
+  }
+  const installDir = path.win32.dirname(executablePath);
+  try {
+    const status = JSON.parse(
+      fs.readFileSync(path.win32.join(installDir, "installation_status.json"), "utf8"),
+    ) as unknown;
+    const subfolder =
+      status && typeof status === "object" ? Reflect.get(status, "_subfolder") : null;
+    if (typeof subfolder !== "string" || !WINDOWS_VERSION_DIR_RE.test(subfolder)) {
+      return null;
+    }
+    const candidate = path.win32.join(installDir, subfolder, "opera.exe");
+    return exists(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 function findDesktopFilePath(desktopId: string): string | null {
@@ -445,19 +473,46 @@ function readWindowsCommandForProgId(progId: string): string | null {
   return normalizeOptionalString(match?.[1]) ?? null;
 }
 
+function resolveWindowsBrowserInstallRoots() {
+  return {
+    localAppData:
+      normalizeOptionalString(process.env.LOCALAPPDATA) ??
+      path.win32.join(os.homedir(), "AppData", "Local"),
+    programFiles:
+      normalizeOptionalString(process.env.ProgramFiles) ?? DEFAULT_WINDOWS_PROGRAM_FILES,
+    // Must use bracket notation: variable name contains parentheses.
+    programFilesX86:
+      normalizeOptionalString(process.env["ProgramFiles(x86)"]) ??
+      DEFAULT_WINDOWS_PROGRAM_FILES_X86,
+  };
+}
+
 function expandWindowsEnvVars(value: string): string {
+  const installRoots = resolveWindowsBrowserInstallRoots();
+  const installRootByEnvName: Record<string, string> = {
+    localappdata: installRoots.localAppData,
+    programfiles: installRoots.programFiles,
+    "programfiles(x86)": installRoots.programFilesX86,
+  };
   return value.replace(/%([^%]+)%/g, (_match, name) => {
-    const key = normalizeOptionalString(name) ?? "";
-    return key ? (process.env[key] ?? `%${key}%`) : _match;
+    const key = normalizeOptionalString(name);
+    if (!key) {
+      return _match;
+    }
+    return (
+      normalizeOptionalString(process.env[key]) ??
+      installRootByEnvName[key.toLowerCase()] ??
+      `%${key}%`
+    );
   });
 }
 
 function extractWindowsExecutablePath(command: string): string | null {
-  const quoted = command.match(/"([^"]+\\.exe)"/i);
+  const quoted = command.match(/"([^"]+\.exe)"/i);
   if (quoted?.[1]) {
     return quoted[1];
   }
-  const unquoted = command.match(/([^\\s]+\\.exe)/i);
+  const unquoted = command.match(/^\s*(\S+\.exe)(?:\s|$)/i);
   if (unquoted?.[1]) {
     return unquoted[1];
   }
@@ -537,7 +592,7 @@ function readSortedDirNames(dir: string): string[] {
 }
 
 /** Find the best Chromium-family executable on macOS. */
-export function findChromeExecutableMac(): BrowserExecutable | null {
+function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
       kind: "chrome",
@@ -603,7 +658,7 @@ function findGoogleChromeExecutableMac(): BrowserExecutable | null {
 }
 
 /** Find the best Chromium-family executable on Linux. */
-export function findChromeExecutableLinux(): BrowserExecutable | null {
+function findChromeExecutableLinux(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     { kind: "chrome", path: "/usr/bin/google-chrome" },
     { kind: "chrome", path: "/usr/bin/google-chrome-stable" },
@@ -639,11 +694,8 @@ function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
 }
 
 /** Find the best Chromium-family executable on Windows. */
-export function findChromeExecutableWindows(): BrowserExecutable | null {
-  const localAppData = process.env.LOCALAPPDATA ?? "";
-  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-  // Must use bracket notation: variable name contains parentheses.
-  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+function findChromeExecutableWindows(): BrowserExecutable | null {
+  const { localAppData, programFiles, programFilesX86 } = resolveWindowsBrowserInstallRoots();
   const joinWin = path.win32.join;
   const candidates: Array<BrowserExecutable> = [];
 
@@ -710,9 +762,7 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
 }
 
 function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
-  const localAppData = process.env.LOCALAPPDATA ?? "";
-  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const { localAppData, programFiles, programFilesX86 } = resolveWindowsBrowserInstallRoots();
   const joinWin = path.win32.join;
   const candidates: string[] = [];
 
@@ -743,13 +793,19 @@ export function resolveGoogleChromeExecutableForPlatform(
   return null;
 }
 
-/** Read a browser executable version string using its command-line flag. */
+/** Read a browser executable version from platform metadata or a command-line probe. */
 export function readBrowserVersion(executablePath: string): string | null {
   if (process.platform === "darwin") {
     const bundleVersion = readMacBundleBrowserVersion(executablePath);
     if (bundleVersion) {
       return bundleVersion;
     }
+  }
+
+  if (process.platform === "win32") {
+    // Windows GUI browsers do not report `--version` to inherited stdout.
+    // Read PE metadata first, then use the install layout only as a safe fallback.
+    return readWindowsBrowserVersion(executablePath);
   }
 
   const output = execText(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
@@ -770,6 +826,50 @@ function readMacBundleBrowserVersion(executablePath: string): string | null {
     ["-c", "Print :CFBundleShortVersionString", plistPath],
     MAC_PLISTBUDDY_TIMEOUT_MS,
   );
+}
+
+const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
+
+function readWindowsBrowserVersion(executablePath: string): string | null {
+  // Read the inspected executable's authoritative PE metadata. Pass the path as
+  // data so a configured path cannot become part of the PowerShell program.
+  const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
+  const systemRoot =
+    configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
+      ? configuredSystemRoot
+      : "C:\\Windows";
+  const powershellPath = path.win32.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const metadataVersion = execText(
+    powershellPath,
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($args[0]).ProductVersion",
+      executablePath,
+    ],
+    WINDOWS_FILE_METADATA_TIMEOUT_MS,
+  );
+  if (metadataVersion) {
+    return metadataVersion.replace(/\s+/g, " ").trim();
+  }
+
+  // Standard Chromium installers also keep a versioned child directory. Only
+  // trust that layout when it is unambiguous; updates may leave two builds.
+  try {
+    const versionDirs = fs
+      .readdirSync(path.win32.dirname(executablePath), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name));
+    return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {
@@ -801,7 +901,16 @@ export function resolveBrowserExecutableForPlatform(
     if (!exists(resolved.executablePath)) {
       throw new Error(`browser.executablePath not found: ${resolved.executablePath}`);
     }
-    return { kind: "custom", path: resolved.executablePath };
+    const directPath =
+      platform === "win32"
+        ? resolveDirectWindowsBrowserExecutable(resolved.executablePath)
+        : resolved.executablePath;
+    if (!directPath) {
+      throw new Error(
+        `browser.executablePath must point to the browser executable, not a handoff launcher: ${resolved.executablePath}`,
+      );
+    }
+    return { kind: "custom", path: directPath };
   }
 
   const detected = detectDefaultChromiumExecutable(platform);
@@ -820,3 +929,4 @@ export function resolveBrowserExecutableForPlatform(
   }
   return null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -192,6 +192,39 @@ describe("resolveModelAuthLabel", () => {
     });
   });
 
+  it("uses Codex CLI auth for Codex-backed OpenAI before env fallback", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai",
+      access: "token",
+      refresh: "refresh",
+      expires: Date.now() + 60_000,
+    });
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "env-key-placeholder",
+      source: "env: OPENAI_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "openai",
+      cfg: {},
+      codexCliCredentialsHome: "/tmp/openclaw-agent/codex-home",
+    });
+
+    expect(label).toBe("oauth (codex-cli)");
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      codexHome: "/tmp/openclaw-agent/codex-home",
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
   it("shows claude cli auth for claude-cli provider without auth profiles", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
@@ -212,6 +245,30 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (claude-cli)");
+    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+  });
+
+  it("shows claude cli apiKeyHelper auth without calling it oauth", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: "helper-hash",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "claude-cli",
+      cfg: {},
+    });
+
+    expect(label).toBe("api-key-helper (claude-cli)");
     expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith({
       ttlMs: 5_000,
       allowKeychainPrompt: false,

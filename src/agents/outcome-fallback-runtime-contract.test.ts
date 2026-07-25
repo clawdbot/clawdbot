@@ -1,4 +1,6 @@
 // Verifies embedded runtime outcome classifications drive model fallback correctly.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
@@ -403,7 +405,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   });
 
   it("keeps running on the primary when terminal output is not classified as fallback", async () => {
-    const contractCase = nonFallbackCases[0];
+    const contractCase = expectDefined(nonFallbackCases[0], "nonFallbackCases[0] test invariant");
     const run = vi.fn().mockResolvedValue(contractCase.result);
     const result = await runWithModelFallback({
       cfg: undefined,

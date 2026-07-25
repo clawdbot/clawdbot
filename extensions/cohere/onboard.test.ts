@@ -2,11 +2,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
 import { buildCohereCatalogModels, COHERE_BASE_URL, COHERE_MODEL_CATALOG } from "./models.js";
-import {
-  applyCohereConfig,
-  COHERE_DEFAULT_MODEL_ID,
-  COHERE_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+import { applyCohereConfig, COHERE_DEFAULT_MODEL_REF } from "./onboard.js";
+
+const COHERE_DEFAULT_MODEL_ID = "command-a-plus-05-2026";
+const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
+const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
+const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 describe("Cohere onboarding", () => {
   it("registers the manifest catalog through the onboarding preset", () => {
@@ -17,7 +18,13 @@ describe("Cohere onboarding", () => {
       baseUrl: COHERE_BASE_URL,
       api: "openai-completions",
     });
-    expect(provider?.models?.map((model) => model.id)).toEqual([COHERE_DEFAULT_MODEL_ID]);
+    expect(provider?.models?.map((model) => model.id)).toEqual([
+      COHERE_DEFAULT_MODEL_ID,
+      "command-a-03-2025",
+      COHERE_COMMAND_A_REASONING_MODEL_ID,
+      COHERE_COMMAND_A_VISION_MODEL_ID,
+      COHERE_NORTH_MINI_CODE_MODEL_ID,
+    ]);
     expect(buildCohereCatalogModels()).toHaveLength(COHERE_MODEL_CATALOG.length);
   });
 
@@ -34,7 +41,7 @@ describe("Cohere onboarding", () => {
 
     expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openai/gpt-5.5");
     expect(result.agents?.defaults?.models?.[COHERE_DEFAULT_MODEL_REF]).toEqual({
-      alias: "Cohere Command A",
+      alias: "Cohere Command A+",
     });
   });
 

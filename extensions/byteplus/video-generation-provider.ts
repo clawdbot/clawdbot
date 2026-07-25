@@ -1,6 +1,7 @@
 /**
  * BytePlus Seedance video generation provider implementation.
  */
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -9,12 +10,11 @@ import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
-  fetchProviderOperationResponse,
+  pollProviderOperationJson,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -30,7 +30,7 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import { BYTEPLUS_BASE_URL } from "./models.js";
 
-const DEFAULT_BYTEPLUS_VIDEO_MODEL = "seedance-1-0-lite-t2v-250428";
+const DEFAULT_BYTEPLUS_VIDEO_MODEL = "seedance-1-0-pro-250528";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
@@ -115,10 +115,6 @@ function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
 function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefined {
   const input = req.inputImages?.[0];
   if (!input) {
@@ -131,7 +127,7 @@ function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefine
   if (!input.buffer) {
     throw new Error("BytePlus reference image is missing image data.");
   }
-  return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
+  return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
 }
 
 function resolveBytePlusSeed(value: unknown): number | undefined {
@@ -166,40 +162,24 @@ async function pollBytePlusTask(params: {
     timeoutMs: params.timeoutMs,
     label: `BytePlus video generation task ${params.taskId}`,
   });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchProviderOperationResponse({
-      stage: "poll",
-      url: `${params.baseUrl}/contents/generations/tasks/${params.taskId}`,
-      init: {
-        method: "GET",
-        headers: params.headers,
-      },
-      timeoutMs: createProviderOperationTimeoutResolver({
-        deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-      }),
-      fetchFn: params.fetchFn,
-      provider: "byteplus",
-      requestFailedMessage: "BytePlus video status request failed",
-    });
-    const payload = await readBytePlusJsonResponse<BytePlusTaskResponse>(
-      response,
-      "BytePlus video status request failed",
-    );
-    switch (readBytePlusTaskStatus(payload)) {
-      case "succeeded":
-        return payload;
-      case "failed":
-      case "cancelled":
-        throw new Error(
-          readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
-        );
-      default:
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        break;
-    }
-  }
-  throw new Error(`BytePlus video generation task ${params.taskId} did not finish in time`);
+  return await pollProviderOperationJson<BytePlusTaskResponse>({
+    url: `${params.baseUrl}/contents/generations/tasks/${params.taskId}`,
+    headers: params.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "BytePlus video status request failed",
+    timeoutMessage: `BytePlus video generation task ${params.taskId} did not finish in time`,
+    isComplete: (payload) => readBytePlusTaskStatus(payload) === "succeeded",
+    getFailureMessage: (payload) => {
+      const status = readBytePlusTaskStatus(payload);
+      return status === "failed" || status === "cancelled"
+        ? readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed"
+        : undefined;
+    },
+  });
 }
 
 async function downloadBytePlusVideo(params: {
@@ -208,16 +188,29 @@ async function downloadBytePlusVideo(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    label: "BytePlus generated video download",
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
   const response = await fetchProviderDownloadResponse({
     url: params.url,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    deadline,
     fetchFn: params.fetchFn,
     provider: "byteplus",
     requestFailedMessage: "BytePlus generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    timeoutMs,
+    onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+      new Error(
+        `BytePlus generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+      ),
     onOverflow: ({ maxBytes }) =>
       new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
   });
@@ -234,12 +227,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
     id: "byteplus",
     label: "BytePlus",
     defaultModel: DEFAULT_BYTEPLUS_VIDEO_MODEL,
-    models: [
-      DEFAULT_BYTEPLUS_VIDEO_MODEL,
-      "seedance-1-0-lite-i2v-250428",
-      "seedance-1-0-pro-250528",
-      "seedance-1-5-pro-251215",
-    ],
+    models: [DEFAULT_BYTEPLUS_VIDEO_MODEL, "seedance-1-5-pro-251215"],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "byteplus",
@@ -305,16 +293,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           capability: "video",
           transport: "http",
         });
-      // Seedance 1.0 has separate T2V and I2V model IDs (e.g. seedance-1-0-lite-t2v-250428 vs
-      // seedance-1-0-lite-i2v-250428). When input images are provided with a T2V model, auto-
-      // switch to the corresponding I2V variant so the API does not reject with task_type mismatch.
-      // 1.5 Pro uses a single model ID for both modes and is unaffected by this substitution.
-      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
-      const requestedModel = normalizeOptionalString(req.model) || DEFAULT_BYTEPLUS_VIDEO_MODEL;
-      const resolvedModel =
-        hasInputImages && requestedModel.includes("-t2v-")
-          ? requestedModel.replace("-t2v-", "-i2v-")
-          : requestedModel;
+      const resolvedModel = normalizeOptionalString(req.model) || DEFAULT_BYTEPLUS_VIDEO_MODEL;
 
       const content: Array<Record<string, unknown>> = [{ type: "text", text: req.prompt }];
       const imageUrl = resolveBytePlusImageUrl(req);

@@ -1,5 +1,9 @@
 // Nextcloud Talk plugin module implements setup core behavior.
-import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -28,8 +32,14 @@ type NextcloudSetupInput = ChannelSetupInput & {
   baseUrl?: string;
   secret?: string;
   secretFile?: string;
+  url?: string;
+  password?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
 
 function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
   return mergeAllowFromEntries(allowFrom, ["*"]);
@@ -203,7 +213,20 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
 };
 
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["rooms"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  prepareAccountConfigInput: ({ input }) => {
+    const setupInput = input as NextcloudSetupInput;
+    return {
+      ...setupInput,
+      baseUrl: setupInput.baseUrl ?? readOptionalString(setupInput.url),
+      secret:
+        setupInput.secret ??
+        readOptionalString(setupInput.token) ??
+        readOptionalString(setupInput.password),
+      secretFile: setupInput.secretFile ?? readOptionalString(setupInput.tokenFile),
+    };
+  },
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
       cfg,
@@ -252,3 +275,46 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
     return setNextcloudTalkAccountConfig(next as CoreConfig, accountId, patch);
   },
 };
+
+export const nextcloudTalkSetupContract = defineChannelSetupContract({
+  fields: {
+    baseUrl: {
+      kind: "string",
+      cli: { flags: "--base-url <url>", description: "Nextcloud base URL" },
+    },
+    url: {
+      kind: "string",
+      cli: { flags: "--url <url>", description: "Legacy Nextcloud base URL alias" },
+    },
+    secret: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--secret <secret>", description: "Nextcloud Talk bot secret" },
+    },
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <secret>", description: "Legacy Nextcloud bot secret alias" },
+    },
+    password: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--password <secret>", description: "Legacy Nextcloud bot secret alias" },
+    },
+    secretFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--secret-file <path>", description: "Nextcloud Talk bot secret file" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Legacy Nextcloud bot secret file alias" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Nextcloud Talk environment credentials" },
+    },
+  },
+  legacyAdapter: nextcloudTalkSetupAdapter,
+});

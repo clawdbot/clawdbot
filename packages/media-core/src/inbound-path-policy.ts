@@ -21,7 +21,9 @@ function normalizePosixAbsolutePath(value: string): string | undefined {
   if (WINDOWS_DRIVE_ROOT_RE.test(withoutTrailingSlash)) {
     return undefined;
   }
-  return withoutTrailingSlash;
+  return WINDOWS_DRIVE_ABS_RE.test(withoutTrailingSlash)
+    ? withoutTrailingSlash.toLowerCase()
+    : withoutTrailingSlash;
 }
 
 function splitPathSegments(value: string): string[] {

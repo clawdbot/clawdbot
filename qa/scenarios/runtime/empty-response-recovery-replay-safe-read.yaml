@@ -5,9 +5,9 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.empty-response-recovery
+      - agent-runtime.failure-recovery-empty-response-recovery
     secondary:
-      - runtime.retry-policy
+      - agent-runtime.failure-recovery-retry-policy
   objective: Verify an empty visible GPT turn after a replay-safe read auto-continues into a visible answer.
   successCriteria:
     - Scenario is mock-openai only so live lanes do not pick it up implicitly.
@@ -27,7 +27,7 @@ scenario:
       promptSnippet: Empty response continuation QA check
       prompt: "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK."
       expectedReply: EMPTY-RECOVERED-OK
-      retryNeedle: The previous attempt did not produce a user-visible answer.
+      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
 
 flow:
   steps:
@@ -41,9 +41,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: sessionKey
           value:
             expr: "`agent:qa:empty-response-recovery:${randomUUID().slice(0, 8)}`"
@@ -73,7 +73,7 @@ flow:
             then:
               - set: scenarioRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore)"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
               - assert:
                   expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.plannedToolName === 'read')"
                   message: expected replay-safe read request in mock trace

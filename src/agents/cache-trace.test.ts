@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
@@ -43,18 +42,17 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
-  it("honors diagnostics cache trace config and expands file paths", () => {
+  it("uses the fixed cache trace path under the state directory", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            filePath: "~/.openclaw/logs/cache-trace.jsonl",
           },
         },
       },
-      env: {},
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-cache-trace" },
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
@@ -63,7 +61,7 @@ describe("createCacheTrace", () => {
     });
 
     expect(typeof trace?.recordStage).toBe("function");
-    expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
+    expect(trace?.filePath).toBe("/tmp/openclaw-cache-trace/logs/cache-trace.jsonl");
 
     trace?.recordStage("session:loaded", {
       messages: [],
@@ -354,5 +352,25 @@ describe("createCacheTrace", () => {
       messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
       messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
     });
+  });
+
+  it("fingerprints malformed and transport-normalized text identically", () => {
+    const { lines, trace } = createMemoryTraceForTest();
+    const high = String.fromCharCode(0xd83d);
+
+    trace?.recordStage("prompt:before", {
+      messages: [{ role: "user", content: `left${high}right`, timestamp: 1 }],
+    });
+    trace?.recordStage("prompt:images", {
+      messages: [{ role: "user", content: "leftright", timestamp: 1 }],
+    });
+
+    const malformedEvent = JSON.parse(lines[0]?.trim() ?? "{}") as {
+      messageFingerprints?: string[];
+    };
+    const normalizedEvent = JSON.parse(lines[1]?.trim() ?? "{}") as {
+      messageFingerprints?: string[];
+    };
+    expect(malformedEvent.messageFingerprints).toEqual(normalizedEvent.messageFingerprints);
   });
 });

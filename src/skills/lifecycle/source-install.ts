@@ -283,8 +283,8 @@ async function installGitSkill(params: {
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
     );
     const cloneArgs = parsed.ref
-      ? ["git", "clone", parsed.url, repoDir]
-      : ["git", "clone", "--depth", "1", parsed.url, repoDir];
+      ? ["git", "clone", "--", parsed.url, repoDir]
+      : ["git", "clone", "--depth", "1", "--", parsed.url, repoDir];
     const clone = await runGitCommand({
       argv: cloneArgs,
       action: "clone",

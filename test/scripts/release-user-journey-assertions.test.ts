@@ -5,7 +5,10 @@ import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
+import {
+  runReleaseUserJourneyAssertion,
+  waitForClickClackSocket,
+} from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
@@ -334,13 +337,14 @@ describe("release user journey assertions", () => {
       const startedAt = Date.now();
       await expect(
         withEnvAsync({ HOME: home, OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100" }, () =>
-          runReleaseUserJourneyAssertion("wait-clickclack-socket", [
-            `http://127.0.0.1:${server.port}`,
-            "1",
-          ]),
+          waitForClickClackSocket({
+            baseUrl: `http://127.0.0.1:${server.port}`,
+            pollIntervalMs: 20,
+            timeoutMs: 150,
+          }),
         ),
       ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
-      expect(Date.now() - startedAt).toBeLessThan(2500);
+      expect(Date.now() - startedAt).toBeLessThan(750);
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });

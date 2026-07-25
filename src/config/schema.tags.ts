@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
 /** Stable config UI tag vocabulary used for filtering and grouping schema hints. */
-export const CONFIG_TAGS = [
+const CONFIG_TAGS = [
   "security",
   "auth",
   "network",
@@ -21,7 +21,7 @@ export const CONFIG_TAGS = [
   "advanced",
 ] as const;
 
-export type ConfigTag = (typeof CONFIG_TAGS)[number];
+type ConfigTag = (typeof CONFIG_TAGS)[number];
 
 const TAG_PRIORITY: Record<ConfigTag, number> = {
   security: 0,
@@ -42,27 +42,39 @@ const TAG_PRIORITY: Record<ConfigTag, number> = {
 };
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
+  cloudWorkers: ["network", "automation"],
   "gateway.auth.token": ["security", "auth", "access", "network"],
   "gateway.auth.password": ["security", "auth", "access", "network"],
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
   "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
   "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
-  "gateway.controlUi.chatMessageMaxWidth": ["advanced"],
+  "gateway.controlUi.toolTitles": ["advanced"],
+  "gateway.controlUi.sessionObserver": ["advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
     "access",
     "network",
     "advanced",
   ],
-  "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
-  "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pairing.sshVerify": ["security", "access", "network", "advanced"],
+  "mcp.apps.enabled": ["security", "access", "advanced"],
+  "mcp.apps.sandboxOrigin": ["security", "network", "advanced"],
+  "mcp.apps.sandboxPort": ["network", "advanced"],
+  "gateway.nodes.pluginTools.enabled": ["tools", "security", "access", "network", "advanced"],
+  "gateway.nodes.allowSkills": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.agentRuns.claude.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.mcp.servers": ["tools", "network", "advanced"],
+  "nodeHost.skills.enabled": ["tools", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
   "tools.exec.mode": ["tools", "security", "access"],
+  "session.sharing": ["access", "privacy", "storage"],
+  "session.sharing.*": ["access", "privacy", "storage"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
+  { prefix: "cloudworkers.", tags: ["network", "automation"] },
   { prefix: "channels.", tags: ["channels", "network"] },
   { prefix: "tools.", tags: ["tools"] },
   { prefix: "gateway.", tags: ["network"] },
@@ -150,7 +162,7 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
 }
 
 /** Derive known config UI tags from a schema path and optional hint metadata. */
-export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
+function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
   const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const override = resolveOverride(path);
   if (override) {

@@ -1,5 +1,5 @@
 // Doctor checks for context engine host requirements against configured agent runtimes.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
 import { resolveDefaultAgentDir } from "../../../agents/agent-scope-config.js";
@@ -53,18 +53,7 @@ function normalizeRuntimeId(value: unknown): string | undefined {
 }
 
 function parseModelRef(value: unknown): { provider: string; modelId: string } | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
-    return undefined;
-  }
-  return {
-    provider: normalizeProviderId(trimmed.slice(0, slash)),
-    modelId: trimmed.slice(slash + 1).trim(),
-  };
+  return typeof value === "string" ? (parseModelCatalogRef(value) ?? undefined) : undefined;
 }
 
 function listModelRefs(value: unknown): string[] {
@@ -202,7 +191,7 @@ function runtimeHostCandidate(params: {
 }
 
 /** Collect effective agent-run host candidates from provider/model runtime policy. */
-export function collectConfiguredContextEngineAgentRunHosts(params: {
+function collectConfiguredContextEngineAgentRunHosts(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): HostCandidate[] {

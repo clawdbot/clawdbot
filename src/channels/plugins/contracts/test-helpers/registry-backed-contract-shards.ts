@@ -1,10 +1,10 @@
+import { beforeAll, describe, it } from "vitest";
 /**
  * Registry-backed channel contract shard installers.
  *
  * Installs surface, directory, threading, and plugin contract suites for bundled channel shards.
  */
-import { expectChannelPluginContract } from "openclaw/plugin-sdk/channel-test-helpers";
-import { beforeAll, describe, it } from "vitest";
+import { expectChannelPluginContract } from "../../../../plugin-sdk/channel-test-helpers.js";
 import {
   getBundledChannelDirectoryPluginAsync,
   getBundledChannelPluginAsync,
@@ -144,10 +144,18 @@ export function installPluginContractRegistryShard(params: ContractShardParams) 
     installEmptyShardSuite("plugin contract registry shard");
     return;
   }
+  const pluginCache = new Map<string, Awaited<ReturnType<typeof getBundledChannelPluginAsync>>>();
+  beforeAll(async () => {
+    await Promise.all(
+      entries.map(async (entry) => {
+        pluginCache.set(entry.id, await getBundledChannelPluginAsync(entry.id));
+      }),
+    );
+  });
   for (const entry of entries) {
     describe(`${entry.id} plugin contract`, () => {
-      it("satisfies the base channel plugin contract", async () => {
-        const plugin = await getBundledChannelPluginAsync(entry.id);
+      it("satisfies the base channel plugin contract", () => {
+        const plugin = pluginCache.get(entry.id);
         if (!plugin) {
           throw new Error(`Missing bundled channel plugin for ${entry.id}`);
         }

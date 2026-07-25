@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   computeBackoff,
-  DEFAULT_HEARTBEAT_SECONDS,
   DEFAULT_RECONNECT_POLICY,
   resolveHeartbeatSeconds,
   resolveReconnectPolicy,
@@ -39,7 +38,7 @@ describe("web reconnect helpers", () => {
   });
 
   it("returns heartbeat default when unset", () => {
-    expect(resolveHeartbeatSeconds(cfg)).toBe(DEFAULT_HEARTBEAT_SECONDS);
+    expect(resolveHeartbeatSeconds(cfg)).toBe(60);
     expect(resolveHeartbeatSeconds(cfg, 5)).toBe(5);
   });
 

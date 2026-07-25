@@ -36,4 +36,52 @@ describe("irc protocol", () => {
     expect(() => sanitizeIrcTarget(" user")).toThrow(/Invalid IRC target/);
   });
 
+  describe("\\u escape surrogate-range guard", () => {
+    const LONE_SURROGATE = /[\uD800-\uDFFF]/;
+
+    it("preserves literal \\uXXXX when codepoint is a high surrogate", () => {
+      const out = sanitizeIrcOutboundText("\\uD800");
+      expect(LONE_SURROGATE.test(out)).toBe(false);
+    });
+
+    it("preserves literal \\uXXXX when codepoint is a low surrogate", () => {
+      const out = sanitizeIrcOutboundText("\\uDFFF");
+      expect(LONE_SURROGATE.test(out)).toBe(false);
+    });
+
+    it("still decodes valid BMP codepoints outside the surrogate range", () => {
+      expect(sanitizeIrcOutboundText("\\u0041")).toBe("A");
+      expect(sanitizeIrcOutboundText("\\u00e9")).toBe("é"); // é
+    });
+
+    it("decodes adjacent surrogate-pair escapes to the astral character", () => {
+      expect(sanitizeIrcOutboundText("\\uD83D\\uDE00")).toBe("😀");
+      expect(sanitizeIrcOutboundText("\\uD83D\\uDE00\\uD83D\\uDE01")).toBe("😀😁");
+    });
+
+    it("preserves lone high surrogate even when followed by a non-surrogate \\u", () => {
+      const out = sanitizeIrcOutboundText("\\uD800\\u0041");
+      expect(LONE_SURROGATE.test(out)).toBe(false);
+      expect(out).toContain("A");
+    });
+
+    it("decodes BMP-escaped prefix before a surrogate pair correctly", () => {
+      // Regression: \\u0041\\uD83D\\uDE00 must yield A😀, not A\\uD83D\\uDE00.
+      // The old step-1 regex \\u(xxxx)\\u(xxxx) would consume \\u0041\\uD83D as a
+      // non-pair, leaving \\uDE00 as a lone surrogate.
+      expect(sanitizeIrcOutboundText("\\u0041\\uD83D\\uDE00")).toBe("A😀");
+    });
+
+    it("handles lone high surrogate followed by a different surrogate pair", () => {
+      // \\uD800\\uD83D\\uDE00: D800 is lone (no matching low), D83D+DE00 form 😀.
+      // Use toBe rather than LONE_SURROGATE regex: emoji contains surrogate
+      // code units internally that would trigger a naive /[\uD800-\uDFFF]/ check.
+      expect(sanitizeIrcOutboundText("\\uD800\\uD83D\\uDE00")).toBe("\\uD800😀");
+    });
+
+    it("preserves two consecutive lone high surrogates", () => {
+      const out = sanitizeIrcOutboundText("\\uD800\\uD801");
+      expect(LONE_SURROGATE.test(out)).toBe(false);
+    });
+  });
 });

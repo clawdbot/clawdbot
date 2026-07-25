@@ -1,6 +1,6 @@
 // Plugin list format tests cover installed plugin table and JSON formatting.
 import { describe, expect, it } from "vitest";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { formatPluginLine } from "./plugins-list-format.js";
 
 describe("formatPluginLine", () => {
@@ -43,5 +43,12 @@ describe("formatPluginLine", () => {
     expect(output).toContain("activation reason: configured\\nnext\\tstep");
     expect(output).not.toContain("\u001B[31m");
     expect(output.match(/activation reason:/g)).toHaveLength(1);
+  });
+
+  it("keeps truncated descriptions free of lone surrogates", () => {
+    const output = formatPluginLine(
+      createPluginRecord({ id: "demo", description: `${"a".repeat(56)}😀tail` }),
+    );
+    expect(Buffer.from(output).toString()).toBe(output);
   });
 });

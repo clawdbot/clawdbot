@@ -5,7 +5,7 @@ import { sharedVitestConfig } from "./vitest.shared.config.ts";
 
 const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
 
-export function createUiE2eVitestConfig(
+function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
   argv: string[] = process.argv,
 ) {

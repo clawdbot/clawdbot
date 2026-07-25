@@ -4,10 +4,27 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
+import {
+  scanTopLevelChars,
+  splitTopLevelPipes,
+  splitTopLevelStages,
+} from "./tool-display-exec-shell.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
+  it("keeps same-line heredoc operators from attaching the body to later stages", () => {
+    const command = "cat <<EOF && printf ok\nbody | secret\nEOF\nprintf done";
+    const stages = splitTopLevelStages(command);
+
+    expect(stages).toHaveLength(2);
+    expect(stages[0]).toBe("cat <<EOF");
+    expect(stages[1]).toContain("printf ok");
+    expect(stages[1]).toContain("printf done");
+    expect(stages[1]).not.toContain("body | secret");
+    expect(splitTopLevelPipes(stages[1] ?? "")).toHaveLength(1);
+  });
+
   it("summarizes tool-search code targets from described tool ids", () => {
     expect(
       resolveToolSearchCodeDisplayTarget({
@@ -462,6 +479,244 @@ describe("tool display details", () => {
     expect(pyDetail).toContain("run python3 inline script (heredoc)");
     expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
     expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
+  });
+
+  it("does not split heredoc body content into exec stages", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: [
+            "python3 <<'PY'",
+            "const slugify = () => 'court-mix';",
+            "if (true) console.log('a') && console.log('b');",
+            "cat <<YAML",
+            "- uses: subosito/flutter-action@v2",
+            "YAML",
+            "PY",
+          ].join("\n"),
+          workdir: "/Users/example/.openclaw/workspace",
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("run python3 inline script (heredoc) (agent)");
+  });
+
+  it("keeps command stages after a heredoc terminator", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: ["python3 <<'PY'", "print('body && not a command')", "PY", "npm test"].join(
+            "\n",
+          ),
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("run python3 inline script (heredoc) → run tests");
+  });
+
+  it("matches shell-quoted heredoc terminators before keeping later stages", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: ["python3 <<\\PY", "print('body && not a command')", "PY", "npm test"].join(
+            "\n",
+          ),
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("run python3 inline script (heredoc) → run tests");
+  });
+
+  it("keeps heredoc body separators out of top-level stage splitting", () => {
+    const stages = splitTopLevelStages(
+      [
+        "mkdir -p .openclaw/tmp/farm-notices",
+        "cat > .openclaw/tmp/farm-notices/ventura.txt <<'EOF'",
+        "Buenos dias equipo; se ajusta la orden A1251718:",
+        "sc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+        "Gracias.",
+        "EOF",
+        "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
+      ].join("\n"),
+    );
+
+    expect(stages).toEqual([
+      [
+        "mkdir -p .openclaw/tmp/farm-notices",
+        "cat > .openclaw/tmp/farm-notices/ventura.txt <<'EOF'",
+        "Buenos dias equipo; se ajusta la orden A1251718:",
+        "sc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+        "Gracias.",
+        "EOF",
+        "./scripts/email_preview_new --to farm@example.com",
+      ].join("\n"),
+      "./scripts/email_preview_new --to farm2@example.com",
+    ]);
+  });
+
+  it("matches escaped heredoc delimiters in top-level stage splitting", () => {
+    const command = [
+      "cat <<\\EOF",
+      "body; not a stage && not a stage || not a stage",
+      "EOF",
+      "printf done && npm test",
+    ].join("\n");
+
+    expect(splitTopLevelStages(command)).toEqual([
+      ["cat <<\\EOF", "body; not a stage && not a stage || not a stage", "EOF", "printf done"].join(
+        "\n",
+      ),
+      "npm test",
+    ]);
+  });
+
+  it("does not treat the overlapping end of a here-string as a heredoc", () => {
+    const command = ["cat <<<true", "npm test && npm build", "true", "pnpm test"].join("\n");
+
+    expect(splitTopLevelStages(command)).toEqual([
+      ["cat <<<true", "npm test"].join("\n"),
+      ["npm build", "true", "pnpm test"].join("\n"),
+    ]);
+
+    const detail = formatToolDetail(
+      resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+    );
+    expect(detail).toContain("run build");
+  });
+
+  it("ignores heredoc-looking tokens inside shell comments", () => {
+    const command = [
+      "export MODE=test # next block uses <<EOF && this is still a comment",
+      "cat <<EOF",
+      "body && data",
+      "EOF",
+      "npm test && npm build",
+    ].join("\n");
+
+    const detail = formatToolDetail(
+      resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+    );
+    expect(detail).toBe("show <<EOF → run tests → run build");
+
+    expect(splitTopLevelStages("echo foo\\ #bar && npm test")).toEqual([
+      "echo foo\\ #bar",
+      "npm test",
+    ]);
+    expect(splitTopLevelStages("echo prefix$(printf suffix)#bar && npm test")).toEqual([
+      "echo prefix$(printf suffix)#bar",
+      "npm test",
+    ]);
+
+    const bodies: string[] = [];
+    const scanBodies = (input: string) => {
+      scanTopLevelChars(
+        input,
+        () => true,
+        (_operatorIndex, start, end) => bodies.push(input.slice(start, end)),
+      );
+    };
+    scanBodies(["(printf ok)# comment uses <<STOP", "npm test && npm build", "STOP"].join("\n"));
+    scanBodies(["echo $(# comment uses <<STOP", "printf ok", ") && npm test"].join("\n"));
+    expect(bodies).toEqual([]);
+
+    for (const expansion of [
+      "echo $(printf suffix)#tag",
+      "echo <(printf suffix)#tag",
+      "echo $(case x in x) printf ok;; esac)#tag",
+    ]) {
+      const withHeredoc = [expansion + " <<STOP", "body", "STOP"].join("\n");
+      scanBodies(withHeredoc);
+    }
+    expect(bodies).toEqual(["body\nSTOP", "body\nSTOP", "body\nSTOP"]);
+  });
+
+  it("does not treat arithmetic bitshifts as heredocs", () => {
+    for (const firstLine of ["echo $((flags << true ))", "((flags << true ))"]) {
+      const command = [firstLine, "npm test && npm build", "true", "pnpm test"].join("\n");
+
+      expect(splitTopLevelStages(command)).toEqual([
+        [firstLine, "npm test"].join("\n"),
+        ["npm build", "true", "pnpm test"].join("\n"),
+      ]);
+
+      const detail = formatToolDetail(
+        resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+      );
+      expect(detail).toContain("run build");
+    }
+  });
+
+  it("keeps heredoc body pipes out of top-level stage summaries", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: [
+            "cat > .openclaw/tmp/farm-notices/ventura.txt <<-'EOF'",
+            "\tBuenos dias equipo; se ajusta la orden A1251718:",
+            "\tsc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+            "\tGracias.",
+            "\tEOF",
+            "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
+          ].join("\n"),
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("show > → run email_preview_new → run email_preview_new");
+  });
+
+  it("consumes same-line heredocs in declaration order before splitting later stages", () => {
+    const stages = splitTopLevelStages(
+      [
+        "cat <<'FIRST' <<-\"SECOND\"",
+        "first; body && body || body | body",
+        "FIRST",
+        "\tsecond; body && body || body | body",
+        "\tSECOND",
+        "printf done && npm test",
+      ].join("\n"),
+    );
+
+    expect(stages).toEqual([
+      [
+        "cat <<'FIRST' <<-\"SECOND\"",
+        "first; body && body || body | body",
+        "FIRST",
+        "\tsecond; body && body || body | body",
+        "\tSECOND",
+        "printf done",
+      ].join("\n"),
+      "npm test",
+    ]);
+  });
+
+  it("splits a real pipe after the final same-line heredoc terminator", () => {
+    const command = [
+      "cat <<ONE <<-'TWO'",
+      "one | body",
+      "ONE",
+      "\ttwo && body",
+      "\tTWO",
+      "cat result | wc -l",
+    ].join("\n");
+
+    expect(splitTopLevelPipes(command)).toEqual([
+      ["cat <<ONE <<-'TWO'", "one | body", "ONE", "\ttwo && body", "\tTWO", "cat result"].join(
+        "\n",
+      ),
+      "wc -l",
+    ]);
   });
 
   it("appends node name to exec detail when node is set", () => {

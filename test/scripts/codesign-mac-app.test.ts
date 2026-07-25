@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
@@ -166,6 +167,7 @@ describe("codesign-mac-app temp file hygiene", () => {
     mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
     mkdirSync(binDir);
     mkdirSync(captureDir);
+    writeFileSync(path.join(app, "Contents", "MacOS", "openclaw-mlx-tts"), "#!/bin/sh\n");
     writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
     installFakeCodesign(binDir);
 
@@ -187,14 +189,20 @@ describe("codesign-mac-app temp file hygiene", () => {
     expect(result.stdout).toContain(`Codesign complete for ${app}`);
 
     const signLines = readFileSync(logPath, "utf8").trim().split("\n");
-    expect(signLines).toHaveLength(2);
-    expect(signLines[0]).toContain(`${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`);
-    expect(signLines[1]).toContain(`${app}\t`);
+    expect(signLines).toHaveLength(3);
+    expect(signLines[0]).toContain(`${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}\t`);
+    expect(signLines[1]).toContain(`${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`);
+    expect(signLines[2]).toContain(`${app}\t`);
     for (const line of signLines) {
       const [, , entitlementPath, copiedEntitlementsPath] = line.split("\t");
-      const copiedEntitlements = readFileSync(copiedEntitlementsPath, "utf8");
-      expect(entitlementPath).toContain("openclaw-entitlements");
-      expect(existsSync(entitlementPath)).toBe(false);
+      const entitlementSource = expectDefined(entitlementPath, "codesign entitlement source path");
+      const copiedEntitlementSource = expectDefined(
+        copiedEntitlementsPath,
+        "copied codesign entitlement path",
+      );
+      const copiedEntitlements = readFileSync(copiedEntitlementSource, "utf8");
+      expect(entitlementSource).toContain("openclaw-entitlements");
+      expect(existsSync(entitlementSource)).toBe(false);
       expect(copiedEntitlements).toContain("com.apple.security.automation.apple-events");
       expect(copiedEntitlements).toContain("com.apple.security.device.camera");
     }

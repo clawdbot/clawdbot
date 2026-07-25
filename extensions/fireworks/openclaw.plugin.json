@@ -18,6 +18,7 @@
       "provider": "fireworks",
       "method": "api-key",
       "choiceId": "fireworks-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Fireworks API key",
       "groupId": "fireworks",
       "groupLabel": "Fireworks",
@@ -49,8 +50,8 @@
             }
           },
           {
-            "id": "accounts/fireworks/routers/kimi-k2p5-turbo",
-            "name": "Kimi K2.5 Turbo (Fire Pass)",
+            "id": "accounts/fireworks/routers/kimi-k2p6-turbo",
+            "name": "Kimi K2.6 Turbo (Fire Pass)",
             "reasoning": false,
             "input": ["text", "image"],
             "contextWindow": 256000,
@@ -69,7 +70,7 @@
       }
     },
     "discovery": {
-      "fireworks": "static"
+      "fireworks": "refreshable"
     }
   },
   "configSchema": {

@@ -26,6 +26,46 @@
         "api": "openai-completions",
         "models": [
           {
+            "id": "step-3.7-flash",
+            "name": "Step 3.7 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "thinkingLevelMap": {
+              "off": "low",
+              "minimal": "low",
+              "xhigh": "high",
+              "max": "high"
+            },
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.2,
+              "output": 1.15,
+              "cacheRead": 0.04,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "supportsReasoningEffort": true,
+              "supportsStrictMode": false,
+              "supportedReasoningEfforts": ["low", "medium", "high"],
+              "maxTokensField": "max_tokens",
+              "reasoningEffortMap": {
+                "off": "low",
+                "none": "low",
+                "minimal": "low",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              }
+            }
+          },
+          {
             "id": "step-3.5-flash",
             "name": "Step 3.5 Flash",
             "reasoning": true,
@@ -45,6 +85,46 @@
         "baseUrl": "https://api.stepfun.ai/step_plan/v1",
         "api": "openai-completions",
         "models": [
+          {
+            "id": "step-3.7-flash",
+            "name": "Step 3.7 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "thinkingLevelMap": {
+              "off": "low",
+              "minimal": "low",
+              "xhigh": "high",
+              "max": "high"
+            },
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
+              "supportsReasoningEffort": true,
+              "supportsStrictMode": false,
+              "supportedReasoningEfforts": ["low", "medium", "high"],
+              "maxTokensField": "max_tokens",
+              "reasoningEffortMap": {
+                "off": "low",
+                "none": "low",
+                "minimal": "low",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              }
+            }
+          },
           {
             "id": "step-3.5-flash",
             "name": "Step 3.5 Flash",
@@ -77,8 +157,8 @@
       }
     },
     "discovery": {
-      "stepfun": "static",
-      "stepfun-plan": "static"
+      "stepfun": "refreshable",
+      "stepfun-plan": "refreshable"
     }
   },
   "providerAuthChoices": [
@@ -86,6 +166,7 @@
       "provider": "stepfun",
       "method": "standard-api-key-cn",
       "choiceId": "stepfun-standard-api-key-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Standard API key (China)",
       "choiceHint": "Endpoint: api.stepfun.com/v1",
       "groupId": "stepfun",
@@ -100,6 +181,7 @@
       "provider": "stepfun",
       "method": "standard-api-key-intl",
       "choiceId": "stepfun-standard-api-key-intl",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Standard API key (Global/Intl)",
       "choiceHint": "Endpoint: api.stepfun.ai/v1",
       "groupId": "stepfun",
@@ -114,6 +196,7 @@
       "provider": "stepfun-plan",
       "method": "plan-api-key-cn",
       "choiceId": "stepfun-plan-api-key-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Step Plan API key (China)",
       "choiceHint": "Endpoint: api.stepfun.com/step_plan/v1",
       "groupId": "stepfun",
@@ -128,6 +211,7 @@
       "provider": "stepfun-plan",
       "method": "plan-api-key-intl",
       "choiceId": "stepfun-plan-api-key-intl",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Step Plan API key (Global/Intl)",
       "choiceHint": "Endpoint: api.stepfun.ai/step_plan/v1",
       "groupId": "stepfun",

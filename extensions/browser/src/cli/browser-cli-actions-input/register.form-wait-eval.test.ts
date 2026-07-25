@@ -71,6 +71,19 @@ describe("browser action input fill command", () => {
       targetId: "tab-1",
     });
   });
+
+  it("reports malformed fields without sending a browser request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "fill", "--fields", "NOT JSON {{{"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      "fields must be valid JSON.",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser action input wait command", () => {
@@ -100,7 +113,39 @@ describe("browser action input wait command", () => {
     const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
       | { timeoutMs?: number }
       | undefined;
-    expect(options?.timeoutMs).toBeGreaterThan(21000);
+    expect(options?.timeoutMs).toBe(26_000);
+  });
+
+  it("budgets every supplied wait condition before adding transport slack", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "wait",
+        "#result",
+        "--time",
+        "1000",
+        "--text",
+        "Ready",
+        "--text-gone",
+        "Loading",
+        "--url",
+        "**/done",
+        "--load",
+        "networkidle",
+        "--fn",
+        "() => true",
+        "--timeout-ms",
+        "2000",
+      ],
+      { from: "user" },
+    );
+
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(options?.timeoutMs).toBe(18_000);
   });
 
   it("rejects non-decimal wait numeric options before sending the wait request", async () => {

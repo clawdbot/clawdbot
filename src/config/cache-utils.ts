@@ -1,21 +1,4 @@
-// Provides config cache helpers with filesystem freshness checks.
-import fs from "node:fs";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
-
-/** Resolves a cache TTL from an env override, falling back unless the override is exact. */
-export function resolveCacheTtlMs(params: {
-  envValue: string | undefined;
-  defaultTtlMs: number;
-}): number {
-  const { envValue, defaultTtlMs } = params;
-  if (envValue) {
-    const parsed = parseStrictNonNegativeInteger(envValue);
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return defaultTtlMs;
-}
+// Provides small synchronous config cache helpers.
 
 /** Returns whether a TTL keeps cache reads and writes active. */
 export function isCacheEnabled(ttlMs: number): boolean {
@@ -147,22 +130,4 @@ export function createExpiringMapCache<TKey, TValue>(options: {
       lastPruneAt = nowMs;
     },
   };
-}
-
-type FileStatSnapshot = {
-  mtimeMs: number;
-  sizeBytes: number;
-};
-
-/** Captures the file attributes used by cache invalidation without exposing fs.Stats. */
-export function getFileStatSnapshot(filePath: string): FileStatSnapshot | undefined {
-  try {
-    const stats = fs.statSync(filePath);
-    return {
-      mtimeMs: stats.mtimeMs,
-      sizeBytes: stats.size,
-    };
-  } catch {
-    return undefined;
-  }
 }

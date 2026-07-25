@@ -15,9 +15,10 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  # Use a non-interactive API probe so wrapper auth behaves the same in
-  # terminal sessions and redirected/scripted runs.
-  if gh api user >/dev/null 2>&1; then
+  # gh auth status fetches token scopes through REST and misreports quota
+  # failures as invalid credentials. GraphQL verifies the active local token
+  # without sending maintainers through a login that cannot restore quota.
+  if gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login >/dev/null 2>&1; then
     return 0
   fi
 
@@ -52,7 +53,18 @@ enter_worktree() {
       git checkout -B "temp/pr-$pr" origin/main
     fi
   else
-    git worktree add "$dir" -b "temp/pr-$pr" origin/main
+    local resolved_parent=""
+    resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
+    local resolved_dir=""
+    if [ -n "$resolved_parent" ]; then
+      resolved_dir="$resolved_parent/$(basename "$dir")"
+    fi
+    if [ ! -e "$dir" ] && [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; then
+      echo "Pruning stale worktree registration for $dir"
+      git worktree prune
+    fi
+    # Per-PR locking makes resetting this script-owned branch namespace safe.
+    git worktree add "$dir" -B "temp/pr-$pr" origin/main
     cd "$dir"
   fi
 
@@ -61,7 +73,53 @@ enter_worktree() {
 
 pr_meta_json() {
   local pr="$1"
-  gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,files,additions,deletions,statusCheckRollup
+  local metadata files expected_file_count actual_file_count head_before head_after
+  metadata=$(gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,changedFiles,additions,deletions,statusCheckRollup)
+  head_before=$(printf '%s\n' "$metadata" | jq -r .headRefOid)
+
+  # Raw `gh pr view --json files` stops at 100 entries. Paginate REST so
+  # review guards see every path, then fail closed on head or API drift.
+  if ! files=$(
+    set -o pipefail
+    gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+      jq -cs '
+        add
+        | map({
+            path: .filename,
+            additions: .additions,
+            deletions: .deletions,
+            changeType: (
+              if .status == "removed" then "DELETED"
+              else (.status | ascii_upcase)
+              end
+            )
+          })
+      '
+  ); then
+    echo "Failed to collect paginated PR file metadata for #$pr." >&2
+    return 1
+  fi
+
+  head_after=$(gh pr view "$pr" --json headRefOid | jq -r .headRefOid)
+  if [ "$head_after" != "$head_before" ]; then
+    echo "PR head changed while collecting file metadata for #$pr (started at $head_before, ended at $head_after). Retry review initialization." >&2
+    return 1
+  fi
+
+  expected_file_count=$(printf '%s\n' "$metadata" | jq -r .changedFiles)
+  if ! actual_file_count=$(
+    printf '%s\n' "$files" |
+      jq -er 'if type == "array" then length else error("expected an array") end'
+  ); then
+    echo "Invalid paginated PR file metadata for #$pr: expected a JSON array." >&2
+    return 1
+  fi
+  if [ "$actual_file_count" -ne "$expected_file_count" ]; then
+    echo "Incomplete PR file metadata for #$pr: expected $expected_file_count changed files, received $actual_file_count from paginated REST." >&2
+    return 1
+  fi
+
+  printf '%s\n%s\n' "$metadata" "$files" | jq -cs '.[0] + {files: .[1]}'
 }
 
 write_pr_meta_files() {
@@ -138,22 +196,45 @@ gc_pr_worktrees() {
       echo "skipping $dir (could not parse PR number)"
       continue
     fi
+    local lock_status=0
+    try_acquire_pr_operation_lock "$pr" || lock_status=$?
+    if [ "$lock_status" -ne 0 ]; then
+      if [ "$lock_status" -eq 1 ]; then
+        echo "skipping $dir (PR #$pr has an active scripts/pr operation)"
+      elif [ -n "$PR_OPERATION_LOCK_BLOCKED_OID" ]; then
+        echo "skipping $dir (PR #$pr operation lock is $PR_OPERATION_LOCK_BLOCKED_REASON)"
+        print_pr_operation_lock_recovery_guidance "$pr"
+      else
+        echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
+      fi
+      continue
+    fi
     local state
     state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || printf 'UNKNOWN')
     case "$state" in
       MERGED|CLOSED)
         if [ "$dry_run" = "true" ]; then
           echo "would remove $dir (PR #$pr state=$state)"
+          removed=$((removed + 1))
         else
           remove_worktree_if_present "$dir"
           delete_local_branch_if_safe "temp/pr-$pr"
           delete_local_branch_if_safe "pr-$pr"
           delete_local_branch_if_safe "pr-$pr-prep"
-          echo "removed $dir (PR #$pr state=$state)"
+          if [ ! -e "$dir" ] &&
+            ! git show-ref --verify --quiet "refs/heads/temp/pr-$pr" &&
+            ! git show-ref --verify --quiet "refs/heads/pr-$pr" &&
+            ! git show-ref --verify --quiet "refs/heads/pr-$pr-prep"
+          then
+            echo "removed $dir (PR #$pr state=$state)"
+            removed=$((removed + 1))
+          else
+            echo "skipping $dir (cleanup incomplete)"
+          fi
         fi
-        removed=$((removed + 1))
         ;;
     esac
+    release_pr_operation_lock
   done
 
   if [ "$removed" -eq 0 ]; then
@@ -167,12 +248,9 @@ gc_pr_worktrees() {
 
 pr_number_from_worktree_dir() {
   local dir="$1"
-  local token
-  token="${dir##*/pr-}"
-  token="${token%%[^0-9]*}"
-  if [ -n "$token" ]; then
-    printf '%s\n' "$token"
-    return 0
-  fi
-  return 1
+  local basename=${dir##*/}
+  local token=${basename#pr-}
+  [ "$basename" != "$token" ] || return 1
+  is_canonical_pr_number "$token" || return 1
+  printf '%s\n' "$token"
 }

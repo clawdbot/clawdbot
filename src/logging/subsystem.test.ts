@@ -148,6 +148,30 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("keeps setup-inference probe warnings in the file log while suppressing console", () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "warn", consoleLevel: "warn", file });
+    const warn = installConsoleMethodSpy("warn");
+    const log = createSubsystemLogger("agent/embedded");
+
+    log.warn("embedded run failover decision", {
+      runId: "probe-setup-inference-test-run",
+      provider: "openai",
+      consoleMessage: "embedded run failover decision: provider=openai error=Authentication failed",
+    });
+    log.warn("embedded run agent end", {
+      runId: "probe-setup-inference-test-run",
+      provider: "openai",
+      consoleMessage: "embedded run agent end: provider=openai error=Authentication failed",
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    const fileLog = fs.readFileSync(file, "utf8");
+    expect(fileLog).toContain("embedded run failover decision");
+    expect(fileLog).toContain("embedded run agent end");
+    expect(fileLog).toContain('"provider":"openai"');
+  });
+
   it("does not suppress probe errors for embedded subsystems", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
     const error = installConsoleMethodSpy("error");

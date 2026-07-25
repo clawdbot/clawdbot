@@ -16,7 +16,6 @@ import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   openaiTTS,
-  resolveOpenAITtsInstructions,
 } from "./tts.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -118,32 +117,6 @@ describe("openai tts", () => {
         expect(isAccepted()).toBe(false);
       },
     );
-  });
-
-  describe("resolveOpenAITtsInstructions", () => {
-    it("keeps instructions only for gpt-4o-mini-tts variants", () => {
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly ")).toBe(
-        "Speak warmly",
-      );
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts-2025-12-15", "Speak warmly")).toBe(
-        "Speak warmly",
-      );
-      expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
-      expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
-    });
-
-    it("preserves instructions for custom OpenAI-compatible TTS endpoints", () => {
-      expect(
-        resolveOpenAITtsInstructions("tts-1", " Speak warmly ", "https://tts.example.com/v1"),
-      ).toBe("Speak warmly");
-      expect(
-        resolveOpenAITtsInstructions("tts-1", " Speak warmly ", "https://api.openai.com/v1/"),
-      ).toBeUndefined();
-      expect(
-        resolveOpenAITtsInstructions("tts-1", "   ", "https://tts.example.com/v1"),
-      ).toBeUndefined();
-    });
   });
 
   describe("openaiTTS diagnostics", () => {

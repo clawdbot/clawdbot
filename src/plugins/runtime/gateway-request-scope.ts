@@ -5,19 +5,24 @@ import type {
   GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { PluginOrigin } from "../plugin-origin.types.js";
 
-export type PluginRuntimeGatewayRequestScope = {
+type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
   pluginId?: string;
   pluginSource?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
 };
 
-export type PluginRuntimePluginScope = {
+type PluginRuntimePluginScope = {
   pluginId: string;
   pluginSource?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
 };
 
 const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
@@ -56,6 +61,16 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
     scoped.pluginSource = scope.pluginSource;
   } else {
     delete scoped.pluginSource;
+  }
+  if (scope.pluginOrigin !== undefined) {
+    scoped.pluginOrigin = scope.pluginOrigin;
+  } else {
+    delete scoped.pluginOrigin;
+  }
+  if (scope.pluginTrustedOfficialInstall !== undefined) {
+    scoped.pluginTrustedOfficialInstall = scope.pluginTrustedOfficialInstall;
+  } else {
+    delete scoped.pluginTrustedOfficialInstall;
   }
   return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }

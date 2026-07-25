@@ -37,6 +37,7 @@ const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
 };
 
 export const MISTRAL_SMALL_LATEST_ID = "mistral-small-latest";
+export const MISTRAL_SMALL_4_ID = "mistral-small-2603";
 export const MISTRAL_MEDIUM_3_5_ID = "mistral-medium-3-5";
 
 export function resolveMistralCompatPatch(model: { id?: string }): {
@@ -48,7 +49,9 @@ export function resolveMistralCompatPatch(model: { id?: string }): {
   reasoningEffortMap?: Record<string, string>;
 } {
   const reasoningEnabled =
-    model.id === MISTRAL_SMALL_LATEST_ID || model.id === MISTRAL_MEDIUM_3_5_ID;
+    model.id === MISTRAL_SMALL_LATEST_ID ||
+    model.id === MISTRAL_SMALL_4_ID ||
+    model.id === MISTRAL_MEDIUM_3_5_ID;
   return {
     ...MISTRAL_MODEL_TRANSPORT_PATCH,
     supportsReasoningEffort: reasoningEnabled,

@@ -126,6 +126,34 @@ describe("SessionHistorySseState", () => {
     }
   });
 
+  test("carries inline user idempotency keys into history metadata", () => {
+    const state = newState([]);
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "optimistic turn" }],
+        idempotencyKey: "client-turn-2",
+      },
+      messageId: "message-user-2",
+      messageSeq: 2,
+    });
+
+    expect(appended).toBeDefined();
+    expect(appended?.messageSeq).toBe(2);
+    expect(
+      (
+        appended!.message as {
+          __openclaw?: { id?: string; idempotencyKey?: string; seq?: number };
+        }
+      )["__openclaw"],
+    ).toMatchObject({
+      id: "message-user-2",
+      idempotencyKey: "client-turn-2",
+      seq: 2,
+    });
+  });
+
   test("reuses one canonical array for items and messages", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
@@ -560,8 +588,41 @@ describe("SessionHistorySseState", () => {
       ],
     });
 
-    expectOnlyAssistantText(snapshot, "Disk usage crossed 95 percent.", 4);
+    expect(snapshot.history.messages).toEqual([
+      {
+        ...assistantTextMessage("Disk usage crossed 95 percent.", 4),
+        __openclaw: { seq: 4, turnBoundary: true },
+      },
+    ]);
     expect(snapshot.rawTranscriptSeq).toBe(4);
+  });
+
+  test("carries a hidden heartbeat boundary into the next visible SSE append", () => {
+    const state = newState([
+      assistantTextMessage("already visible", 1),
+      {
+        role: "user",
+        content: HEARTBEAT_PROMPT,
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    expect(appendAssistantText(state, "HEARTBEAT_OK", 3)).toBeNull();
+
+    const compaction = state.appendInlineMessage({
+      message: {
+        role: "system",
+        content: textContent("Compaction summary"),
+      },
+      messageSeq: 4,
+    });
+    expect(compaction?.message?.["__openclaw"]?.turnBoundary).toBeUndefined();
+
+    const appended = appendAssistantText(state, "Disk usage crossed 95 percent.", 5);
+    expect(appended?.message).toMatchObject({
+      role: "assistant",
+      __openclaw: { seq: 5, turnBoundary: true },
+    });
   });
 
   test("does not append heartbeat or internal-only SSE messages", () => {

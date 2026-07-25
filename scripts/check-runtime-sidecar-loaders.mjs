@@ -230,7 +230,7 @@ export function findRuntimeSidecarLoaderViolations(content, importerPath, explic
 /**
  * Collects runtime sidecar loader violations across configured roots.
  */
-export async function collectRuntimeSidecarLoaderViolations(params) {
+async function collectRuntimeSidecarLoaderViolations(params) {
   const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
     extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],
   });

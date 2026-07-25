@@ -1,4 +1,5 @@
 // Line tests cover channel.sendPayload plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
@@ -59,6 +60,14 @@ function lineResult(messageId: string, chatId = "c1") {
     chatId,
     receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
   };
+}
+
+function createCredentialBearingHttpUrl(): string {
+  const url = new URL("http://example.com/image.jpg");
+  url.username = ["line", "user"].join("-");
+  url.password = ["line", "fixture"].join("-");
+  url.searchParams.set("auth", ["line", "query"].join("-"));
+  return url.href;
 }
 
 function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
@@ -161,6 +170,31 @@ describe("line outbound sendPayload", () => {
     });
   });
 
+  it("reports each platform result for text and media payloads", async () => {
+    const { runtime } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const onDeliveryResult = vi.fn();
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:progress",
+      text: "Hello",
+      payload: {
+        text: "Hello",
+        mediaUrl: "https://example.com/image.jpg",
+      },
+      accountId: "default",
+      cfg,
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+      "m-text",
+      "m-media",
+    ]);
+  });
+
   it("sends template message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -203,13 +237,14 @@ describe("line outbound sendPayload", () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const altText = "a".repeat(1600);
 
     const payload = {
       channelData: {
         line: {
           quickReplies: ["One", "Two"],
           flexMessage: {
-            altText: "Card",
+            altText,
             contents: { type: "bubble" },
           },
         },
@@ -230,7 +265,7 @@ describe("line outbound sendPayload", () => {
       [
         {
           type: "flex",
-          altText: "Card",
+          altText: "a".repeat(1500),
           contents: { type: "bubble" },
           quickReply: { items: ["One", "Two"] },
         },
@@ -343,7 +378,9 @@ describe("line outbound sendPayload", () => {
     );
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
     const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
-    expect(mediaOrder).toBeLessThan(quickReplyOrder);
+    expect(expectDefined(mediaOrder, "LINE media invocation")).toBeLessThan(
+      expectDefined(quickReplyOrder, "LINE quick-reply invocation"),
+    );
   });
 
   it("keeps generic media payloads on the image-only send path", async () => {
@@ -472,6 +509,60 @@ describe("line outbound sendPayload", () => {
       ],
       { verbose: false, accountId: "default", cfg },
     );
+  });
+
+  it("keeps generic quick-reply media on the validated image route", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:U123",
+      text: "",
+      payload: {
+        mediaUrl: "https://example.com/clip.mp4",
+        channelData: { line: { quickReplies: ["One"] } },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/clip.mp4",
+          previewImageUrl: "https://example.com/clip.mp4",
+          quickReply: { items: ["One"] },
+        },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
+      policy: { allowPrivateNetwork: false },
+    });
+  });
+
+  it("rejects insecure generic media before quick-reply batch sends", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text: "",
+        payload: {
+          mediaUrl: createCredentialBearingHttpUrl(),
+          channelData: { line: { quickReplies: ["One"] } },
+        },
+        accountId: "default",
+        cfg,
+      }),
+    ).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
+
+    expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
   });
 
   it("keeps trackingId for user quick-reply inline video media", async () => {

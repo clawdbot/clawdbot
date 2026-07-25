@@ -16,20 +16,32 @@ afterAll(() => {
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
-const runEmbeddedAgent = vi.fn(async () => ({
-  meta: { startedAt: Date.now() },
+type LlmTaskApi = Parameters<typeof createLlmTaskTool>[0];
+type RunEmbeddedAgent = LlmTaskApi["runtime"]["agent"]["runEmbeddedAgent"];
+
+const runEmbeddedAgent = vi.fn<RunEmbeddedAgent>(async () => ({
+  meta: { durationMs: 0, startedAt: Date.now() },
   payloads: [{ text: "{}" }],
 }));
 
-const resolveThinkingPolicy = vi.fn(() => ({
-  levels: [
-    { id: "off", label: "off" },
-    { id: "minimal", label: "minimal" },
-    { id: "low", label: "low" },
-    { id: "medium", label: "medium" },
-    { id: "high", label: "high" },
-  ],
-}));
+const resolveThinkingPolicy = vi.fn(
+  ({ model, agentRuntime }: { model?: string | null; agentRuntime?: string | null }) => ({
+    levels: [
+      { id: "off", label: "off" },
+      { id: "minimal", label: "minimal" },
+      { id: "low", label: "low" },
+      { id: "medium", label: "medium" },
+      { id: "high", label: "high" },
+      ...(model?.startsWith("gpt-5.6") &&
+      (agentRuntime === "openclaw" || (agentRuntime === "codex" && !model.endsWith("-luna")))
+        ? [
+            { id: "max", label: "max" },
+            { id: "ultra", label: "ultra" },
+          ]
+        : []),
+    ],
+  }),
+);
 
 const normalizeThinkingLevel = vi.fn((raw?: string | null) => {
   const value = raw?.trim().toLowerCase();
@@ -39,19 +51,29 @@ const normalizeThinkingLevel = vi.fn((raw?: string | null) => {
   if (value === "on") {
     return "low";
   }
-  if (["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"].includes(value)) {
+  if (
+    ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"].includes(value)
+  ) {
     return value;
   }
   return undefined;
 });
 
-function fakeApi(overrides: any = {}) {
+function fakeApi(overrides: Record<string, unknown> = {}): LlmTaskApi {
   return {
     id: "llm-task",
     name: "llm-task",
     source: "test",
     config: {
-      agents: { defaults: { workspace: "/tmp", model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: {
+          workspace: "/tmp",
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
     },
     pluginConfig: {},
     runtime: {
@@ -66,12 +88,12 @@ function fakeApi(overrides: any = {}) {
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     registerTool() {},
     ...overrides,
-  };
+  } as unknown as LlmTaskApi;
 }
 
 function mockEmbeddedRunJson(payload: unknown) {
-  (runEmbeddedAgent as any).mockResolvedValueOnce({
-    meta: {},
+  runEmbeddedAgent.mockResolvedValueOnce({
+    meta: { durationMs: 0 },
     payloads: [{ text: JSON.stringify(payload) }],
   });
 }
@@ -79,7 +101,7 @@ function mockEmbeddedRunJson(payload: unknown) {
 function resetRunnerMocks() {
   runEmbeddedAgent.mockReset();
   runEmbeddedAgent.mockImplementation(async () => ({
-    meta: { startedAt: Date.now() },
+    meta: { durationMs: 0, startedAt: Date.now() },
     payloads: [{ text: "{}" }],
   }));
   resolveThinkingPolicy.mockClear();
@@ -89,7 +111,26 @@ function resetRunnerMocks() {
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
-  return (runEmbeddedAgent as any).mock.calls[0]?.[0];
+  return firstEmbeddedRunCall();
+}
+
+function firstEmbeddedRunCall() {
+  const call = runEmbeddedAgent.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected embedded agent run");
+  }
+  return call;
+}
+
+function resultJson(result: unknown): unknown {
+  if (!result || typeof result !== "object" || !("details" in result)) {
+    throw new Error("expected tool result details");
+  }
+  const details = result.details;
+  if (!details || typeof details !== "object" || !("json" in details)) {
+    throw new Error("expected tool result JSON");
+  }
+  return details.json;
 }
 
 describe("llm-task tool (json-only)", () => {
@@ -98,28 +139,28 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("returns parsed json", async () => {
-    (runEmbeddedAgent as any).mockResolvedValueOnce({
-      meta: {},
+    runEmbeddedAgent.mockResolvedValueOnce({
+      meta: { durationMs: 0 },
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
     const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return foo" });
-    expect((res as any).details.json).toEqual({ foo: "bar" });
+    expect(resultJson(res)).toEqual({ foo: "bar" });
   });
 
   it("strips fenced json", async () => {
-    (runEmbeddedAgent as any).mockResolvedValueOnce({
-      meta: {},
+    runEmbeddedAgent.mockResolvedValueOnce({
+      meta: { durationMs: 0 },
       payloads: [{ text: '```json\n{"ok":true}\n```' }],
     });
     const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return ok" });
-    expect((res as any).details.json).toEqual({ ok: true });
+    expect(resultJson(res)).toEqual({ ok: true });
   });
 
   it("validates schema", async () => {
-    (runEmbeddedAgent as any).mockResolvedValueOnce({
-      meta: {},
+    runEmbeddedAgent.mockResolvedValueOnce({
+      meta: { durationMs: 0 },
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
     const tool = createLlmTaskTool(fakeApi());
@@ -130,18 +171,18 @@ describe("llm-task tool (json-only)", () => {
       additionalProperties: false,
     };
     const res = await tool.execute("id", { prompt: "return foo", schema });
-    expect((res as any).details.json).toEqual({ foo: "bar" });
+    expect(resultJson(res)).toEqual({ foo: "bar" });
   });
 
   it("validates caller schemas with repeated $id independently across calls", async () => {
     const tool = createLlmTaskTool(fakeApi());
-    (runEmbeddedAgent as any)
+    runEmbeddedAgent
       .mockResolvedValueOnce({
-        meta: {},
+        meta: { durationMs: 0 },
         payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
       })
       .mockResolvedValueOnce({
-        meta: {},
+        meta: { durationMs: 0 },
         payloads: [{ text: JSON.stringify({ count: 1 }) }],
       });
 
@@ -179,8 +220,8 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on invalid json", async () => {
-    (runEmbeddedAgent as any).mockResolvedValueOnce({
-      meta: {},
+    runEmbeddedAgent.mockResolvedValueOnce({
+      meta: { durationMs: 0 },
       payloads: [{ text: "not-json" }],
     });
     const tool = createLlmTaskTool(fakeApi());
@@ -188,8 +229,8 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on schema mismatch", async () => {
-    (runEmbeddedAgent as any).mockResolvedValueOnce({
-      meta: {},
+    runEmbeddedAgent.mockResolvedValueOnce({
+      meta: { durationMs: 0 },
       payloads: [{ text: JSON.stringify({ foo: 1 }) }],
     });
     const tool = createLlmTaskTool(fakeApi());
@@ -239,7 +280,7 @@ describe("llm-task tool (json-only)", () => {
 
     await tool.execute("id", { prompt: "x", model: "gemini-flash" });
 
-    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
+    const call = firstEmbeddedRunCall();
     expect(call.provider).toBe("google");
     expect(call.model).toBe("gemini-3-flash-preview");
   });
@@ -251,7 +292,74 @@ describe("llm-task tool (json-only)", () => {
     expect(resolveThinkingPolicy).toHaveBeenCalledWith({
       provider: "openai",
       model: "gpt-5.5",
+      agentRuntime: "openclaw",
     });
+  });
+
+  it("lets a configured Codex runtime own Ultra validation and execution", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const config = {
+      agents: {
+        defaults: {
+          workspace: "/tmp",
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    const tool = createLlmTaskTool(fakeApi({ config }));
+
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      thinking: "ultra",
+    });
+
+    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      agentRuntime: "codex",
+    });
+    const call = firstEmbeddedRunCall();
+    expect(call.thinkLevel).toBe("ultra");
+    expect(call.config).toBe(config);
+    expect(call.agentHarnessRuntimeOverride).toBe("codex");
+  });
+
+  it("lets an explicit OpenClaw model runtime own Luna Ultra", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const config = {
+      agents: {
+        defaults: {
+          workspace: "/tmp",
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
+    const tool = createLlmTaskTool(fakeApi({ config }));
+
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      thinking: "ultra",
+    });
+
+    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: "openclaw",
+    });
+    const call = firstEmbeddedRunCall();
+    expect(call.thinkLevel).toBe("ultra");
+    expect(call.config).toBe(config);
+    expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
   it("normalizes thinking aliases", async () => {
@@ -295,6 +403,7 @@ describe("llm-task tool (json-only)", () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.disableTools).toBe(true);
+    expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
   it("rejects malformed numeric run options before dispatch", async () => {

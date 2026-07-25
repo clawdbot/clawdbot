@@ -1,25 +1,24 @@
 // Resolves bundled plugin load-path aliases for package output.
 import path from "node:path";
-import { isPathInside } from "./path-safety.js";
 
 /** Alias class for current packaged paths and legacy bundled extension paths. */
-export type BundledPluginLoadPathAliasKind = "current" | "legacy";
+type BundledPluginLoadPathAliasKind = "current" | "legacy";
 
 /** Load path alias used while resolving bundled plugins across package layouts. */
-export type BundledPluginLoadPathAlias = {
+type BundledPluginLoadPathAlias = {
   kind: BundledPluginLoadPathAliasKind;
   path: string;
 };
 
 /** Parsed path metadata for a bundled plugin in a packaged dist root. */
-export type PackagedBundledPluginPath = {
+type PackagedBundledPluginPath = {
   packageRoot: string;
   bundledRoot: string;
   bundledLeaf: string;
 };
 
 /** Parsed path metadata for a bundled plugin in the legacy extensions root. */
-export type LegacyBundledPluginPath = {
+type LegacyBundledPluginPath = {
   packageRoot: string;
   legacyRoot: string;
   bundledLeaf: string;
@@ -83,7 +82,7 @@ export function parsePackagedBundledPluginPath(
 }
 
 /** Builds the legacy extensions-root alias for a packaged bundled plugin path. */
-export function buildLegacyBundledPath(localPath: string): string | null {
+function buildLegacyBundledPath(localPath: string): string | null {
   const packaged = parsePackagedBundledPluginPath(localPath);
   if (!packaged) {
     return null;
@@ -126,32 +125,4 @@ export function buildBundledPluginLoadPathAliases(localPath: string): BundledPlu
     { kind: "current", path: localPath },
     { kind: "legacy", path: legacyPath },
   ];
-}
-
-function isSameOrInside(baseDir: string, targetPath: string): boolean {
-  const base = path.resolve(normalizeBundledLookupPath(baseDir));
-  const target = path.resolve(normalizeBundledLookupPath(targetPath));
-  return target === base || isPathInside(base, target);
-}
-
-/** Classifies a load path as current or legacy for a packaged bundled plugin root. */
-export function resolvePackagedBundledLoadPathAlias(params: {
-  bundledRoot?: string;
-  loadPath: string;
-}): BundledPluginLoadPathAlias | null {
-  if (!params.bundledRoot) {
-    return null;
-  }
-  const packaged = findPackagedBundledRoot(params.bundledRoot);
-  if (!packaged) {
-    return null;
-  }
-  const legacyRoot = path.join(packaged.packageRoot, "extensions");
-  if (isSameOrInside(params.bundledRoot, params.loadPath)) {
-    return { kind: "current", path: params.loadPath };
-  }
-  if (isSameOrInside(legacyRoot, params.loadPath)) {
-    return { kind: "legacy", path: params.loadPath };
-  }
-  return null;
 }

@@ -1,130 +1,47 @@
-// xAI schema cleaner tests cover provider-specific keyword stripping for tool
-// schemas before they are sent to Grok/xAI endpoints.
+// xAI schema tests lock the live-supported JSON Schema bounds used by tools.
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 import { describe, expect, it } from "vitest";
-import { stripUnsupportedSchemaKeywords } from "../../plugin-sdk/provider-tools.js";
 
-const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "minContains",
-  "maxContains",
-]);
-
-function stripXaiUnsupportedKeywords(schema: unknown): unknown {
-  return stripUnsupportedSchemaKeywords(schema, XAI_UNSUPPORTED_SCHEMA_KEYWORDS);
-}
-
-describe("stripXaiUnsupportedKeywords", () => {
-  it("strips minLength and maxLength from string properties", () => {
+describe("xAI tool schema compatibility", () => {
+  it("preserves supported bounds while stripping documented contains-count bounds", () => {
     const schema = {
       type: "object",
       properties: {
-        name: { type: "string", minLength: 1, maxLength: 64, description: "A name" },
-      },
-    };
-    const result = stripXaiUnsupportedKeywords(schema) as {
-      properties: { name: Record<string, unknown> };
-    };
-    expect(result.properties.name.minLength).toBeUndefined();
-    expect(result.properties.name.maxLength).toBeUndefined();
-    expect(result.properties.name.type).toBe("string");
-    expect(result.properties.name.description).toBe("A name");
-  });
-
-  it("strips minItems and maxItems from array properties", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        items: { type: "array", minItems: 1, maxItems: 50, items: { type: "string" } },
-      },
-    };
-    const result = stripXaiUnsupportedKeywords(schema) as {
-      properties: { items: Record<string, unknown> };
-    };
-    expect(result.properties.items.minItems).toBeUndefined();
-    expect(result.properties.items.maxItems).toBeUndefined();
-    expect(result.properties.items.type).toBe("array");
-  });
-
-  it("strips minContains and maxContains", () => {
-    const schema = {
-      type: "array",
-      minContains: 1,
-      maxContains: 5,
-      contains: { type: "string" },
-    };
-    const result = stripXaiUnsupportedKeywords(schema) as Record<string, unknown>;
-    expect(result.minContains).toBeUndefined();
-    expect(result.maxContains).toBeUndefined();
-    expect(result.contains).toEqual({ type: "string" });
-  });
-
-  it("strips keywords recursively inside nested objects", () => {
-    // Attachment schemas can contain large string bounds deep in nested objects;
-    // xAI rejects those bounds unless the cleaner recurses.
-    const schema = {
-      type: "object",
-      properties: {
-        attachment: {
-          type: "object",
-          properties: {
-            content: { type: "string", maxLength: 6_700_000 },
-          },
+        name: { type: "string", minLength: 1, maxLength: 64 },
+        tags: {
+          type: "array",
+          minItems: 1,
+          maxItems: 5,
+          items: { type: "string", minLength: 2, maxLength: 20 },
+          contains: { const: "required" },
+          minContains: 1,
+          maxContains: 1,
         },
       },
-    };
-    const result = stripXaiUnsupportedKeywords(schema) as {
-      properties: { attachment: { properties: { content: Record<string, unknown> } } };
-    };
-    expect(result.properties.attachment.properties.content.maxLength).toBeUndefined();
-    expect(result.properties.attachment.properties.content.type).toBe("string");
-  });
-
-  it("strips keywords inside anyOf/oneOf/allOf variants", () => {
-    const schema = {
-      anyOf: [{ type: "string", minLength: 1 }, { type: "null" }],
-    };
-    const result = stripXaiUnsupportedKeywords(schema) as {
-      anyOf: Array<Record<string, unknown>>;
-    };
-    expect(result.anyOf[0].minLength).toBeUndefined();
-    expect(result.anyOf[0].type).toBe("string");
-  });
-
-  it("strips keywords inside array item schemas", () => {
-    const schema = {
-      type: "array",
-      items: { type: "string", maxLength: 100 },
-    };
-    const result = stripXaiUnsupportedKeywords(schema) as {
-      items: Record<string, unknown>;
-    };
-    expect(result.items.maxLength).toBeUndefined();
-    expect(result.items.type).toBe("string");
-  });
-
-  it("preserves all other schema keywords", () => {
-    const schema = {
-      type: "object",
-      description: "A tool schema",
-      required: ["name"],
-      properties: {
-        name: { type: "string", description: "The name", enum: ["foo", "bar"] },
-      },
+      required: ["name", "tags"],
       additionalProperties: false,
     };
-    const result = stripXaiUnsupportedKeywords(schema) as Record<string, unknown>;
-    expect(result.type).toBe("object");
-    expect(result.description).toBe("A tool schema");
-    expect(result.required).toEqual(["name"]);
-    expect(result.additionalProperties).toBe(false);
-  });
 
-  it("passes through primitives and null unchanged", () => {
-    expect(stripXaiUnsupportedKeywords(null)).toBeNull();
-    expect(stripXaiUnsupportedKeywords("string")).toBe("string");
-    expect(stripXaiUnsupportedKeywords(42)).toBe(42);
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelProvider: "xai",
+        modelCompat: {
+          toolSchemaProfile: "xai",
+          unsupportedToolSchemaKeywords: ["minContains", "maxContains"],
+        },
+      }),
+    ).toEqual({
+      ...schema,
+      properties: {
+        ...schema.properties,
+        tags: {
+          type: "array",
+          minItems: 1,
+          maxItems: 5,
+          items: { type: "string", minLength: 2, maxLength: 20 },
+          contains: { const: "required" },
+        },
+      },
+    });
   });
 });

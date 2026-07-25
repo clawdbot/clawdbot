@@ -1,54 +1,50 @@
+import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Abort-signal wrapping for agent tools.
  * Combines per-call cancellation with run-level aborts while preserving plugin,
  * channel, and before_tool_call metadata on wrapped tools.
  */
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 
 function throwAbortError(): never {
-  const err = new Error("Aborted");
-  err.name = "AbortError";
-  throw err;
+  throw createAbortError("Aborted");
 }
 
 /**
- * Checks if an object is a valid AbortSignal using structural typing.
- * This is more reliable than `instanceof` across different realms (VM, iframe, etc.)
- * where the AbortSignal constructor may differ.
+ * Races a tool execute promise against the combined abort signal so an abort
+ * settles the wrapped call immediately instead of awaiting the tool forever.
+ * JavaScript cannot cancel a running promise: a tool that never observes the
+ * signal keeps executing in the background and may settle later, but its late
+ * settlement is detached here so the result never lands in an aborted run.
+ * Tool settlements pass through untouched to preserve tool error semantics,
+ * including non-Error rejections.
  */
-function isAbortSignal(obj: unknown): obj is AbortSignal {
-  return obj instanceof AbortSignal;
-}
-
-function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
-  if (!a && !b) {
-    return undefined;
-  }
-  if (a && !b) {
-    return a;
-  }
-  if (b && !a) {
-    return b;
-  }
-  if (a?.aborted) {
-    return a;
-  }
-  if (b?.aborted) {
-    return b;
-  }
-  if (typeof AbortSignal.any === "function" && isAbortSignal(a) && isAbortSignal(b)) {
-    return AbortSignal.any([a, b]);
-  }
-
-  const controller = new AbortController();
-  const onAbort = bindAbortRelay(controller);
-  a?.addEventListener("abort", onAbort, { once: true });
-  b?.addEventListener("abort", onAbort, { once: true });
-  return controller.signal;
+function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(createAbortError("Aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        // Tool settlements pass through untouched, including non-Error rejections.
+        // oxlint-disable-next-line typescript/prefer-promise-reject-errors
+        reject(error);
+      },
+    );
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
 }
 
 /** Wrap a tool so every execute call observes the supplied run abort signal. */
@@ -66,11 +62,14 @@ export function wrapToolWithAbortSignal(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const combined = combineAbortSignals(signal, abortSignal);
-      if (combined?.aborted) {
+      const combinedSignal = signal ? AbortSignal.any([signal, abortSignal]) : abortSignal;
+      if (combinedSignal.aborted) {
         throwAbortError();
       }
-      return await execute(toolCallId, params, combined, onUpdate);
+      return await raceWithAbortSignal(
+        execute(toolCallId, params, combinedSignal, onUpdate),
+        combinedSignal,
+      );
     },
   };
   copyPluginToolMeta(tool, wrappedTool);

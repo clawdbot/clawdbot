@@ -3,10 +3,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { GoogleGenAI, Modality } from "@google/genai";
-import { chromium, type Browser } from "playwright";
-import { createServer } from "vite";
-import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   parseStrictIntegerOption,
@@ -15,20 +11,24 @@ import {
 } from "../lib/dev-tooling-safety.ts";
 
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
+  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
 const OPENAI_HTTP_RESPONSE_MAX_BYTES = 256 * 1024;
 const GOOGLE_REALTIME_MODEL =
-  process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() ||
-  "gemini-2.5-flash-native-audio-preview-12-2025";
+  process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() || "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim() || "Kore";
 const GOOGLE_LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
 type RealtimeSmokeCliOptions = {
   help: boolean;
+  openAIOnly: boolean;
 };
+
+// Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
+type Browser = import("playwright").Browser;
+type ViteDevServer = Awaited<ReturnType<(typeof import("vite"))["createServer"]>>;
 
 type SmokeResult = {
   name: string;
@@ -66,7 +66,8 @@ function usage(): string {
     "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts [options]",
     "",
     "Options:",
-    "  -h, --help    Show this help",
+    "  --openai-only  Run only the OpenAI backend and browser legs",
+    "  -h, --help     Show this help",
     "",
     "Environment:",
     "  OPENAI_API_KEY",
@@ -76,12 +77,15 @@ function usage(): string {
 
 function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
   for (const arg of argv) {
-    if (arg === "--help" || arg === "-h") {
+    if (arg === "--help" || arg === "-h" || arg === "--openai-only") {
       continue;
     }
     throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
-  return { help: argv.includes("--help") || argv.includes("-h") };
+  return {
+    help: argv.includes("--help") || argv.includes("-h"),
+    openAIOnly: argv.includes("--openai-only"),
+  };
 }
 
 function getEnv(name: string): string | undefined {
@@ -269,6 +273,8 @@ async function createOpenAIClientSecret(
 }
 
 async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
+  const { buildOpenAIRealtimeVoiceProvider } =
+    await import("../../extensions/openai/realtime-voice-provider.ts");
   const provider = buildOpenAIRealtimeVoiceProvider();
   const events: string[] = [];
   const bridge = provider.createBridge({
@@ -444,53 +450,55 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
   }
 }
 
-async function createGoogleLiveToken(apiKey: string): Promise<string> {
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: { apiVersion: "v1alpha" },
-  });
-  const now = Date.now();
-  const token = await ai.authTokens.create({
-    config: {
-      uses: 1,
-      expireTime: new Date(now + 30 * 60 * 1000).toISOString(),
-      newSessionExpireTime: new Date(now + 60 * 1000).toISOString(),
-      liveConnectConstraints: {
-        model: GOOGLE_REALTIME_MODEL,
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: GOOGLE_REALTIME_VOICE },
-            },
-          },
-          systemInstruction: "OpenClaw browser Talk live smoke.",
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
-        },
-      },
-    },
-  });
-  const name = token.name?.trim();
-  if (!name) {
-    throw new Error("Google Live auth token response did not include a token name");
-  }
-  return name;
-}
-
 async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promise<SmokeResult> {
   try {
-    const token = await createGoogleLiveToken(apiKey);
+    const { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } =
+      await import("../../src/talk/describe-view-tool.ts");
+    const { buildGoogleRealtimeVoiceProvider } =
+      await import("../../extensions/google/realtime-voice-provider.ts");
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const session = await provider.createBrowserSession?.({
+      cfg: {},
+      providerConfig: {
+        apiKey,
+        model: GOOGLE_REALTIME_MODEL,
+        voice: GOOGLE_REALTIME_VOICE,
+      },
+      model: GOOGLE_REALTIME_MODEL,
+      voice: GOOGLE_REALTIME_VOICE,
+      instructions:
+        "OpenClaw browser Video Talk live smoke. After receiving a visual frame and request, call describe_view exactly once.",
+      tools: [REALTIME_VOICE_DESCRIBE_VIEW_TOOL],
+    });
+    if (
+      !session ||
+      session.transport !== "provider-websocket" ||
+      session.protocol !== "google-live-bidi"
+    ) {
+      throw new Error("Google Live provider did not create a browser WebSocket session");
+    }
     const page = await browser.newPage();
     await page.evaluate("globalThis.__name = (fn) => fn");
     const result = await page.evaluate(
-      async ({ model, tokenName, websocketUrl }) => {
+      async ({
+        initialMessage,
+        tokenName,
+        websocketUrl,
+      }: {
+        initialMessage: unknown;
+        tokenName: string;
+        websocketUrl: string;
+      }) => {
         const debug: {
           opened: boolean;
           messages: string[];
           close?: { code: number; reason: string };
           error: boolean;
         } = { opened: false, messages: [], error: false };
+        let setupComplete = false;
+        let videoFrameSent = false;
+        let describeViewCalled = false;
+        let functionResponseSent = false;
         const dataToText = async (data: unknown): Promise<string> => {
           if (typeof data === "string") {
             return data;
@@ -513,27 +521,78 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
           );
           ws.addEventListener("open", () => {
             debug.opened = true;
-            ws.send(
-              JSON.stringify({
-                setup: {
-                  model: model.startsWith("models/") ? model : `models/${model}`,
-                  generationConfig: { responseModalities: ["AUDIO"] },
-                  inputAudioTranscription: {},
-                  outputAudioTranscription: {},
-                },
-              }),
-            );
+            ws.send(JSON.stringify(initialMessage));
           });
           ws.addEventListener("message", (event) => {
             void (async () => {
               const text = await dataToText(event.data);
               debug.messages.push(text.slice(0, 300));
-              const message = JSON.parse(text) as { setupComplete?: unknown };
-              if (!message.setupComplete) {
+              const message = JSON.parse(text) as {
+                setupComplete?: unknown;
+                serverContent?: unknown;
+                toolCall?: {
+                  functionCalls?: Array<{ id?: string; name?: string }>;
+                };
+              };
+              if (message.setupComplete) {
+                setupComplete = true;
+                const canvas = document.createElement("canvas");
+                canvas.width = 8;
+                canvas.height = 8;
+                const context = canvas.getContext("2d");
+                if (!context) {
+                  throw new Error("Google Live smoke could not create a camera fixture");
+                }
+                context.fillStyle = "#2f81f7";
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                const frame = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+                if (!frame) {
+                  throw new Error("Google Live smoke camera fixture was empty");
+                }
+                ws.send(
+                  JSON.stringify({
+                    realtimeInput: { video: { data: frame, mimeType: "image/jpeg" } },
+                  }),
+                );
+                videoFrameSent = true;
+                ws.send(
+                  JSON.stringify({
+                    realtimeInput: { text: "Call describe_view now for the visual frame." },
+                  }),
+                );
                 return;
               }
-              window.clearTimeout(timeout);
-              resolve({ setupComplete: true, readyState: ws.readyState });
+              const describeView = message.toolCall?.functionCalls?.find(
+                (call) => call.name === "describe_view" && call.id,
+              );
+              if (describeView?.id) {
+                describeViewCalled = true;
+                ws.send(
+                  JSON.stringify({
+                    toolResponse: {
+                      functionResponses: [
+                        {
+                          id: describeView.id,
+                          name: "describe_view",
+                          response: { ok: true, cameraStreamActive: true },
+                        },
+                      ],
+                    },
+                  }),
+                );
+                functionResponseSent = true;
+                return;
+              }
+              if (message.serverContent && functionResponseSent) {
+                window.clearTimeout(timeout);
+                resolve({
+                  setupComplete,
+                  videoFrameSent,
+                  describeViewCalled,
+                  functionResponseAccepted: true,
+                  readyState: ws.readyState,
+                });
+              }
             })().catch((error: unknown) => {
               window.clearTimeout(timeout);
               reject(toLintErrorObject(error, "Non-Error rejection"));
@@ -557,16 +616,26 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
         return value;
       },
       {
-        model: GOOGLE_REALTIME_MODEL,
-        tokenName: token,
-        websocketUrl: GOOGLE_LIVE_WS_URL,
+        initialMessage: session.initialMessage ?? { setup: {} },
+        tokenName: session.clientSecret,
+        websocketUrl: session.websocketUrl || GOOGLE_LIVE_WS_URL,
       },
     );
     await page.close();
     return {
       name: "google-live-browser-ws",
-      ok: result.setupComplete === true,
-      details: { model: GOOGLE_REALTIME_MODEL, setupComplete: result.setupComplete === true },
+      ok:
+        result.setupComplete === true &&
+        result.videoFrameSent === true &&
+        result.describeViewCalled === true &&
+        result.functionResponseAccepted === true,
+      details: {
+        model: GOOGLE_REALTIME_MODEL,
+        setupComplete: result.setupComplete === true,
+        videoFrameSent: result.videoFrameSent === true,
+        describeViewCalled: result.describeViewCalled === true,
+        functionResponseAccepted: result.functionResponseAccepted === true,
+      },
     };
   } catch (error) {
     return { name: "google-live-browser-ws", ok: false, details: { error: shortError(error) } };
@@ -574,9 +643,10 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
 }
 
 async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> {
-  let server: Awaited<ReturnType<typeof createServer>> | undefined;
+  let server: ViteDevServer | undefined;
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
+    const { createServer } = await import("vite");
     const repoRoot = process.cwd().replaceAll("\\", "/");
     const relayModulePath = JSON.stringify(
       `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
@@ -766,6 +836,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     console.log(usage());
     return;
   }
+  const { chromium } = await import("playwright");
   const openAIKey = getEnv("OPENAI_API_KEY");
   const googleKey = getEnv("GEMINI_API_KEY") ?? getEnv("GOOGLE_API_KEY");
   const browser = await chromium.launch({
@@ -794,16 +865,18 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       results.push(await smokeOpenAIBackendBridge(openAIKey));
       results.push(await smokeOpenAIWebRtc(browser, openAIKey));
     }
-    if (!googleKey) {
-      results.push({
-        name: "google-live-browser-ws",
-        ok: false,
-        details: { error: "GEMINI_API_KEY or GOOGLE_API_KEY missing" },
-      });
-    } else {
-      results.push(await smokeGoogleLiveBrowserWs(browser, googleKey));
+    if (!cli.openAIOnly) {
+      if (!googleKey) {
+        results.push({
+          name: "google-live-browser-ws",
+          ok: false,
+          details: { error: "GEMINI_API_KEY or GOOGLE_API_KEY missing" },
+        });
+      } else {
+        results.push(await smokeGoogleLiveBrowserWs(browser, googleKey));
+      }
+      results.push(await smokeGatewayRelayBrowser(browser));
     }
-    results.push(await smokeGatewayRelayBrowser(browser));
   } finally {
     await browser.close();
   }

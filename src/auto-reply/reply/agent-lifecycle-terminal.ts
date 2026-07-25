@@ -42,9 +42,10 @@ export function createAgentLifecycleTerminalBackstop(params: {
   sessionKey?: string;
   startedAt?: number;
   getLifecycleGeneration: () => string;
-  resolveAbortLifecycleFields: () => {
+  resolveTerminationFields: (error?: unknown) => {
     aborted?: true;
     stopReason?: string;
+    timeoutPhase?: string;
   };
 }): AgentLifecycleTerminalBackstop {
   let terminalEmitted = false;
@@ -57,8 +58,16 @@ export function createAgentLifecycleTerminalBackstop(params: {
       return;
     }
     const phase = readStringValue(evt.data.phase);
-    if (phase === "start" && typeof evt.data.startedAt === "number") {
-      startedAt = evt.data.startedAt;
+    if (phase === "start") {
+      if (typeof evt.data.startedAt === "number") {
+        startedAt = evt.data.startedAt;
+      }
+      // A same-candidate retry replaces deferred terminal state from the
+      // preceding attempt; retaining it would abort a recovered run.
+      deferredError = undefined;
+      for (const key of DEFERRED_TERMINAL_METADATA_KEYS) {
+        delete deferredTerminalMetadata[key];
+      }
     }
     if (phase === "finishing") {
       deferredError = readStringValue(evt.data.error) ?? deferredError;
@@ -74,8 +83,10 @@ export function createAgentLifecycleTerminalBackstop(params: {
       return;
     }
     terminalEmitted = true;
-    const abortLifecycleFields = params.resolveAbortLifecycleFields();
-    const restartAbort = abortLifecycleFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
+    const terminationFields = params.resolveTerminationFields(
+      phase === "error" ? resultOrError : undefined,
+    );
+    const restartAbort = terminationFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
     const data: Record<string, unknown> = {
       ...deferredTerminalMetadata,
       phase: restartAbort ? "end" : phase,
@@ -87,18 +98,18 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (phase === "error") {
       data.error = formatErrorMessage(resultOrError);
-      Object.assign(data, abortLifecycleFields);
+      Object.assign(data, terminationFields);
     } else {
       const meta =
         resultOrError && typeof resultOrError === "object" && "meta" in resultOrError
           ? (resultOrError as { meta?: Record<string, unknown> }).meta
           : undefined;
       Object.assign(data, resolveAgentLifecycleTerminalMetadata(meta));
-      if (abortLifecycleFields.aborted === true) {
+      if (terminationFields.aborted === true) {
         data.aborted = true;
       }
-      if (abortLifecycleFields.stopReason && !readStringValue(data.stopReason)) {
-        data.stopReason = abortLifecycleFields.stopReason;
+      if (terminationFields.stopReason && !readStringValue(data.stopReason)) {
+        data.stopReason = terminationFields.stopReason;
       }
     }
     if (extraData) {

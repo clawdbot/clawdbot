@@ -10,13 +10,13 @@ describe("check-release-metadata-only", () => {
         "--head",
         "HEAD",
         "./package.json",
-        "apps\\ios\\version.json",
+        "apps\\ios\\CHANGELOG.md",
       ]),
     ).toEqual({
       staged: false,
       base: "origin/release",
       head: "HEAD",
-      paths: ["package.json", "apps/ios/version.json"],
+      paths: ["package.json", "apps/ios/CHANGELOG.md"],
     });
   });
 

@@ -1,0 +1,91 @@
+title: Matrix shared DM session notice
+
+scenario:
+  id: dm-shared-session
+  surface: dm
+  coverage:
+    primary:
+      - matrix.sender-bound-dm-routing
+      - channels.session-key-construction
+  objective: Verify the default Matrix per-user DM session emits a cross-room notice when the same sender moves to another DM room.
+  successCriteria:
+    - Both DM rooms receive top-level marker replies.
+    - The second room receives the shared-session notice naming channels.matrix.dm.sessionScope.
+  docsRefs:
+    - docs/channels/matrix.md
+  codeRefs:
+    - extensions/matrix/src/matrix/monitor/handler.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    profiles: { "matrix:adapter": 11, "matrix:all": 15, "matrix:transport": 14 }
+    kind: flow
+    channel: matrix
+    summary: Send consecutive DMs from one Matrix user in two rooms and require the shared-session notice.
+    config:
+      primaryConversationId: driver-dm
+      secondaryConversationId: driver-dm-shared
+      primaryMarker: QA-MATRIX-DM-PRIMARY-OK
+      secondaryMarker: QA-MATRIX-DM-SHARED-OK
+
+flow:
+  steps:
+    - name: emits the cross-room shared-session notice
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.primaryConversationId
+              kind: direct
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`Reply exactly: ${config.primaryMarker}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.primaryConversationId
+              kind: direct
+            textIncludes:
+              ref: config.primaryMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+        - set: secondaryStartIndex
+          value:
+            expr: state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.secondaryConversationId
+              kind: direct
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`Reply exactly: ${config.secondaryMarker}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.secondaryConversationId
+              kind: direct
+            sinceIndex:
+              ref: secondaryStartIndex
+            textIncludes:
+              ref: config.secondaryMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+          saveAs: reply
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.secondaryConversationId
+              kind: direct
+            sinceIndex:
+              ref: secondaryStartIndex
+            textIncludes: channels.matrix.dm.sessionScope
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+          saveAs: notice
+        - assert:
+            expr: "!reply.threadId && !notice.threadId"
+            message: Matrix DM shared-session reply and notice must stay top-level
+      detailsExpr: notice.text

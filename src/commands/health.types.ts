@@ -1,4 +1,5 @@
 // Shared summary types returned by gateway health and rendered by the CLI.
+import type { GatewayModelPricingHealth } from "../gateway/model-pricing-cache.types.js";
 /** Health snapshot for one configured channel account. */
 export type ChannelAccountHealthSummary = {
   accountId: string;
@@ -39,6 +40,15 @@ export type PluginHealthErrorSummary = {
 export type PluginHealthSummary = {
   loaded: string[];
   errors: PluginHealthErrorSummary[];
+  unavailable?: Array<{
+    id: string;
+    state: "configured-unavailable";
+    diagnostic: {
+      kind: "plugin-verification";
+      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      detail: string;
+    };
+  }>;
 };
 
 /** Context engine quarantine entry included in health output. */
@@ -55,9 +65,28 @@ export type ContextEngineHealthSummary = {
   quarantined: ContextEngineHealthQuarantineSummary[];
 };
 
+/** Dead-lettered delivery queue entries surfaced in health output. */
+export type DeliveryQueueHealthSummary = {
+  failed: Array<{
+    queueName: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
+  ingressFailed?: Array<{
+    channelId: string;
+    accountId: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
+};
+
 /** Optional model pricing cache health reported by the gateway. */
-type ModelPricingHealthSummary =
-  import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
+type ModelPricingHealthSummary = GatewayModelPricingHealth;
+
+/** Config hot-reload watcher status, present only when a reloader is running. */
+type ConfigReloadHealthSummary = {
+  hotReloadStatus: import("../gateway/config-reload-status.types.js").GatewayHotReloadStatus;
+};
 
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = {
@@ -67,7 +96,9 @@ export type HealthSummary = {
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
+  deliveryQueues?: DeliveryQueueHealthSummary;
   modelPricing?: ModelPricingHealthSummary;
+  configReload?: ConfigReloadHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
   channelLabels: Record<string, string>;

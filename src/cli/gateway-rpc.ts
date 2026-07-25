@@ -21,11 +21,11 @@ async function loadGatewayRpcRuntime(): Promise<GatewayRpcRuntimeModule> {
   return gatewayRpcRuntimeLoader.load();
 }
 
-export function addGatewayClientOptions(cmd: Command) {
+export function addGatewayClientOptions(cmd: Command, defaults?: { timeoutMs?: number }) {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
-    .option("--timeout <ms>", "Timeout in ms", "30000")
+    .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 30_000))
     .option("--expect-final", "Wait for final response (agent)", false);
 }
 
@@ -37,6 +37,7 @@ export async function callGatewayFromCli(
     clientName?: GatewayClientName;
     mode?: GatewayClientMode;
     deviceIdentity?: DeviceIdentity | null;
+    signal?: AbortSignal;
     expectFinal?: boolean;
     progress?: boolean;
     scopes?: OperatorScope[];

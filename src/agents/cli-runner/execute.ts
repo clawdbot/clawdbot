@@ -3,19 +3,23 @@
  * live-session routing, and diagnostics.
  */
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
   type McpLoopbackToolCallStart,
+  type McpLoopbackToolCallTerminalOutcome,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   emitAgentEvent,
 } from "../../infra/agent-events.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
@@ -25,15 +29,30 @@ import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
+import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
+import type { RunExit } from "../../process/supervisor/types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
+import {
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
+} from "../bash-tools.exec-approval-request.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
+import {
+  fingerprintCliRuntimeArtifact,
+  resolveCliRuntimeOwnerFingerprint,
+} from "../cli-auth-epoch.js";
+import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliPlanUpdate,
   type CliStreamingDelta,
+  type CliThinkingDelta,
+  type CliThinkingProgress,
+  type CliToolUseStartDelta,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
@@ -44,16 +63,16 @@ import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
-  isMessagingToolTargetEvidenceAction,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
 import {
-  collectMessagingMediaUrlsFromRecord,
-  collectMessagingMediaUrlsFromToolResult,
-  extractMessagingToolSend,
+  detectImageReferences,
+  hasHydratableMediaImages,
+} from "../embedded-agent-runner/run/images.js";
+import {
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
   sanitizeToolArgs,
@@ -61,14 +80,31 @@ import {
 } from "../embedded-agent-subscribe.tools.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import {
+  closeClaudeLiveSessionForContext,
   rotateClaudeLiveMcpCaptureKeyForContext,
   runClaudeLiveSessionTurn,
   shouldUseClaudeLiveSession,
 } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
+import {
+  appendUniqueCliMessagingEvidence,
+  buildMessagingToolSendEvidenceKey,
+  CLI_MESSAGING_EVIDENCE_MAX_CALLS,
+  extractCliMessagingContent,
+  extractCliMessagingTarget,
+  normalizeCliMessagingToolName,
+} from "./execute-messaging.js";
+import {
+  createCliAbortError,
+  executeNodeClaudeRun,
+  resolveNodeClaudePlacement,
+  stripGatewayLocalClaudeArgs,
+} from "./execute-node-claude.js";
+import { appendCliOutputTail } from "./execute-output-buffer.js";
 import {
   buildCliSupervisorScopeKey,
   buildClaudeOwnerKey,
@@ -89,130 +125,12 @@ import {
   formatCliBackendOutputDigest,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
-import type { PreparedCliRunContext } from "./types.js";
+import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { createCliOutputFailoverError } from "./output-error.js";
+import { buildCliBackendToolAvailability } from "./tool-policy.js";
+import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
-const executeDeps = {
-  getProcessSupervisor: getProcessSupervisorImpl,
-  enqueueSystemEvent: enqueueSystemEventImpl,
-  requestHeartbeat: requestHeartbeatImpl,
-  writeCliSystemPromptFile,
-};
-
-const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
-const CLI_MESSAGING_EVIDENCE_MAX_CALLS = 64;
-const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
-const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
-const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
-
-function normalizeCliMessagingToolName(toolName: string): string {
-  return toolName.startsWith(OPENCLAW_MCP_TOOL_PREFIX)
-    ? toolName.slice(OPENCLAW_MCP_TOOL_PREFIX.length)
-    : toolName;
-}
-
-function extractCliMessagingTarget(
-  context: PreparedCliRunContext,
-  toolName: string,
-  args: Record<string, unknown>,
-): MessagingToolSend | undefined {
-  const normalizedToolName = normalizeCliMessagingToolName(toolName);
-  const currentProvider = context.params.messageChannel ?? context.params.messageProvider;
-  const hasExplicitProvider =
-    (typeof args.provider === "string" && args.provider.trim().length > 0) ||
-    (typeof args.channel === "string" && args.channel.trim().length > 0);
-  const targetArgs =
-    normalizedToolName === "message" && currentProvider && !hasExplicitProvider
-      ? { ...args, provider: currentProvider }
-      : args;
-  if (!isMessagingToolTargetEvidenceAction(normalizedToolName, targetArgs)) {
-    return undefined;
-  }
-  return extractMessagingToolSend(normalizedToolName, targetArgs, {
-    config: context.params.config,
-    currentChannelId: context.params.currentChannelId,
-    currentThreadId: context.params.currentThreadTs,
-    currentMessageId: context.params.currentMessageId,
-  });
-}
-
-function buildMessagingToolSendEvidenceKey(send: MessagingToolSend): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify([
-        send.tool,
-        send.provider,
-        send.accountId,
-        send.to,
-        send.threadId,
-        send.threadImplicit,
-        send.threadSuppressed,
-        send.text,
-        send.mediaUrls,
-      ]),
-    )
-    .digest("hex");
-}
-
-function buildCliMcpCaptureKey(context: PreparedCliRunContext): string | undefined {
-  if (!context.mcpDeliveryCapture) {
-    return undefined;
-  }
-  return crypto.randomUUID();
-}
-
-function extractCliMessagingContent(
-  args: Record<string, unknown>,
-  result: unknown,
-): Pick<MessagingToolSend, "text" | "mediaUrls"> {
-  const text = ["message", "SendMessage", "content", "text", "caption"]
-    .map((key) => args[key])
-    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
-  const mediaUrls = [
-    ...collectMessagingMediaUrlsFromRecord(args),
-    ...collectMessagingMediaUrlsFromToolResult(result),
-  ].filter((url, index, all) => all.indexOf(url) === index);
-  return {
-    ...(text ? { text } : {}),
-    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
-  };
-}
-
-function appendUniqueCliMessagingEvidence(
-  values: string[],
-  valueKeys: Set<string>,
-  additions: readonly string[],
-): void {
-  for (const addition of additions) {
-    if (!addition || valueKeys.has(addition)) {
-      continue;
-    }
-    if (values.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const removed = values.shift();
-      if (removed) {
-        valueKeys.delete(removed);
-      }
-    }
-    values.push(addition);
-    valueKeys.add(addition);
-  }
-}
-
-function appendCliOutputTail(tail: Buffer, chunk: string): Buffer {
-  if (!chunk) {
-    return tail;
-  }
-  const chunkBuffer = Buffer.from(chunk);
-  if (chunkBuffer.byteLength >= CLI_RUNNER_OUTPUT_TAIL_BYTES) {
-    return Buffer.from(chunkBuffer.subarray(chunkBuffer.byteLength - CLI_RUNNER_OUTPUT_TAIL_BYTES));
-  }
-  const next = Buffer.concat([tail, chunkBuffer], tail.byteLength + chunkBuffer.byteLength);
-  if (next.byteLength <= CLI_RUNNER_OUTPUT_TAIL_BYTES) {
-    return next;
-  }
-  return Buffer.from(next.subarray(next.byteLength - CLI_RUNNER_OUTPUT_TAIL_BYTES));
-}
 
 function appendCliOutputParseBuffer(
   buffer: Buffer,
@@ -241,21 +159,48 @@ function appendCliOutputParseBuffer(
   };
 }
 
-/** Overrides process/event dependencies for CLI runner execution tests. */
-export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
-  Object.assign(executeDeps, overrides);
+const executeDeps = {
+  getProcessSupervisor: getProcessSupervisorImpl,
+
+  enqueueSystemEvent: enqueueSystemEventImpl,
+
+  requestHeartbeat: requestHeartbeatImpl,
+
+  writeCliSystemPromptFile,
+
+  invokeNodeClaudeCliRun,
+
+  registerExecApprovalRequestForHostOrThrow,
+  resolveRegisteredExecApprovalDecision,
+};
+
+const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
+
+const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
+
+const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
+
+function normalizeCliBackendThinkingLevel(
+  level: PreparedCliRunContext["params"]["thinkLevel"],
+): CliBackendThinkingLevel | undefined {
+  return level === "ultra" ? "max" : level;
 }
 
-function createCliAbortError(): Error {
-  const error = new Error("CLI run aborted");
-  error.name = "AbortError";
-  return error;
+function buildCliMcpCaptureKey(context: PreparedCliRunContext): string | undefined {
+  if (!context.mcpDeliveryCapture) {
+    return undefined;
+  }
+  return crypto.randomUUID();
+}
+
+/** Overrides process/event dependencies for CLI runner execution tests. */
+function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
+  Object.assign(executeDeps, overrides);
 }
 
 function buildCliLogArgs(params: {
   args: string[];
   systemPromptArg?: string;
-  sessionArg?: string;
   modelArg?: string;
   imageArg?: string;
   argsPrompt?: string;
@@ -266,11 +211,6 @@ function buildCliLogArgs(params: {
     if (arg === params.systemPromptArg) {
       const systemPromptValue = params.args[i + 1] ?? "";
       logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
-      i += 1;
-      continue;
-    }
-    if (arg === params.sessionArg) {
-      logArgs.push(arg, params.args[i + 1] ?? "");
       i += 1;
       continue;
     }
@@ -314,6 +254,30 @@ const CLI_ENV_AUTH_LOG_KEYS = [
 ] as const;
 
 const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
+const CLAUDE_SELECTED_AUTH_ENV_KEYS = new Set(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
+const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set(["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]);
+
+function resolveNodeClaudeAuthEnv(context: PreparedCliRunContext): Record<string, string> {
+  const secretInput = context.preparedBackend.secretInput;
+  if (!secretInput) {
+    return {};
+  }
+  const descriptorEnv = context.preparedBackend.env ?? {};
+  const requestEnv = Object.hasOwn(descriptorEnv, "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR")
+    ? "CLAUDE_CODE_OAUTH_TOKEN"
+    : Object.hasOwn(descriptorEnv, "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR")
+      ? "ANTHROPIC_API_KEY"
+      : undefined;
+  if (!requestEnv) {
+    return {};
+  }
+  const data = secretInput.createData();
+  try {
+    return { [requestEnv]: data.toString("utf8") };
+  } finally {
+    data.fill(0);
+  }
+}
 
 const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 
@@ -363,10 +327,7 @@ function formatCliEnvKeyList(keys: readonly string[]): string {
 function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
   return [
     `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
-    `sessionKey=${childEnv.OPENCLAW_MCP_SESSION_KEY ? "set" : "<empty>"}`,
-    `agentId=${childEnv.OPENCLAW_MCP_AGENT_ID || "<empty>"}`,
-    `accountId=${childEnv.OPENCLAW_MCP_ACCOUNT_ID || "<empty>"}`,
-    `messageChannel=${childEnv.OPENCLAW_MCP_MESSAGE_CHANNEL || "<empty>"}`,
+    `capture=${childEnv.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
   ].join(" ");
 }
 
@@ -378,8 +339,23 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+function formatCliSessionReuseLogState(reusableSession: CliReusableSession): string {
+  switch (reusableSession.mode) {
+    case "reuse":
+      return "reusable";
+    case "reuse-with-drift":
+      return `reusable-drift:${reusableSession.drift.reasons.join(",")}`;
+    case "invalidate":
+      return `invalidated:${reusableSession.invalidatedReason}`;
+    case "none":
+      return "none";
+  }
+  const exhaustive: never = reusableSession;
+  return exhaustive;
+}
+
 /** Builds the compact execution summary logged before a CLI backend run. */
-export function buildCliExecLogLine(params: {
+function buildCliExecLogLine(params: {
   provider: string;
   model: string;
   promptChars: number;
@@ -387,15 +363,9 @@ export function buildCliExecLogLine(params: {
   useResume: boolean;
   cliSessionId?: string;
   resolvedSessionId?: string;
-  reusableSessionId?: string;
-  invalidatedReason?: string;
+  reusableSession: CliReusableSession;
   hasHistoryPrompt: boolean;
 }): string {
-  const reuseState = params.reusableSessionId
-    ? "reusable"
-    : params.invalidatedReason
-      ? `invalidated:${params.invalidatedReason}`
-      : "none";
   return [
     `cli exec: provider=${params.provider}`,
     `model=${params.model}`,
@@ -404,13 +374,13 @@ export function buildCliExecLogLine(params: {
     `useResume=${params.useResume ? "true" : "false"}`,
     `session=${params.cliSessionId ? "present" : "none"}`,
     `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
-    `reuse=${reuseState}`,
+    `reuse=${formatCliSessionReuseLogState(params.reusableSession)}`,
     `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
   ].join(" ");
 }
 
 /** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
-export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
+function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
   const childKeySet = new Set(childKeys);
@@ -429,16 +399,32 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   ].join(" ");
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerExecuteTestApi")] = {
+    buildCliEnvAuthLog,
+    buildCliExecLogLine,
+    setCliRunnerExecuteTestDeps: (overrides: Record<string, unknown>) => {
+      setCliRunnerExecuteTestDeps(overrides as Partial<typeof executeDeps>);
+    },
+  };
+}
+
+type ExecutePreparedCliRunOptions = {
+  onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
+};
+
 /** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
+  options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
   const params = context.params;
   if (params.abortSignal?.aborted) {
     throw createCliAbortError();
   }
   const backend = context.preparedBackend.backend;
+  const nodePlacement = resolveNodeClaudePlacement(context);
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
     cliSessionId: cliSessionIdToUse,
@@ -446,17 +432,26 @@ export async function executePreparedCliRun(
   const useResume = Boolean(
     cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
   );
+  const resendSystemPromptForSoftResume = context.reusableCliSession.mode === "reuse-with-drift";
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: isNew || resendSystemPromptForSoftResume,
     systemPrompt: context.systemPrompt,
   });
   const systemPromptFile =
-    systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
+    !nodePlacement &&
+    systemPromptArg &&
+    (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume)
       ? await executeDeps.writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,
         })
+      : undefined;
+  const nodeSystemPrompt =
+    nodePlacement &&
+    systemPromptArg &&
+    (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume)
+      ? systemPromptArg
       : undefined;
 
   const basePrompt = cliSessionIdToUse
@@ -468,16 +463,29 @@ export async function executePreparedCliRun(
     }),
     context.backendResolved.textTransforms?.input,
   );
+  if (
+    nodePlacement &&
+    ((params.images?.length ?? 0) > 0 ||
+      hasHydratableMediaImages(params.media) ||
+      (params.imagePrompt ? detectImageReferences(params.imagePrompt).length > 0 : false))
+  ) {
+    throw new Error("paired-node Claude CLI sessions do not support attachments or images");
+  }
   const {
     prompt: promptWithImages,
     imagePaths,
     cleanupImages,
-  } = await prepareCliPromptImagePayload({
-    backend,
-    prompt,
-    workspaceDir: context.workspaceDir,
-    images: params.images,
-  });
+  } = nodePlacement
+    ? { prompt, imagePaths: [] as string[], cleanupImages: async () => {} }
+    : await prepareCliPromptImagePayload({
+        backend,
+        prompt,
+        imagePrompt: params.imagePrompt,
+        workspaceDir: context.workspaceDir,
+        images: params.images,
+        imageOrder: params.imageOrder,
+        media: params.media,
+      });
   prompt = promptWithImages;
 
   const { argsPrompt, stdin } = resolvePromptInput({
@@ -490,39 +498,71 @@ export async function executePreparedCliRun(
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
   const fallbackClaudeSkillsPlugin =
-    context.claudeSkillsPluginArgs === undefined
+    !nodePlacement && context.claudeSkillsPluginArgs === undefined
       ? await prepareClaudeCliSkillsPlugin({
           backendId: context.backendResolved.id,
           skillsSnapshot: params.skillsSnapshot,
         })
       : undefined;
   let fallbackClaudeSkillsPluginCleanupOwned = false;
-  const claudeSkillsPluginArgs =
-    context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? [];
+  const claudeSkillsPluginArgs = nodePlacement
+    ? []
+    : (context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? []);
   const baseArgsWithSkills =
     claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
-  const executionBaseArgs =
-    context.backendResolved.resolveExecutionArgs?.({
-      config: params.config,
-      workspaceDir: context.workspaceDir,
-      provider: params.provider,
-      modelId: context.modelId,
-      authProfileId: context.effectiveAuthProfileId,
-      thinkingLevel: params.thinkLevel,
-      executionMode: params.executionMode ?? "agent",
-      useResume,
-      baseArgs: baseArgsWithSkills,
-    }) ?? baseArgsWithSkills;
+  const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
+    config: params.config,
+    workspaceDir: context.workspaceDir,
+    provider: params.provider,
+    modelId: context.modelId,
+    authProfileId: context.effectiveAuthProfileId,
+    thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+    executionMode: params.executionMode ?? "agent",
+    // Node runs project the native subset only: gateway-loopback MCP tools do
+    // not exist on the node, and --allowedTools auto-approval must never cross
+    // the node boundary. Dropping availability entirely would let a restricted
+    // session run with the node's full native toolset.
+    toolAvailability: params.cliToolAvailability
+      ? buildCliBackendToolAvailability(
+          nodePlacement
+            ? { native: params.cliToolAvailability.native, openClaw: [] }
+            : params.cliToolAvailability,
+        )
+      : undefined,
+    useResume,
+    baseArgs: baseArgsWithSkills,
+  });
+  if (
+    params.cliToolAvailability &&
+    context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+    !resolvedExecutionArgs
+  ) {
+    throw new Error(
+      `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
+    );
+  }
+  const executionBaseArgs = nodePlacement
+    ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
+    : (resolvedExecutionArgs ?? baseArgsWithSkills);
+  const argsBackend = nodePlacement
+    ? {
+        ...backend,
+        systemPromptArg: undefined,
+        systemPromptFileArg: undefined,
+      }
+    : backend;
   const args = buildCliArgs({
-    backend,
+    backend: argsBackend,
     baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
-    systemPrompt: systemPromptArg,
+    systemPrompt: nodePlacement ? undefined : systemPromptArg,
     systemPromptFilePath: systemPromptFile?.filePath,
     imagePaths,
     promptArg: argsPrompt,
     useResume,
+    forkResume: params.forkCliSessionOnResume,
+    sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
   const claudeOwnerKey = buildClaudeOwnerKey({
@@ -544,6 +584,45 @@ export async function executePreparedCliRun(
 
   let completedOutput: CliOutput | undefined;
   let executionError: unknown;
+  let outerCleanupError: Error | undefined;
+  const useManagedClaudeLiveSession =
+    shouldUseClaudeLiveSession(context) && !params.onSuccessfulAuthBinding;
+  // Fresh-session retries invoke this function again. Keep one helper per
+  // observable CLI attempt so every started call retains its own terminal event.
+  const claudeModelCallDiagnostics = createClaudeCliModelCallDiagnostics({
+    context,
+    prompt,
+    systemPrompt: systemPromptArg ?? undefined,
+    transport: nodePlacement
+      ? "paired-node-cli"
+      : useManagedClaudeLiveSession
+        ? "stdio-live"
+        : "stdio",
+  });
+  let forkResumeClaimed = false;
+  let forkSuccessorObserved = false;
+  let forkSuccessorPersistence: Promise<void> | undefined;
+  const observeForkSuccessor = (sessionId: string) => {
+    if (
+      forkSuccessorObserved ||
+      !forkResumeClaimed ||
+      !resolvedSessionId ||
+      sessionId === resolvedSessionId
+    ) {
+      return;
+    }
+    forkSuccessorObserved = true;
+    forkSuccessorPersistence = params.persistCliSessionForkSuccessor?.(sessionId);
+    void forkSuccessorPersistence?.catch(() => undefined);
+  };
+  const finishForkSuccessorPersistence = async () => {
+    try {
+      await forkSuccessorPersistence;
+    } catch (error) {
+      forkSuccessorObserved = false;
+      throw error;
+    }
+  };
   const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
     try {
       await cleanup?.();
@@ -568,6 +647,20 @@ export async function executePreparedCliRun(
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }
+      claudeModelCallDiagnostics?.emitStarted();
+      if (params.forkCliSessionOnResume && useResume) {
+        if (!params.persistCliSessionForkSuccessor) {
+          throw new Error("CLI session fork successor persistence is unavailable");
+        }
+        forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
+        if (!forkResumeClaimed) {
+          throw new Error("CLI session fork marker is no longer available");
+        }
+        // The fork argument only applies at process startup; a cached warm child
+        // would run this turn inside the source session. Force a fresh spawn.
+        await closeClaudeLiveSessionForContext(context);
+      }
+      await context.preparedBackend.beforeExecution?.();
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
@@ -587,6 +680,173 @@ export async function executePreparedCliRun(
         string,
         { toolName: string; args: Record<string, unknown>; target?: MessagingToolSend }
       >();
+      type CliToolTerminalOutcome = McpLoopbackToolCallTerminalOutcome | { outcome: "completed" };
+      type CliLoopbackAmbiguityGroup = {
+        calls: Set<CliLoopbackCall>;
+        activeToolCallIds: Set<string>;
+      };
+      type CliLoopbackCall = {
+        admitted: McpLoopbackToolCallStart;
+        current: McpLoopbackToolCallStart;
+        boundToolCallId?: string;
+        outcome?: CliToolTerminalOutcome;
+        ambiguous: boolean;
+        ambiguityGroup?: CliLoopbackAmbiguityGroup;
+      };
+      type ActiveCliTool = {
+        toolName: string;
+        args: Record<string, unknown>;
+        loopbackCall?: CliLoopbackCall;
+        loopbackAmbiguous: boolean;
+        ambiguityGroup?: CliLoopbackAmbiguityGroup;
+      };
+      const cliLoopbackCalls: CliLoopbackCall[] = [];
+      const activeCliTools = new Map<string, ActiveCliTool>();
+      let cliLoopbackCorrelationOverflowed = false;
+      const matchesCliLoopbackCall = (
+        toolName: string,
+        toolArgs: Record<string, unknown>,
+        call: McpLoopbackToolCallStart,
+      ) =>
+        normalizeCliMessagingToolName(toolName) === call.toolName &&
+        isDeepStrictEqual(toolArgs, call.args);
+      const markCliLoopbackCallsAmbiguous = (
+        calls: CliLoopbackCall[],
+        activeEntries = Array.from(activeCliTools.entries()).filter(
+          ([, activeTool]) =>
+            activeTool.loopbackCall !== undefined && calls.includes(activeTool.loopbackCall),
+        ),
+      ) => {
+        const groups = new Set<CliLoopbackAmbiguityGroup>();
+        for (const call of calls) {
+          if (call.ambiguityGroup) {
+            groups.add(call.ambiguityGroup);
+          }
+        }
+        for (const [, activeTool] of activeEntries) {
+          if (activeTool.ambiguityGroup) {
+            groups.add(activeTool.ambiguityGroup);
+          }
+        }
+        const group = groups.values().next().value ?? {
+          calls: new Set<CliLoopbackCall>(),
+          activeToolCallIds: new Set<string>(),
+        };
+        for (const existing of groups) {
+          if (existing === group) {
+            continue;
+          }
+          for (const call of existing.calls) {
+            call.ambiguityGroup = group;
+            group.calls.add(call);
+          }
+          for (const toolCallId of existing.activeToolCallIds) {
+            const activeTool = activeCliTools.get(toolCallId);
+            if (activeTool) {
+              activeTool.ambiguityGroup = group;
+              group.activeToolCallIds.add(toolCallId);
+            }
+          }
+          existing.calls.clear();
+          existing.activeToolCallIds.clear();
+        }
+        for (const call of calls) {
+          call.ambiguous = true;
+          call.ambiguityGroup = group;
+          group.calls.add(call);
+        }
+        for (const [toolCallId, activeTool] of activeEntries) {
+          activeTool.loopbackAmbiguous = true;
+          activeTool.ambiguityGroup = group;
+          group.activeToolCallIds.add(toolCallId);
+        }
+      };
+      const markCliLoopbackSignatureAmbiguous = (call: McpLoopbackToolCallStart) => {
+        const calls = cliLoopbackCalls.filter((candidate) =>
+          matchesCliLoopbackCall(call.toolName, call.args, candidate.admitted),
+        );
+        const activeEntries = Array.from(activeCliTools.entries()).filter(([, activeTool]) =>
+          matchesCliLoopbackCall(activeTool.toolName, activeTool.args, call),
+        );
+        markCliLoopbackCallsAmbiguous(calls, activeEntries);
+      };
+      const retainCliLoopbackCall = (call: McpLoopbackToolCallStart) => {
+        if (cliLoopbackCalls.length >= CLI_LOOPBACK_CORRELATION_MAX_CALLS) {
+          cliLoopbackCorrelationOverflowed = true;
+          for (const activeTool of activeCliTools.values()) {
+            if (activeTool.loopbackCall || activeTool.toolName.startsWith("mcp__")) {
+              activeTool.loopbackAmbiguous = true;
+            }
+          }
+          cliLoopbackCalls.length = 0;
+          return undefined;
+        }
+        const retained: CliLoopbackCall = {
+          admitted: call,
+          current: call,
+          ambiguous: false,
+        };
+        cliLoopbackCalls.push(retained);
+        return retained;
+      };
+      const bindCliLoopbackCall = (
+        call: CliLoopbackCall,
+        toolCallId: string,
+        activeTool: ActiveCliTool,
+      ) => {
+        call.boundToolCallId = toolCallId;
+        activeTool.loopbackCall = call;
+        activeTool.loopbackAmbiguous ||= call.ambiguous;
+        if (call.ambiguityGroup) {
+          activeTool.ambiguityGroup = call.ambiguityGroup;
+          call.ambiguityGroup.activeToolCallIds.add(toolCallId);
+        }
+      };
+      const removeCliLoopbackCall = (call: CliLoopbackCall | undefined) => {
+        if (!call) {
+          return;
+        }
+        const index = cliLoopbackCalls.indexOf(call);
+        if (index >= 0) {
+          cliLoopbackCalls.splice(index, 1);
+        }
+      };
+      const retireCliLoopbackCorrelation = (
+        toolCallId: string,
+        activeTool: ActiveCliTool | undefined,
+      ) => {
+        removeCliLoopbackCall(activeTool?.loopbackCall);
+        const group = activeTool?.ambiguityGroup;
+        if (!group) {
+          return;
+        }
+        group.activeToolCallIds.delete(toolCallId);
+        const hasUnboundCall = Array.from(group.calls).some(
+          (call) => call.boundToolCallId === undefined && cliLoopbackCalls.includes(call),
+        );
+        if (group.activeToolCallIds.size > 0 || hasUnboundCall) {
+          return;
+        }
+        // An ambiguous group owns unbound captures too. Retire the whole group
+        // once its parsed tools finish so stale calls cannot poison later tools.
+        for (const call of group.calls) {
+          removeCliLoopbackCall(call);
+        }
+        group.calls.clear();
+      };
+      const resolveCliLoopbackTerminalOutcome = (toolCallId: string) => {
+        const activeTool = activeCliTools.get(toolCallId);
+        if (activeTool?.loopbackAmbiguous) {
+          return { outcome: "unknown" } as const;
+        }
+        return activeTool?.loopbackCall?.outcome;
+      };
+      const matchingActiveCliTools = (
+        call: McpLoopbackToolCallStart,
+      ): Array<[string, ActiveCliTool]> =>
+        Array.from(activeCliTools.entries()).filter(([, activeTool]) =>
+          matchesCliLoopbackCall(activeTool.toolName, activeTool.args, call),
+        );
       const messagingToolSentTexts: string[] = [];
       const messagingToolSentTextKeys = new Set<string>();
       const messagingToolSentMediaUrls: string[] = [];
@@ -652,6 +912,7 @@ export async function executePreparedCliRun(
             : {}),
         };
       };
+      let finalizeParsedTools = () => {};
       try {
         cliBackendLog.info(
           buildCliExecLogLine({
@@ -662,8 +923,7 @@ export async function executePreparedCliRun(
             useResume,
             cliSessionId: cliSessionIdToUse,
             resolvedSessionId,
-            reusableSessionId: context.reusableCliSession.sessionId,
-            invalidatedReason: context.reusableCliSession.invalidatedReason,
+            reusableSession: context.reusableCliSession,
             hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
           }),
         );
@@ -672,16 +932,41 @@ export async function executePreparedCliRun(
           isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const hasJsonlOutput = outputMode === "jsonl";
-        const initialGatewayCaptureKey = shouldUseClaudeLiveSession(context)
-          ? undefined
-          : buildCliMcpCaptureKey(context);
-        const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
-          mode: context.backendResolved.bundleMcpMode,
-          backend,
-          env: context.preparedBackend.env,
-          captureKey: initialGatewayCaptureKey,
-        });
+        const initialGatewayCaptureKey =
+          useManagedClaudeLiveSession || nodePlacement ? undefined : buildCliMcpCaptureKey(context);
+        const mcpCaptureAttempt = nodePlacement
+          ? { env: {}, cleanup: undefined }
+          : await prepareCliBundleMcpCaptureAttempt({
+              mode: context.backendResolved.bundleMcpMode,
+              backend,
+              env: context.preparedBackend.env,
+              captureKey: initialGatewayCaptureKey,
+            });
         cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
+        const preparedBackendEnv = context.preparedBackend.env ?? {};
+        const hasSelectedClaudeAuth =
+          Boolean(context.preparedBackend.secretInput) ||
+          [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
+        const selectedClaudeClearEnv = hasSelectedClaudeAuth
+          ? new Set(backend.clearEnv ?? [])
+          : undefined;
+        const configuredBackendEnv = Object.fromEntries(
+          Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
+        );
+        const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
+        const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
+          NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
+        );
+        const nodeEnv = (() => {
+          if (!nodePlacement) {
+            return undefined;
+          }
+          const forwarded = {
+            ...Object.fromEntries(nodeEnvEntries),
+            ...resolveNodeClaudeAuthEnv(context),
+          };
+          return Object.keys(forwarded).length > 0 ? forwarded : undefined;
+        })();
         const env = (() => {
           const next = sanitizeHostExecEnv({
             baseEnv: process.env,
@@ -689,15 +974,11 @@ export async function executePreparedCliRun(
           });
           const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
           for (const key of backend.clearEnv ?? []) {
-            if (preservedEnv.has(key)) {
+            if (preservedEnv.has(key) && !selectedClaudeClearEnv?.has(key)) {
               continue;
             }
             delete next[key];
           }
-          const backendEnv = {
-            ...backend.env,
-            ...context.preparedBackend.env,
-          };
           if (Object.keys(backendEnv).length > 0) {
             Object.assign(
               next,
@@ -717,18 +998,59 @@ export async function executePreparedCliRun(
 
           return next;
         })();
+        let executionCommand = backend.command;
+        let executionLeadingArgv: readonly string[] = [];
+        let executionArgs = args;
+        context.runtimeOwnerFingerprint = undefined;
+        context.runtimeArtifactFingerprint = undefined;
+        if (params.onSuccessfulAuthBinding && !nodePlacement) {
+          const executableIdentity = await resolveCliExecutableIdentity({
+            command: backend.command,
+            cwd: context.cwd ?? context.workspaceDir,
+            env,
+            ...(context.backendResolved.runtimeArtifact
+              ? { runtimeArtifact: context.backendResolved.runtimeArtifact }
+              : {}),
+          });
+          if (!executableIdentity) {
+            throw new Error(
+              `CLI backend ${context.backendResolved.id} executable cannot be bound to one durable absolute owner`,
+            );
+          }
+          executionCommand = executableIdentity.invocation.command;
+          executionLeadingArgv = executableIdentity.invocation.leadingArgv;
+          executionArgs = args;
+          context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
+            provider: params.provider,
+            backendId: context.backendResolved.id,
+            executableIdentity,
+          });
+          if (!context.authBindingFingerprint) {
+            context.runtimeOwnerFingerprint = await resolveCliRuntimeOwnerFingerprint({
+              provider: params.provider,
+              config: params.config ?? context.contextEngineConfig,
+              ...(context.agentDir ? { agentDir: context.agentDir } : {}),
+              agentId: params.agentId,
+              runtimeOwnerId: context.backendResolved.id,
+              ...(context.effectiveAuthProfileId
+                ? { authProfileId: context.effectiveAuthProfileId }
+                : {}),
+              ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+              runtimeArtifactFingerprint: context.runtimeArtifactFingerprint,
+            });
+          }
+        }
         if (logOutputText) {
           const logArgs = buildCliLogArgs({
-            args,
+            args: executionArgs,
             systemPromptArg: backend.systemPromptArg,
-            sessionArg: backend.sessionArg,
             modelArg: backend.modelArg,
             imageArg: backend.imageArg,
             argsPrompt,
           });
-          cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
+          cliBackendLog.info(`cli argv: ${executionCommand} ${logArgs.join(" ")}`);
           cliBackendLog.info(`cli env auth: ${buildCliEnvAuthLog(env)}`);
-          if (env.OPENCLAW_MCP_TOKEN || env.OPENCLAW_MCP_SESSION_KEY || env.OPENCLAW_MCP_AGENT_ID) {
+          if (env.OPENCLAW_MCP_TOKEN) {
             cliBackendLog.info(`cli env mcp: ${buildCliEnvMcpLog(env)}`);
           }
         }
@@ -827,6 +1149,7 @@ export async function executePreparedCliRun(
           if (gatewayCaptureKey) {
             throw new Error("CLI MCP capture key changed during an active attempt");
           }
+          context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
           gatewayCaptureKey = captureKey;
           const isAdmittedPotentialMessagingDelivery = (toolName: string) => {
             return isMessagingTool(normalizeCliMessagingToolName(toolName));
@@ -852,11 +1175,44 @@ export async function executePreparedCliRun(
               inFlightUnclassifiedMcpRequests = Math.max(0, inFlightUnclassifiedMcpRequests - 1);
             },
             onToolCallStart: (call) => {
+              const retained = retainCliLoopbackCall(call);
+              const candidates = matchingActiveCliTools(call);
+              // Parallel same-name calls can reach the loopback out of stream
+              // order. Bind only a unique name+arguments match; ambiguity is
+              // safer than assigning a trusted terminal outcome to the wrong call.
+              let matched =
+                retained &&
+                candidates.length === 1 &&
+                !candidates[0]?.[1].loopbackCall &&
+                !candidates[0]?.[1].loopbackAmbiguous
+                  ? candidates[0]
+                  : undefined;
+              if (retained && matched) {
+                bindCliLoopbackCall(retained, matched[0], matched[1]);
+              } else if (retained && candidates.length > 0) {
+                markCliLoopbackSignatureAmbiguous(call);
+                // The exact identity is unknowable, but pairing an unmatched
+                // peer keeps the ambiguity group's lifetime count complete.
+                matched = candidates.find(([, activeTool]) => !activeTool.loopbackCall);
+                if (matched) {
+                  bindCliLoopbackCall(retained, matched[0], matched[1]);
+                }
+              }
               if (isAdmittedPotentialMessagingDelivery(call.toolName)) {
                 inFlightMessagingToolCalls += 1;
               }
+              return matched?.[0];
             },
             onToolCallUpdate: ({ previous, current }) => {
+              const candidates = cliLoopbackCalls.filter((candidate) =>
+                matchesCliLoopbackCall(previous.toolName, previous.args, candidate.current),
+              );
+              const candidate = candidates.at(0);
+              if (candidates.length === 1 && candidate && !candidate.ambiguous) {
+                candidate.current = current;
+              } else if (candidates.length > 0) {
+                markCliLoopbackCallsAmbiguous(candidates);
+              }
               inFlightPreparedMessagingCalls.delete(previous);
               const wasMessagingSend = isAdmittedPotentialMessagingDelivery(previous.toolName);
               const isMessagingSend = isPreparedMessagingDelivery(current.toolName, current.args);
@@ -879,32 +1235,95 @@ export async function executePreparedCliRun(
               }
               inFlightPreparedMessagingCalls.delete(call);
             },
-            onToolCallResult: ({ toolName, args: toolArgs, result, isError }) => {
-              const normalizedToolName = normalizeCliMessagingToolName(toolName);
-              if (!isMessagingToolDeliveryAction(normalizedToolName, toolArgs)) {
+            onToolCallResult: (call) => {
+              const terminalOutcome: CliToolTerminalOutcome =
+                call.outcome === "blocked"
+                  ? { outcome: call.outcome, deniedReason: call.deniedReason }
+                  : { outcome: call.outcome };
+              const correlated = call.correlationId
+                ? cliLoopbackCalls.find(
+                    (candidate) => candidate.boundToolCallId === call.correlationId,
+                  )
+                : undefined;
+              const candidates = correlated
+                ? [correlated]
+                : cliLoopbackCalls.filter((candidate) =>
+                    matchesCliLoopbackCall(call.toolName, call.args, candidate.current),
+                  );
+              if (candidates.length === 1 && candidates[0]) {
+                candidates[0].outcome = terminalOutcome;
+              } else if (candidates.length > 1) {
+                markCliLoopbackCallsAmbiguous(candidates);
+              }
+              const normalizedToolName = normalizeCliMessagingToolName(call.toolName);
+              if (!isMessagingToolDeliveryAction(normalizedToolName, call.args)) {
                 return;
               }
               commitMessagingToolResult({
                 toolName: normalizedToolName,
-                target: extractCliMessagingTarget(context, normalizedToolName, toolArgs),
-                args: toolArgs,
-                result,
-                isError,
+                target: extractCliMessagingTarget(context, normalizedToolName, call.args),
+                args: call.args,
+                result: "result" in call ? call.result : undefined,
+                isError: call.outcome !== "completed",
               });
             },
           });
         };
         beginGatewayCapture(initialGatewayCaptureKey);
         let observedCliActivity = false;
+        let signaledToolExecutionStarted = false;
+        let signaledAssistantOutputStarted = false;
         const emitLiveEvents = params.executionMode !== "side-question";
-        const emitCliToolUseStart = (event: {
-          toolCallId: string;
-          name: string;
-          args: Record<string, unknown>;
-        }) => {
+        const activeParsedTools = new Map<
+          string,
+          { startedAt: number; toolName: string; kind: CliToolUseStartDelta["kind"] }
+        >();
+        const emitCliToolUseStart = (event: CliToolUseStartDelta) => {
           observedCliActivity = true;
+          if (!signaledToolExecutionStarted) {
+            signaledToolExecutionStarted = true;
+            params.onExecutionPhase?.({
+              phase: "tool_execution_started",
+              provider: params.provider,
+              model: context.modelId,
+              backend: context.backendResolved.id,
+            });
+          }
+          // Server-native calls have their own result stream and must never inherit MCP outcomes.
+          if (event.kind !== "server_tool_use") {
+            const activeTool = {
+              toolName: event.name,
+              args: event.args,
+              loopbackAmbiguous: cliLoopbackCorrelationOverflowed && event.name.startsWith("mcp__"),
+            };
+            activeCliTools.set(event.toolCallId, activeTool);
+            const admittedCall = {
+              toolName: normalizeCliMessagingToolName(event.name),
+              args: event.args,
+            };
+            const pendingCandidates = cliLoopbackCalls.filter(
+              (candidate) =>
+                candidate.boundToolCallId === undefined &&
+                matchesCliLoopbackCall(event.name, event.args, candidate.admitted),
+            );
+            const hasAssociatedPeer = matchingActiveCliTools(admittedCall).some(
+              ([toolCallId, peer]) =>
+                toolCallId !== event.toolCallId &&
+                (peer.loopbackCall !== undefined || peer.loopbackAmbiguous),
+            );
+            const pending = pendingCandidates[0];
+            if (hasAssociatedPeer || pendingCandidates.length > 1 || pending?.ambiguous) {
+              markCliLoopbackSignatureAmbiguous(admittedCall);
+              if (pending) {
+                bindCliLoopbackCall(pending, event.toolCallId, activeTool);
+              }
+            } else if (pendingCandidates.length === 1 && pending) {
+              bindCliLoopbackCall(pending, event.toolCallId, activeTool);
+            }
+          }
           const toolName = normalizeCliMessagingToolName(event.name);
           if (
+            event.kind !== "server_tool_use" &&
             !gatewayCaptureKey &&
             event.args.dryRun !== true &&
             isMessagingToolDeliveryAction(toolName, event.args)
@@ -945,6 +1364,9 @@ export async function executePreparedCliRun(
           result?: unknown;
         }) => {
           observedCliActivity = true;
+          const activeTool = activeCliTools.get(event.toolCallId);
+          activeCliTools.delete(event.toolCallId);
+          retireCliLoopbackCorrelation(event.toolCallId, activeTool);
           const pending = pendingMessagingCalls.get(event.toolCallId);
           if (pending) {
             pendingMessagingCalls.delete(event.toolCallId);
@@ -970,6 +1392,137 @@ export async function executePreparedCliRun(
               result: sanitizeToolResult(event.result),
             },
           });
+        };
+        const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
+          const startedAt = Date.now();
+          activeParsedTools.set(event.toolCallId, {
+            startedAt,
+            toolName: event.name,
+            kind: event.kind,
+          });
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.started",
+            runId: params.runId,
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            toolName: event.name,
+            toolSource: event.name.startsWith("mcp__") ? "mcp" : "core",
+            toolOwner: "cli-runner",
+            toolCallId: event.toolCallId,
+          });
+          emitCliToolUseStart(event);
+        };
+        const emitParsedToolTerminal = (event: {
+          toolCallId: string;
+          name: string;
+          isError: boolean;
+          incomplete?: boolean;
+        }) => {
+          const activeTool = activeParsedTools.get(event.toolCallId);
+          activeParsedTools.delete(event.toolCallId);
+          const trustedOutcome = resolveCliLoopbackTerminalOutcome(event.toolCallId);
+          const toolName = activeTool?.toolName ?? event.name;
+          const now = Date.now();
+          const trustedTerminalReason =
+            trustedOutcome &&
+            trustedOutcome.outcome !== "blocked" &&
+            trustedOutcome.outcome !== "completed" &&
+            trustedOutcome.outcome !== "unknown"
+              ? trustedOutcome.outcome
+              : undefined;
+          const terminalReason =
+            trustedTerminalReason ??
+            resolveCliToolTerminalReason({
+              error: event.incomplete ? runError : undefined,
+              abortSignal: params.abortSignal,
+            });
+          // Incomplete client/MCP tools inherit the enclosing failed run even when
+          // the loopback disconnect is ambiguous. Server-native tools do not.
+          const useEnclosingTerminalReason =
+            event.incomplete &&
+            runFailed &&
+            activeTool !== undefined &&
+            activeTool.kind !== "server_tool_use";
+          const diagnosticBase = {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            toolName,
+            toolSource: toolName.startsWith("mcp__") ? ("mcp" as const) : ("core" as const),
+            toolOwner: "cli-runner",
+            toolCallId: event.toolCallId,
+            durationMs: Math.max(0, now - (activeTool?.startedAt ?? now)),
+          };
+          if (trustedOutcome?.outcome === "unknown" && !useEnclosingTerminalReason) {
+            emitTrustedDiagnosticEvent({
+              type: "tool.execution.error",
+              ...diagnosticBase,
+              errorCategory: "cli_tool_ambiguous",
+              errorCode: "tool_outcome_unknown",
+            });
+            return;
+          }
+          if (
+            event.incomplete &&
+            activeTool?.kind === "server_tool_use" &&
+            trustedOutcome === undefined
+          ) {
+            emitTrustedDiagnosticEvent({
+              type: "tool.execution.error",
+              ...diagnosticBase,
+              errorCategory: "cli_tool_ambiguous",
+              errorCode: "tool_outcome_unknown",
+            });
+            return;
+          }
+          const trustedFailure =
+            trustedOutcome !== undefined && trustedOutcome.outcome !== "completed";
+          emitTrustedDiagnosticEvent(
+            trustedOutcome?.outcome === "blocked"
+              ? {
+                  type: "tool.execution.blocked",
+                  ...diagnosticBase,
+                  deniedReason: trustedOutcome.deniedReason,
+                  reason: "blocked by before-tool policy",
+                }
+              : trustedFailure || (trustedOutcome === undefined && event.isError)
+                ? {
+                    type: "tool.execution.error",
+                    ...diagnosticBase,
+                    errorCategory:
+                      terminalReason === "cancelled"
+                        ? "aborted"
+                        : event.incomplete && (!trustedOutcome || useEnclosingTerminalReason)
+                          ? "cli_tool_incomplete"
+                          : "cli_tool",
+                    terminalReason,
+                  }
+                : {
+                    type: "tool.execution.completed",
+                    ...diagnosticBase,
+                  },
+          );
+        };
+        const emitParsedToolResult = (event: {
+          toolCallId: string;
+          name: string;
+          isError: boolean;
+          result?: unknown;
+        }) => {
+          emitParsedToolTerminal(event);
+          emitCliToolResult(event);
+        };
+        finalizeParsedTools = () => {
+          for (const [toolCallId, activeTool] of Array.from(activeParsedTools)) {
+            emitParsedToolTerminal({
+              toolCallId,
+              name: activeTool.toolName,
+              isError: true,
+              incomplete: true,
+            });
+          }
         };
         let commentaryCounter = 0;
         const emitCliCommentaryText = (text: string) => {
@@ -997,6 +1550,15 @@ export async function executePreparedCliRun(
         const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
           if (text || delta) {
             observedCliActivity = true;
+            if (!signaledAssistantOutputStarted) {
+              signaledAssistantOutputStarted = true;
+              params.onExecutionPhase?.({
+                phase: "assistant_output_started",
+                provider: params.provider,
+                model: context.modelId,
+                backend: context.backendResolved.id,
+              });
+            }
           }
           if (!emitLiveEvents) {
             return;
@@ -1016,7 +1578,52 @@ export async function executePreparedCliRun(
             },
           });
         };
-        if (shouldUseClaudeLiveSession(context)) {
+        // Emit-always: thinking reaches the agent-event bus and session archive
+        // like the embedded reasoning stream; /reasoning and /verbose gate only
+        // presentation. Text stays raw here to match the thinking-stream contract
+        // shared with embedded-agent-subscribe, which archives untransformed
+        // reasoning regardless of source.
+        const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+          if (text || delta) {
+            observedCliActivity = true;
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: { text, delta, ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}) },
+          });
+        };
+        const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: { progressTokens },
+          });
+        };
+        const emitCliPlanUpdate = ({ steps }: CliPlanUpdate) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "plan",
+            data: {
+              phase: "update",
+              title: "Plan updated",
+              source: "codex-exec",
+              steps,
+            },
+          });
+        };
+        if (useManagedClaudeLiveSession) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
           }
@@ -1026,40 +1633,49 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          const liveSessionOwnsRunArtifacts = context.mcpDeliveryCapture !== true;
-          fallbackClaudeSkillsPluginCleanupOwned = liveSessionOwnsRunArtifacts;
-          const ownedPreparedBackendCleanup = liveSessionOwnsRunArtifacts
-            ? context.preparedBackend.cleanup
-            : undefined;
-          if (liveSessionOwnsRunArtifacts) {
-            context.preparedBackend.cleanup = undefined;
-          }
+          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
-            args,
+            args: executionArgs,
+            executableCommand: executionCommand,
+            executableLeadingArgv: executionLeadingArgv,
             env,
             prompt,
             useResume,
+            forceNewSession:
+              cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
+            requiredSessionGeneration: cliSessionIdToUse
+              ? context.requiredClaudeLiveSessionGeneration
+              : undefined,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: emitCliAssistantDelta,
+            onThinkingDelta: emitCliThinkingDelta,
+            onThinkingProgress: emitCliThinkingProgress,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
+            resolveToolResultTerminalOutcome: (event) => {
+              const outcome = resolveCliLoopbackTerminalOutcome(event.toolCallId);
+              return outcome?.outcome === "completed" ? undefined : outcome;
+            },
             onCommentaryText:
               emitLiveEvents && context.params.emitCommentaryText
                 ? emitCliCommentaryText
                 : undefined,
             onMcpCaptureReady: beginGatewayCapture,
-            cleanup: liveSessionOwnsRunArtifacts
-              ? async () => {
-                  try {
-                    await fallbackClaudeSkillsPlugin?.cleanup();
-                  } finally {
-                    await ownedPreparedBackendCleanup?.();
-                  }
-                }
-              : async () => {},
+            cleanup: async () => {
+              await fallbackClaudeSkillsPlugin?.cleanup();
+            },
+            onSessionId: (sessionId) => {
+              observeForkSuccessor(sessionId);
+            },
+            onAssistantMessage: claudeModelCallDiagnostics?.observeAssistantMessage,
+            onUsage: claudeModelCallDiagnostics?.observeUsage,
+            onCliOutput: claudeModelCallDiagnostics?.observeCliOutput,
+            onRequestPayload: claudeModelCallDiagnostics?.observeRequestPayload,
+            onPhase: options?.onPhase,
           });
+          options?.onPhase?.("resolve");
           const rawText = liveResult.output.text;
           runOutput = {
             ...liveResult.output,
@@ -1076,30 +1692,56 @@ export async function executePreparedCliRun(
                 backend,
                 providerId: context.backendResolved.id,
                 onAssistantDelta: emitCliAssistantDelta,
-                onToolUseStart: emitCliToolUseStart,
-                onToolResult: emitCliToolResult,
+                onThinkingDelta: emitCliThinkingDelta,
+                onThinkingProgress: emitCliThinkingProgress,
+                onPlanUpdate: emitCliPlanUpdate,
+                onToolUseStart: emitParsedToolUseStart,
+                onToolResult: emitParsedToolResult,
                 onCommentaryText:
                   emitLiveEvents && context.params.emitCommentaryText
                     ? emitCliCommentaryText
                     : undefined,
+                onSessionId: (sessionId) => {
+                  observeForkSuccessor(sessionId);
+                },
+                onAssistantMessage: claudeModelCallDiagnostics?.observeAssistantMessage,
+                onUsage: claudeModelCallDiagnostics?.observeUsage,
               })
             : null;
-          const supervisor = executeDeps.getProcessSupervisor();
-          const scopeKey = buildCliSupervisorScopeKey({
-            backend,
-            backendId: context.backendResolved.id,
-            cliSessionId: useResume ? resolvedSessionId : undefined,
-          });
-          let stdoutTail: Buffer = Buffer.alloc(0);
+          let stdoutTail = "";
           let stdoutParseBuffer: Buffer = Buffer.alloc(0);
           let stdoutBytes = 0;
           const stdoutHash = crypto.createHash("sha256");
           let stdoutParseExceeded = false;
-          let stderrTail: Buffer = Buffer.alloc(0);
+          let stderrTail = "";
           let stderrParseBuffer: Buffer = Buffer.alloc(0);
           let stderrBytes = 0;
           const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
+          const consumeStdout = (chunk: string) => {
+            const chunkBytes = Buffer.byteLength(chunk);
+            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
+            stdoutBytes += chunkBytes;
+            stdoutHash.update(chunk);
+            stdoutTail = appendCliOutputTail(stdoutTail, chunk);
+            if (!stdoutParseExceeded) {
+              const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
+              stdoutParseBuffer = nextStdoutParse.buffer;
+              stdoutParseExceeded = nextStdoutParse.exceeded;
+            }
+            streamingParser?.push(chunk);
+          };
+          const consumeStderr = (chunk: string) => {
+            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stderr");
+            stderrBytes += Buffer.byteLength(chunk);
+            stderrHash.update(chunk);
+            stderrTail = appendCliOutputTail(stderrTail, chunk);
+            if (!stderrParseExceeded) {
+              const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
+              stderrParseBuffer = nextStderrParse.buffer;
+              stderrParseExceeded = nextStderrParse.exceeded;
+            }
+          };
 
           params.onExecutionPhase?.({
             phase: "process_spawned",
@@ -1107,80 +1749,129 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          const managedRun = await supervisor.spawn({
-            sessionId: params.sessionId,
-            backendId: context.backendResolved.id,
-            scopeKey,
-            replaceExistingScope: Boolean(useResume && scopeKey),
-            mode: "child",
-            argv: [backend.command, ...args],
-            timeoutMs: params.timeoutMs,
-            noOutputTimeoutMs,
-            cwd: context.cwd ?? context.workspaceDir,
-            env,
-            input: stdinPayload,
-            captureOutput: false,
-            onStdout: (chunk: string) => {
-              stdoutBytes += Buffer.byteLength(chunk);
-              stdoutHash.update(chunk);
-              stdoutTail = appendCliOutputTail(stdoutTail, chunk);
-              if (!stdoutParseExceeded) {
-                const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
-                stdoutParseBuffer = nextStdoutParse.buffer;
-                stdoutParseExceeded = nextStdoutParse.exceeded;
-              }
-              streamingParser?.push(chunk);
-            },
-            onStderr: (chunk: string) => {
-              stderrBytes += Buffer.byteLength(chunk);
-              stderrHash.update(chunk);
-              stderrTail = appendCliOutputTail(stderrTail, chunk);
-              if (!stderrParseExceeded) {
-                const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
-                stderrParseBuffer = nextStderrParse.buffer;
-                stderrParseExceeded = nextStderrParse.exceeded;
-              }
-            },
-          });
-          let replyBackendCompleted = false;
-          const replyBackendHandle = params.replyOperation
-            ? {
-                kind: "cli" as const,
-                cancel: () => {
-                  managedRun.cancel("manual-cancel");
-                },
-                isStreaming: () => !replyBackendCompleted,
-              }
-            : undefined;
-          if (replyBackendHandle) {
-            params.replyOperation?.attachBackend(replyBackendHandle);
-          }
-          const abortManagedRun = () => {
-            managedRun.cancel("manual-cancel");
-          };
-          params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
-          if (params.abortSignal?.aborted) {
-            abortManagedRun();
-          }
-          let result: Awaited<ReturnType<typeof managedRun.wait>>;
-          try {
-            result = await managedRun.wait();
-          } finally {
-            replyBackendCompleted = true;
+          let managedRunPid: number | undefined;
+          let nodeRunAbortSignal: AbortSignal | undefined;
+          let nodeRunTruncated = false;
+          let result: RunExit;
+          claudeModelCallDiagnostics?.observeRequestPayload(stdin ?? argsPrompt ?? "");
+          if (nodePlacement) {
+            const nodeRun = await executeNodeClaudeRun({
+              context,
+              nodePlacement,
+              executionArgs,
+              stdinPayload,
+              ...(nodeSystemPrompt !== undefined ? { nodeSystemPrompt } : {}),
+              ...(nodeEnv ? { nodeEnv } : {}),
+              ...(selectedClaudeClearEnv ? { nodeClearEnv: [...selectedClaudeClearEnv] } : {}),
+              noOutputTimeoutMs,
+              consumeStdout,
+              consumeStderr,
+              deps: executeDeps,
+            });
+            result = nodeRun.result;
+            nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
+            nodeRunTruncated = nodeRun.nodeRunTruncated;
+          } else {
+            const supervisor = executeDeps.getProcessSupervisor();
+            const scopeKey = buildCliSupervisorScopeKey({
+              backend,
+              backendId: context.backendResolved.id,
+              cliSessionId: useResume ? resolvedSessionId : undefined,
+            });
+            const managedRun = await supervisor.spawn({
+              sessionId: params.sessionId,
+              backendId: context.backendResolved.id,
+              scopeKey,
+              replaceExistingScope: Boolean(useResume && scopeKey),
+              mode: "child",
+              argv: [executionCommand, ...executionLeadingArgv, ...executionArgs],
+              timeoutMs: params.timeoutMs,
+              noOutputTimeoutMs,
+              cwd: context.cwd ?? context.workspaceDir,
+              env,
+              input: stdinPayload,
+              secretInput: context.preparedBackend.secretInput,
+              captureOutput: false,
+              onStdout: consumeStdout,
+              onStderr: consumeStderr,
+            });
+            managedRunPid = managedRun.pid;
+            let replyBackendCompleted = false;
+            const replyBackendHandle = params.replyOperation
+              ? {
+                  kind: "cli" as const,
+                  cancel: () => {
+                    managedRun.cancel("manual-cancel");
+                  },
+                  isStreaming: () => !replyBackendCompleted,
+                }
+              : undefined;
             if (replyBackendHandle) {
-              params.replyOperation?.detachBackend(replyBackendHandle);
+              params.replyOperation?.attachBackend(replyBackendHandle);
             }
-            params.abortSignal?.removeEventListener("abort", abortManagedRun);
+            const abortManagedRun = () => {
+              managedRun.cancel("manual-cancel");
+            };
+            params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+            if (params.abortSignal?.aborted) {
+              abortManagedRun();
+            }
+            try {
+              result = await managedRun.wait();
+            } finally {
+              replyBackendCompleted = true;
+              if (replyBackendHandle) {
+                params.replyOperation?.detachBackend(replyBackendHandle);
+              }
+              params.abortSignal?.removeEventListener("abort", abortManagedRun);
+            }
           }
-          streamingParser?.finish();
-          if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
+          if (
+            (params.abortSignal?.aborted || nodeRunAbortSignal?.aborted) &&
+            result.reason === "manual-cancel"
+          ) {
             throw createCliAbortError();
+          }
+          options?.onPhase?.("resolve");
+          streamingParser?.finish();
+          const streamingParserErrorText =
+            outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
+          if (streamingParserErrorText) {
+            throw new FailoverError(streamingParserErrorText, {
+              reason: "format",
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus("format"),
+            });
+          }
+          // The node re-injects the terminal result line when its output cap
+          // truncates the stream; if even that is missing, the turn outcome is
+          // unknowable and must not pass as a clean exit.
+          if (
+            nodeRunTruncated &&
+            result.exitCode === 0 &&
+            !result.timedOut &&
+            !streamingParser?.getOutput()
+          ) {
+            throw new FailoverError(
+              "paired node truncated the Claude CLI stream before the terminal result; refusing to accept partial output.",
+              {
+                reason: "format",
+                provider: params.provider,
+                model: context.modelId,
+                sessionId: params.sessionId,
+                lane: params.lane,
+                status: resolveFailoverStatus("format"),
+              },
+            );
           }
 
           const stdout = stdoutParseBuffer.toString("utf8").trim();
-          const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
+          const stdoutDiagnostic = stdoutTail.trim();
           const stderr = stderrParseBuffer.toString("utf8").trim();
-          const stderrDiagnostic = stderrTail.toString("utf8").trim();
+          const stderrDiagnostic = stderrTail.trim();
           const processDiagnostics = {
             backendId: context.backendResolved.id,
             processReason: result.reason,
@@ -1210,11 +1901,41 @@ export async function executePreparedCliRun(
             }
           }
 
+          const streamedJsonlOutput =
+            outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+          const parsedStructuredOutput =
+            streamedJsonlOutput ??
+            (outputMode === "json" && !stdoutParseExceeded
+              ? parseCliOutput({
+                  raw: stdout,
+                  backend,
+                  providerId: context.backendResolved.id,
+                  outputMode,
+                  fallbackSessionId: resolvedSessionId,
+                })
+              : null);
+          // A completed terminal record is authoritative even if the CLI hangs
+          // afterward. Reclassifying it as a timeout could replay completed tools.
+          if (parsedStructuredOutput?.terminalFailure) {
+            const terminalError = createCliOutputFailoverError({
+              output: parsedStructuredOutput,
+              provider: params.provider,
+              model: context.modelId,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+            });
+            if (terminalError) {
+              throw terminalError;
+            }
+          }
+
           if (result.exitCode !== 0 || result.reason !== "exit") {
+            options?.onPhase?.("send");
             if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
               const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
               cliBackendLog.warn(
-                `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
+                `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRunPid ?? "node"}`,
               );
               const retryableNoOutputTimeout =
                 !observedCliActivity &&
@@ -1231,7 +1952,11 @@ export async function executePreparedCliRun(
                 const stallNotice = [
                   `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
                   "It may have been waiting for interactive input or an approval prompt.",
-                  "For Claude Code, prefer --permission-mode bypassPermissions --print.",
+                  // Node runs strip --permission-mode, so the local-flag hint
+                  // would be unfollowable advice there.
+                  ...(nodePlacement
+                    ? ["Check the node's Claude permission settings for pending prompts."]
+                    : ["For Claude Code, prefer --permission-mode bypassPermissions --print."]),
                 ].join(" ");
                 const eventRouting = resolveEventSessionRoutingPolicy({
                   cfg: params.config,
@@ -1262,6 +1987,13 @@ export async function executePreparedCliRun(
                 lane: params.lane,
                 status: resolveFailoverStatus("timeout"),
                 code: retryableNoOutputTimeout ? "cli_no_output_timeout" : undefined,
+                cliTimeout: {
+                  mode: "no-output",
+                  timeoutSeconds: Math.round(noOutputTimeoutMs / 1000),
+                  observedActivity: observedCliActivity,
+                  activeToolCount: activeParsedTools.size,
+                  backgroundTaskCount: 0,
+                },
               });
             }
             if (result.reason === "overall-timeout") {
@@ -1274,6 +2006,13 @@ export async function executePreparedCliRun(
                 lane: params.lane,
                 status: resolveFailoverStatus("timeout"),
                 code: "cli_overall_timeout",
+                cliTimeout: {
+                  mode: "overall",
+                  timeoutSeconds: Math.round(params.timeoutMs / 1000),
+                  observedActivity: observedCliActivity,
+                  activeToolCount: activeParsedTools.size,
+                  backgroundTaskCount: 0,
+                },
               });
             }
             const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(
@@ -1300,12 +2039,14 @@ export async function executePreparedCliRun(
             reason = reason ?? "unknown";
             const status = resolveFailoverStatus(reason);
             const retryCode =
-              reason === "unknown" &&
-              result.reason === "exit" &&
-              errorCandidates.length === 0 &&
-              !observedCliActivity
-                ? "cli_unknown_empty_failure"
-                : undefined;
+              reason === "context_overflow"
+                ? "cli_context_overflow"
+                : reason === "unknown" &&
+                    result.reason === "exit" &&
+                    errorCandidates.length === 0 &&
+                    !observedCliActivity
+                  ? "cli_unknown_empty_failure"
+                  : undefined;
             throw new FailoverError(err, {
               reason,
               provider: params.provider,
@@ -1316,9 +2057,6 @@ export async function executePreparedCliRun(
               code: retryCode,
             });
           }
-
-          const streamedJsonlOutput =
-            outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
 
           if (stdoutParseExceeded && !streamedJsonlOutput) {
             throw new FailoverError(
@@ -1335,7 +2073,7 @@ export async function executePreparedCliRun(
           }
 
           const parsed =
-            streamedJsonlOutput ??
+            parsedStructuredOutput ??
             parseCliOutput({
               raw: stdout,
               backend,
@@ -1343,17 +2081,16 @@ export async function executePreparedCliRun(
               outputMode,
               fallbackSessionId: resolvedSessionId,
             });
-          if (parsed.errorText) {
-            const reason =
-              classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
-            throw new FailoverError(parsed.errorText, {
-              reason,
-              provider: params.provider,
-              model: context.modelId,
-              sessionId: params.sessionId,
-              lane: params.lane,
-              status: resolveFailoverStatus(reason),
-            });
+          const parsedError = createCliOutputFailoverError({
+            output: parsed,
+            provider: params.provider,
+            model: context.modelId,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            lane: params.lane,
+          });
+          if (parsedError) {
+            throw parsedError;
           }
           const rawText = parsed.text;
           cliBackendLog.info(
@@ -1407,7 +2144,7 @@ export async function executePreparedCliRun(
               },
             );
             if (!captureBecameIdle) {
-              if (shouldUseClaudeLiveSession(context)) {
+              if (useManagedClaudeLiveSession) {
                 await rotateClaudeLiveMcpCaptureKeyForContext(context);
               }
               const unresolvedPreparedMessagingCalls = Array.from(inFlightPreparedMessagingCalls);
@@ -1439,8 +2176,20 @@ export async function executePreparedCliRun(
           }
           recordRunError(error);
         } finally {
-          if (gatewayCaptureKey) {
-            clearMcpLoopbackToolCallCapture(gatewayCaptureKey);
+          // Captured MCP calls may settle after the CLI process exits. Drain
+          // first so finalization can use their trusted terminal outcomes.
+          try {
+            finalizeParsedTools();
+          } finally {
+            if (gatewayCaptureKey) {
+              // Drain accepted work, then fence this exact grant generation before
+              // clearing observers; otherwise a late request escapes accounting.
+              try {
+                context.preparedBackend.mcpClientGrantCapture?.deactivate(gatewayCaptureKey);
+              } finally {
+                clearMcpLoopbackToolCallCapture(gatewayCaptureKey);
+              }
+            }
           }
         }
         try {
@@ -1469,19 +2218,59 @@ export async function executePreparedCliRun(
       }
       return withExecutionEvidence(runOutput);
     });
-    return completedOutput;
+    if (completedOutput.sessionId) {
+      observeForkSuccessor(completedOutput.sessionId);
+    }
+    await finishForkSuccessorPersistence();
+    if (forkResumeClaimed && !forkSuccessorObserved) {
+      await params.restoreCliSessionFork?.();
+      forkResumeClaimed = false;
+      throw new Error("forked CLI session did not report a successor session id");
+    }
   } catch (error) {
     executionError = error;
-    throw error;
+    claudeModelCallDiagnostics?.emitError(error);
+    let failure = error;
+    try {
+      await finishForkSuccessorPersistence();
+    } catch (persistenceError) {
+      failure = new AggregateError(
+        [error, persistenceError],
+        "CLI turn failed and its fork successor could not be persisted",
+      );
+    }
+    if (forkResumeClaimed && !forkSuccessorObserved) {
+      await params.restoreCliSessionFork?.();
+    }
+    throw failure;
   } finally {
-    if (!fallbackClaudeSkillsPluginCleanupOwned) {
-      await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
-    }
-    if (systemPromptFile) {
-      await cleanupOuterResource(systemPromptFile.cleanup);
-    }
-    if (cleanupImages) {
-      await cleanupOuterResource(cleanupImages);
+    try {
+      if (!fallbackClaudeSkillsPluginCleanupOwned) {
+        await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
+      }
+      if (systemPromptFile) {
+        await cleanupOuterResource(systemPromptFile.cleanup);
+      }
+      if (cleanupImages) {
+        await cleanupOuterResource(cleanupImages);
+      }
+    } catch (error) {
+      outerCleanupError = toErrorObject(error, "CLI outer resource cleanup failed");
     }
   }
+  if (outerCleanupError !== undefined) {
+    options?.onPhase?.("cleanup");
+    claudeModelCallDiagnostics?.emitError(outerCleanupError);
+    throw outerCleanupError;
+  }
+  if (!completedOutput) {
+    const error = new Error("CLI run completed without output");
+    claudeModelCallDiagnostics?.emitError(error);
+    throw error;
+  }
+  // Success stays provisional until fallible persistence and cleanup finish;
+  // otherwise a rejected turn would be exported as completed.
+  claudeModelCallDiagnostics?.emitCompleted(completedOutput);
+  return completedOutput;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

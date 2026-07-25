@@ -3,11 +3,13 @@ title: Subagent stale child links
 scenario:
   id: subagent-stale-child-links
   surface: subagents
+  runtimePairLane: core
   coverage:
     primary:
-      - agents.subagents
+      - gateway.session-apis-subagents
+      - agent-runtime.subagent-turns-subagents
     secondary:
-      - gateway.sessions-list
+      - gateway.session-apis-sessions-list
   objective: Verify restarted gateways hide stale persisted subagent child links without hiding live or fresh children.
   successCriteria:
     - Old ended subagent run records are not exposed as current children.

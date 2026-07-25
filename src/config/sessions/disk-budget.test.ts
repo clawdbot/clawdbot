@@ -4,14 +4,19 @@ import type { PathLike, StatOptions } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import { enforceSessionDiskBudget, pruneUnreferencedSessionArtifacts } from "./disk-budget.js";
-import { saveSessionStore } from "./store.js";
+import {
+  enforceSessionDiskBudget,
+  measureSessionPhysicalDiskUsage,
+  pruneUnreferencedSessionArtifacts,
+} from "./disk-budget.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
@@ -54,6 +59,84 @@ function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.s
 }
 
 describe("enforceSessionDiskBudget", () => {
+  it("counts the SQLite main file and WAL as physical session usage", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+      if (!databasePath) {
+        throw new Error("expected a SQLite database path");
+      }
+      await fs.writeFile(databasePath, Buffer.alloc(321));
+      await fs.writeFile(`${databasePath}-wal`, Buffer.alloc(654));
+
+      const usage = await measureSessionPhysicalDiskUsage(storePath);
+
+      expect(usage).toEqual({
+        databaseMainBytes: 321,
+        databaseWalBytes: 654,
+        sessionFilesBytes: 0,
+        totalBytes: 975,
+      });
+    });
+  });
+
+  it("excludes migration archives from physical SQLite usage (#106875)", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+      if (!databasePath) {
+        throw new Error("expected a SQLite database path");
+      }
+      await fs.writeFile(databasePath, Buffer.alloc(100));
+      // Rollback archives are recovery artifacts outside the session budget;
+      // counting them would evict live history to pay for unreclaimable bytes.
+      await fs.writeFile(path.join(dir, "legacy.jsonl.migrated"), Buffer.alloc(4096));
+      await fs.writeFile(path.join(dir, "legacy.jsonl.migrated.2"), Buffer.alloc(4096));
+
+      const usage = await measureSessionPhysicalDiskUsage(storePath);
+
+      expect(usage.totalBytes).toBe(100);
+      expect(usage.sessionFilesBytes).toBe(0);
+    });
+  });
+
+  it("excludes migration archives from the session disk budget (#106875)", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const sessionId = "keep";
+      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+      const migrationArchivePath = path.join(dir, "legacy.jsonl.migrated");
+      const numberedMigrationArchivePath = path.join(dir, "legacy.jsonl.migrated.2");
+      const store: Record<string, SessionEntry> = {
+        [sessionKey]: { sessionId, updatedAt: Date.now() },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "t".repeat(64), "utf-8");
+      await fs.writeFile(migrationArchivePath, "m".repeat(400), "utf-8");
+      await fs.writeFile(numberedMigrationArchivePath, "n".repeat(400), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 300,
+          highWaterBytes: 200,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.overBudget).toBe(false);
+      expect(result.removedEntries).toBe(0);
+      expect(result.removedFiles).toBe(0);
+      expect(store).toHaveProperty(sessionKey);
+      await expectPathExists(transcriptPath);
+      await expectPathExists(migrationArchivePath);
+      await expectPathExists(numberedMigrationArchivePath);
+    });
+  });
+
   it("does not treat referenced transcripts with marker-like session IDs as archived artifacts", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -204,6 +287,42 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("preserves model-locked harness sessions when removing entries for disk budget", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const lockedKey = "agent:main:harness-owned:locked";
+      const removableKey = "agent:main:old-removable";
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        [lockedKey]: {
+          sessionId: "locked-budget",
+          updatedAt: now - 10_000,
+          modelSelectionLocked: true,
+        },
+        [removableKey]: {
+          sessionId: "old-removable",
+          updatedAt: now,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 120,
+          highWaterBytes: 80,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(store).toHaveProperty(lockedKey);
+      expect(store).not.toHaveProperty(removableKey);
+    });
+  });
+
   it("accounts for deduped skills prompt blobs before evicting sessions", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -305,6 +424,9 @@ describe("enforceSessionDiskBudget", () => {
           highWaterBytes: 1,
         },
         warnOnly: false,
+        commitEvictedIndex: async () => {
+          await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+        },
       });
 
       expectBudgetResult(result);
@@ -566,6 +688,117 @@ describe("enforceSessionDiskBudget", () => {
       expect(store).toHaveProperty(activeKey);
       expectBudgetResult(result);
       expect(result.removedEntries).toBe(1);
+    });
+  });
+
+  it("commits the reduced session index before deleting an evicted transcript", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-commit-order-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const oldTranscript = path.join(dir, "old.jsonl");
+      const activeTranscript = path.join(dir, "active.jsonl");
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [activeKey]: { sessionId: "active", updatedAt: 2 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(oldTranscript, "t".repeat(10 * 1024), "utf-8");
+      await fs.writeFile(activeTranscript, "a".repeat(64), "utf-8");
+
+      let commitCalls = 0;
+      let transcriptPresentAtCommit: boolean | null = null;
+      let indexPresentActiveOnlyAtCommit: boolean | null = null;
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
+        warnOnly: false,
+        commitEvictedIndex: async () => {
+          commitCalls += 1;
+          transcriptPresentAtCommit = nodeFs.existsSync(oldTranscript);
+          await fs.writeFile(storePath, JSON.stringify({ [activeKey]: store[activeKey] }, null, 2));
+          const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+            string,
+            SessionEntry
+          >;
+          indexPresentActiveOnlyAtCommit =
+            persisted[activeKey] !== undefined && persisted[oldKey] === undefined;
+        },
+      });
+
+      expectBudgetResult(result);
+      expect(commitCalls).toBe(1);
+      expect(transcriptPresentAtCommit).toBe(true);
+      expect(indexPresentActiveOnlyAtCommit).toBe(true);
+      expect(result.removedEntries).toBe(1);
+      expect(result.removedFiles).toBeGreaterThanOrEqual(1);
+      expect(store[oldKey]).toBeUndefined();
+      expect(store).toHaveProperty(activeKey);
+      await expectPathMissing(oldTranscript);
+      await expectPathExists(activeTranscript);
+    });
+  });
+
+  it("retains the evicted transcript when the index commit fails", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-commit-fail-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const oldTranscript = path.join(dir, "old.jsonl");
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [activeKey]: { sessionId: "active", updatedAt: 2 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(oldTranscript, "t".repeat(10 * 1024), "utf-8");
+
+      const commitFailure = new Error("simulated store-write failure");
+      await expect(
+        enforceSessionDiskBudget({
+          store,
+          storePath,
+          activeSessionKey: activeKey,
+          maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
+          warnOnly: false,
+          commitEvictedIndex: async () => {
+            throw commitFailure;
+          },
+        }),
+      ).rejects.toBe(commitFailure);
+
+      await expectPathExists(oldTranscript);
+    });
+  });
+
+  it("retains evicted artifacts when no durable index commit is available", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-missing-commit-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const oldTranscript = path.join(dir, "old.jsonl");
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [activeKey]: { sessionId: "active", updatedAt: 2 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(oldTranscript, "t".repeat(10 * 1024), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(result.removedFiles).toBe(0);
+      expect(result.totalBytesAfter).toBeGreaterThan(result.highWaterBytes);
+      expect(store[oldKey]).toBeUndefined();
+      await expectPathExists(oldTranscript);
     });
   });
 });

@@ -1,8 +1,11 @@
 // Shared directive parsing helpers used by model and auth directive handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS } from "../../config/sessions/session-snapshot-merge.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
@@ -45,6 +48,68 @@ export function canPersistSessionDirectiveDefaults(params: {
   }
 
   return params.commandAuthorized === true || params.senderIsOwner === true;
+}
+
+/** Names explicit directive writes that snapshot equality cannot infer. */
+export function resolveDirectiveTouchedSessionFields(params: {
+  directives: InlineDirectives;
+  allowInternalExecPersistence: boolean;
+  allowInternalVerbosePersistence: boolean;
+}): Array<keyof SessionEntry> {
+  const { directives } = params;
+  const fields = new Set<keyof SessionEntry>();
+  if (directives.hasThinkDirective) {
+    fields.add("thinkingLevel");
+  }
+  if (directives.hasFastDirective) {
+    fields.add("fastMode");
+  }
+  if (directives.hasVerboseDirective && params.allowInternalVerbosePersistence) {
+    fields.add("verboseLevel");
+  }
+  if (directives.hasTraceDirective) {
+    fields.add("traceLevel");
+  }
+  if (directives.hasReasoningDirective) {
+    fields.add("reasoningLevel");
+  }
+  if (directives.hasElevatedDirective) {
+    fields.add("elevatedLevel");
+  }
+  if (directives.hasModelDirective) {
+    for (const field of SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS) {
+      fields.add(field);
+    }
+  }
+  if (directives.hasExecDirective && params.allowInternalExecPersistence) {
+    if (directives.execHost) {
+      fields.add("execHost");
+    }
+    if (directives.execSecurity) {
+      fields.add("execSecurity");
+    }
+    if (directives.execAsk) {
+      fields.add("execAsk");
+    }
+    if (directives.execNode) {
+      fields.add("execNode");
+    }
+  }
+  if (directives.hasQueueDirective) {
+    if (directives.queueReset || directives.queueMode) {
+      fields.add("queueMode");
+    }
+    if (directives.queueReset || typeof directives.debounceMs === "number") {
+      fields.add("queueDebounceMs");
+    }
+    if (directives.queueReset || typeof directives.cap === "number") {
+      fields.add("queueCap");
+    }
+    if (directives.queueReset || directives.dropPolicy) {
+      fields.add("queueDrop");
+    }
+  }
+  return [...fields];
 }
 
 const formatElevatedEvent = (level: ElevatedLevel) => {

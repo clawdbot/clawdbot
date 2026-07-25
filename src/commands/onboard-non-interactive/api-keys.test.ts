@@ -61,6 +61,30 @@ describe("resolveNonInteractiveApiKey", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("rejects command-shaped flag keys before returning them", async () => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockImplementation(() => {
+      throw new Error("env lookup should not run for a malformed explicit flag");
+    });
+
+    const result = await resolveNonInteractiveApiKey({
+      provider: "zai",
+      cfg: {},
+      flagValue:
+        "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+      flagName: "--zai-api-key",
+      envVar: "ZAI_API_KEY",
+      runtime: runtime as never,
+    });
+
+    expect(result).toBeNull();
+    expect(resolveEnvApiKey).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Paste the API key value, not an OpenClaw onboarding command.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it.each([
     {
       provider: "xai",

@@ -1,22 +1,15 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core helper module supports test manager helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryIndexManager } from "./index.js";
 
-type MemoryIndexModule = typeof import("./index.js");
+const ensureEmbeddingMocksLoaded = createLazyRuntimeModule(() =>
+  import("./embedding.test-mocks.js").then(() => undefined),
+);
 
-let ensureEmbeddingMocksLoadedPromise: Promise<void> | null = null;
-let getMemorySearchManagerPromise: Promise<MemoryIndexModule["getMemorySearchManager"]> | null =
-  null;
-
-async function ensureEmbeddingMocksLoaded(): Promise<void> {
-  ensureEmbeddingMocksLoadedPromise ??= import("./embedding.test-mocks.js").then(() => undefined);
-  await ensureEmbeddingMocksLoadedPromise;
-}
-
-async function loadGetMemorySearchManager(): Promise<MemoryIndexModule["getMemorySearchManager"]> {
-  getMemorySearchManagerPromise ??= import("./index.js").then((mod) => mod.getMemorySearchManager);
-  return await getMemorySearchManagerPromise;
-}
+const loadGetMemorySearchManager = createLazyRuntimeModule(() =>
+  import("./index.js").then((mod) => mod.getMemorySearchManager),
+);
 
 export async function getRequiredMemoryIndexManager(params: {
   cfg: OpenClawConfig;

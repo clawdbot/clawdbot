@@ -88,7 +88,6 @@ vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
@@ -98,7 +97,6 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
@@ -106,9 +104,19 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
+
+vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/thinking-runtime.js")>();
+  return {
+    ...actual,
+    // These tests cover directive acknowledgements and persistence, not harness selection.
+    // Keep each directive from loading unrelated provider-route metadata through auto selection.
+    resolveEffectiveAgentRuntime: () => "openclaw",
+  };
+});
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>

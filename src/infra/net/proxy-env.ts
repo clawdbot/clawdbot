@@ -1,5 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Proxy environment helpers mirror undici EnvHttpProxyAgent selection while
 // adding OpenClaw NO_PROXY CIDR/wildcard bypass checks.
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
+
 export const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -11,13 +14,7 @@ export const PROXY_ENV_KEYS = [
 
 /** Return whether any supported proxy environment variable is non-blank. */
 export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  for (const key of PROXY_ENV_KEYS) {
-    const value = env[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return true;
-    }
-  }
-  return false;
+  return readTrimmedStringAlias(env, PROXY_ENV_KEYS) !== undefined;
 }
 
 function normalizeProxyEnvValue(value: string | undefined): string | null | undefined {
@@ -129,6 +126,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * (`undici/lib/dispatcher/env-http-proxy-agent.js`):
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
+ * - Lower-case `no_proxy` shadows upper-case `NO_PROXY`, including blank values
  * - Empty or missing → no bypass
  * - Bare `*` value → bypass everything
  * - Exact hostname match
@@ -150,7 +148,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * SSRF bypass.
  */
 export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
+  const raw = env.no_proxy ?? env.NO_PROXY ?? "";
   if (!raw) {
     return false;
   }
@@ -195,7 +193,7 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
       if (!m) {
         continue;
       }
-      entryHost = m[1];
+      entryHost = expectDefined(m[1], "m capture group 1");
       entryPort = m[2];
     } else {
       const firstColonIdx = entry.indexOf(":");
@@ -265,7 +263,7 @@ function matchesIpv4NoProxyPattern(targetHost: string, entryHost: string): boole
 
   const cidrMatch = entryHost.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
   if (cidrMatch) {
-    const network = parseIpv4Address(cidrMatch[1]);
+    const network = parseIpv4Address(expectDefined(cidrMatch[1], "cidr match capture group 1"));
     const prefixLength = Number(cidrMatch[2]);
     if (network === undefined || prefixLength < 0 || prefixLength > 32) {
       return false;
@@ -282,8 +280,7 @@ function matchesIpv4NoProxyPattern(targetHost: string, entryHost: string): boole
   if (patternParts.length > 4 || patternParts.length === 0) {
     return false;
   }
-  for (let index = 0; index < patternParts.length; index += 1) {
-    const part = patternParts[index];
+  for (const [index, part] of patternParts.entries()) {
     if (part === "*") {
       if (index === patternParts.length - 1) {
         return true;

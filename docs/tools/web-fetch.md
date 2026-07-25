@@ -8,16 +8,13 @@ title: "Web fetch"
 sidebarTitle: "Web Fetch"
 ---
 
-The `web_fetch` tool does a plain HTTP GET and extracts readable content
-(HTML to markdown or text). It does **not** execute JavaScript.
-
-For JS-heavy sites or login-protected pages, use the
-[Web Browser](/tools/browser) instead.
+`web_fetch` does a plain HTTP GET and extracts readable content (HTML to
+markdown or text). It does **not** execute JavaScript. For JS-heavy sites or
+login-protected pages, use the [Web Browser](/tools/browser) instead.
 
 ## Quick start
 
-`web_fetch` is **enabled by default** -- no configuration needed. The agent can
-call it immediately:
+Enabled by default, no configuration needed:
 
 ```javascript
 await web_fetch({ url: "https://example.com/article" });
@@ -34,8 +31,24 @@ Output format after main-content extraction.
 </ParamField>
 
 <ParamField path="maxChars" type="number">
-Truncate output to this many characters.
+Truncate output to this many characters. Clamped to `tools.web.fetch.maxCharsCap`.
 </ParamField>
+
+## Result
+
+`web_fetch` returns a closed structured result with these fields:
+
+- Request metadata: `url`, `finalUrl`, `status`, `extractMode`, and `extractor`
+- Optional response metadata: `contentType`, `title`, and `warning` (omitted when absent)
+- Wrapped content metadata: `externalContent`, `truncated`, `length`, `rawLength`,
+  `fetchedAt`, `tookMs`, and `text`
+- Optional `cached: true` on a cache hit
+- Optional `spill: { path, chars, truncated? }` when truncated content was written
+  to a private temporary file; `truncated` is present only when that file contains
+  partial source content
+
+`length` is the wrapped `text` length. `rawLength` is the extracted content length
+before external-content wrapping.
 
 ## How it works
 
@@ -48,8 +61,8 @@ Truncate output to this many characters.
     Runs Readability (main-content extraction) on the HTML response.
   </Step>
   <Step title="Fallback (optional)">
-    If Readability fails and Firecrawl is selected, retries through the
-    Firecrawl API with bot-circumvention mode.
+    If Readability fails and a fetch provider is available, retries through
+    that provider (for example Firecrawl's bot-circumvention mode).
   </Step>
   <Step title="Cache">
     Results are cached for 15 minutes (configurable) to reduce repeated
@@ -67,10 +80,8 @@ Fetching page content...
 ```
 
 Fast cache hits and quick network responses finish before the timer fires, so
-they do not show a progress line. If the call is canceled, the timer is cleared.
-When the fetch eventually completes, the agent receives the normal tool result;
-the progress line is only channel UI state and never contains fetched page
-content.
+they never show a progress line. Canceling the call clears the timer. The
+progress line is channel UI state only and never contains fetched page content.
 
 ## Config
 
@@ -81,9 +92,9 @@ content.
       fetch: {
         enabled: true, // default: true
         provider: "firecrawl", // optional; omit for auto-detect
-        maxChars: 50000, // max output chars
-        maxCharsCap: 50000, // hard cap for maxChars param
-        maxResponseBytes: 2000000, // max download size before truncation
+        maxChars: 20000, // default output chars; capped by maxCharsCap
+        maxCharsCap: 20000, // hard cap for maxChars param
+        maxResponseBytes: 750000, // max download size before truncation (32000-10000000)
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         maxRedirects: 3,
@@ -123,7 +134,7 @@ If Readability extraction fails, `web_fetch` can fall back to
             // apiKey: "fc-...", // optional; omit for keyless starter access
             baseUrl: "https://api.firecrawl.dev",
             onlyMainContent: true,
-            maxAgeMs: 86400000, // cache duration (1 day)
+            maxAgeMs: 172800000, // cache duration (2 days)
             timeoutSeconds: 60,
           },
         },
@@ -134,7 +145,8 @@ If Readability extraction fails, `web_fetch` can fall back to
 ```
 
 `plugins.entries.firecrawl.config.webFetch.apiKey` is optional and supports SecretRef objects.
-Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
+Legacy `tools.web.fetch.firecrawl.*` config auto-migrates to
+`plugins.entries.firecrawl.config.webFetch` via `openclaw doctor --fix`.
 
 <Note>
   If you configure a Firecrawl API-key SecretRef and it is unresolved with no
@@ -154,7 +166,7 @@ Current runtime behavior:
   provider from configured credentials. Non-sandboxed `web_fetch` can use
   installed plugins that declare `contracts.webFetchProviders` and register a
   matching provider at runtime. The official Firecrawl plugin provides this
-  fallback.
+  fallback today.
 - Sandboxed `web_fetch` calls allow bundled providers plus installed providers
   whose official npm or ClawHub provenance is verified. Today that permits the
   official Firecrawl plugin; third-party external fetch plugins stay excluded.
@@ -179,15 +191,15 @@ outbound policy after DNS resolution.
 
 ## Limits and safety
 
-- `maxChars` is clamped to `tools.web.fetch.maxCharsCap`
-- Response body is capped at `maxResponseBytes` before parsing; oversized
-  responses are truncated with a warning
+- `maxChars` is clamped to `tools.web.fetch.maxCharsCap` (default `20000`)
+- Response body is capped at `maxResponseBytes` (default `750000`, clamped to
+  32000-10000000) before parsing; oversized responses are truncated with a warning
 - Private/internal hostnames are blocked
 - `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
   `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins
   for trusted fake-IP proxy stacks; leave them unset unless your proxy owns
   those synthetic ranges and enforces its own destination policy
-- Redirects are checked and limited by `maxRedirects`
+- Redirects are checked and limited by `maxRedirects` (default `3`)
 - `useTrustedEnvProxy` is an explicit opt-in and should only be enabled for
   operator-controlled proxies that still enforce outbound policy after DNS
   resolution

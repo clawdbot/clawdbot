@@ -5,50 +5,41 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-Status: bundled plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
+Nextcloud Talk is a downloadable channel plugin (`@openclaw/nextcloud-talk`) that connects OpenClaw to a self-hosted Nextcloud instance through a Talk webhook bot. Direct messages, rooms, reactions, and markdown messages are supported; media goes out as URLs.
 
-## Bundled plugin
-
-Nextcloud Talk ships as a bundled plugin in current OpenClaw releases, so
-normal packaged builds do not need a separate install.
-
-If you are on an older build or a custom install that excludes Nextcloud Talk,
-install the npm package directly:
-
-Install via CLI (npm registry):
+## Install
 
 ```bash
 openclaw plugins install @openclaw/nextcloud-talk
 ```
 
-Use the bare package to follow the current official release tag. Pin an exact
-version only when you need a reproducible install.
+Use the bare package spec to follow the current official release tag. Pin an exact version only when you need a reproducible install.
 
-Local checkout (when running from a git repo):
+From a local checkout (dev workflows):
 
 ```bash
 openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
 
-Details: [Plugins](/tools/plugin)
+Restart the gateway after installing. Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Ensure the Nextcloud Talk plugin is available.
-   - Current packaged OpenClaw releases already bundle it.
-   - Older/custom installs can add it manually with the commands above.
+1. Install the plugin (above).
 2. On your Nextcloud server, create a bot:
 
    ```bash
    ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction
    ```
 
+   Keep `--feature response`: without it, outbound replies fail with 401. Repair an existing bot with `./occ talk:bot:state --feature webhook --feature response --feature reaction <botId> 1`.
+
 3. Enable the bot in the target room settings.
 4. Configure OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Or env: `NEXTCLOUD_TALK_BOT_SECRET` (default account only)
 
-   CLI setup:
+   CLI setup (`--url`/`--token` are aliases for the explicit fields; `nc-talk` and `nc` work as channel aliases):
 
    ```bash
    openclaw channels add --channel nextcloud-talk \
@@ -92,9 +83,11 @@ Minimal config:
 ## Notes
 
 - Bots cannot initiate DMs. The user must message the bot first.
-- Webhook URL must be reachable by the Gateway; set `webhookPublicUrl` if behind a proxy.
-- Media uploads are not supported by the bot API; media is sent as URLs.
-- The webhook payload does not distinguish DMs vs rooms; set `apiUser` + `apiPassword` to enable room-type lookups (otherwise DMs are treated as rooms).
+- The webhook URL must be reachable from the Nextcloud server; set `webhookPublicUrl` when the gateway sits behind a proxy. Webhook requests are HMAC-SHA256 signed with the bot secret; invalid signatures are rejected and rate limited.
+- Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
+- The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room.
+- Outbound requests go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
+- With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` probes the bot and warns when the `response` feature is missing.
 
 ## Access control (DMs)
 
@@ -103,12 +96,12 @@ Minimal config:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
 - Public DMs: `channels.nextcloud-talk.dmPolicy="open"` plus `channels.nextcloud-talk.allowFrom=["*"]`.
-- `allowFrom` matches Nextcloud user IDs only; display names are ignored.
+- `allowFrom` matches Nextcloud user IDs only (lowercased); display names are ignored.
 
 ## Rooms (groups)
 
 - Default: `channels.nextcloud-talk.groupPolicy = "allowlist"` (mention-gated).
-- Allowlist rooms with `channels.nextcloud-talk.rooms`:
+- Allowlist rooms with `channels.nextcloud-talk.rooms`, keyed by room token; `"*"` sets a wildcard default:
 
 ```json5
 {
@@ -122,6 +115,7 @@ Minimal config:
 }
 ```
 
+- Per-room keys: `requireMention` (default true), `enabled` (false disables the room), `allowFrom` (per-room sender allowlist), `tools` (allow/deny tool overrides), `skills` (limit loaded skills), `systemPrompt`.
 - To allow no rooms, keep the allowlist empty or set `channels.nextcloud-talk.groupPolicy="disabled"`.
 
 ## Capabilities
@@ -143,29 +137,33 @@ Provider options:
 
 - `channels.nextcloud-talk.enabled`: enable/disable channel startup.
 - `channels.nextcloud-talk.baseUrl`: Nextcloud instance URL.
-- `channels.nextcloud-talk.botSecret`: bot shared secret.
+- `channels.nextcloud-talk.botSecret`: bot shared secret (string or secret reference).
 - `channels.nextcloud-talk.botSecretFile`: regular-file secret path. Symlinks are rejected.
-- `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection).
+- `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection) and the status probe.
 - `channels.nextcloud-talk.apiPassword`: API/app password for room lookups.
 - `channels.nextcloud-talk.apiPasswordFile`: API password file path.
 - `channels.nextcloud-talk.webhookPort`: webhook listener port (default: 8788).
 - `channels.nextcloud-talk.webhookHost`: webhook host (default: 0.0.0.0).
 - `channels.nextcloud-talk.webhookPath`: webhook path (default: /nextcloud-talk-webhook).
 - `channels.nextcloud-talk.webhookPublicUrl`: externally reachable webhook URL.
-- `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`.
-- `channels.nextcloud-talk.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`.
-- `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`.
-- `channels.nextcloud-talk.groupAllowFrom`: group allowlist (user IDs).
-- `channels.nextcloud-talk.rooms`: per-room settings and allowlist.
+- `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing). `open` requires `allowFrom=["*"]`.
+- `channels.nextcloud-talk.allowFrom`: DM allowlist (user IDs).
+- `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled` (default: allowlist).
+- `channels.nextcloud-talk.groupAllowFrom`: room sender allowlist (user IDs); falls back to `allowFrom` when unset.
+- `channels.nextcloud-talk.rooms`: per-room settings and allowlist (see above).
 - Static sender access groups can be referenced from `allowFrom` and `groupAllowFrom` with `accessGroup:<name>`.
 - `channels.nextcloud-talk.historyLimit`: group history limit (0 disables).
 - `channels.nextcloud-talk.dmHistoryLimit`: DM history limit (0 disables).
-- `channels.nextcloud-talk.dms`: per-DM overrides (historyLimit).
-- `channels.nextcloud-talk.textChunkLimit`: outbound text chunk size (chars).
-- `channels.nextcloud-talk.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
-- `channels.nextcloud-talk.blockStreaming`: disable block streaming for this channel.
-- `channels.nextcloud-talk.blockStreamingCoalesce`: block streaming coalesce tuning.
+- `channels.nextcloud-talk.dms`: per-DM overrides keyed by user ID (`historyLimit`).
+- `channels.nextcloud-talk.textChunkLimit`: outbound text chunk size in chars (default: 4000).
+- `channels.nextcloud-talk.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.nextcloud-talk.streaming.block.enabled`: enable or disable block streaming for this channel.
+- `channels.nextcloud-talk.streaming.block.coalesce`: block streaming coalesce tuning.
+- `channels.nextcloud-talk.responsePrefix`: outbound reply prefix.
+- `channels.nextcloud-talk.markdown.tables`: markdown table rendering mode (`off | bullets | code | block`).
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).
+- `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork`: allow private/internal Nextcloud hosts past the SSRF guard.
+- `channels.nextcloud-talk.accounts.<id>`: per-account overrides (same keys); `defaultAccount` picks the default. Env vars `NEXTCLOUD_TALK_BOT_SECRET` / `NEXTCLOUD_TALK_API_PASSWORD` apply to the default account only.
 
 ## Related
 

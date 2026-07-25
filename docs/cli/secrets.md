@@ -9,14 +9,14 @@ title: "Secrets"
 
 # `openclaw secrets`
 
-Use `openclaw secrets` to manage SecretRefs and keep the active runtime snapshot healthy.
+Manage SecretRefs and keep the active runtime snapshot healthy.
 
-Command roles:
-
-- `reload`: gateway RPC (`secrets.reload`) that re-resolves refs and swaps runtime snapshot only on full success (no config writes).
-- `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs are skipped unless `--allow-exec` is set).
-- `configure`: interactive planner for provider setup, target mapping, and preflight (TTY required).
-- `apply`: execute a saved plan (`--dry-run` for validation only; dry-run skips exec checks by default, and write mode rejects exec-containing plans unless `--allow-exec` is set), then scrub targeted plaintext residues.
+| Command     | Role                                                                                                                                                                                         |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reload`    | Gateway RPC (`secrets.reload`): re-resolves refs and atomically publishes the owner-aware runtime snapshot (no config writes); eligible owner failures may publish as cold or stale warnings |
+| `audit`     | Read-only scan of config/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs skipped unless `--allow-exec`)                      |
+| `configure` | Interactive planner for provider setup, target mapping, and preflight (requires a TTY)                                                                                                       |
+| `apply`     | Executes a saved plan (`--dry-run` validates only and skips exec checks by default; write mode rejects exec-containing plans unless `--allow-exec`), then scrubs targeted plaintext residues |
 
 Recommended operator loop:
 
@@ -29,22 +29,16 @@ openclaw secrets audit --check
 openclaw secrets reload
 ```
 
-If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both dry-run and write apply commands.
+If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both the dry-run and write `apply` commands.
 
-Exit code note for CI/gates:
+Exit codes for CI/gates:
 
 - `audit --check` returns `1` on findings.
-- unresolved refs return `2`.
+- Unresolved refs return `2` (regardless of `--check`).
 
-Related:
-
-- Secrets guide: [Secrets Management](/gateway/secrets)
-- Credential surface: [SecretRef Credential Surface](/reference/secretref-credential-surface)
-- Security guide: [Security](/gateway/security)
+Related: [Secrets Management](/gateway/secrets) · [SecretRef Credential Surface](/reference/secretref-credential-surface) · [Security](/gateway/security)
 
 ## Reload runtime snapshot
-
-Re-resolve secret refs and atomically swap runtime snapshot.
 
 ```bash
 openclaw secrets reload
@@ -52,22 +46,13 @@ openclaw secrets reload --json
 openclaw secrets reload --url ws://127.0.0.1:18789 --token <token>
 ```
 
-Notes:
+Uses gateway RPC method `secrets.reload`. Healthy owners refresh independently. Eligible failed owners become stale only when their ref identities, provider definitions, and complete non-secret owner contract are unchanged; new or changed failures become cold. This degraded activation succeeds and reports `warningCount`. Strict or unmapped failures return an error and preserve the previously active snapshot.
 
-- Uses gateway RPC method `secrets.reload`.
-- If resolution fails, gateway keeps last-known-good snapshot and returns an error (no partial activation).
-- JSON response includes `warningCount`.
-
-Options:
-
-- `--url <url>`
-- `--token <token>`
-- `--timeout <ms>`
-- `--json`
+Options: `--url <url>`, `--token <token>`, `--timeout <ms>`, `--json`.
 
 ## Audit
 
-Scan OpenClaw state for:
+Scans OpenClaw state for:
 
 - plaintext secret storage
 - unresolved refs
@@ -75,9 +60,9 @@ Scan OpenClaw state for:
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
-Header residue note:
+The `.env` scan covers the effective state directory and the directory containing the active config. When both paths name the same file, it is scanned once.
 
-- Sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).
+Sensitive provider header detection is name-heuristic based: it flags headers whose name matches common auth/credential fragments (`authorization`, `x-api-key`, `token`, `secret`, `password`, `credential`).
 
 ```bash
 openclaw secrets audit
@@ -86,21 +71,12 @@ openclaw secrets audit --json
 openclaw secrets audit --allow-exec
 ```
 
-Exit behavior:
-
-- `--check` exits non-zero on findings.
-- unresolved refs exit with higher-priority non-zero code.
-
-Report shape highlights:
+Report shape:
 
 - `status`: `clean | findings | unresolved`
 - `resolution`: `refsChecked`, `skippedExecRefs`, `resolvabilityComplete`
 - `summary`: `plaintextCount`, `unresolvedRefCount`, `shadowedRefCount`, `legacyResidueCount`
-- finding codes:
-  - `PLAINTEXT_FOUND`
-  - `REF_UNRESOLVED`
-  - `REF_SHADOWED`
-  - `LEGACY_RESIDUE`
+- finding codes: `PLAINTEXT_FOUND`, `REF_UNRESOLVED`, `REF_SHADOWED`, `LEGACY_RESIDUE`
 
 ## Configure (interactive helper)
 
@@ -116,43 +92,34 @@ openclaw secrets configure --agent ops
 openclaw secrets configure --json
 ```
 
-Flow:
-
-- Provider setup first (`add/edit/remove` for `secrets.providers` aliases).
-- Credential mapping second (select fields and assign `{source, provider, id}` refs).
-- Preflight and optional apply last.
+Flow: provider setup first (add/edit/remove `secrets.providers` aliases), then credential mapping (select fields, assign `{source, provider, id}` refs), then preflight and optional apply.
 
 Flags:
 
-- `--providers-only`: configure `secrets.providers` only, skip credential mapping.
-- `--skip-provider-setup`: skip provider setup and map credentials to existing providers.
-- `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store.
-- `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands).
+- `--providers-only`: configure `secrets.providers` only, skip credential mapping
+- `--skip-provider-setup`: skip provider setup, map credentials to existing providers
+- `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store
+- `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands)
+
+`--providers-only` and `--skip-provider-setup` cannot be combined.
 
 Notes:
 
 - Requires an interactive TTY.
-- You cannot combine `--providers-only` with `--skip-provider-setup`.
-- `configure` targets secret-bearing fields in `openclaw.json` plus `auth-profiles.json` for the selected agent scope.
-- `configure` supports creating new `auth-profiles.json` mappings directly in the picker flow.
-- Canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
-- It performs preflight resolution before apply.
-- If preflight/apply includes exec refs, keep `--allow-exec` set for both steps.
-- Generated plans default to scrub options (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson` all enabled).
-- Apply path is one-way for scrubbed plaintext values.
-- Without `--apply`, CLI still prompts `Apply this plan now?` after preflight.
-- With `--apply` (and no `--yes`), CLI prompts an extra irreversible confirmation.
-- `--json` prints the plan + preflight report, but the command still requires an interactive TTY.
+- Targets secret-bearing fields in `openclaw.json` plus `auth-profiles.json` for the selected agent scope; canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Supports creating new `auth-profiles.json` mappings directly in the picker flow.
+- Runs preflight resolution before apply.
+- Generated plans default to scrub options enabled (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson`). Apply is one-way for scrubbed plaintext values.
+- `--plan-out` refuses to create a plan whose UTF-8 serialized form exceeds 16 MiB (16,777,216 bytes), matching the `apply --from` input limit.
+- Without `--apply`, the CLI still prompts `Apply this plan now?` after preflight.
+- With `--apply` (and no `--yes`), the CLI prompts an extra irreversible-migration confirmation.
+- `--json` prints the plan + preflight report, but still requires an interactive TTY.
 
-Exec provider safety note:
+### Exec provider safety
 
-- Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`.
-- Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, and pair it with `trustedDirs` (for example `["/opt/homebrew"]`).
-- On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`. Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, paired with `trustedDirs` (for example `["/opt/homebrew"]`). On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed; for trusted paths only, set `allowInsecurePath: true` on that provider to bypass the path security check.
 
 ## Apply a saved plan
-
-Apply or preflight a plan generated previously:
 
 ```bash
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
@@ -162,29 +129,22 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 ```
 
-Exec behavior:
+`--dry-run` validates preflight without writing files; exec SecretRef checks are skipped by default in dry-run. Write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec`. Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
-- `--dry-run` validates preflight without writing files.
-- exec SecretRef checks are skipped by default in dry-run.
-- write mode rejects plans that contain exec SecretRefs/providers unless `--allow-exec` is set.
-- Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
-
-Plan contract details (allowed target paths, validation rules, and failure semantics):
-
-- [Secrets Apply Plan Contract](/gateway/secrets-plan-contract)
+`--from` must point to a regular file no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
 
 What `apply` may update:
 
 - `openclaw.json` (SecretRef targets + provider upserts/deletes)
 - `auth-profiles.json` (provider-target scrubbing)
 - legacy `auth.json` residues
-- `~/.openclaw/.env` known secret keys whose values were migrated
+- `.env` files in the effective state and active-config directories, for known secret keys whose values were migrated
 
-## Why no rollback backups
+Plan contract details (allowed target paths, validation rules, failure semantics): [Secrets Apply Plan Contract](/gateway/secrets-plan-contract).
 
-`secrets apply` intentionally does not write rollback backups containing old plaintext values.
+### Why no rollback backups
 
-Safety comes from strict preflight + atomic-ish apply with best-effort in-memory restore on failure.
+`secrets apply` intentionally does not write rollback backups containing old plaintext values. Safety comes from strict preflight plus atomic-ish apply, with best-effort in-memory restore on failure.
 
 ## Example
 
@@ -200,3 +160,4 @@ If `audit --check` still reports plaintext findings, update the remaining report
 
 - [CLI reference](/cli)
 - [Secrets management](/gateway/secrets)
+- [Vault SecretRefs](/plugins/vault)

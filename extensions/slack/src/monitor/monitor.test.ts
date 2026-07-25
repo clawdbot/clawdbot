@@ -2,7 +2,7 @@
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { createSlackMonitorContext, normalizeSlackChannelType } from "./context.js";
 
@@ -226,8 +226,6 @@ const baseParams = () => ({
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
-  threadRequireExplicitMention: false,
-  removeAckAfterReply: false,
 });
 
 function createListedChannelsContext(groupPolicy: "open" | "allowlist") {
@@ -373,6 +371,111 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
     expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
     // Unlisted channel should be allowed with open policy
     expect(ctx.isChannelAllowed({ channelId: "C_UNLISTED", channelType: "channel" })).toBe(true);
+  });
+
+  it("warns once per explicitly disabled direct channel", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      accountId: "work",
+      groupPolicy: "open",
+      channelsConfig: {
+        C_DENIED: { enabled: false },
+        C_OTHER: { enabled: false },
+      },
+    });
+    const warnSpy = vi.spyOn(ctx.logger, "warn").mockImplementation(() => undefined);
+
+    expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+    expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+    expect(ctx.isChannelAllowed({ channelId: "C_OTHER", channelType: "channel" })).toBe(false);
+
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenNthCalledWith(
+      1,
+      {
+        provider: "slack",
+        accountId: "work",
+        channelId: "C_DENIED",
+        reason: "channel_not_allowed",
+        cause: "channel_disabled",
+        groupPolicy: "open",
+        matchSource: "direct",
+        matchKey: "C_DENIED",
+      },
+      "Slack channel denied by configuration",
+    );
+  });
+
+  it("repeats disabled-channel warnings on a fixed interval despite steady traffic", () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createSlackMonitorContext({
+        ...baseParams(),
+        groupPolicy: "open",
+        channelsConfig: { C_DENIED: { enabled: false } },
+      });
+      const warnSpy = vi.spyOn(ctx.logger, "warn").mockImplementation(() => undefined);
+
+      expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+      vi.advanceTimersByTime(4 * 60_000);
+      expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("warns for wildcard disablement under allowlist policy", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      groupPolicy: "allowlist",
+      channelsConfig: { "*": { enabled: false } },
+    });
+    const warnSpy = vi.spyOn(ctx.logger, "warn").mockImplementation(() => undefined);
+
+    expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      {
+        provider: "slack",
+        accountId: "default",
+        channelId: "C_DENIED",
+        reason: "channel_not_allowed",
+        cause: "channel_disabled",
+        groupPolicy: "allowlist",
+        matchSource: "wildcard",
+        matchKey: "*",
+      },
+      "Slack channel denied by configuration",
+    );
+  });
+
+  it("does not warn for allowlist misses or globally disabled groups", () => {
+    const allowlistCtx = createListedChannelsContext("allowlist");
+    const allowlistWarnSpy = vi
+      .spyOn(allowlistCtx.logger, "warn")
+      .mockImplementation(() => undefined);
+    expect(allowlistCtx.isChannelAllowed({ channelId: "C_UNLISTED", channelType: "channel" })).toBe(
+      false,
+    );
+    expect(allowlistWarnSpy).not.toHaveBeenCalled();
+
+    const disabledCtx = createSlackMonitorContext({
+      ...baseParams(),
+      groupPolicy: "disabled",
+      channelsConfig: { C_DENIED: { enabled: false } },
+    });
+    const disabledWarnSpy = vi
+      .spyOn(disabledCtx.logger, "warn")
+      .mockImplementation(() => undefined);
+    expect(disabledCtx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(
+      false,
+    );
+    expect(disabledWarnSpy).not.toHaveBeenCalled();
   });
 
   it("allows all channels when groupPolicy is open and channelsConfig is empty", () => {

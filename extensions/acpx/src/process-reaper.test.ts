@@ -1,13 +1,19 @@
 // ACPX tests cover process reaper plugin behavior.
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+
+const runExecMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runExec: runExecMock,
+}));
+
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
-  isOpenClawOwnedAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
-  type AcpxProcessInfo,
 } from "./process-reaper.js";
 
 const WRAPPER_ROOT = "/tmp/openclaw-state/acpx";
@@ -15,13 +21,24 @@ const CODEX_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/codex-acp-wrapper.mjs`;
 const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
 const CLAUDE_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/claude-agent-acp-wrapper.mjs`;
 const PLUGIN_DEPS_CODEX_COMMAND =
-  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js";
+  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@agentclientprotocol/codex-acp/dist/index.js";
+const PLUGIN_DEPS_CODEX_APP_SERVER_COMMAND =
+  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@openai/codex/bin/codex.js app-server";
+const PLUGIN_DEPS_CODEX_PLATFORM_COMMAND =
+  "/tmp/openclaw/plugin-runtime-deps/node_modules/@openai/codex-linux-x64/vendor/codex app-server";
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node ${path.resolve(
-  "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+  "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
 )}`;
+const LOCAL_CODEX_APP_SERVER_COMMAND = `node ${path.resolve(
+  "node_modules/@openai/codex/bin/codex.js",
+)} app-server`;
+// Legacy adapter subprocesses remain cleanup-owned during upgrades.
 const LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND = path.resolve(
   "node_modules/@zed-industries/codex-acp-linux-x64/bin/codex-acp",
 );
+
+type CleanupDeps = NonNullable<Parameters<typeof cleanupOpenClawOwnedAcpxProcessTree>[0]["deps"]>;
+type AcpxProcessInfo = Awaited<ReturnType<NonNullable<CleanupDeps["listProcesses"]>>>[number];
 
 function cleanupDeps(processes: AcpxProcessInfo[]) {
   const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
@@ -52,25 +69,33 @@ function collectMatching<T, U>(
 }
 
 describe("process reaper", () => {
-  it("recognizes generated Codex and Claude wrappers only under the configured root", () => {
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: CODEX_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: CLAUDE_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: "node /tmp/other/codex-acp-wrapper.mjs",
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(false);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    runExecMock.mockReset();
+  });
+
+  it("bounds process inspection and fails closed on timeout", async () => {
+    runExecMock.mockRejectedValueOnce(new Error("process listing timed out"));
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const killSpy = vi.spyOn(process, "kill");
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 200,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      wrapperRoot: WRAPPER_ROOT,
+    });
+
+    expect(runExecMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
+      maxBuffer: 8 * 1024 * 1024,
+      timeoutMs: 2_000,
+    });
+    expect(result).toEqual({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "unverified-root",
+    });
+    expect(killSpy).not.toHaveBeenCalled();
   });
 
   it("only treats generated wrappers as launch-lease aware", () => {
@@ -86,24 +111,6 @@ describe("process reaper", () => {
     expect(isOpenClawLeaseAwareAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(
       false,
     );
-  });
-
-  it("recognizes OpenClaw plugin-runtime-deps ACP adapter children", () => {
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(true);
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: "npx @zed-industries/codex-acp" })).toBe(
-      false,
-    );
-  });
-
-  it("recognizes plugin-local ACP adapter package paths without trusting arbitrary installs", () => {
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND })).toBe(
-      true,
-    );
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: "node /tmp/other-project/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
-      }),
-    ).toBe(false);
   });
 
   it("kills an owned recorded process tree children first", async () => {
@@ -315,6 +322,29 @@ describe("process reaper", () => {
         (entry) => entry.pid,
       ),
     ).toEqual([501, 500]);
+  });
+
+  it("reaps packaged Codex app-server orphans without claiming native plugin processes", async () => {
+    const { deps, killed } = cleanupDeps([
+      { pid: 510, ppid: 1, command: PLUGIN_DEPS_CODEX_APP_SERVER_COMMAND },
+      { pid: 511, ppid: 510, command: PLUGIN_DEPS_CODEX_PLATFORM_COMMAND },
+      { pid: 512, ppid: 1, command: LOCAL_CODEX_APP_SERVER_COMMAND },
+    ]);
+
+    const result = await reapStaleOpenClawOwnedAcpxOrphans({
+      wrapperRoot: WRAPPER_ROOT,
+      deps,
+    });
+
+    expect(result.skippedReason).toBeUndefined();
+    expect(result.inspectedPids).toEqual([510, 511]);
+    expect(
+      collectMatching(
+        killed,
+        (entry) => entry.signal === "SIGTERM",
+        (entry) => entry.pid,
+      ),
+    ).toEqual([511, 510]);
   });
 
   it("keeps startup scans quiet when process listing is unavailable", async () => {

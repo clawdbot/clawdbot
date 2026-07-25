@@ -35,6 +35,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
       label: "QQBot Channel API",
       description:
         "Authenticated HTTP proxy for QQ Open Platform channel APIs. " +
+        "Use write and delete endpoints only after explicit user intent; DELETE requires confirmed=true, and bulk deletes require bulkConfirmed=true after confirming the exact target. " +
         "Common endpoints: " +
         "list guilds GET /users/@me/guilds | " +
         "list channels GET /guilds/{guild_id}/channels | " +
@@ -51,7 +52,11 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
       async execute(_toolCallId, params) {
         const { getAccessToken } = await import("../../engine/messaging/sender.js");
         const accessToken = await getAccessToken(account.appId, account.clientSecret);
-        return executeChannelApi(params as ChannelApiParams, { accessToken });
+        return executeChannelApi(params as ChannelApiParams, {
+          accessToken,
+          cfg,
+          accountId: firstAccountId,
+        });
       },
     },
     { name: "qqbot_channel_api" },

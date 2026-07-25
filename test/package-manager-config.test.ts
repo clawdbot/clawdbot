@@ -72,6 +72,18 @@ describe("package manager build policy", () => {
     expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
   });
 
+  it("includes the Crabbox wrapper runtime modules in the published root package", () => {
+    const packageJson = readJson("package.json") as RootPackageJson;
+
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        "scripts/crabbox-wrapper.mjs",
+        "scripts/crabbox-wrapper-providers.mjs",
+        "scripts/testbox-lease-freshness.mjs",
+      ]),
+    );
+  });
+
   it("keeps npm shrinkwrap aligned with workspace overrides", () => {
     const workspace = parse(
       fs.readFileSync("pnpm-workspace.yaml", "utf8"),
@@ -95,7 +107,11 @@ describe("package manager build policy", () => {
       "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
     });
     if (packages.has("lru-memoizer@3.0.0")) {
-      expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+      const lruCacheVersion = (overrides["lru-memoizer@3.0.0"] as Record<string, string>)[
+        "lru-cache"
+      ];
+      expect(lruCacheVersion).toMatch(/^11\.\d+\.\d+$/u);
+      expect(packages.has(`lru-cache@${lruCacheVersion}`)).toBe(true);
     }
   });
 

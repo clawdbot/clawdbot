@@ -1,28 +1,12 @@
 // OC Path module implements edit behavior.
-import {
-  Document,
-  isMap,
-  isScalar,
-  isSeq,
-  LineCounter,
-  parseDocument,
-  type Node,
-  type Pair,
-} from "yaml";
+import { Document, isMap, isSeq, LineCounter, parseDocument, type Node } from "yaml";
 import type { OcPath } from "../oc-path.js";
-import {
-  formatOcPath,
-  isPositionalSeg,
-  isQuotedSeg,
-  parseArrayIndexSegment,
-  resolvePositionalSeg,
-  splitRespectingBrackets,
-  unquoteSeg,
-} from "../oc-path.js";
+import { formatOcPath } from "../oc-path.js";
 import { guardSentinel } from "../sentinel.js";
 import type { YamlAst } from "./ast.js";
+import { resolveYamlOcPath } from "./resolve.js";
 
-export type YamlEditResult =
+type YamlEditResult =
   | { readonly ok: true; readonly ast: YamlAst }
   | {
       readonly ok: false;
@@ -38,16 +22,12 @@ export function setYamlOcPath(ast: YamlAst, path: OcPath, newValue: unknown): Ya
   }
   guardYamlSentinel(newValue, formatOcPath(path));
 
-  const rawSegments = pathSegments(path);
-  if (rawSegments.length === 0) {
+  // Keep read/write addressing aligned for positional tokens and YAML key coercion.
+  const match = resolveYamlOcPath(ast, path);
+  if (match === null || match.kind === "root") {
     return { ok: false, reason: "unresolved" };
   }
-
-  const segments = resolvePositionalSegments(ast.doc.contents as Node, rawSegments);
-  if (segments === null) {
-    return { ok: false, reason: "unresolved" };
-  }
-
+  const segments = match.path;
   if (!ast.doc.hasIn(segments)) {
     return { ok: false, reason: "unresolved" };
   }
@@ -71,14 +51,11 @@ export function insertYamlOcPath(
   }
   guardYamlSentinel(newValue, `${formatOcPath(parentPath)}/${formatInsertionMarker(marker)}`);
 
-  const rawParentSegments = pathSegments(parentPath);
-  const segments =
-    rawParentSegments.length === 0
-      ? rawParentSegments
-      : resolvePositionalSegments(ast.doc.contents as Node, rawParentSegments);
-  if (segments === null) {
+  const match = resolveYamlOcPath(ast, parentPath);
+  if (match === null) {
     return { ok: false, reason: "unresolved" };
   }
+  const segments = match.kind === "root" ? [] : match.path;
   const { doc: cloned, lineCounter } = cloneDoc(ast.doc);
 
   const parent = segments.length === 0 ? cloned.contents : cloned.getIn(segments, false);
@@ -112,73 +89,6 @@ export function insertYamlOcPath(
   }
 
   return { ok: false, reason: "unresolved" };
-}
-
-function resolvePositionalSegments(root: Node, segments: readonly string[]): string[] | null {
-  const out: string[] = [];
-  let node: Node | null = root;
-  for (const seg of segments) {
-    if (node === null) {
-      return null;
-    }
-    let segNorm = seg;
-    if (isPositionalSeg(seg)) {
-      const concrete = positionalForYamlNode(node, seg);
-      if (concrete === null) {
-        return null;
-      }
-      segNorm = concrete;
-    }
-    out.push(segNorm);
-    if (isMap(node)) {
-      const pairs: readonly Pair[] = (node as { items: readonly Pair[] }).items;
-      const pair: Pair | undefined = pairs.find((p) => {
-        const k = isScalar(p.key) ? p.key.value : p.key;
-        return String(k) === segNorm;
-      });
-      node = (pair?.value as Node | undefined) ?? null;
-      continue;
-    }
-    if (isSeq(node)) {
-      const idx = parseArrayIndexSegment(segNorm, node.items.length);
-      if (idx === null) {
-        return null;
-      }
-      node = (node.items[idx] as Node | null) ?? null;
-      continue;
-    }
-    node = null;
-  }
-  return out;
-}
-
-function positionalForYamlNode(node: Node, seg: string): string | null {
-  if (isMap(node)) {
-    const pairs: readonly Pair[] = (node as { items: readonly Pair[] }).items;
-    const keys: readonly string[] = pairs.map((p) => String(isScalar(p.key) ? p.key.value : p.key));
-    return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
-  }
-  if (isSeq(node)) {
-    const items: readonly Node[] = (node as { items: readonly Node[] }).items;
-    return resolvePositionalSeg(seg, { indexable: true, size: items.length });
-  }
-  return null;
-}
-
-function pathSegments(path: OcPath): string[] {
-  const segs: string[] = [];
-  const collect = (slot: string | undefined) => {
-    if (slot === undefined) {
-      return;
-    }
-    for (const sub of splitRespectingBrackets(slot, ".")) {
-      segs.push(isQuotedSeg(sub) ? unquoteSeg(sub) : sub);
-    }
-  };
-  collect(path.section);
-  collect(path.item);
-  collect(path.field);
-  return segs;
 }
 
 function formatInsertionMarker(

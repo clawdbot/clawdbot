@@ -102,14 +102,7 @@ export async function maybeWrapCommandWithShellSnapshot(
   }
 }
 
-export function resetShellSnapshotCacheForTests(): void {
-  snapshotCache.clear();
-  cleanupPromise = null;
-}
-
-export function resolveShellSnapshotDir(
-  env: Record<string, string | undefined> = process.env,
-): string {
+function resolveShellSnapshotDir(env: Record<string, string | undefined> = process.env): string {
   return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "cache", "shell-snapshots");
 }
 
@@ -183,8 +176,21 @@ function buildStartupSignature(shell: string): Array<[string, number, number] | 
   });
 }
 
+function readNonBlankPathEnv(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
 function getTrustedShellHome(): string {
-  return process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
+  const configuredHome =
+    readNonBlankPathEnv(process.env.HOME) ?? readNonBlankPathEnv(process.env.USERPROFILE);
+  if (configuredHome) {
+    return configuredHome;
+  }
+  const accountHome = readNonBlankPathEnv(os.userInfo().homedir);
+  if (!accountHome) {
+    throw new Error("Unable to resolve the current user's home directory");
+  }
+  return accountHome;
 }
 
 async function createShellSnapshot(
@@ -313,6 +319,7 @@ function buildTrustedSnapshotCaptureEnv(
   runtimeEnv: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
   const env = buildSnapshotCaptureEnv(process.env);
+  env.HOME = getTrustedShellHome();
   // OPENCLAW_SHELL is injected by the exec runtime, so startup files can keep
   // their documented exec-specific branches without trusting model input.
   if (runtimeEnv.OPENCLAW_SHELL === "exec") {
@@ -440,16 +447,15 @@ async function runShell(opts: {
   cwd: string;
   env: Record<string, string | undefined>;
   timeoutMs: number;
-}): Promise<{ status: number | null; stdout: string }> {
+}): Promise<{ status: number | null }> {
   return await new Promise((resolve) => {
     const child = spawn(opts.shell, [...opts.shellArgs, opts.command], {
       cwd: opts.cwd,
       detached: process.platform !== "win32",
       env: opts.env,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: "ignore",
       windowsHide: true,
     });
-    let stdout = "";
     let settled = false;
     const finish = (status: number | null) => {
       if (settled) {
@@ -457,18 +463,13 @@ async function runShell(opts: {
       }
       settled = true;
       clearTimeout(timeout);
-      killProcessTree(child.pid ?? 0, { graceMs: 0 });
-      child.stdout.destroy();
-      resolve({ status, stdout });
+      killProcessTree(child.pid ?? 0, { graceMs: 0, detached: true });
+      resolve({ status });
     };
     const timeout = setTimeout(() => {
-      killProcessTree(child.pid ?? 0, { graceMs: 250 });
+      killProcessTree(child.pid ?? 0, { graceMs: 250, detached: true });
       finish(null);
     }, opts.timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
     child.on("error", () => {
       finish(null);
     });

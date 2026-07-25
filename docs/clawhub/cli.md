@@ -9,79 +9,82 @@ title: "ClawHub CLI"
 
 # ClawHub CLI
 
-OpenClaw has two command-line entry points for ClawHub:
+Two command-line surfaces talk to ClawHub:
 
-- `openclaw skills` and `openclaw plugins` install and manage ClawHub packages
-  inside OpenClaw.
-- The standalone `clawhub` CLI handles publisher workflows such as login,
-  publish, transfer, and sync.
+- `openclaw skills` / `openclaw plugins` - discover, install, and update
+  packages for a local OpenClaw agent or Gateway.
+- The standalone `clawhub` CLI - publisher workflows: login, publish, sync,
+  and transfer.
 
 ## Discover and install
-
-Use OpenClaw commands when you want to install or update packages for a local
-OpenClaw agent or Gateway.
 
 ```bash
 openclaw skills search "calendar"
 openclaw skills install @owner/<slug>
-openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
+openclaw skills install @owner/<slug> --version <version> --global
 openclaw skills update @owner/<slug>
-openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
-openclaw skills verify @owner/<slug>
+openclaw skills update --all --acknowledge-clawhub-risk
+openclaw skills verify @owner/<slug> --card
 
 openclaw plugins search "calendar"
 openclaw plugins install clawhub:<package>
 openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins update <id-or-npm-spec>
+openclaw plugins update --all
 ```
 
-Skill installs target the active workspace `skills/` directory by default. Add
-`--global` to install into the shared managed skills directory.
+Skill installs target the active workspace `skills/` directory by default; add
+`--global` for the shared managed skills directory. Plugin installs need the
+explicit `clawhub:` prefix to force ClawHub resolution over npm, git, or a
+local path. Full flag reference: [`openclaw skills`](/cli/skills) and
+[`openclaw plugins`](/cli/plugins).
 
-OpenClaw checks the selected community ClawHub skill or plugin trust state
-before downloading it. Versioned community skill and plugin releases use
-exact-release trust metadata; resolver-backed GitHub skills rely on ClawHub's
-install resolver to enforce scan and force-install policy before it returns a
-pinned commit. Malicious or blocked community releases are refused. Risky
-community releases require review and `--acknowledge-clawhub-risk` when a
-non-interactive command should continue after that review.
+### Release trust
 
-Official ClawHub publishers/packages and bundled OpenClaw sources bypass this
-release-trust prompt and security-verdict fetch during install and update.
+OpenClaw checks a release's ClawHub trust state before downloading it, for
+both skills and plugins. Versioned releases use exact-release trust metadata;
+resolver-backed GitHub skills go through ClawHub's install resolver, which
+enforces scan and force-install policy before returning a pinned commit.
 
-Plugin installs use the `clawhub:` prefix when you want ClawHub resolution
-instead of npm or another install source.
+- **Malicious or blocked** releases are refused outright.
+- **Risky** releases (non-clean scan, non-blocking moderation state) print a
+  warning and require `--acknowledge-clawhub-risk` to continue
+  non-interactively.
+- **Official ClawHub publishers/packages and bundled OpenClaw sources** skip
+  the trust prompt and security-verdict fetch entirely.
 
 ## Publish and maintain
 
-Install the standalone ClawHub CLI for publisher workflows:
+Install the standalone CLI once, then log in:
 
 ```bash
 npm i -g clawhub
 clawhub login
 ```
 
-Publish plugin packages with `clawhub package publish`:
+Publish a plugin package (folder path, GitHub repo `owner/repo[@ref]`, or
+tarball URL) with `clawhub package publish`:
 
 ```bash
-clawhub package publish your-org/your-plugin --dry-run
-clawhub package publish your-org/your-plugin
+clawhub package publish ./my-plugin --dry-run
+clawhub package publish ./my-plugin
 clawhub package publish your-org/your-plugin@v1.0.0
 ```
 
-Publish skill folders with `clawhub skill publish`:
+Publish a skill folder with `clawhub skill publish`:
 
 ```bash
 clawhub skill publish ./skills/review-helper
-clawhub skill publish ./skills/review-helper --version 1.0.0
+clawhub skill publish ./skills/review-helper --version 1.0.0 --owner your-org
 ```
 
-When local skill scan state or package ownership needs maintenance, use the
-relevant standalone command:
+Other maintenance commands:
 
 ```bash
-clawhub sync --all
-clawhub package transfer @old-owner/package --to new-owner
+clawhub sync --all                                          # scan local skills, publish new/updated ones
+clawhub package transfer @old-owner/package --to new-owner   # move a plugin package to another publisher
+clawhub skill rename old-slug new-slug                       # rename a published skill, redirect the old slug
+clawhub explore --sort trending                              # browse the registry, sorted by trending
 ```
 
 ## Related

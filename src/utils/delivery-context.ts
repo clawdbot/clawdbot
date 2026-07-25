@@ -4,5 +4,6 @@ export {
   deliveryContextKey,
   mergeDeliveryContext,
   normalizeDeliveryContext,
+  sessionDeliveryChannel,
 } from "./delivery-context.shared.js";
 export type { DeliveryContext } from "./delivery-context.types.js";

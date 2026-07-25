@@ -1,8 +1,10 @@
 // Verifies Docker create arguments for sandbox hardening and configured passthrough.
 import { describe, expect, it } from "vitest";
-import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./sandbox/constants.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
+
+const OPENCLAW_CLI_ENV_VALUE = "1";
 
 describe("buildSandboxCreateArgs", () => {
   function createSandboxConfig(
@@ -101,6 +103,7 @@ describe("buildSandboxCreateArgs", () => {
       "openclaw.sandbox=1",
       "openclaw.sessionKey=main",
       "openclaw.createdAtMs=1700000000000",
+      `openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`,
       "openclaw.sandboxBrowser=1",
     ]);
     expect(args).toContain("--read-only");
@@ -374,5 +377,20 @@ describe("buildSandboxCreateArgs", () => {
       createdAtMs: 1700000000000,
     });
     expectFlagValues(args, "--network", ["container:peer"]);
+  });
+
+  it("passes one --init flag so Docker reaps orphaned processes", () => {
+    const cfg = createSandboxConfig();
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-init",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+    expect(args.filter((arg) => arg === "--init")).toHaveLength(1);
+    // Docker create options must follow the subcommand and precede the image.
+    const createIdx = args.indexOf("create");
+    const initIdx = args.indexOf("--init");
+    expect(initIdx).toBeGreaterThan(createIdx);
   });
 });

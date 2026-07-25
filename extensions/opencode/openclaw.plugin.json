@@ -2,14 +2,19 @@
   "id": "opencode",
   "icon": "https://cdn.simpleicons.org/opencode",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
-  "providers": ["opencode"],
+  "providers": [
+    "opencode"
+  ],
   "providerEndpoints": [
     {
       "endpointClass": "opencode-native",
-      "hostSuffixes": ["opencode.ai"]
+      "hostSuffixes": [
+        "opencode.ai"
+      ]
     }
   ],
   "providerRequest": {
@@ -19,11 +24,170 @@
       }
     }
   },
+  "modelCatalog": {
+    "providers": {
+      "opencode": {
+        "baseUrl": "https://opencode.ai/zen/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "claude-opus-4-8",
+            "name": "Claude Opus 4.8",
+            "api": "anthropic-messages",
+            "provider": "opencode",
+            "baseUrl": "https://opencode.ai/zen",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 5,
+              "output": 25,
+              "cacheRead": 0.5,
+              "cacheWrite": 6.25
+            },
+            "contextWindow": 200000,
+            "maxTokens": 65536,
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gpt-5.5",
+            "name": "GPT-5.5",
+            "api": "openai-responses",
+            "provider": "opencode",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 5,
+              "output": 30,
+              "cacheRead": 0.5,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 5,
+                  "output": 30,
+                  "cacheRead": 0.5,
+                  "cacheWrite": 0,
+                  "range": [
+                    0,
+                    272000
+                  ]
+                },
+                {
+                  "input": 10,
+                  "output": 45,
+                  "cacheRead": 1,
+                  "cacheWrite": 0,
+                  "range": [
+                    272000
+                  ]
+                }
+              ]
+            },
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "gemini-3.1-pro",
+            "name": "Gemini 3.1 Pro",
+            "api": "google-generative-ai",
+            "provider": "opencode",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 2,
+              "output": 12,
+              "cacheRead": 0.2,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 2,
+                  "output": 12,
+                  "cacheRead": 0.2,
+                  "cacheWrite": 0,
+                  "range": [
+                    0,
+                    200000
+                  ]
+                },
+                {
+                  "input": 4,
+                  "output": 18,
+                  "cacheRead": 0.4,
+                  "cacheWrite": 0,
+                  "range": [
+                    200000
+                  ]
+                }
+              ]
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "minimax-m2.7",
+            "name": "MiniMax M2.7",
+            "api": "openai-completions",
+            "provider": "opencode",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.06,
+              "cacheWrite": 0.375
+            },
+            "contextWindow": 204800,
+            "maxTokens": 131072,
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "supportsDeveloperRole": false,
+              "supportsStrictMode": false
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "opencode": "runtime"
+    }
+  },
   "setup": {
     "providers": [
       {
         "id": "opencode",
-        "envVars": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+        "envVars": [
+          "OPENCODE_API_KEY",
+          "OPENCODE_ZEN_API_KEY"
+        ]
       }
     ]
   },
@@ -32,6 +196,7 @@
       "provider": "opencode",
       "method": "api-key",
       "choiceId": "opencode-zen",
+      "appGuidedSecret": true,
       "choiceLabel": "OpenCode Zen catalog",
       "groupId": "opencode",
       "groupLabel": "OpenCode",
@@ -43,11 +208,15 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["opencode"]
+    "mediaUnderstandingProviders": [
+      "opencode"
+    ]
   },
   "mediaUnderstandingProviderMetadata": {
     "opencode": {
-      "capabilities": ["image"],
+      "capabilities": [
+        "image"
+      ],
       "defaultModels": {
         "image": "gpt-5-nano"
       }
@@ -56,6 +225,23 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "sessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "sessionCatalog.enabled": {
+      "label": "OpenCode Session Catalog",
+      "help": "Auto-detect OpenCode sessions on the Gateway and paired nodes, then show them in the sessions sidebar."
+    }
   }
 }

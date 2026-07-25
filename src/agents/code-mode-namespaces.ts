@@ -11,12 +11,14 @@ const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";
 const CODE_MODE_NAMESPACE_TOOL_CALL = Symbol.for("openclaw.codeMode.namespaceToolCall");
 const RESERVED_NAMESPACE_GLOBALS = new Set([
   "ALL_TOOLS",
+  "agents",
   "API",
   "Array",
   "Boolean",
   "Date",
   "Error",
   "globalThis",
+  "log",
   "json",
   "JSON",
   "Map",
@@ -26,6 +28,7 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
   "Number",
   "Object",
   "Promise",
+  "phase",
   "Set",
   "String",
   "text",
@@ -35,7 +38,7 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
 const CODE_MODE_NAMESPACE_REGISTRY_KEY = Symbol.for("openclaw.codeMode.namespaces");
 
 /** Runtime context passed to plugin code-mode namespace scope factories. */
-export type CodeModeNamespaceContext = {
+type CodeModeNamespaceContext = {
   config?: unknown;
   runtimeConfig?: unknown;
   agentId?: string;
@@ -48,13 +51,13 @@ export type CodeModeNamespaceContext = {
 };
 
 /** Object installed into a code-mode namespace global. */
-export type CodeModeNamespaceScope = Record<string, unknown>;
+type CodeModeNamespaceScope = Record<string, unknown>;
 
 /** Maps JavaScript namespace function arguments into a tool input payload. */
-export type CodeModeNamespaceToolInputMapper = (args: unknown[]) => unknown;
+type CodeModeNamespaceToolInputMapper = (args: unknown[]) => unknown;
 
 /** Marker object used inside namespace scopes to represent a tool invocation. */
-export type CodeModeNamespaceToolCall = {
+type CodeModeNamespaceToolCall = {
   readonly [CODE_MODE_NAMESPACE_TOOL_CALL]: true;
   readonly toolName: string;
   readonly catalogId?: string;
@@ -63,7 +66,7 @@ export type CodeModeNamespaceToolCall = {
 };
 
 /** Plugin registration contract for one code-mode namespace. */
-export type CodeModeNamespaceRegistration = {
+type CodeModeNamespaceRegistration = {
   id: string;
   globalName: string;
   description?: string;
@@ -75,7 +78,7 @@ export type CodeModeNamespaceRegistration = {
 };
 
 /** Registration with the owning plugin id attached. */
-export type RegisteredCodeModeNamespace = CodeModeNamespaceRegistration & {
+type RegisteredCodeModeNamespace = CodeModeNamespaceRegistration & {
   pluginId: string;
 };
 
@@ -285,13 +288,20 @@ export function registerCodeModeNamespaceForPlugin(
 }
 
 /** Lists registered namespaces in deterministic id order. */
-export function listCodeModeNamespaces(): RegisteredCodeModeNamespace[] {
+function listCodeModeNamespaces(): RegisteredCodeModeNamespace[] {
   return [...registryState.registrations.values()].toSorted((a, b) => a.id.localeCompare(b.id));
 }
 
 /** Clears all namespace registrations for isolated tests. */
-export function clearCodeModeNamespacesForTest(): void {
+function clearCodeModeNamespacesForTest(): void {
   registryState.registrations.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codeModeNamespacesTestApi")] = {
+    clearCodeModeNamespacesForTest,
+    listCodeModeNamespaces,
+  };
 }
 
 /** Clears namespace registrations owned by one plugin. */
@@ -574,6 +584,7 @@ export type CodeModeApiVirtualFile = {
   path: string;
   description?: string;
   content: string;
+  bytes: number;
 };
 
 function buildMcpParamDocs(schema: unknown): McpApiParamDoc[] {
@@ -864,26 +875,66 @@ function createMcpNamespaceScope(
   return createMcpNamespaceModel(catalog)?.root;
 }
 
-/** Builds virtual API declaration files for visible MCP namespace tools. */
+const SWARM_AGENTS_API_CONTENT = `type AgentJsonSchema = Record<string, unknown>;
+
+interface AgentRunOptions {
+  label?: string;
+  model?: string;
+  thinking?: string;
+  fastMode?: boolean | "auto";
+  agentId?: string;
+  schema?: AgentJsonSchema;
+  phase?: string;
+}
+
+interface AgentsApi {
+  run(prompt: string, options?: AgentRunOptions & { schema?: undefined }): Promise<string>;
+  run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
+}
+
+/** Spawn collector agents concurrently. */
+declare const agents: Readonly<AgentsApi>;
+/** Publish a phase heading for this swarm. */
+declare function phase(title: string): void;
+/** Publish a progress note for this swarm. */
+declare function log(message: string): void;
+
+// Fan-out: const reports = await Promise.all(prompts.map((prompt) => agents.run(prompt)));
+// Gate: while (!ready) { ready = await agents.run("Check readiness") === "ready"; }
+// Cycle: for (let pass = 0; pass < 3; pass++) draft = await agents.run("Improve: " + draft);
+// Schema: const fact = await agents.run<{ answer: string }>("Research", { schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] } });
+`;
+
+/** Builds virtual API declaration files for visible guest and MCP namespace tools. */
 export function createCodeModeApiVirtualFiles(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): CodeModeApiVirtualFile[] {
-  const model = createMcpNamespaceModel(catalog);
-  if (!model) {
-    return [];
-  }
   const files: CodeModeApiVirtualFile[] = [
     {
-      path: "mcp/index.d.ts",
-      description: "Root MCP namespace declaration and server list.",
-      content: renderMcpRootFile(model.docs),
+      path: "agents.d.ts",
+      description: "Swarm collector globals and orchestration idioms.",
+      content: SWARM_AGENTS_API_CONTENT,
+      bytes: Buffer.byteLength(SWARM_AGENTS_API_CONTENT, "utf8"),
     },
   ];
+  const model = createMcpNamespaceModel(catalog);
+  if (!model) {
+    return files;
+  }
+  const rootContent = renderMcpRootFile(model.docs);
+  files.push({
+    path: "mcp/index.d.ts",
+    description: "Root MCP namespace declaration and server list.",
+    content: rootContent,
+    bytes: Buffer.byteLength(rootContent, "utf8"),
+  });
   for (const server of model.docs) {
+    const content = renderMcpServerHeader(server, server.tools);
     files.push({
       path: `mcp/${server.identifier}.d.ts`,
       description: `MCP server declaration for ${server.serverName}.`,
-      content: renderMcpServerHeader(server, server.tools),
+      content,
+      bytes: Buffer.byteLength(content, "utf8"),
     });
   }
   return files;
@@ -1120,3 +1171,4 @@ export async function createCodeModeNamespaceRuntime(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

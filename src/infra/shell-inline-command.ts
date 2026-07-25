@@ -3,7 +3,18 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 // Shell inline-command parsing recognizes POSIX, cmd, and PowerShell command
 // flags so approval surfaces can distinguish wrapper argv from executed text.
-export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
+export const POSIX_INLINE_COMMAND_FLAGS = new Set([
+  "-lc",
+  "-c",
+  "--command",
+  "--commands",
+  "--cmdline",
+]);
+export const NUSHELL_INLINE_COMMAND_FLAGS = new Set([
+  ...POSIX_INLINE_COMMAND_FLAGS,
+  "-e",
+  "--execute",
+]);
 
 function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
   const forms: string[] = [];
@@ -29,7 +40,7 @@ const POWERSHELL_COMMAND_FLAGS = [
 const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
 const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
 
-export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...POWERSHELL_COMMAND_FLAGS,
   ...POWERSHELL_FILE_FLAGS,
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
@@ -166,7 +177,7 @@ export function resolveInlineCommandMatch(
     valueOptions?: ReadonlySet<string>;
   } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -261,7 +272,7 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   flags: ReadonlySet<string>,
 ): boolean {
   let sawInteractiveMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -290,7 +301,7 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   flags: ReadonlySet<string>,
 ): boolean {
   let sawLoginMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;

@@ -22,6 +22,20 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
+    func `browser control enabled reads config flag`() async {
+        let override = self.makeConfigOverridePath()
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            #expect(OpenClawConfigFile.browserControlEnabled() == true)
+            OpenClawConfigFile.saveDict(["browser": ["enabled": false]])
+            #expect(OpenClawConfigFile.browserControlEnabled() == false)
+            OpenClawConfigFile.setBrowserControlEnabled(true)
+            #expect(OpenClawConfigFile.browserControlEnabled() == true)
+        }
+    }
+
+    @MainActor
+    @Test
     func `remote gateway port parses and matches host`() async {
         let override = self.makeConfigOverridePath()
 
@@ -268,11 +282,64 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
+    func `load dict ignores legacy config health sidecar`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+        let configHealthPath = stateDir.appendingPathComponent("logs/config-health.json")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try FileManager().createDirectory(
+            at: configHealthPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let legacyHealth = """
+        {
+          "entries": {
+            "\(configPath.path)": {
+              "lastKnownGood": {
+                "bytes": 4096,
+                "gatewayMode": "local",
+                "hasMeta": true
+              }
+            }
+          }
+        }
+        """
+        try legacyHealth.write(to: configHealthPath, atomically: true, encoding: .utf8)
+        let updateOnlyConfig = """
+        {
+          "update": {
+            "channel": "beta"
+          }
+        }
+        """
+        try updateOnlyConfig.write(to: configPath, atomically: true, encoding: .utf8)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            try OpenClawConfigFile.withTestingFileLock {
+                let loaded = OpenClawConfigFile.loadDict()
+                let update = loaded["update"] as? [String: Any]
+                #expect(update?["channel"] as? String == "beta")
+                #expect(!FileManager().fileExists(atPath: auditPath.path))
+                let persistedHealth = try String(contentsOf: configHealthPath, encoding: .utf8)
+                #expect(persistedHealth == legacyHealth)
+            }
+        }
+    }
+
+    @MainActor
+    @Test
     func `load dict audits suspicious out-of-band clobbers`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
         let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+        let configHealthPath = stateDir.appendingPathComponent("logs/config-health.json")
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -293,6 +360,7 @@ struct OpenClawConfigFileTests {
                     ],
                 ])
                 _ = OpenClawConfigFile.loadDict()
+                #expect(!FileManager().fileExists(atPath: configHealthPath.path))
 
                 let clobbered = """
                 {
@@ -305,6 +373,7 @@ struct OpenClawConfigFileTests {
 
                 let loaded = OpenClawConfigFile.loadDict()
                 #expect((loaded["gateway"] as? [String: Any]) == nil)
+                #expect(!FileManager().fileExists(atPath: configHealthPath.path))
 
                 let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
                 let lines = rawAudit

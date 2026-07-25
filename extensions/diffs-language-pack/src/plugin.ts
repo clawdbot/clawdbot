@@ -1,7 +1,9 @@
 // Diffs Language Pack plugin module implements plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "../api.js";
-import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
+import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
+
+const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 export function registerDiffsLanguagePackPlugin(api: OpenClawPluginApi): void {
   api.registerHttpRoute({
@@ -30,7 +32,11 @@ function createDiffsLanguagePackHttpHandler() {
     }
 
     res.statusCode = 200;
-    setSharedHeaders(res, asset.contentType);
+    setSharedHeaders(
+      res,
+      asset.contentType,
+      parsed.pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
+    );
     if (req.method === "HEAD") {
       res.end();
     } else {
@@ -57,8 +63,12 @@ function respondText(res: ServerResponse, statusCode: number, body: string): voi
   res.end(body);
 }
 
-function setSharedHeaders(res: ServerResponse, contentType: string): void {
-  res.setHeader("cache-control", "no-store, max-age=0");
+function setSharedHeaders(
+  res: ServerResponse,
+  contentType: string,
+  cacheControl = "no-store, max-age=0",
+): void {
+  res.setHeader("cache-control", cacheControl);
   res.setHeader("content-type", contentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");

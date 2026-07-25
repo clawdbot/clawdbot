@@ -188,7 +188,7 @@ function encodeKeyToken(
   }
 
   if (token.length === 2 && token.startsWith("^")) {
-    const ctrl = toCtrlChar(token[1]);
+    const ctrl = toCtrlChar(token.charAt(1));
     if (ctrl) {
       return ctrl;
     }

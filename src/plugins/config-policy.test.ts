@@ -1,11 +1,6 @@
 // Covers plugin config policy validation and ownership decisions.
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  hasExplicitPluginConfig,
-  isBundledChannelEnabledByChannelConfig,
-  normalizePluginsConfigWithResolver,
-} from "./config-policy.js";
+import { hasExplicitPluginConfig, normalizePluginsConfigWithResolver } from "./config-policy.js";
 
 describe("normalizePluginsConfigWithResolver", () => {
   it("uses the provided plugin id resolver for allow deny and entry keys", () => {
@@ -33,20 +28,5 @@ describe("hasExplicitPluginConfig", () => {
     expect(hasExplicitPluginConfig({ slots: { memory: "none" } })).toBe(true);
     expect(hasExplicitPluginConfig({ entries: { foo: {} } })).toBe(true);
     expect(hasExplicitPluginConfig({})).toBe(false);
-  });
-});
-
-describe("isBundledChannelEnabledByChannelConfig", () => {
-  it("only treats enabled channel entries as bundled plugin enablement", () => {
-    const cfg = {
-      channels: {
-        telegram: { enabled: true },
-        slack: { enabled: false },
-      },
-    } as OpenClawConfig;
-
-    expect(isBundledChannelEnabledByChannelConfig(cfg, "telegram")).toBe(true);
-    expect(isBundledChannelEnabledByChannelConfig(cfg, "slack")).toBe(false);
-    expect(isBundledChannelEnabledByChannelConfig(cfg, "not-a-channel")).toBe(false);
   });
 });

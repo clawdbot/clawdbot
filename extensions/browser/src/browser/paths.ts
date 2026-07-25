@@ -12,13 +12,7 @@ import {
   resolveStrictExistingPathsWithinRoot,
 } from "../sdk-security-runtime.js";
 import { CONFIG_DIR } from "../utils.js";
-export {
-  pathScope,
-  resolvePathsWithinRoot,
-  resolvePathWithinRoot,
-  resolveWritablePathWithinRoot,
-} from "../sdk-security-runtime.js";
-export { resolveExistingPathsWithinRoot, resolveStrictExistingPathsWithinRoot };
+export { resolveExistingPathsWithinRoot };
 
 const DEFAULT_FALLBACK_BROWSER_TMP_DIR = "/tmp/openclaw";
 
@@ -48,7 +42,7 @@ export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "download
 /** Default root directory for browser upload inputs. */
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
 /** Default root directory for managed inbound media references. */
-export const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
+const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
 
 type ExistingPathsResult = Awaited<ReturnType<typeof resolveExistingPathsWithinRoot>>;
 type StrictExistingPathsResult = Awaited<ReturnType<typeof resolveStrictExistingPathsWithinRoot>>;

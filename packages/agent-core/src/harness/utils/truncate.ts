@@ -111,7 +111,7 @@ function replaceUnpairedSurrogates(content: string): string {
       if (i + 1 < content.length) {
         const next = content.charCodeAt(i + 1);
         if (next >= 0xdc00 && next <= 0xdfff) {
-          output += content[i] + content[i + 1];
+          output += content.charAt(i) + content.charAt(i + 1);
           i++;
           continue;
         }
@@ -120,7 +120,7 @@ function replaceUnpairedSurrogates(content: string): string {
     } else if (code >= 0xdc00 && code <= 0xdfff) {
       output += "�";
     } else {
-      output += content[i];
+      output += content.charAt(i);
     }
   }
   return output;
@@ -201,8 +201,8 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     });
   }
 
-  const firstLineBytes = utf8ByteLength(input.lines[0]);
-  if (firstLineBytes > input.maxBytes) {
+  const firstLine = input.lines[0];
+  if (firstLine !== undefined && utf8ByteLength(firstLine) > input.maxBytes) {
     return buildTruncationResult(input, {
       content: "",
       truncated: true,
@@ -217,8 +217,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   let outputBytesCount = 0;
   let truncatedBy: "lines" | "bytes" = input.totalLines > input.maxLines ? "lines" : "bytes";
 
-  for (let i = 0; i < input.lines.length && i < input.maxLines; i++) {
-    const line = input.lines[i];
+  for (const [i, line] of input.lines.slice(0, input.maxLines).entries()) {
     const lineBytes = utf8ByteLength(line) + (i > 0 ? 1 : 0); // +1 for newline
 
     if (outputBytesCount + lineBytes > input.maxBytes) {
@@ -273,7 +272,10 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   let lastLinePartial = false;
 
   for (let i = input.lines.length - 1; i >= 0 && outputLinesArr.length < input.maxLines; i--) {
-    const line = input.lines[i];
+    const line = input.lines.at(i);
+    if (line === undefined) {
+      continue;
+    }
     const lineBytes = utf8ByteLength(line) + (outputLinesArr.length > 0 ? 1 : 0); // +1 for newline
 
     if (outputBytesCount + lineBytes > input.maxBytes) {
@@ -324,7 +326,7 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
   let outputBytes = 0;
   let start = str.length;
   let needsReplacement = false;
-  for (let i = str.length; i > 0; ) {
+  for (let i = str.length; i > 0;) {
     let characterStart = i - 1;
     const code = str.charCodeAt(characterStart);
     let characterBytes: number;
@@ -359,6 +361,10 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
 /**
  * Trim a single display line and mark it with the grep-style truncation suffix.
+ *
+ * The cut point is backed off by one code unit when it would otherwise split a
+ * surrogate pair, so emoji / CJK Extension B characters crossing the boundary
+ * stay intact instead of rendering as replacement characters.
  */
 export function truncateLine(
   line: string,
@@ -367,5 +373,16 @@ export function truncateLine(
   if (line.length <= maxChars) {
     return { text: line, wasTruncated: false };
   }
-  return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
+  let cut = maxChars;
+  // Avoid splitting a surrogate pair at the truncation boundary.
+  if (cut < line.length) {
+    const lastCode = line.charCodeAt(cut - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      const nextCode = line.charCodeAt(cut);
+      if (nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+        cut -= 1;
+      }
+    }
+  }
+  return { text: `${line.slice(0, cut)}... [truncated]`, wasTruncated: true };
 }

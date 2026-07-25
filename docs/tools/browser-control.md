@@ -20,19 +20,24 @@ and restart the gateway before the HTTP endpoints become available. Without
 this variable the browser control runtime still works through the CLI and
 agent tools, but nothing listens on the loopback control port.
 
-- Status/start/stop: `GET /`, `POST /start`, `POST /stop`
-- Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
+- Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
+- Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
+- Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
 - Snapshot/screenshot: `GET /snapshot`, `POST /screenshot`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
 - Permissions: `POST /permissions/grant`
 - Debugging: `GET /console`, `POST /pdf`
-- Debugging: `GET /errors`, `GET /requests`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
+- Debugging: `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
 - State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`
 - State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
+
+`POST /tabs/action` is the batched form the CLI uses internally for
+`browser tab` subcommands (`{"action":"new"|"label"|"select"|"close"|"list", ...}`);
+prefer the single-purpose tab routes above when scripting directly.
 
 All endpoints accept `?profile=<name>`. `POST /start?headless=true` requests a
 one-shot headless launch for local managed profiles without changing persisted
@@ -146,17 +151,33 @@ All commands accept `--browser-profile <name>` to target a specific profile, and
 
 ```bash
 openclaw browser status
+openclaw browser doctor
+openclaw browser doctor --deep    # add a live snapshot probe
 openclaw browser start
 openclaw browser start --headless # one-shot local managed headless launch
 openclaw browser stop            # also clears emulation on attach-only/remote CDP
+openclaw browser reset-profile   # moves the profile's browser data to Trash
 openclaw browser tabs
 openclaw browser tab             # shortcut for current tab
 openclaw browser tab new
+openclaw browser tab new --label research
+openclaw browser tab label abcd1234 research
 openclaw browser tab select 2
 openclaw browser tab close 2
 openclaw browser open https://example.com
 openclaw browser focus abcd1234
 openclaw browser close abcd1234
+```
+
+</Accordion>
+
+<Accordion title="Profiles: list, create, delete">
+
+```bash
+openclaw browser profiles
+openclaw browser create-profile --name research --color "#0066CC"
+openclaw browser create-profile --name attach --driver existing-session --cdp-url http://127.0.0.1:9222
+openclaw browser delete-profile --name research
 ```
 
 </Accordion>
@@ -176,6 +197,7 @@ openclaw browser snapshot --labels
 openclaw browser snapshot --urls
 openclaw browser snapshot --selector "#main" --interactive
 openclaw browser snapshot --frame "iframe#main" --interactive
+openclaw browser snapshot --out snapshot.txt
 openclaw browser console --level error
 openclaw browser errors --clear
 openclaw browser requests --filter api --clear
@@ -201,6 +223,7 @@ openclaw browser select 9 OptionA OptionB
 openclaw browser download e12 report.pdf
 openclaw browser waitfordownload report.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf
+openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref e12
 openclaw browser upload media://inbound/file.pdf
 openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
 openclaw browser dialog --accept
@@ -242,7 +265,12 @@ openclaw browser set device "iPhone 14"
 
 Notes:
 
-- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
+- The agent-facing `browser` tool exposes `action=download` (required `ref` and
+  `path`) and `action=waitfordownload` (optional `path`). Both return the saved
+  download URL, suggested filename, and guarded local path. Explicit download
+  interception is available for managed Playwright profiles; existing-session
+  profiles return an unsupported-operation error.
+- Prefer atomic chooser uploads: pass the trigger `--ref` with the upload so OpenClaw arms and clicks in one request. Paths-only `upload` remains supported when a later trigger is intentional. Use `--input-ref` or `--element` to set a file input directly. `dialog` is an arming call; run it before the click/press that triggers the dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` accepts files from the OpenClaw temp uploads root and
@@ -253,9 +281,10 @@ Notes:
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
 Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
-can prove the replacement tab, such as same URL or a single old tab becoming a
-single new tab after form submission. Raw target ids are still volatile; prefer
-`suggestedTargetId` from `tabs` in scripts.
+can prove the replacement tab, such as a unique old/new pair for the same URL or
+a single old tab becoming a single new tab after form submission. Ambiguous
+duplicate-URL replacements receive fresh handles. Raw target ids are still
+volatile; prefer `suggestedTargetId` from `tabs` in scripts.
 
 Snapshot flags at a glance:
 
@@ -314,6 +343,41 @@ Ref behavior:
   Playwright's `aria-ref` selector. Run a fresh snapshot on the same tab when
   that happens.
 
+## Browser batch CLI
+
+`openclaw browser batch` runs an array of nested `/act` actions in one `/act`
+call (the same `kind="batch"` runtime reached through the agent tool), so CLI
+users and scripts can combine actions like `wait`, `click`, `type`, and
+`evaluate` into a single replayable plan without per-action round trips. Each
+entry in `actions[]` is a `BrowserActRequest` — the closed union the `/act`
+route accepts (`click`, `clickCoords`, `type`, `press`, `hover`,
+`scrollIntoView`, `drag`, `select`, `fill`, `resize`, `wait`, `evaluate`,
+`close`, `batch`) — not arbitrary `openclaw browser` subcommands. `batch` is
+not supported on `profile="user"` and other existing-session (chrome-mcp)
+profiles; send actions individually there.
+
+- CLI: `openclaw browser batch --actions '<json>'`, `openclaw browser batch
+--actions-file plan.json`, or `openclaw browser batch --actions-file -` to
+  read the JSON array from stdin. `--continue` sets `stopOnError=false`; the
+  default is to stop on first error. `--target-id` scopes the whole batch to
+  one tab.
+- Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is
+  not a nested action). A nested action that changes page state — such as a
+  `click` that triggers navigation, or an `evaluate` that mutates the DOM — can
+  invalidate earlier refs for the rest of the batch. Put state-changing actions
+  first, or split into a follow-up batch after re-snapshotting. Navigation and
+  re-snapshotting happen outside the batch (`openclaw browser navigate` /
+  `snapshot`), since `open`, `navigate`, and `snapshot` are not `/act` kinds.
+- Target id conflicts: a nested action may omit `targetId` or repeat the
+  request-level `targetId`; an explicit nested `targetId` that resolves to a
+  different tab is rejected with `ACT_TARGET_ID_MISMATCH` before any action
+  runs. Batched actions share the request's tab by design.
+- Error summary: the response is `{ "results": [{ "ok": true }, { "ok": false,
+"error": "<message>" }, ...] }`, one entry per action in order. When
+  `stopOnError` is the default, the array ends at the first failure; with
+  `--continue` it covers every action. Any failed entry makes the CLI exit
+  nonzero; pass `--json` to preserve the full ordered response for scripts.
+
 ## Wait power-ups
 
 You can wait on more than just time/text:
@@ -322,7 +386,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
-  - Supported on managed `openclaw` and raw/remote CDP profiles. The `user` and `existing-session` profiles reject `networkidle`; use `--url`, `--text`, a selector, or `--fn` waits there.
+  - Supported on managed `openclaw` and raw/remote CDP profiles. Profiles using the `existing-session` driver (including the default `user` profile) reject `networkidle`; use `--url`, `--text`, a selector, or `--fn` waits there.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
@@ -360,10 +424,10 @@ When an action fails (e.g. "not visible", "strict mode violation", "covered"):
 Examples:
 
 ```bash
-openclaw browser status --json
-openclaw browser snapshot --interactive --json
-openclaw browser requests --filter api --json
-openclaw browser cookies --json
+openclaw browser --json status
+openclaw browser --json snapshot --interactive
+openclaw browser --json requests --filter api
+openclaw browser --json cookies
 ```
 
 Role snapshots in JSON include `refs` plus a small `stats` block (lines/chars/refs/interactive) so tools can reason about payload size and density.
@@ -375,7 +439,7 @@ These are useful for "make the site behave like X" workflows:
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
 - Offline: `set offline on|off`
-- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (legacy `set headers --json '{"X-Debug":"1"}'` remains supported)
+- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (or the positional form `set headers '{"X-Debug":"1"}'`)
 - HTTP basic auth: `set credentials user pass` (or `--clear`)
 - Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
 - Media: `set media dark|light|no-preference|none`

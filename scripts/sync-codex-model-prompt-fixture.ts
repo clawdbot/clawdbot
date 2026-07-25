@@ -109,7 +109,7 @@ export function renderCodexModelInstructions(params: {
   throw new Error(`Codex model ${params.model.slug} has no renderable instructions.`);
 }
 
-export async function createCodexModelPromptFixture(params: {
+async function createCodexModelPromptFixture(params: {
   catalogPath: string;
   catalogLabel?: string;
   model: string;
@@ -265,7 +265,7 @@ export async function runCodexModelPromptFixtureSync(
     );
     return { status: "skipped" as const, candidates: defaultCatalog?.candidates ?? [] };
   }
-  const model = parseArgValue(argv, "--model") ?? "gpt-5.5";
+  const model = parseArgValue(argv, "--model") ?? "gpt-5.6-sol";
   const personality = parsePersonality(parseArgValue(argv, "--personality"));
   const catalogGitHead = parseArgValue(argv, "--catalog-git-head");
   const catalogLabel = parseArgValue(argv, "--source-label");

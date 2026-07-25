@@ -15,7 +15,7 @@ export function createGoogleProvider(): ProviderPlugin {
         id: "api-key",
         kind: "api_key",
         label: "Google Gemini API key",
-        hint: "AI Studio / Gemini API key",
+        hint: "Free API key from aistudio.google.com/apikey",
         run: noopAuth,
         wizard: {
           choiceId: "gemini-api-key",
@@ -70,7 +70,7 @@ export function createGoogleGeminiCliProvider(): ProviderPlugin {
       setup: {
         choiceId: "google-gemini-cli",
         choiceLabel: "Gemini CLI OAuth",
-        choiceHint: "Google OAuth with project-aware token payload",
+        choiceHint: "Sign in with your Google account (opens a browser)",
         methodId: "oauth",
       },
     },

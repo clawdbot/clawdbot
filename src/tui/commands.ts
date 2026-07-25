@@ -2,7 +2,11 @@
 import type { SlashCommand } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
-import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
+import {
+  listChatCommands,
+  listChatCommandsForConfig,
+  resolveTextCommand,
+} from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
 
@@ -14,24 +18,30 @@ const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full", "reset", "inherit", "clear", "default"];
 
-export type ParsedCommand = {
+type ParsedCommand = {
   name: string;
   args: string;
 };
 
-export type SlashCommandOptions = {
+type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   thinkingLevels?: Array<{ id: string; label: string }>;
   local?: boolean;
   dynamicCommands?: CommandEntry[];
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
-  elev: "elevated",
+  crestodian: "openclaw", // hidden alias
   gwstatus: "gateway-status",
 };
+
+// These shared commands have explicit local TUI routing but no same-named
+// built-in autocomplete entry. Other shared commands require the Gateway and
+// must stay out of local autocomplete and model prompts.
+const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "queue", "stop"]);
 
 function createLevelCompletion(
   levels: string[],
@@ -64,6 +74,13 @@ function appendSlashCommand(
 }
 
 export function parseCommand(input: string): ParsedCommand {
+  const sharedCommand = resolveTextCommand(input);
+  if (sharedCommand) {
+    return {
+      name: sharedCommand.command.key,
+      args: sharedCommand.args ?? "",
+    };
+  }
   const trimmed = input.replace(/^\//, "").trim();
   if (!trimmed) {
     return { name: "", args: "" };
@@ -76,10 +93,15 @@ export function parseCommand(input: string): ParsedCommand {
   };
 }
 
+/** Whether a slash input belongs to the shared Gateway command registry. */
+export function isSharedTextCommand(input: string): boolean {
+  return resolveTextCommand(input) !== null;
+}
+
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
   const thinkLevels = options.thinkingLevels?.length
     ? options.thinkingLevels.map((level) => level.label)
-    : listThinkingLevelLabels(options.provider, options.model);
+    : listThinkingLevelLabels(options.provider, options.model, undefined, options.agentRuntime);
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
   const traceCompletions = createLevelCompletion(TRACE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);
@@ -94,7 +116,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
-    { name: "crestodian", description: "Return to Crestodian" },
+    { name: "openclaw", description: "Return to OpenClaw" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -161,6 +183,13 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const seen = new Set(commands.map((command) => command.name));
   const gatewayCommands = options.cfg ? listChatCommandsForConfig(options.cfg) : listChatCommands();
   for (const command of gatewayCommands) {
+    if (
+      options.local &&
+      !seen.has(command.key) &&
+      !LOCAL_TUI_ROUTED_SHARED_COMMANDS.has(command.key)
+    ) {
+      continue;
+    }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
       appendSlashCommand(commands, seen, alias, command.description);
@@ -177,18 +206,45 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   return commands;
 }
 
+export function shouldSubmitExactArgumentCompletion(
+  input: string,
+  commands: SlashCommand[],
+): boolean {
+  const match = /^\/([^\s]+)\s+(.+)$/u.exec(input);
+  if (!match) {
+    return false;
+  }
+  const [, commandName, argumentText] = match;
+  if (argumentText === undefined) {
+    return false;
+  }
+  const command = commands.find((candidate) => candidate.name === commandName);
+  if (!command?.getArgumentCompletions) {
+    return false;
+  }
+  const completions = command.getArgumentCompletions(argumentText);
+  return (
+    Array.isArray(completions) && completions.length === 1 && completions[0]?.value === argumentText
+  );
+}
+
 export function helpText(options: SlashCommandOptions = {}): string {
-  const thinkLevels = formatThinkingLevels(options.provider, options.model, "|");
+  const thinkLevels = formatThinkingLevels(
+    options.provider,
+    options.model,
+    "|",
+    undefined,
+    options.agentRuntime,
+  );
   return [
     "Slash commands:",
     "/help",
-    "/commands",
-    "/status",
+    ...(options.local ? [] : ["/commands", "/status"]),
     "/gateway-status",
     "/gwstatus",
     ...(options.local ? ["/auth [provider]"] : []),
     "/agent <id> (or /agents)",
-    "/crestodian [request]",
+    "/openclaw [request]",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,

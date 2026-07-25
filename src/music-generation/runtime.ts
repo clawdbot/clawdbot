@@ -27,14 +27,12 @@ import type { MusicGenerationResult } from "./types.js";
 const log = createSubsystemLogger("music-generation");
 
 /** Injectable dependencies used by tests and alternate runtime hosts. */
-export type MusicGenerationRuntimeDeps = {
+type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
   log?: Pick<typeof log, "debug">;
 };
-
-export type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 
 /** List runtime-visible music generation providers for a config snapshot. */
 export function listRuntimeMusicGenerationProviders(
@@ -54,10 +52,10 @@ export async function generateMusic(
   const logger = deps.log ?? log;
   const timeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.musicGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.music);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.music,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
     agentDir: params.agentDir,
@@ -68,7 +66,7 @@ export async function generateMusic(
     throw new Error(
       buildNoCapabilityModelConfiguredMessage({
         capabilityLabel: "music-generation",
-        modelConfigKey: "musicGenerationModel",
+        modelConfigKey: "mediaModels.music",
         providers: listProviders(params.cfg),
         fallbackSampleRef: "google/lyria-3-clip-preview",
         getProviderEnvVars: deps.getProviderEnvVars,

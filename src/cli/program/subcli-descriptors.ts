@@ -7,31 +7,36 @@ import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 export type SubCliDescriptor = NamedCommandDescriptor;
 
 const subCliCommandCatalog = defineCommandDescriptorCatalog([
-  { name: "acp", description: "Run and manage ACP-backed coding agents", hasSubcommands: true },
+  { name: "acp", description: "Run an ACP bridge backed by the Gateway", hasSubcommands: true },
   {
     name: "gateway",
-    description: "Run, inspect, and query the OpenClaw Gateway",
+    description: "Run, inspect, and query the WebSocket Gateway",
     hasSubcommands: true,
   },
   {
     name: "daemon",
-    description: "Manage the Gateway service (legacy alias)",
+    description: "Manage the Gateway service (launchd/systemd/schtasks)",
     hasSubcommands: true,
   },
-  { name: "logs", description: "Tail Gateway logs locally or via RPC", hasSubcommands: false },
+  { name: "logs", description: "Tail gateway file logs via RPC", hasSubcommands: false },
   {
     name: "system",
-    description: "System events, heartbeat, and presence",
+    description: "System tools (events, heartbeat, presence)",
     hasSubcommands: true,
   },
   {
     name: "models",
-    description: "List, scan, and set model providers",
+    description: "Model discovery, scanning, and configuration",
+    hasSubcommands: true,
+  },
+  {
+    name: "promos",
+    description: "Discover and claim promotional model offers from ClawHub",
     hasSubcommands: true,
   },
   {
     name: "infer",
-    description: "Run provider-backed model, media, search, and embedding commands",
+    description: "Run provider-backed inference commands through a stable CLI surface",
     hasSubcommands: true,
   },
   {
@@ -41,9 +46,14 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "approvals",
-    description: "Manage exec approvals (gateway or node host)",
+    description: "Manage approval policy and pending requests",
     hasSubcommands: true,
     parentDefaultHelp: true,
+  },
+  {
+    name: "exec-approvals",
+    description: "Manage exec approvals (alias for approvals)",
+    hasSubcommands: true,
   },
   {
     name: "exec-policy",
@@ -52,12 +62,18 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "nodes",
-    description: "Pair nodes and run node-host commands through the Gateway",
+    description: "Manage gateway-owned nodes (pairing, status, invoke, and media)",
     hasSubcommands: true,
   },
   {
     name: "devices",
-    description: "Device pairing + token management",
+    description: "Device pairing and auth tokens",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
+    name: "users",
+    description: "Manage durable user profiles and email aliases",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -67,9 +83,30 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "worker",
+    description: "Run the restricted cloud worker runtime",
+    hasSubcommands: false,
+  },
+  {
     name: "sandbox",
-    description: "Manage sandbox containers for agent isolation",
+    description: "Manage sandbox containers (Docker-based agent isolation)",
     hasSubcommands: true,
+  },
+  {
+    name: "fleet",
+    description: "Provision and manage isolated tenant cells (experimental)",
+    hasSubcommands: true,
+  },
+  {
+    name: "worktrees",
+    description: "Create, inspect, restore, and clean up managed worktrees",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
+    name: "attach",
+    description: "Attach Claude Code to a gateway session with scoped MCP tools",
+    hasSubcommands: false,
   },
   {
     name: "tui",
@@ -88,7 +125,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "cron",
-    description: "Schedule and inspect Gateway background jobs",
+    description: "Manage cron jobs (via Gateway)",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -124,7 +161,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "qr",
-    description: "Generate mobile pairing QR/setup code",
+    description: "Generate a mobile pairing QR code and setup code",
     hasSubcommands: false,
   },
   {
@@ -139,13 +176,13 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "plugins",
-    description: "Install, enable, disable, and inspect plugins",
+    description: "Manage OpenClaw plugins and extensions",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
   {
     name: "channels",
-    description: "Add, remove, login, and inspect messaging channels",
+    description: "Manage connected chat channels and accounts",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -156,17 +193,17 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "security",
-    description: "Security tools and local config audits",
+    description: "Audit local config and state for common security foot-guns",
     hasSubcommands: true,
   },
   {
     name: "secrets",
-    description: "Audit, apply, and reload SecretRef-backed credentials",
+    description: "Secrets runtime controls",
     hasSubcommands: true,
   },
   {
     name: "skills",
-    description: "List, inspect, and install agent skills",
+    description: "List and inspect available skills",
     hasSubcommands: true,
   },
   {

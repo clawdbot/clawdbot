@@ -25,6 +25,7 @@ export function createBaseToolHandlerState() {
     pendingToolTrustedLocalMedia: false,
     deterministicApprovalPromptPending: false,
     toolExecutionSinceLastBlockReply: false,
+    assistantMessageIndex: 0,
     messagingToolSentTexts: [] as string[],
     messagingToolSentTextsNormalized: [] as string[],
     messagingToolSentMediaUrls: [] as string[],

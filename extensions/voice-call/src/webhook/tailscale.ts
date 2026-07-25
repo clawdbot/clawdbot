@@ -1,5 +1,5 @@
 // Voice Call plugin module implements tailscale behavior.
-import { spawn } from "node:child_process";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import type { VoiceCallConfig } from "../config.js";
 
 type TailscaleSelfInfo = {
@@ -7,71 +7,27 @@ type TailscaleSelfInfo = {
   nodeId: string | null;
 };
 
-export const TAILSCALE_COMMAND_STDOUT_MAX_BYTES = 4 * 1024 * 1024;
+const TAILSCALE_COMMAND_STDOUT_MAX_BYTES = 4 * 1024 * 1024;
 
-type TailscaleCommandStdout = {
-  bytes: number;
-  exceeded: boolean;
-  text: string;
-};
-
-export function appendTailscaleCommandStdout(
-  current: TailscaleCommandStdout,
-  data: Buffer | string,
-  maxBytes = TAILSCALE_COMMAND_STDOUT_MAX_BYTES,
-): TailscaleCommandStdout {
-  if (current.exceeded) {
-    return current;
-  }
-  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  const bytes = current.bytes + buffer.byteLength;
-  if (bytes > maxBytes) {
-    return { bytes, exceeded: true, text: "" };
-  }
-  return { bytes, exceeded: false, text: `${current.text}${buffer.toString("utf8")}` };
-}
-
-function runTailscaleCommand(
+async function runTailscaleCommand(
   args: string[],
   timeoutMs = 2500,
 ): Promise<{ code: number; stdout: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn("tailscale", args, {
-      stdio: ["ignore", "pipe", "ignore"],
+  try {
+    const result = await runCommandWithTimeout(["tailscale", ...args], {
+      killProcessTree: true,
+      maxOutputBytes: { stdout: TAILSCALE_COMMAND_STDOUT_MAX_BYTES, stderr: 1 },
+      outputCapture: "head",
+      terminateOnOutputLimit: { stdout: true },
+      timeoutMs,
     });
-
-    let stdout: TailscaleCommandStdout = { bytes: 0, exceeded: false, text: "" };
-    let settled = false;
-    const finish = (result: { code: number; stdout: string }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-
-    proc.stdout.on("data", (data) => {
-      stdout = appendTailscaleCommandStdout(stdout, data);
-      if (stdout.exceeded) {
-        proc.kill("SIGKILL");
-        finish({ code: -1, stdout: "" });
-      }
-    });
-
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finish({ code: -1, stdout: "" });
-    }, timeoutMs);
-
-    proc.on("error", () => {
-      finish({ code: -1, stdout: "" });
-    });
-
-    proc.on("close", (code) => {
-      finish({ code: code ?? -1, stdout: stdout.text });
-    });
-  });
+    if (result.termination !== "exit" || result.outputLimitExceeded) {
+      return { code: -1, stdout: "" };
+    }
+    return { code: result.code ?? -1, stdout: result.stdout };
+  } catch {
+    return { code: -1, stdout: "" };
+  }
 }
 
 export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {

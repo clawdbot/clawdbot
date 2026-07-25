@@ -13,7 +13,7 @@ import {
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 
-export type TelegramSendChatActionLogger = (message: string) => void;
+type TelegramSendChatActionLogger = (message: string) => void;
 
 type ChatAction =
   | "typing"
@@ -50,7 +50,7 @@ export type TelegramSendChatActionHandler = {
   reset: () => void;
 };
 
-export type CreateTelegramSendChatActionHandlerParams = {
+type CreateTelegramSendChatActionHandlerParams = {
   sendChatActionFn: SendChatActionFn;
   logger: TelegramSendChatActionLogger;
   maxConsecutive401?: number;
@@ -100,7 +100,7 @@ function isTransientSendChatActionError(error: unknown): boolean {
   return (
     isTelegramRateLimitError(error) ||
     isTelegramServerError(error) ||
-    isRecoverableTelegramNetworkError(error, { context: "send" })
+    isRecoverableTelegramNetworkError(error, { context: "action" })
   );
 }
 

@@ -6,7 +6,10 @@ import officialExternalChannelCatalog from "./lib/official-external-channel-cata
 import { isRecord, trimString } from "./lib/record-shared.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
-/** Generated official channel catalog path in dist. */
+/**
+ * Generated official channel catalog path in dist.
+ * @internal Directly tested script implementation detail.
+ */
 export const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json";
 
 function toCatalogInstall(value, packageName) {
@@ -65,6 +68,7 @@ function getCatalogChannelId(entry) {
 
 /**
  * Collects publishable channel catalog entries from bundled and external channels.
+ * @internal Directly tested script implementation detail.
  */
 export function buildOfficialChannelCatalog(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();

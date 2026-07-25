@@ -11,6 +11,55 @@ vi.mock("../../channels/plugins/index.js", () => ({
 const baseConfig = {} as OpenClawConfig;
 
 describe("resolveFollowupDeliveryPayloads", () => {
+  it("drops payloads without visible content", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: " \t\n " }, { text: "", mediaUrls: [" "] }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps rich content when text is blank", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: " ", mediaUrl: "file:///tmp/reply.png" }],
+      }),
+    ).toMatchObject([{ text: " ", mediaUrl: "file:///tmp/reply.png" }]);
+  });
+
+  it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
+      }),
+    ).toEqual([{ text: "final answer" }]);
+  });
+
+  it("keeps a durable reasoning payload when reasoningPayloadsEnabled is true", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
+        reasoningPayloadsEnabled: true,
+      }),
+    ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
+  });
+
+  it("drops commentary unless its delivery lane is enabled", () => {
+    const payload = { text: "internal commentary", isCommentary: true };
+    expect(resolveFollowupDeliveryPayloads({ cfg: baseConfig, payloads: [payload] })).toEqual([]);
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [payload],
+        commentaryPayloadsEnabled: true,
+      }),
+    ).toMatchObject([payload]);
+  });
+
   it("drops heartbeat ack payloads without media", () => {
     expect(
       resolveFollowupDeliveryPayloads({
@@ -202,7 +251,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toStrictEqual([]);
   });
 
-  it("falls back to global text dedupe for legacy multi-target messaging telemetry", () => {
+  it("does not apply ambiguous global text evidence across multiple routes", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
@@ -215,7 +264,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
           { tool: "discord", provider: "discord", to: "channel:C2" },
         ],
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual([{ text: "hello world!" }]);
   });
 
   it("dedupes final media only against message-tool media sent to the same route", () => {
@@ -244,7 +293,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/discord-photo.jpg" }]);
   });
 
-  it("falls back to global media dedupe for legacy multi-target messaging telemetry", () => {
+  it("does not apply ambiguous global media evidence across multiple routes", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
@@ -257,7 +306,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
           { tool: "discord", provider: "discord", to: "channel:C2" },
         ],
       }),
-    ).toEqual([{ text: "photo", mediaUrl: undefined, mediaUrls: undefined }]);
+    ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }]);
   });
 
   it("delivers distinct replies when a messaging tool already sent to the same provider and target", () => {

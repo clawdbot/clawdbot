@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/zai-provider",
-  "version": "2026.6.10",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/zai-provider",
-      "version": "2026.6.10"
+      "version": "2026.7.2"
     }
   }
 }

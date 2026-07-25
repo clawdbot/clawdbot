@@ -1,7 +1,8 @@
 // Session utility performance tests protect resolver cache scaling for large
 // session lists with repeated provider/model tuples.
 import path from "node:path";
-import { describe, test, expect, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeAll, describe, test, expect, vi } from "vitest";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -24,6 +25,49 @@ import { listSessionsFromStore } from "./session-utils.js";
  * are the actual scaling failure mode we care about.
  */
 describe("listSessionsFromStore resolver cache", () => {
+  beforeAll(async () => {
+    await withStateDirEnv("openclaw-perf-warm-", async ({ stateDir }) => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const cfg = {
+        agents: { defaults: { model: { primary: "google-vertex/gemini-3-flash-preview" } } },
+      } as OpenClawConfig;
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      listSessionsFromStore({
+        cfg,
+        storePath: path.join(stateDir, "sessions.json"),
+        store: {
+          google: {
+            sessionId: "google",
+            updatedAt: 1,
+            modelProvider: "google-vertex",
+            model: "gemini-3-flash-preview",
+          },
+          openai: {
+            sessionId: "openai",
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-5",
+          },
+          anthropic: {
+            sessionId: "anthropic",
+            updatedAt: 1,
+            modelProvider: "anthropic",
+            model: "claude-opus-4-7",
+          },
+          openrouter: {
+            sessionId: "openrouter",
+            updatedAt: 1,
+            modelProvider: "openrouter",
+            model: "z-ai/glm-5",
+          },
+        },
+        opts: {},
+      });
+    });
+  });
+
   test("collapses non-lightweight per-row resolver work to O(unique provider/model tuples)", async () => {
     await withStateDirEnv("openclaw-perf-", async ({ stateDir }) => {
       resetPluginRuntimeStateForTest();
@@ -48,7 +92,10 @@ describe("listSessionsFromStore resolver cache", () => {
       const now = Date.now();
       const rowCount = 30;
       for (let i = 0; i < rowCount; i++) {
-        const tuple = tuples[i % tuples.length];
+        const tuple = expectDefined(
+          tuples[i % tuples.length],
+          "tuples[i % tuples.length] test invariant",
+        );
         store[`agent:default:webchat:dm:${i}`] = {
           updatedAt: now - i,
           modelProvider: tuple.modelProvider,

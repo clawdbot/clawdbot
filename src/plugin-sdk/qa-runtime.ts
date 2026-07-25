@@ -1,13 +1,15 @@
-// QA runtime helpers register and execute plugin QA scenarios from local files.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+// QA runtime helpers register and execute plugin QA scenarios from local files.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Command } from "commander";
 import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
+import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
@@ -89,10 +91,7 @@ type LiveTransportQaCommanderOptions = {
 };
 
 /** Commander registration hook for one live-transport QA subcommand. */
-export type LiveTransportQaCliRegistration = {
-  commandName: string;
-  register(qa: Command): void;
-};
+export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
 
 /** Help text customizations for live credential source and role flags. */
 export type LiveTransportQaCredentialCliOptions = {
@@ -114,6 +113,7 @@ export type LiveTransportQaCliRegistrationOptions = {
   allowFailuresHelp?: string;
   scenarioHelp: string;
   sutAccountHelp: string;
+  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
 };
 
@@ -155,6 +155,7 @@ function mapLiveTransportQaCommanderOptions(
 function registerLiveTransportQaCli(
   params: LiveTransportQaCliRegistrationOptions & {
     qa: Command;
+    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
   },
 ) {
   const command = params.qa
@@ -208,6 +209,7 @@ export function createLiveTransportQaCliRegistration(
 ): LiveTransportQaCliRegistration {
   return {
     commandName: params.commandName,
+    adapterFactory: params.adapterFactory,
     register(qa: Command) {
       registerLiveTransportQaCli({
         ...params,
@@ -216,30 +218,6 @@ export function createLiveTransportQaCliRegistration(
     },
   };
 }
-
-/** One top-level check row in a rendered QA markdown report. */
-export type QaReportCheck = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-/** One scenario section in a rendered QA markdown report. */
-export type QaReportScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaReportCheck[];
-};
-
-export {
-  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
-  collectLiveTransportStandardScenarioCoverage,
-  findMissingLiveTransportStandardScenarios,
-  selectLiveTransportScenarios,
-  type LiveTransportScenarioDefinition,
-  type LiveTransportStandardScenarioId,
-} from "./qa-live-transport-scenarios.js";
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
@@ -253,98 +231,13 @@ export type QaDockerFetchResponse = {
   ok: boolean;
   body?: { cancel?: () => unknown } | null;
 };
-export type QaDockerFetchLike = (input: string) => Promise<QaDockerFetchResponse>;
+export type QaDockerFetchLike = (
+  input: string,
+  init?: Pick<RequestInit, "signal">,
+) => Promise<QaDockerFetchResponse>;
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
-
-function pushQaReportDetailsBlock(lines: string[], label: string, details: string, indent = "") {
-  if (!details.includes("\n")) {
-    lines.push(`${indent}- ${label}: ${details}`);
-    return;
-  }
-  lines.push(`${indent}- ${label}:`);
-  lines.push("", "```text", details, "```");
-}
-
-/** Render checks, scenarios, timeline, and notes into the standard QA markdown report format. */
-export function renderQaMarkdownReport(params: {
-  title: string;
-  startedAt: Date;
-  finishedAt: Date;
-  checks?: QaReportCheck[];
-  scenarios?: QaReportScenario[];
-  timeline?: string[];
-  notes?: string[];
-}) {
-  const checks = params.checks ?? [];
-  const scenarios = params.scenarios ?? [];
-  const passCount =
-    checks.filter((check) => check.status === "pass").length +
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failCount =
-    checks.filter((check) => check.status === "fail").length +
-    scenarios.filter((scenario) => scenario.status === "fail").length;
-
-  const lines = [
-    `# ${params.title}`,
-    "",
-    `- Started: ${params.startedAt.toISOString()}`,
-    `- Finished: ${params.finishedAt.toISOString()}`,
-    `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
-    `- Passed: ${passCount}`,
-    `- Failed: ${failCount}`,
-    "",
-  ];
-
-  if (checks.length > 0) {
-    lines.push("## Checks", "");
-    for (const check of checks) {
-      lines.push(`- [${check.status === "pass" ? "x" : " "}] ${check.name}`);
-      if (check.details) {
-        pushQaReportDetailsBlock(lines, "Details", check.details, "  ");
-      }
-    }
-  }
-
-  if (scenarios.length > 0) {
-    lines.push("", "## Scenarios", "");
-    for (const scenario of scenarios) {
-      lines.push(`### ${scenario.name}`);
-      lines.push("");
-      lines.push(`- Status: ${scenario.status}`);
-      if (scenario.details) {
-        pushQaReportDetailsBlock(lines, "Details", scenario.details);
-      }
-      if (scenario.steps?.length) {
-        lines.push("- Steps:");
-        for (const step of scenario.steps) {
-          lines.push(`  - [${step.status === "pass" ? "x" : " "}] ${step.name}`);
-          if (step.details) {
-            pushQaReportDetailsBlock(lines, "Details", step.details, "    ");
-          }
-        }
-      }
-      lines.push("");
-    }
-  }
-
-  if (params.timeline && params.timeline.length > 0) {
-    lines.push("## Timeline", "");
-    for (const item of params.timeline) {
-      lines.push(`- ${item}`);
-    }
-  }
-
-  if (params.notes && params.notes.length > 0) {
-    lines.push("", "## Notes", "");
-    for (const note of params.notes) {
-      lines.push(`- ${note}`);
-    }
-  }
-
-  lines.push("");
-  return lines.join("\n");
-}
+const DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
 /** Append a formatted live-lane issue while preserving the caller-owned issue list. */
 export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {
@@ -487,10 +380,16 @@ function parseDockerComposePsRows(stdout: string) {
   }
 }
 
-async function isQaDockerHealthy(url: string, fetchImpl: QaDockerFetchLike) {
+async function isQaDockerHealthy(
+  url: string,
+  fetchImpl: QaDockerFetchLike,
+  timeoutMs = DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS,
+) {
   let response: QaDockerFetchResponse | undefined;
   try {
-    response = await fetchImpl(url);
+    response = await fetchImpl(url, {
+      signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
+    });
     return response.ok;
   } catch {
     return false;
@@ -515,18 +414,18 @@ export function createQaDockerRuntime(params: {
       ? DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS
       : params.commandTimeoutMs;
 
-  const fetchHealthUrl = async (url: string): Promise<{ ok: boolean }> => {
+  const fetchHealthUrl: QaDockerFetchLike = async (url, init) => {
     const { response, release } = await fetchWithSsrFGuard({
       url,
-      init: {
-        signal: AbortSignal.timeout(2_000),
-      },
+      signal: init?.signal ?? undefined,
+      timeoutMs: DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS,
       policy: { allowPrivateNetwork: true },
       auditContext: params.auditContext,
     });
     try {
       return { ok: response.ok };
     } finally {
+      await releaseQaDockerFetchResponse(response);
       await release();
     }
   };
@@ -561,19 +460,36 @@ export function createQaDockerRuntime(params: {
     let lastError: unknown = null;
 
     while (Date.now() < deadline) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
       let response: QaDockerFetchResponse | undefined;
+      const requestTimeoutMs = Math.max(
+        1,
+        Math.min(DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+      );
+      const requestSignal = AbortSignal.timeout(requestTimeoutMs);
       try {
-        response = await deps.fetchImpl(url);
+        response = await deps.fetchImpl(url, {
+          signal: requestSignal,
+        });
         if (response.ok) {
           return;
         }
         lastError = new Error(`Health check returned non-OK for ${url}`);
       } catch (error) {
         lastError = error;
+        if (requestSignal.aborted && requestTimeoutMs === remainingMs) {
+          break;
+        }
       } finally {
         await releaseQaDockerFetchResponse(response);
       }
-      await deps.sleepImpl(pollMs);
+      const remainingSleepMs = deadline - Date.now();
+      if (remainingSleepMs > 0) {
+        await deps.sleepImpl(Math.min(pollMs, remainingSleepMs));
+      }
     }
 
     const elapsedSec = Math.round((Date.now() - startMs) / 1000);
@@ -732,22 +648,8 @@ export async function startLiveTransportQaOutputTee(params: {
         output.end(resolve);
       });
       if (outputError) {
-        throw toLintErrorObject(outputError, "Non-Error thrown");
+        throw toErrorObject(outputError, "Non-Error thrown");
       }
     },
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

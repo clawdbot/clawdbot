@@ -41,9 +41,13 @@ async function runProviderDynamicModelDefault(
   return runProviderDynamicModel(params);
 }
 
-async function normalizeDynamicModelDefault(model: Model, agentDir: string): Promise<Model> {
+async function normalizeDynamicModelDefault(
+  model: Model,
+  agentDir: string,
+  options: { config?: OpenClawConfig; workspaceDir?: string },
+): Promise<Model> {
   const { normalizeDiscoveredAgentModel } = await import("./agent-model-discovery.js");
-  return normalizeDiscoveredAgentModel(model, agentDir);
+  return normalizeDiscoveredAgentModel(model, agentDir, options);
 }
 
 function liveModelKey(provider: string, id: string): string | null {
@@ -73,7 +77,6 @@ export async function appendPrioritizedDynamicLiveModels(params: {
 }): Promise<{ models: Model[]; added: Model[] }> {
   const resolveDynamicModel = params.resolveDynamicModel ?? runProviderDynamicModelDefault;
   const prepareDynamicModel = params.prepareDynamicModel ?? prepareProviderDynamicModelDefault;
-  const normalizeModel = params.normalizeModel ?? normalizeDynamicModelDefault;
   const refs = params.refs ?? listPrioritizedHighSignalLiveModelRefs();
   const seen = new Set<string>();
   for (const model of params.models) {
@@ -122,7 +125,12 @@ export async function appendPrioritizedDynamicLiveModels(params: {
     if (!resolved) {
       continue;
     }
-    const model = await normalizeModel(resolved as Model, params.agentDir);
+    const model = params.normalizeModel
+      ? await params.normalizeModel(resolved as Model, params.agentDir)
+      : await normalizeDynamicModelDefault(resolved as Model, params.agentDir, {
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+        });
     const resolvedKey = liveModelKey(model.provider, model.id);
     // De-dupe against the resolved identity as well as the requested ref; hooks
     // may canonicalize provider ids or return aliases.

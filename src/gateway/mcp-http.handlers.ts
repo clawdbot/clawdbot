@@ -1,8 +1,15 @@
 // Gateway MCP loopback JSON-RPC handlers.
 // Implements initialize, tools/list, tools/call, and notification handling.
 import crypto from "node:crypto";
+import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import {
+  formatToolExecutionErrorMessage,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
+} from "../agents/tool-result-error.js";
+import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
   MCP_LOOPBACK_SERVER_VERSION,
@@ -17,25 +24,33 @@ import {
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
 
-type McpTextContent = {
-  type: "text";
-  text: string;
-};
+function stringifyMcpContent(value: unknown): string {
+  return typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+}
+
+const MCP_LOOPBACK_CONTENT_TYPES = new Set<ContentBlock["type"]>(["text", "image", "resource"]);
 
 // Tool implementations may return MCP content blocks, plain strings, or
-// arbitrary JSON. Normalize them into text blocks for consistent loopback output.
-function normalizeToolCallContent(result: unknown): McpTextContent[] {
+// arbitrary JSON. Preserve the valid block types shared by every protocol revision
+// this server advertises; newer and malformed shapes remain visible as text.
+function normalizeToolCallContent(result: unknown): ContentBlock[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
-    return content.map((block: { type?: string; text?: string }) => ({
-      type: (block.type ?? "text") as "text",
-      text: block.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
-    }));
+    return content.map((block) => {
+      const parsed = ContentBlockSchema.safeParse(block);
+      if (parsed.success && MCP_LOOPBACK_CONTENT_TYPES.has(parsed.data.type)) {
+        return parsed.data;
+      }
+      return {
+        type: "text" as const,
+        text: stringifyMcpContent(block),
+      };
+    });
   }
   return [
     {
       type: "text",
-      text: typeof result === "string" ? result : JSON.stringify(result),
+      text: stringifyMcpContent(result),
     },
   ];
 }
@@ -47,12 +62,14 @@ export async function handleMcpJsonRpc(params: {
   toolSchema: McpToolSchemaEntry[];
   hookContext?: HookContext;
   signal?: AbortSignal;
-  onToolCallResult?: (call: {
-    toolName: string;
-    args: Record<string, unknown>;
-    result?: unknown;
-    isError: boolean;
-  }) => void;
+  /** Revalidate short-lived client authority immediately before side effects. */
+  authorizeToolCall?: () => boolean;
+  onToolCallResult?: (
+    call: {
+      toolName: string;
+      args: Record<string, unknown>;
+    } & McpLoopbackToolCallOutcome,
+  ) => void;
   onToolCallPrepared?: (call: { toolName: string; args: Record<string, unknown> }) => void;
 }): Promise<object | null> {
   const { id, method, params: methodParams } = params.message;
@@ -81,7 +98,11 @@ export async function handleMcpJsonRpc(params: {
       return jsonRpcResult(id, { tools: params.toolSchema });
     case "tools/call": {
       const toolName = typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
-      const toolArgs = (methodParams?.arguments ?? {}) as Record<string, unknown>;
+      const rawToolArgs = methodParams?.arguments;
+      if (rawToolArgs !== undefined && !isRecord(rawToolArgs)) {
+        return jsonRpcError(id, -32602, "Invalid params: tools/call arguments must be an object");
+      }
+      const toolArgs = rawToolArgs ?? {};
       if (!toolName) {
         return jsonRpcResult(id, {
           content: [{ type: "text", text: "Tool not available: unknown" }],
@@ -105,49 +126,86 @@ export async function handleMcpJsonRpc(params: {
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       let executedToolArgs = toolArgs;
-      const reportToolCallResult = (result: unknown, isError: boolean) => {
+      const reportToolCallResult = (outcome: McpLoopbackToolCallOutcome) => {
         try {
           params.onToolCallResult?.({
             toolName,
             args: executedToolArgs,
-            result,
-            isError,
+            ...outcome,
           });
         } catch {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }
       };
       try {
+        const preparedToolArgs = tool.prepareBeforeToolCallParams
+          ? await tool.prepareBeforeToolCallParams(toolArgs, {
+              toolCallId,
+              hookContext: params.hookContext,
+              signal: params.signal,
+            })
+          : toolArgs;
+        executedToolArgs = preparedToolArgs as Record<string, unknown>;
         // Gateway before-tool hooks still run for loopback MCP calls so policy
         // and audit behavior matches native tool calls from normal chat runs.
+        // Preserve prepared params so exec can restore private workdir/env state after hooks.
         const hookResult = await runBeforeToolCallHook({
           toolName,
-          params: toolArgs,
+          params: preparedToolArgs,
           toolCallId,
           ctx: params.hookContext,
           signal: params.signal,
         });
         if (hookResult.blocked) {
+          const disposition = hookResult.kind === "failure" ? hookResult.disposition : "blocked";
+          reportToolCallResult(
+            disposition === "blocked"
+              ? {
+                  outcome: disposition,
+                  deniedReason: hookResult.deniedReason ?? "plugin-before-tool-call",
+                }
+              : { outcome: disposition },
+          );
           return jsonRpcResult(id, {
             content: [{ type: "text", text: hookResult.reason }],
             isError: true,
           });
         }
-        executedToolArgs = hookResult.params as Record<string, unknown>;
+        const finalizedToolArgs =
+          tool.finalizeBeforeToolCallParams?.(hookResult.params, preparedToolArgs) ??
+          hookResult.params;
+        executedToolArgs = finalizedToolArgs as Record<string, unknown>;
         try {
           params.onToolCallPrepared?.({ toolName, args: executedToolArgs });
         } catch {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }
-        const result = await tool.execute(toolCallId, hookResult.params, params.signal);
-        reportToolCallResult(result, false);
+        if (params.authorizeToolCall && !params.authorizeToolCall()) {
+          reportToolCallResult({ outcome: "blocked", deniedReason: "client-grant-revoked" });
+          return jsonRpcResult(id, {
+            content: [{ type: "text", text: "Tool call authorization expired" }],
+            isError: true,
+          });
+        }
+        const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        const failureKind = resolveToolResultFailureKind(result);
+        reportToolCallResult(
+          failureKind === "blocked"
+            ? { outcome: "blocked", deniedReason: "tool_result_blocked" }
+            : { outcome: failureKind ?? "completed", result },
+        );
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
-          isError: false,
+          isError: failureKind !== undefined,
         });
       } catch (error) {
-        reportToolCallResult(error, true);
-        const message = formatErrorMessage(error);
+        // A disconnected request does not identify the enclosing run outcome,
+        // but its payload may prove partial delivery and prevent a duplicate send.
+        reportToolCallResult({
+          outcome: params.signal?.aborted ? "unknown" : resolveToolExecutionErrorKind(error),
+          result: error,
+        });
+        const message = formatToolExecutionErrorMessage(error, "tool execution failed");
         return jsonRpcResult(id, {
           content: [{ type: "text", text: message || "tool execution failed" }],
           isError: true,

@@ -8,78 +8,49 @@ title: "ACP"
 
 Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge that talks to an OpenClaw Gateway.
 
-This command speaks ACP over stdio for IDEs and forwards prompts to the Gateway
-over WebSocket. It keeps ACP sessions mapped to Gateway session keys.
+`openclaw acp` speaks ACP over stdio for IDEs and forwards prompts to the Gateway over WebSocket, keeping ACP sessions mapped to Gateway session keys. It is a Gateway-backed ACP bridge, not a full ACP-native editor runtime: it focuses on session routing, prompt delivery, and streaming updates.
 
-`openclaw acp` is a Gateway-backed ACP bridge, not a full ACP-native editor
-runtime. It focuses on session routing, prompt delivery, and basic streaming
-updates.
-
-If you want an external MCP client to talk directly to OpenClaw channel
-conversations instead of hosting an ACP harness session, use
-[`openclaw mcp serve`](/cli/mcp) instead.
+If you want an external MCP client to talk directly to OpenClaw channel conversations instead of hosting an ACP harness session, use [`openclaw mcp serve`](/cli/mcp) instead.
 
 ## What this is not
 
-This page is often confused with ACP harness sessions.
+`openclaw acp` means OpenClaw acts as an ACP server: an IDE or ACP client connects to OpenClaw, and OpenClaw forwards that work into a Gateway session.
 
-`openclaw acp` means:
-
-- OpenClaw acts as an ACP server
-- an IDE or ACP client connects to OpenClaw
-- OpenClaw forwards that work into a Gateway session
-
-This is different from [ACP Agents](/tools/acp-agents), where OpenClaw runs an
-external harness such as Codex or Claude Code through `acpx`.
+This is different from [ACP Agents](/tools/acp-agents), where OpenClaw runs an external harness such as Codex or Claude Code through `acpx`.
 
 Quick rule:
 
 - editor/client wants to talk ACP to OpenClaw: use `openclaw acp`
 - OpenClaw should launch Codex/Claude/Gemini as an ACP harness: use `/acp spawn` and [ACP Agents](/tools/acp-agents)
 
-## Compatibility Matrix
+## Compatibility matrix
 
-| ACP area                                                              | Status      | Notes                                                                                                                                                                                                                                            |
-| --------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `initialize`, `newSession`, `prompt`, `cancel`                        | Implemented | Core bridge flow over stdio to Gateway chat/send + abort.                                                                                                                                                                                        |
-| `listSessions`, slash commands                                        | Implemented | Session list works against Gateway session state with bounded cursor pagination and `cwd` filtering where Gateway session rows carry workspace metadata; commands are advertised via `available_commands_update`.                                |
-| Session lineage metadata                                              | Implemented | Session listings and session info snapshots include OpenClaw parent and child lineage in `_meta` so ACP clients can render subagent graphs without private Gateway side channels.                                                                |
-| `resumeSession`, `closeSession`                                       | Implemented | Resume rebinds an ACP session to an existing Gateway session without replaying history. Close cancels active bridge work, resolves pending prompts as cancelled, and releases bridge session state.                                              |
-| `loadSession`                                                         | Partial     | Rebinds the ACP session to a Gateway session key and replays ACP event-ledger history for bridge-created sessions. Older/no-ledger sessions fall back to stored user/assistant text.                                                             |
-| Prompt content (`text`, embedded `resource`, images)                  | Partial     | Text/resources are flattened into chat input; images become Gateway attachments.                                                                                                                                                                 |
-| Session modes                                                         | Partial     | `session/set_mode` is supported and the bridge exposes initial Gateway-backed session controls for thought level, tool verbosity, reasoning, usage detail, and elevated actions. Broader ACP-native mode/config surfaces are still out of scope. |
-| Session info and usage updates                                        | Partial     | The bridge emits `session_info_update` and best-effort `usage_update` notifications from cached Gateway session snapshots. Usage is approximate and only sent when Gateway token totals are marked fresh.                                        |
-| Tool streaming                                                        | Partial     | `tool_call` / `tool_call_update` events include raw I/O, text content, and best-effort file locations when Gateway tool args/results expose them. Embedded terminals and richer diff-native output are still not exposed.                        |
-| Exec approvals                                                        | Partial     | Gateway exec approval prompts during active ACP prompt turns are relayed to the ACP client with `session/request_permission`.                                                                                                                    |
-| Per-session MCP servers (`mcpServers`)                                | Unsupported | Bridge mode rejects per-session MCP server requests. Configure MCP on the OpenClaw gateway or agent instead.                                                                                                                                     |
-| Client filesystem methods (`fs/read_text_file`, `fs/write_text_file`) | Unsupported | The bridge does not call ACP client filesystem methods.                                                                                                                                                                                          |
-| Client terminal methods (`terminal/*`)                                | Unsupported | The bridge does not create ACP client terminals or stream terminal ids through tool calls.                                                                                                                                                       |
-| Session plans / thought streaming                                     | Unsupported | The bridge currently emits output text and tool status, not ACP plan or thought updates.                                                                                                                                                         |
+| ACP area                                                              | Status      | Notes                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initialize`, `newSession`, `prompt`, `cancel`                        | Implemented | Core bridge flow over stdio to Gateway chat/send + abort.                                                                                                                                                                             |
+| `listSessions`, slash commands                                        | Implemented | Session list works against Gateway session state with bounded cursor pagination and `cwd` filtering where Gateway session rows carry workspace metadata; commands are advertised via `available_commands_update`.                     |
+| Session lineage metadata                                              | Implemented | Session listings and session info snapshots include OpenClaw parent and child lineage in `_meta` so ACP clients can render subagent graphs without private Gateway side channels.                                                     |
+| `resumeSession`, `closeSession`                                       | Implemented | Resume rebinds an ACP session to an existing Gateway session without replaying history. Close cancels active bridge work, resolves pending prompts as cancelled, and releases bridge session state.                                   |
+| `loadSession`                                                         | Partial     | Rebinds the ACP session to a Gateway session key and replays ACP event-ledger history for bridge-created sessions. Older/no-ledger sessions fall back to stored user/assistant text.                                                  |
+| Prompt content (`text`, embedded `resource`, images)                  | Partial     | Text/resources flatten into chat input; images become Gateway attachments.                                                                                                                                                            |
+| Session modes                                                         | Partial     | `session/set_mode` is supported; the bridge exposes Gateway-backed session controls for thought level, tool verbosity, reasoning, usage detail, and elevated actions. Broader ACP-native mode/config surfaces are still out of scope. |
+| Thought streaming                                                     | Implemented | Model thinking content streams as `agent_thought_chunk` session updates. ACP-native session plans are not emitted.                                                                                                                    |
+| Session info and usage updates                                        | Partial     | The bridge emits `session_info_update` and best-effort `usage_update` notifications from cached Gateway session snapshots. Usage is approximate and only sent when Gateway token totals are marked fresh.                             |
+| Tool streaming                                                        | Partial     | `tool_call`/`tool_call_update` events include raw I/O, text content, and best-effort file locations when Gateway tool args/results expose them. Embedded terminals and richer diff-native output are not exposed.                     |
+| Exec approvals                                                        | Partial     | Gateway exec approval prompts during active ACP prompt turns relay to the ACP client with `session/request_permission`.                                                                                                               |
+| Per-session MCP servers (`mcpServers`)                                | Unsupported | Bridge mode rejects per-session MCP server requests. Configure MCP on the OpenClaw Gateway or agent instead.                                                                                                                          |
+| Client filesystem methods (`fs/read_text_file`, `fs/write_text_file`) | Unsupported | The bridge does not call ACP client filesystem methods.                                                                                                                                                                               |
+| Client terminal methods (`terminal/*`)                                | Unsupported | The bridge does not create ACP client terminals or stream terminal ids through tool calls.                                                                                                                                            |
 
-## Known Limitations
+## Known limitations
 
-- `loadSession` can replay complete ACP event-ledger history only for
-  bridge-created sessions. Older/no-ledger sessions still use transcript
-  fallback and do not reconstruct historic tool calls or system notices.
-- If multiple ACP clients share the same Gateway session key, event and cancel
-  routing are best-effort rather than strictly isolated per client. Prefer the
-  default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local
-  turns.
-- Gateway stop states are translated into ACP stop reasons, but that mapping is
-  less expressive than a fully ACP-native runtime.
-- Initial session controls currently surface a focused subset of Gateway knobs:
-  thought level, tool verbosity, reasoning, usage detail, and elevated
-  actions. Model selection and exec-host controls are not yet exposed as ACP
-  config options.
-- `session_info_update` and `usage_update` are derived from Gateway session
-  snapshots, not live ACP-native runtime accounting. Usage is approximate,
-  carries no cost data, and is only emitted when the Gateway marks total token
-  data as fresh.
-- Tool follow-along data is best-effort. The bridge can surface file paths that
-  appear in known tool args/results, but it does not yet emit ACP terminals or
-  structured file diffs.
-- Exec approval relay is scoped to the active ACP prompt turn; approvals from
-  other Gateway sessions are ignored.
+- `loadSession` replays complete ACP event-ledger history only for bridge-created sessions. Older/no-ledger sessions use transcript fallback and do not reconstruct historic tool calls or system notices.
+- If multiple ACP clients share the same Gateway session key, event and cancel routing are best-effort rather than strictly isolated per client. Prefer the default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local turns.
+- Gateway stop states translate into ACP stop reasons, but that mapping is less expressive than a fully ACP-native runtime.
+- Session controls surface a focused subset of Gateway knobs: thought level, tool verbosity, reasoning, usage detail, and elevated actions. Model selection and exec-host controls are not exposed as ACP config options.
+- `session_info_update` and `usage_update` derive from Gateway session snapshots, not live ACP-native runtime accounting. Usage is approximate, carries no cost data, and is only emitted when the Gateway marks total token data as fresh.
+- Tool follow-along data is best-effort: the bridge surfaces file paths that appear in known tool args/results, but does not emit ACP terminals or structured file diffs.
+- Exec approval relay is scoped to the active ACP prompt turn; approvals from other Gateway sessions are ignored.
 
 ## Usage
 
@@ -104,8 +75,7 @@ openclaw acp --session agent:main:main --reset-session
 
 ## ACP client (debug)
 
-Use the built-in ACP client to sanity-check the bridge without an IDE.
-It spawns the ACP bridge and lets you type prompts interactively.
+Use the built-in ACP client to sanity-check the bridge without an IDE. It spawns the ACP bridge and lets you type prompts interactively.
 
 ```bash
 openclaw acp client
@@ -119,21 +89,17 @@ openclaw acp client --server "node" --server-args openclaw.mjs acp --url ws://12
 
 Permission model (client debug mode):
 
-- Auto-approval is allowlist-based and only applies to trusted core tool IDs.
+- Auto-approval is allowlist-based and applies only to trusted core tool IDs.
 - `read` auto-approval is scoped to the current working directory (`--cwd` when set).
-- ACP only auto-approves narrow readonly classes: scoped `read` calls under the active cwd plus readonly search tools (`search`, `web_search`, `memory_search`). Unknown/non-core tools, out-of-scope reads, exec-capable tools, control-plane tools, mutating tools, and interactive flows always require explicit prompt approval.
-- Server-provided `toolCall.kind` is treated as untrusted metadata (not an authorization source).
+- ACP only auto-approves narrow readonly classes: scoped `read` calls under the active cwd, plus readonly search tools (`search`, `web_search`, `memory_search`). Unknown/non-core tools, out-of-scope reads, exec-capable tools, control-plane tools, mutating tools, and interactive flows always require explicit prompt approval.
+- Server-provided `toolCall.kind` is treated as untrusted metadata, not an authorization source.
 - This ACP bridge policy is separate from ACPX harness permissions. If you run OpenClaw through the `acpx` backend, `plugins.entries.acpx.config.permissionMode=approve-all` is the break-glass "yolo" switch for that harness session.
 
 ## Protocol smoke testing
 
-For protocol-level debugging, start a Gateway with isolated state and drive
-`openclaw acp` over stdio with an ACP JSON-RPC client. Cover `initialize`,
-`session/new`, `session/list` with an absolute `cwd`, `session/resume`,
-`session/close`, duplicate close, and missing resume.
+For protocol-level debugging, start a Gateway with isolated state and drive `openclaw acp` over stdio with an ACP JSON-RPC client. Cover `initialize`, `session/new`, `session/list` with an absolute `cwd`, `session/resume`, `session/close`, duplicate close, and missing resume.
 
-The proof should include the advertised lifecycle capabilities, a Gateway-backed
-session row, update notifications, and the Gateway `sessions.list` log:
+The proof should include the advertised lifecycle capabilities, a Gateway-backed session row, update notifications, and the Gateway `sessions.list` log:
 
 ```json
 {
@@ -165,14 +131,11 @@ session row, update notifications, and the Gateway `sessions.list` log:
 }
 ```
 
-Avoid using `openclaw gateway call sessions.list` as the only ACP proof. That
-CLI path may request a fresh-token operator scope upgrade; ACP bridge
-correctness is proven by ACP stdio frames plus the Gateway `sessions.list` log.
+Avoid using `openclaw gateway call sessions.list` as the only ACP proof. That CLI path may request a fresh-token operator scope upgrade; ACP bridge correctness is proven by ACP stdio frames plus the Gateway `sessions.list` log.
 
 ## How to use this
 
-Use ACP when an IDE (or other client) speaks Agent Client Protocol and you want
-it to drive an OpenClaw Gateway session.
+Use ACP when an IDE (or other client) speaks Agent Client Protocol and you want it to drive an OpenClaw Gateway session.
 
 1. Ensure the Gateway is running (local or remote).
 2. Configure the Gateway target (config or flags).
@@ -195,9 +158,7 @@ openclaw acp --url wss://gateway-host:18789 --token-file ~/.openclaw/gateway.tok
 
 ## Selecting agents
 
-ACP does not pick agents directly. It routes by the Gateway session key.
-
-Use agent-scoped session keys to target a specific agent:
+ACP does not pick agents directly. It routes by the Gateway session key. Use agent-scoped session keys to target a specific agent:
 
 ```bash
 openclaw acp --session agent:main:main
@@ -205,24 +166,15 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-Each ACP session maps to a single Gateway session key. One agent can have many
-sessions; ACP defaults to an isolated `acp-bridge:<uuid>` session unless you override
-the key or label.
+Each ACP session maps to a single Gateway session key. One agent can have many sessions; ACP defaults to an isolated `acp-bridge:<uuid>` session unless you override the key or label.
 
-Per-session `mcpServers` are not supported in bridge mode. If an ACP client
-sends them during `newSession` or `loadSession`, the bridge returns a clear
-error instead of silently ignoring them.
+Per-session `mcpServers` are not supported in bridge mode. If an ACP client sends them during `newSession` or `loadSession`, the bridge returns a clear error instead of silently ignoring them.
 
-If you want ACPX-backed sessions to see OpenClaw plugin tools or selected
-built-in tools such as `cron`, enable the gateway-side ACPX MCP bridges instead
-of trying to pass per-session `mcpServers`. See
-[ACP Agents](/tools/acp-agents-setup#plugin-tools-mcp-bridge) and
-[OpenClaw tools MCP bridge](/tools/acp-agents-setup#openclaw-tools-mcp-bridge).
+If you want ACPX-backed sessions to see OpenClaw plugin tools or selected built-in tools such as `cron`, enable the gateway-side ACPX MCP bridges instead of trying to pass per-session `mcpServers`. See [ACP Agents](/tools/acp-agents-setup#plugin-tools-mcp-bridge) and [OpenClaw tools MCP bridge](/tools/acp-agents-setup#openclaw-tools-mcp-bridge).
 
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 
-If you want a coding agent such as Codex or Claude Code to talk to your
-OpenClaw bot over ACP, use `acpx` with its built-in `openclaw` target.
+If you want a coding agent such as Codex or Claude Code to talk to your OpenClaw bot over ACP, use `acpx` with its built-in `openclaw` target.
 
 Typical flow:
 
@@ -242,8 +194,7 @@ acpx openclaw -s codex-bridge --cwd /path/to/repo \
   "Ask my OpenClaw work agent for recent context relevant to this repo."
 ```
 
-If you want `acpx openclaw` to target a specific Gateway and session key every
-time, override the `openclaw` agent command in `~/.acpx/config.json`:
+If you want `acpx openclaw` to target a specific Gateway and session key every time, override the `openclaw` agent command in `~/.acpx/config.json`:
 
 ```json
 {
@@ -255,15 +206,13 @@ time, override the `openclaw` agent command in `~/.acpx/config.json`:
 }
 ```
 
-For a repo-local OpenClaw checkout, use the direct CLI entrypoint instead of the
-dev runner so the ACP stream stays clean. For example:
+For a repo-local OpenClaw checkout, use the direct CLI entrypoint instead of the dev runner so the ACP stream stays clean:
 
 ```bash
 env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 node openclaw.mjs acp ...
 ```
 
-This is the easiest way to let Codex, Claude Code, or another ACP-aware client
-pull contextual information from an OpenClaw agent without scraping a terminal.
+This is the easiest way to let Codex, Claude Code, or another ACP-aware client pull contextual information from an OpenClaw agent without scraping a terminal.
 
 ## Zed editor setup
 
@@ -309,10 +258,7 @@ In Zed, open the Agent panel and select "OpenClaw ACP" to start a thread.
 
 ## Session mapping
 
-By default, ACP bridge sessions get an isolated Gateway session key with an
-`acp-bridge:` prefix. These normal-model bridge sessions are synthetic and
-subject to stale-entry pruning and entry-count caps. To reuse a known session,
-pass a session key or label:
+By default, ACP bridge sessions get an isolated Gateway session key with an `acp-bridge:` prefix. These normal-model bridge sessions are synthetic and disposable: they are subject to stale-entry pruning and are not treated as protected human conversation surfaces. To reuse a known session, pass a session key or label:
 
 - `--session <key>`: use a specific Gateway session key.
 - `--session-label <label>`: resolve an existing session by label.
@@ -334,7 +280,7 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 
 ## Options
 
-- `--url <url>`: Gateway WebSocket URL (defaults to gateway.remote.url when configured).
+- `--url <url>`: Gateway WebSocket URL (defaults to `gateway.remote.url` when configured).
 - `--token <token>`: Gateway auth token.
 - `--token-file <path>`: read Gateway auth token from file.
 - `--password <password>`: Gateway auth password.
@@ -349,14 +295,11 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 
 Security note:
 
-- `--token` and `--password` can be visible in local process listings on some systems.
-- Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
+- `--token` and `--password` can be visible in local process listings on some systems. Prefer `--token-file`/`--password-file` or environment variables (`OPENCLAW_GATEWAY_TOKEN`, `OPENCLAW_GATEWAY_PASSWORD`).
 - Gateway auth resolution follows the shared contract used by other Gateway clients:
-  - local mode: env (`OPENCLAW_GATEWAY_*`) -> `gateway.auth.*` -> `gateway.remote.*` fallback only when `gateway.auth.*` is unset (configured-but-unresolved local SecretRefs fail closed)
+  - local mode: env (`OPENCLAW_GATEWAY_*`) then `gateway.auth.*`, falling back to `gateway.remote.*` only when `gateway.auth.*` is unset (a configured-but-unresolved local SecretRef fails closed instead of silently falling back)
   - remote mode: `gateway.remote.*` with env/config fallback per remote precedence rules
   - `--url` is override-safe and does not reuse implicit config/env credentials; pass explicit `--token`/`--password` (or file variants)
-- ACP runtime backend child processes receive `OPENCLAW_SHELL=acp`, which can be used for context-specific shell/profile rules.
-- `openclaw acp client` sets `OPENCLAW_SHELL=acp-client` on the spawned bridge process.
 
 ### `acp client` options
 
@@ -365,6 +308,7 @@ Security note:
 - `--server-args <args...>`: extra arguments passed to the ACP server.
 - `--server-verbose`: enable verbose logging on the ACP server.
 - `--verbose, -v`: verbose client logging.
+- `openclaw acp client` sets `OPENCLAW_SHELL=acp-client` on the spawned bridge process, which can be used for context-specific shell/profile rules.
 
 ## Related
 

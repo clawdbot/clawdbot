@@ -1,46 +1,23 @@
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements gateway behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../api.js";
-import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import {
+  assertNoCursorAdvance,
+  createWorkboardDispatchHandler,
+  listWorkboardCards,
+  readId,
+  respondError,
+} from "./gateway-helpers.js";
+import {
+  registerWorkboardWorkspaceBoardMethod,
+  registerWorkboardWorkspaceBulkMethod,
+  registerWorkboardWorkspaceCardMethods,
+  registerWorkboardWorkspaceWorkflowMethods,
+} from "./gateway-workspace-methods.js";
 import { WorkboardStore } from "./store.js";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "./types.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
-
-type GatewayMethodContext = Parameters<
-  Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
->[0];
-type GatewayRespond = GatewayMethodContext["respond"];
-
-function respondError(respond: GatewayRespond, error: unknown) {
-  respond(false, undefined, {
-    code: "workboard_error",
-    message: formatErrorMessage(error),
-  });
-}
-
-function readId(params: Record<string, unknown>): string {
-  const value = params.id;
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  throw new Error("id is required.");
-}
-
-function readPatch(params: Record<string, unknown>): Record<string, unknown> {
-  const patch = params.patch;
-  if (patch && typeof patch === "object" && !Array.isArray(patch)) {
-    return patch as Record<string, unknown>;
-  }
-  return params;
-}
-
-function assertNoCursorAdvance(params: Record<string, unknown>) {
-  if (params.advance === true) {
-    throw new Error("notification cursor advancement requires workboard.notifications.advance.");
-  }
-}
 
 function redactClaimToken(card: WorkboardCard): WorkboardCard {
   const claim = card.metadata?.claim;
@@ -72,15 +49,17 @@ export function registerWorkboardGatewayMethods(params: {
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
+  const dispatchCards = createWorkboardDispatchHandler({
+    api,
+    store,
+    redactCard: redactClaimToken,
+  });
 
   api.registerGatewayMethod(
     "workboard.cards.list",
     async ({ params: requestParams, respond }) => {
       try {
-        respond(true, {
-          cards: (await store.list({ boardId: requestParams.boardId })).map(redactClaimToken),
-          statuses: WORKBOARD_STATUSES,
-        });
+        respond(true, await listWorkboardCards(store, requestParams.boardId, redactClaimToken));
       } catch (error) {
         respondError(respond, error);
       }
@@ -88,33 +67,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.cards.create",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, { card: redactClaimToken(await store.create(requestParams)) });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
-
-  api.registerGatewayMethod(
-    "workboard.cards.update",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, {
-          card: redactClaimToken(
-            await store.update(readId(requestParams), readPatch(requestParams)),
-          ),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceCardMethods({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.cards.move",
@@ -344,18 +297,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: WRITE_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.cards.bulk",
-    async ({ params: requestParams, respond }) => {
-      try {
-        const result = await store.bulkUpdate(requestParams);
-        respond(true, { cards: result.cards.map(redactClaimToken) });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceBulkMethod({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.cards.diagnostics",
@@ -383,30 +325,13 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.dispatch",
-    async ({ params: requestParams, respond }) => {
-      try {
-        const boardId =
-          requestParams && typeof requestParams === "object" && "boardId" in requestParams
-            ? requestParams.boardId
-            : undefined;
-        const result = await dispatchAndStartWorkboardCards({
-          store,
-          subagent: api.runtime.subagent,
-          options: {
-            boardId: typeof boardId === "string" ? boardId : undefined,
-          },
-        });
-        respond(true, {
-          ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
+    async (context) => await dispatchCards(context, { supportsMaxStarts: false }),
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.dispatchWithOptions",
+    async (context) => await dispatchCards(context, { supportsMaxStarts: true }),
     { scope: WRITE_SCOPE },
   );
 
@@ -422,17 +347,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.boards.upsert",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, { board: await store.upsertBoard(requestParams) });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceBoardMethod({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.boards.archive",
@@ -485,35 +400,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  api.registerGatewayMethod(
-    "workboard.cards.specify",
-    async ({ params: requestParams, respond }) => {
-      try {
-        respond(true, {
-          card: redactClaimToken(await store.specify(readId(requestParams), requestParams, null)),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
-
-  api.registerGatewayMethod(
-    "workboard.cards.decompose",
-    async ({ params: requestParams, respond }) => {
-      try {
-        const result = await store.decompose(readId(requestParams), requestParams, null);
-        respond(true, {
-          parent: redactClaimToken(result.parent),
-          children: result.children.map(redactClaimToken),
-        });
-      } catch (error) {
-        respondError(respond, error);
-      }
-    },
-    { scope: WRITE_SCOPE },
-  );
+  registerWorkboardWorkspaceWorkflowMethods({ api, store, redactCard: redactClaimToken });
 
   api.registerGatewayMethod(
     "workboard.notifications.subscribe",

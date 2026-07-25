@@ -1,17 +1,20 @@
 // Proxy capture SQLite store persists capture metadata and replayable exchanges.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   configureSqliteConnectionPragmas,
+  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -28,7 +31,7 @@ import type {
 } from "./types.js";
 
 // Capture rows and compressed payload BLOBs live in the shared global state DB.
-export type DebugProxyCaptureStoreOptions = {
+type DebugProxyCaptureStoreOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
@@ -39,6 +42,45 @@ type PathBasedDebugProxyCaptureStore = {
 
 const DEBUG_PROXY_CAPTURE_DIR_MODE = 0o700;
 const DEBUG_PROXY_CAPTURE_FILE_MODE = 0o600;
+const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION = 1;
+const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS capture_sessions (
+    id TEXT PRIMARY KEY,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    mode TEXT NOT NULL,
+    source_scope TEXT NOT NULL,
+    source_process TEXT NOT NULL,
+    proxy_url TEXT,
+    db_path TEXT NOT NULL,
+    blob_dir TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS capture_events (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    source_scope TEXT NOT NULL,
+    source_process TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    method TEXT,
+    host TEXT,
+    path TEXT,
+    status INTEGER,
+    close_code INTEGER,
+    content_type TEXT,
+    headers_json TEXT,
+    data_text TEXT,
+    data_blob_id TEXT,
+    data_sha256 TEXT,
+    error_text TEXT,
+    meta_json TEXT
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
+  CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
+`;
 
 function isInMemoryDatabasePath(dbPath: string): boolean {
   if (dbPath === ":memory:") {
@@ -50,8 +92,7 @@ function isInMemoryDatabasePath(dbPath: string): boolean {
   const fragmentIndex = dbPath.indexOf("#");
   const uriWithoutFragment = fragmentIndex === -1 ? dbPath : dbPath.slice(0, fragmentIndex);
   const queryIndex = uriWithoutFragment.indexOf("?");
-  const uriPath =
-    queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
+  const uriPath = queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
   try {
     if (decodeURIComponent(uriPath.slice("file:".length)) === ":memory:") {
       return true;
@@ -87,8 +128,7 @@ function openPathBasedDebugProxyCaptureStore(
       fs.closeSync(fs.openSync(fileBackedPath, "a", DEBUG_PROXY_CAPTURE_FILE_MODE));
     }
   }
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath);
+  const db = openNodeSqliteDatabase(dbPath);
   let walMaintenance: SqliteWalMaintenance | undefined;
   try {
     if (fileBackedPath) {
@@ -100,44 +140,22 @@ function openPathBasedDebugProxyCaptureStore(
       ...(fileBackedPath ? { databasePath: fileBackedPath } : {}),
       foreignKeys: true,
     });
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS capture_sessions (
-        id TEXT PRIMARY KEY,
-        started_at INTEGER NOT NULL,
-        ended_at INTEGER,
-        mode TEXT NOT NULL,
-        source_scope TEXT NOT NULL,
-        source_process TEXT NOT NULL,
-        proxy_url TEXT,
-        db_path TEXT NOT NULL,
-        blob_dir TEXT NOT NULL
+    const versionRow = db.prepare("PRAGMA user_version").get() as
+      | { user_version?: unknown }
+      | undefined;
+    const schemaVersion = Number(versionRow?.user_version ?? 0);
+    if (schemaVersion > DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+      throw new Error(
+        `Legacy debug proxy capture database uses newer schema version ${schemaVersion}; this build supports ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION}`,
       );
-      CREATE TABLE IF NOT EXISTS capture_events (
-        id INTEGER PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        ts INTEGER NOT NULL,
-        source_scope TEXT NOT NULL,
-        source_process TEXT NOT NULL,
-        protocol TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        flow_id TEXT NOT NULL,
-        method TEXT,
-        host TEXT,
-        path TEXT,
-        status INTEGER,
-        close_code INTEGER,
-        content_type TEXT,
-        headers_json TEXT,
-        data_text TEXT,
-        data_blob_id TEXT,
-        data_sha256 TEXT,
-        error_text TEXT,
-        meta_json TEXT
-      );
-      CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
-      CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
-    `);
+    }
+    db.exec(DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL);
+    if (schemaVersion < DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+      migrateSqliteSchemaToStrict(db, DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL, {
+        databaseLabel: fileBackedPath ?? dbPath,
+      });
+      db.exec(`PRAGMA user_version = ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION};`);
+    }
     if (fileBackedPath) {
       hardenLegacyDatabaseFiles(fileBackedPath);
     }
@@ -220,7 +238,10 @@ class DebugProxyCaptureStoreImpl {
   }
 
   get isClosed(): boolean {
-    return this.closed;
+    // A store dies with the DatabaseSync it wraps: the shared-path handle can
+    // be closed underneath us (exit-time cache close), and the cache must then
+    // rebind a fresh store instead of handing out a dead connection.
+    return this.closed || !this.db.isOpen;
   }
 
   upsertSession(session: CaptureSessionRecord): void {
@@ -281,7 +302,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord {
-    const sha256 = createHash("sha256").update(data).digest("hex");
+    const sha256 = sha256Hex(data);
     const blobId = sha256.slice(0, 24);
     if (this.pathBased) {
       fs.mkdirSync(this.pathBased.blobDir, {
@@ -743,10 +764,12 @@ class DebugProxyCaptureStoreImpl {
           )
           .get(...sessionIds) as { count: number }
       ).count ?? 0;
-    this.db.prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`).run(
-      ...sessionIds,
-    );
-    this.db.prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`).run(...sessionIds);
+    this.db
+      .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
+      .run(...sessionIds);
+    this.db
+      .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
+      .run(...sessionIds);
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
@@ -783,17 +806,14 @@ class DebugProxyCaptureStoreImpl {
 }
 
 export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
-  persistPayload(
-    data: Buffer,
-    contentType?: string,
-  ): CaptureBlobRecord | SharedCaptureBlobRecord;
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
 };
 
-export type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord;
 };
 
-export type SharedDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
+type SharedDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
   persistPayload(data: Buffer, contentType?: string): SharedCaptureBlobRecord;
 };
 
@@ -813,6 +833,7 @@ type CachedStoreEntry = {
 };
 
 const cachedStores = new Map<string, CachedStoreEntry>();
+let unregisterExitClose: (() => void) | null = null;
 
 function resolveDebugProxyCaptureStoreKey(
   optionsOrDbPath: DebugProxyCaptureStoreOptions | string,
@@ -834,6 +855,9 @@ function getDebugProxyCaptureStoreImpl(
   }
   const store = new DebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
   cachedStores.set(key, { store, leases: 0 });
+  // Safety net for legacy path-based stores that own their DatabaseSync;
+  // shared-path stores only flip their closed flag here, never the shared DB.
+  unregisterExitClose ??= registerSqliteCacheExitClose(closeDebugProxyCaptureStore);
   return store;
 }
 
@@ -852,6 +876,8 @@ export function getDebugProxyCaptureStore(
 }
 
 export function closeDebugProxyCaptureStore(): void {
+  unregisterExitClose?.();
+  unregisterExitClose = null;
   for (const cached of cachedStores.values()) {
     cached.store.close();
   }
@@ -860,7 +886,10 @@ export function closeDebugProxyCaptureStore(): void {
 
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
-export function acquireDebugProxyCaptureStore(dbPath: string, blobDir: string): {
+export function acquireDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): {
   store: LegacyDebugProxyCaptureStore;
   release: () => void;
 };
@@ -905,10 +934,7 @@ export function acquireDebugProxyCaptureStore(
 
 export function persistEventPayload(
   store: {
-    persistPayload(
-      data: Buffer,
-      contentType?: string,
-    ): CaptureBlobRecord | SharedCaptureBlobRecord;
+    persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
   },
   params: { data?: Buffer | string | null; contentType?: string; previewLimit?: number },
 ): { dataText?: string; dataBlobId?: string; dataSha256?: string } {
@@ -918,10 +944,11 @@ export function persistEventPayload(
   const buffer = Buffer.isBuffer(params.data) ? params.data : Buffer.from(params.data);
   const previewLimit = params.previewLimit ?? 8192;
   // Store the whole payload as a blob but keep a small UTF-8 preview inline for
-  // fast CLI listings and query output.
+  // fast CLI listings and query output. write(), unlike end(), omits an incomplete
+  // trailing code point introduced by the byte cap instead of injecting U+FFFD.
   const blob = store.persistPayload(buffer, params.contentType);
   return {
-    dataText: buffer.subarray(0, previewLimit).toString("utf8"),
+    dataText: new StringDecoder("utf8").write(buffer.subarray(0, previewLimit)),
     dataBlobId: blob.blobId,
     dataSha256: blob.sha256,
   };
@@ -931,3 +958,4 @@ export function safeJsonString(value: unknown): string | undefined {
   const raw = serializeJson(value);
   return raw ?? undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

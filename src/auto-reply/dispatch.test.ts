@@ -2,8 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
-import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 type DispatchReplyFromConfigFn =
@@ -11,6 +13,8 @@ type DispatchReplyFromConfigFn =
 type FinalizeInboundContextFn = typeof import("./reply/inbound-context.js").finalizeInboundContext;
 type DeriveInboundMessageHookContextFn =
   typeof import("../hooks/message-hook-mappers.js").deriveInboundMessageHookContext;
+type ResolveInboundReplyHookTargetFn =
+  typeof import("../hooks/message-hook-mappers.js").resolveInboundReplyHookTarget;
 type GetGlobalHookRunnerFn = typeof import("../plugins/hook-runner-global.js").getGlobalHookRunner;
 type CreateReplyDispatcherFn = typeof import("./reply/reply-dispatcher.js").createReplyDispatcher;
 type CreateReplyDispatcherWithTypingFn =
@@ -47,6 +51,10 @@ vi.mock("../hooks/message-hook-mappers.js", () => ({
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
   }),
+  resolveInboundReplyHookTarget: (...args: Parameters<ResolveInboundReplyHookTargetFn>) => {
+    const [finalized, hookCtx] = args;
+    return finalized.OriginatingTo || hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
+  },
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -73,8 +81,7 @@ const {
   dispatchInboundMessageWithBufferedDispatcher,
   withReplyDispatcher,
 } = await import("./dispatch.js");
-const { clearReplyUsageStateForTest, recordReplyUsageState } =
-  await import("./reply/reply-usage-state.js");
+const { recordReplyUsageState } = await import("./reply/reply-usage-state.js");
 
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
@@ -112,7 +119,6 @@ function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatc
 describe("withReplyDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearReplyUsageStateForTest();
     hoisted.finalizeInboundContextMock.mockImplementation((ctx: unknown) => ctx);
     hoisted.deriveInboundMessageHookContextMock.mockReturnValue({
       channelId: "threads",
@@ -157,10 +163,13 @@ describe("withReplyDispatcher", () => {
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcher,
+      onSettled: () => {
+        order.push("onSettled");
+      },
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle", "onSettled"]);
   });
 
   it("emits message.received diagnostics before dispatch", async () => {
@@ -201,6 +210,9 @@ describe("withReplyDispatcher", () => {
   it("always marks complete and waits for idle after success", async () => {
     const order: string[] = [];
     const dispatcher = createDispatcher(order);
+    registerReplyDispatcherSettledTask(dispatcher, () => {
+      order.push("settledTask");
+    });
 
     const result = await withReplyDispatcher({
       dispatcher,
@@ -214,7 +226,7 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(result).toBe("ok");
-    expect(order).toEqual(["run", "markComplete", "waitForIdle", "onSettled"]);
+    expect(order).toEqual(["run", "markComplete", "waitForIdle", "settledTask", "onSettled"]);
   });
 
   it("still drains dispatcher after run throws", async () => {
@@ -272,6 +284,34 @@ describe("withReplyDispatcher", () => {
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
     expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("composes channel and dispatcher typing-controller observers", async () => {
+    const dispatcherObserver = vi.fn();
+    const channelObserver = vi.fn();
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: { onTypingController: dispatcherObserver },
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: { deliver: async () => undefined },
+      replyOptions: { onTypingController: channelObserver },
+    });
+
+    const typingController = {} as never;
+    const dispatchParams = hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0];
+    dispatchParams?.replyOptions?.onTypingController?.(typingController);
+    expect(dispatcherObserver).toHaveBeenCalledWith(typingController);
+    expect(channelObserver).toHaveBeenCalledWith(typingController);
   });
 
   it("passes runtime toolsAllow from buffered dispatch into reply resolution", async () => {

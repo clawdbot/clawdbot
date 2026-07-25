@@ -10,6 +10,39 @@ describe("twitchPlugin pairing", () => {
   });
 });
 
+describe("twitchPlugin outbound session routing", () => {
+  it("reproduces the canonical inbound channel session", async () => {
+    const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "ops",
+      accountId: "stream",
+      target: "twitch:channel:OpenClaw",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:ops:twitch:group:openclaw",
+      baseSessionKey: "agent:ops:twitch:group:openclaw",
+      recipientSessionExact: true,
+      peer: { kind: "group", id: "openclaw" },
+      chatType: "group",
+      to: "openclaw",
+    });
+  });
+
+  it.each(["twitch:user:alice", "twitch:dm:alice"])(
+    "rejects unsupported direct target %s",
+    async (target) => {
+      const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "ops",
+        target,
+      });
+
+      expect(route).toBeNull();
+    },
+  );
+});
+
 describe("twitchPlugin.status.buildAccountSnapshot", () => {
   it("uses the resolved account ID for multi-account configs", async () => {
     const secondary = {

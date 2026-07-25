@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  downloadClawHubGitHubSkillArchive,
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
@@ -21,7 +22,8 @@ import {
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
-  resolveClawHubAuthToken,
+  reportClawHubPluginInstallTelemetry,
+  reportClawHubSkillInstallTelemetry,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
@@ -69,17 +71,129 @@ function createStalledBodyResponse(params: {
   };
 }
 
+function createOversizedArchiveResponse(
+  params: {
+    headers?: HeadersInit;
+  } = {},
+): {
+  response: Response;
+  cancel: ReturnType<typeof vi.fn>;
+} {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancel();
+    },
+  });
+  const headers = new Headers(params.headers);
+  headers.set("content-type", headers.get("content-type") ?? "application/zip");
+  headers.set("content-length", String(256 * 1024 * 1024 + 512 * 1024));
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers,
+    }),
+    cancel,
+  };
+}
+
+function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
+  const prefixBytes = new TextEncoder().encode(prefix);
+  const suffixBytes = new TextEncoder().encode(suffix);
+  const buffer = new ArrayBuffer(prefixBytes.byteLength + 1 + suffixBytes.byteLength);
+  const bytes = new Uint8Array(buffer);
+  bytes.set(prefixBytes);
+  bytes[prefixBytes.byteLength] = 0xff;
+  bytes.set(suffixBytes, prefixBytes.byteLength + 1);
+  return buffer;
+}
+
+const oversizedArchiveCases: Array<{
+  name: string;
+  headers?: HeadersInit;
+  download: (response: Response) => Promise<unknown>;
+  expectedResource: string;
+}> = [
+  {
+    name: "package archive",
+    download: (response) =>
+      downloadClawHubPackageArchive({
+        name: "@hyf/zai-external-alpha",
+        version: "0.0.1",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "package archive download for @hyf/zai-external-alpha",
+  },
+  {
+    name: "ClawPack artifact",
+    headers: { "content-type": "application/octet-stream" },
+    download: (response) =>
+      downloadClawHubPackageArchive({
+        name: "demo",
+        version: "1.2.3",
+        artifact: "clawpack",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "ClawPack download for demo@1.2.3",
+  },
+  {
+    name: "skill archive",
+    download: (response) =>
+      downloadClawHubSkillArchive({
+        slug: "agentreceipt",
+        version: "1.0.0",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "skill archive download for agentreceipt",
+  },
+  {
+    name: "resolver URL archive",
+    download: (response) =>
+      downloadClawHubSkillArchiveUrl({
+        baseUrl: "https://clawhub.ai",
+        url: "https://downloads.example.com/skill.zip",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "skill archive download at /skill.zip",
+  },
+  {
+    name: "GitHub source archive",
+    download: (response) =>
+      downloadClawHubGitHubSkillArchive({
+        repo: "owner/repo",
+        commit: "abc123",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "GitHub source archive for owner/repo@abc123",
+  },
+];
+
 describe("clawhub helpers", () => {
   const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
 
+  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async (_input, init) => {
+          expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${expectedToken}`);
+          return new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toStrictEqual([]);
+  }
+
   afterEach(() => {
     delete process.env.OPENCLAW_CLAWHUB_URL;
-    delete process.env.OPENCLAW_CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_AUTH_TOKEN;
-    delete process.env.OPENCLAW_CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
+    delete process.env.CLAWHUB_DISABLE_TELEMETRY;
+    delete process.env.CLAWDHUB_DISABLE_TELEMETRY;
     originalEnv.restore();
   });
 
@@ -135,10 +249,14 @@ describe("clawhub helpers", () => {
     ).toBe("1.2.2");
   });
 
-  it("checks plugin api ranges without semver dependency", () => {
+  it("checks plugin api ranges with semver precedence", () => {
     expect(satisfiesPluginApiRange("1.2.3", "^1.2.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.2.3", "~1.2.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.2.3", "1.2.x")).toBe(true);
     expect(satisfiesPluginApiRange("1.9.0", ">=1.2.0 <2.0.0")).toBe(true);
+    expect(satisfiesPluginApiRange("1.3.0", "~1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("2.0.0", "^1.2.0")).toBe(false);
+    expect(satisfiesPluginApiRange("2.0.0-beta.1", "^1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("1.1.9", ">=1.2.0")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
@@ -167,6 +285,7 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.5.2", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.4.0", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.99", "2026.4")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.4.1", "=2026.4")).toBe(false);
     expect(satisfiesPluginApiRange("2026.5.2", "=2026.4")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "2026.4")).toBe(false);
   });
@@ -189,6 +308,10 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("invalid", "*")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.24", ">*")).toBe(false);
     expect(satisfiesPluginApiRange("2026.3.24", "<*")).toBe(false);
+    expect(satisfiesPluginApiRange("1.5.0", ">=1.0.0 || >=2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.2.3", "1.2.3||2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.5.0", "1.0.0 - 2.0.0")).toBe(false);
+    expect(satisfiesPluginApiRange("1.2.3", "~>1.2.3")).toBe(false);
   });
 
   it("checks min gateway versions with loose host labels", () => {
@@ -216,29 +339,29 @@ describe("clawhub helpers", () => {
     expect(normalizeClawHubSha256Hex("not-a-hash")).toBeNull();
   });
 
-  it("resolves ClawHub auth token from config.json", async () => {
+  it("loads ClawHub request auth from config.json", async () => {
     await withTempDir({ prefix: "openclaw-clawhub-config-" }, async (configRoot) => {
       const configPath = path.join(configRoot, "clawhub", "config.json");
-      process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = configPath;
+      process.env.CLAWHUB_CONFIG_PATH = configPath;
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, JSON.stringify({ auth: { token: "cfg-token-123" } }), "utf8");
 
-      await expect(resolveClawHubAuthToken()).resolves.toBe("cfg-token-123");
+      await expectSearchUsesAuthToken("cfg-token-123");
     });
   });
 
-  it("resolves ClawHub auth token from the legacy config path override", async () => {
+  it("loads ClawHub request auth from the legacy config path override", async () => {
     await withTempDir({ prefix: "openclaw-clawdhub-config-" }, async (configRoot) => {
       const configPath = path.join(configRoot, "config.json");
       process.env.CLAWDHUB_CONFIG_PATH = configPath;
       await fs.writeFile(configPath, JSON.stringify({ token: "legacy-token-123" }), "utf8");
 
-      await expect(resolveClawHubAuthToken()).resolves.toBe("legacy-token-123");
+      await expectSearchUsesAuthToken("legacy-token-123");
     });
   });
 
   it.runIf(process.platform === "darwin")(
-    "resolves ClawHub auth token from the macOS Application Support path",
+    "loads ClawHub request auth from the macOS Application Support path",
     async () => {
       await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
         const configPath = path.join(
@@ -253,7 +376,7 @@ describe("clawhub helpers", () => {
           await fs.mkdir(path.dirname(configPath), { recursive: true });
           await fs.writeFile(configPath, JSON.stringify({ token: "macos-token-123" }), "utf8");
 
-          await expect(resolveClawHubAuthToken()).resolves.toBe("macos-token-123");
+          await expectSearchUsesAuthToken("macos-token-123");
         } finally {
           homedirSpy.mockRestore();
         }
@@ -262,7 +385,7 @@ describe("clawhub helpers", () => {
   );
 
   it.runIf(process.platform === "darwin")(
-    "falls back to XDG_CONFIG_HOME on macOS when Application Support has no config",
+    "falls back to XDG_CONFIG_HOME for ClawHub request auth on macOS",
     async () => {
       await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
         await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
@@ -273,7 +396,7 @@ describe("clawhub helpers", () => {
             await fs.mkdir(path.dirname(configPath), { recursive: true });
             await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
 
-            await expect(resolveClawHubAuthToken()).resolves.toBe("xdg-token-123");
+            await expectSearchUsesAuthToken("xdg-token-123");
           } finally {
             homedirSpy.mockRestore();
           }
@@ -283,7 +406,7 @@ describe("clawhub helpers", () => {
   );
 
   it("injects resolved auth token into ClawHub requests", async () => {
-    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    process.env.CLAWHUB_TOKEN = "env-token-123";
     const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       expect(url).toContain("/api/v1/search");
@@ -295,6 +418,57 @@ describe("clawhub helpers", () => {
     };
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
+  });
+
+  it("preserves the legacy telemetry opt-out when the primary env is blank", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "   ";
+    process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "token-123",
+      slug: "calendar",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("sends canonical plugin install telemetry", async () => {
+    let requestBody: unknown;
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected JSON request body");
+      }
+      requestBody = JSON.parse(init.body) as unknown;
+      return new Response(null, { status: 200 });
+    });
+
+    await reportClawHubPluginInstallTelemetry({
+      token: "token-123",
+      packageName: "@openclaw/voice-call",
+      version: "2026.7.23",
+      fetchImpl,
+    });
+
+    expect(requestBody).toEqual({
+      event: "plugin_install",
+      packageName: "@openclaw/voice-call",
+      version: "2026.7.23",
+    });
+  });
+
+  it("applies the install telemetry opt-out to plugin reports", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubPluginInstallTelemetry({
+      token: "token-123",
+      packageName: "@openclaw/voice-call",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("preserves the configured ClawHub base URL path prefix", async () => {
@@ -318,6 +492,34 @@ describe("clawhub helpers", () => {
     expect(url.origin).toBe("https://internal.example.com");
     expect(url.pathname).toBe("/clawhub/api/v1/search");
     expect(url.searchParams.get("q")).toBe("calendar");
+  });
+
+  it("treats an empty primary telemetry setting as absent", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "";
+    process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "test-token",
+      slug: "calendar",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("lets a nonblank primary telemetry setting override the legacy opt-out", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "false";
+    process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "test-token",
+      slug: "calendar",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("sends owner-qualified skill detail lookups as slug plus ownerHandle", async () => {
@@ -503,7 +705,7 @@ describe("clawhub helpers", () => {
   });
 
   it("can post bulk skill security verdict requests without resolved auth", async () => {
-    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    process.env.CLAWHUB_TOKEN = "env-token-123";
     let requestedInit: RequestInit | undefined;
     const envelope = {
       schema: "clawhub.skill.security-verdicts.v1",
@@ -597,6 +799,15 @@ describe("clawhub helpers", () => {
     } finally {
       setTimeoutSpy.mockRestore();
     }
+  });
+
+  it("rejects malformed UTF-8 in generated Skill Card markdown", async () => {
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response(malformedUtf8("# Agent ", "\n")),
+      }),
+    ).rejects.toThrow(TypeError);
   });
 
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
@@ -846,8 +1057,42 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/declared sha256/);
   });
 
+  it.each(oversizedArchiveCases)(
+    "rejects and cancels oversized $name downloads",
+    async ({ headers, download, expectedResource }) => {
+      const oversized = createOversizedArchiveResponse({ headers });
+
+      await expect(download(oversized.response)).rejects.toThrow(
+        `ClawHub ${expectedResource} exceeded 268435456 bytes (268959744 bytes declared)`,
+      );
+      expect(oversized.cancel).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("uses decoded stream bytes instead of encoded content length", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const archive = await downloadClawHubPackageArchive({
+      name: "encoded-package",
+      version: "1.0.0",
+      fetchImpl: async () =>
+        new Response(bytes, {
+          status: 200,
+          headers: {
+            "content-encoding": "gzip",
+            "content-length": String(256 * 1024 * 1024 + 1),
+            "content-type": "application/zip",
+          },
+        }),
+    });
+    try {
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from(bytes));
+    } finally {
+      await archive.cleanup();
+    }
+  });
+
   it("annotates 429 errors with the reset hint and a sign-in hint when unauthenticated", async () => {
-    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
     await expect(
       searchClawHubSkills({
         query: "calendar",
@@ -865,7 +1110,7 @@ describe("clawhub helpers", () => {
   });
 
   it("degrades gracefully on 429 when the response carries no rate-limit headers", async () => {
-    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
     await expect(
       searchClawHubSkills({
         query: "calendar",
@@ -874,12 +1119,128 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
+  it.each(["0x10", "1e3", "-1", "-0", "+7", "0.5", "9007199254740993"])(
+    "does not describe malformed RateLimit-Reset values as seconds: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: { "RateLimit-Reset": reset },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+    },
+  );
+
+  it.each(["invalid", "+7", "-0"])(
+    "uses a valid Retry-After hint when RateLimit-Reset is malformed: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: {
+                "RateLimit-Reset": reset,
+                "Retry-After": "7",
+              },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
+    },
+  );
+
+  it("retries transient ClawHub reads and honors Retry-After", async () => {
+    const cancel = vi.fn();
+    let attempts = 0;
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                cancel() {
+                  cancel();
+                },
+              }),
+              {
+                status: 503,
+                headers: { "Retry-After": "0" },
+              },
+            );
+          }
+          return new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toStrictEqual([]);
+
+    expect(attempts).toBe(2);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the final ClawHub error body after transient retries are exhausted", async () => {
+    let attempts = 0;
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () => {
+          attempts += 1;
+          return new Response("Rate limit temporarily unavailable", {
+            status: 503,
+            headers: { "Retry-After": "0" },
+          });
+        },
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search failed (503): Rate limit temporarily unavailable");
+
+    expect(attempts).toBe(4);
+  });
+
+  it("does not retry non-idempotent ClawHub requests", async () => {
+    let attempts = 0;
+    await expect(
+      fetchClawHubSkillSecurityVerdicts({
+        items: [],
+        skipAuth: true,
+        fetchImpl: async () => {
+          attempts += 1;
+          return new Response("temporarily unavailable", { status: 503 });
+        },
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/skills/-/security-verdicts failed (503)");
+    expect(attempts).toBe(1);
+  });
+
   it("wraps malformed successful ClawHub JSON responses", async () => {
     await expect(
       searchClawHubSkills({
         query: "calendar",
         fetchImpl: async () =>
           new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+  });
+
+  it("rejects malformed UTF-8 in otherwise valid ClawHub JSON", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response(malformedUtf8('{"results":[{"slug":"', '"}]}'), {
             status: 200,
             headers: { "content-type": "application/json" },
           }),
@@ -905,22 +1266,29 @@ describe("clawhub helpers", () => {
   });
 
   it("times out and cancels stalled ClawHub error bodies", async () => {
-    const stalled = createStalledBodyResponse({
-      firstChunk: new TextEncoder().encode("partial error"),
-      headers: { "content-type": "text/plain" },
-      status: 500,
-      statusText: "Server Error",
-    });
+    const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
     await expect(
       searchClawHubSkills({
         query: "calendar",
         timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
+        fetchImpl: async () => {
+          const stalled = createStalledBodyResponse({
+            firstChunk: new TextEncoder().encode("partial error"),
+            headers: { "content-type": "text/plain", "retry-after": "0" },
+            status: 500,
+            statusText: "Server Error",
+          });
+          stalledResponses.push(stalled);
+          return stalled.response;
+        },
       }),
     ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    for (const stalled of stalledResponses) {
+      expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    }
+    const finalResponse = stalledResponses.at(-1);
+    expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
@@ -963,7 +1331,8 @@ describe("clawhub helpers", () => {
     try {
       await searchClawHubSkills({
         query: "calendar",
-        fetchImpl: async () => new Response(oversized, { status: 500 }),
+        fetchImpl: async () =>
+          new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
       });
     } catch (caught) {
       error = caught;
@@ -1013,7 +1382,7 @@ describe("clawhub helpers", () => {
   });
 
   it("annotates 429 errors with the reset hint but no sign-in hint when authenticated", async () => {
-    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    process.env.CLAWHUB_TOKEN = "env-token-123";
     await expect(
       searchClawHubSkills({
         query: "calendar",
@@ -1031,7 +1400,7 @@ describe("clawhub helpers", () => {
   });
 
   it("skips the reset suffix on 429 when Retry-After is an HTTP-date", async () => {
-    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    process.env.CLAWHUB_TOKEN = "env-token-123";
     await expect(
       searchClawHubSkills({
         query: "calendar",
@@ -1149,7 +1518,7 @@ describe("clawhub helpers", () => {
   });
 
   it("does not send ambient ClawHub auth tokens to off-registry resolver archive URLs", async () => {
-    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    process.env.CLAWHUB_TOKEN = "env-token-123";
     let requestedUrl = "";
     let requestedInit: RequestInit | undefined;
 
@@ -1177,3 +1546,4 @@ describe("clawhub helpers", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,10 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isNodeVersionManagerRuntime,
-  resolveLinuxSystemCaBundle,
-} from "../bootstrap/node-extra-ca-certs.js";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
 import { VERSION } from "../version.js";
 import {
@@ -22,9 +18,8 @@ import {
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "./constants.js";
+import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
-
-export { isNodeVersionManagerRuntime, resolveLinuxSystemCaBundle };
 
 type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
@@ -194,6 +189,7 @@ function addCommonEnvConfiguredBinDirs(
   options: Pick<MinimalServicePathOptions, "cwd" | "home">,
 ): void {
   addEnvConfiguredBinDir(dirs, env?.PNPM_HOME, options);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env?.PNPM_HOME, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"), options);
@@ -274,7 +270,7 @@ function resolveDarwinUserBinDirs(
   addEnvConfiguredBinDir(dirs, env?.NVM_DIR, pathOptions);
   // fnm: use aliases/default (not current)
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
+  // pnpm 10 placed binaries directly in PNPM_HOME; pnpm 11 uses PNPM_HOME/bin.
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
@@ -288,7 +284,9 @@ function resolveDarwinUserBinDirs(
   addExistingDir(dirs, `${home}/Library/Application Support/fnm/aliases/default/bin`, existsSync); // fnm default
   addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
   // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
+  addExistingDir(dirs, `${home}/Library/pnpm/bin`, existsSync); // pnpm 11 default
   addExistingDir(dirs, `${home}/Library/pnpm`, existsSync); // pnpm default
+  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 XDG fallback
   addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm XDG fallback
 
   return dirs;
@@ -330,12 +328,13 @@ function resolveLinuxUserBinDirs(
   addExistingDir(dirs, `${home}/.local/share/fnm/current/bin`, existsSync); // fnm legacy current symlink
   addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
   addExistingDir(dirs, `${home}/.fnm/current/bin`, existsSync); // fnm legacy current symlink
+  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 global bin
   addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm global bin
 
   return dirs;
 }
 
-export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
+function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
     // Windows scheduled tasks inherit PATH from the task host; generated cmd
@@ -369,10 +368,10 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   for (const dir of extraDirs) {
     add(dir);
   }
-  for (const dir of userDirs) {
+  for (const dir of systemDirs) {
     add(dir);
   }
-  for (const dir of systemDirs) {
+  for (const dir of userDirs) {
     add(dir);
   }
 
@@ -388,7 +387,7 @@ export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptio
   });
 }
 
-export function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
+function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
@@ -409,6 +408,7 @@ function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): 
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
+  existingNodeOptions?: string;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
@@ -429,6 +429,7 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
+    NODE_OPTIONS: resolveGatewayHeapNodeOptions(params.existingNodeOptions),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
@@ -457,10 +458,12 @@ export function buildNodeServiceEnvironment(params: {
     params.execPath,
   );
   const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
+  const gatewayPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+    OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),

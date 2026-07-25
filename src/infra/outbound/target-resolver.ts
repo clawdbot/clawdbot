@@ -28,10 +28,10 @@ import {
 } from "./target-normalization.js";
 
 /** Directory-backed destination kind used by outbound target resolution. */
-export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
+type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
 /** Strategy for resolving multiple matching directory entries. */
-export type ResolveAmbiguousMode = "error" | "best" | "first";
+type ResolveAmbiguousMode = "error" | "best" | "first";
 
 /** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
 export type ResolvedMessagingTarget = {
@@ -43,7 +43,7 @@ export type ResolvedMessagingTarget = {
 };
 
 /** Result of resolving a user-supplied outbound target. */
-export type ResolveMessagingTargetResult =
+type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
@@ -332,12 +332,14 @@ async function getDirectoryEntries(params: {
     runtime: params.runtime,
     plugin: params.plugin,
   };
+  const cacheQuery = normalizeQuery(params.query ?? "");
   const cacheKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
     source: "cache",
     signature,
+    query: cacheQuery,
   });
   const cached = directoryCache.get(cacheKey, params.cfg);
   if (cached) {
@@ -359,6 +361,7 @@ async function getDirectoryEntries(params: {
     kind: params.kind,
     source: "live",
     signature,
+    query: cacheQuery,
   });
   const liveEntries = await listDirectoryEntries({
     ...listParams,
@@ -405,7 +408,7 @@ function pickAmbiguousMatch(
 }
 
 /** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
-export async function resolveMessagingTarget(params: {
+async function resolveMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   input: string;
@@ -476,6 +479,9 @@ export async function resolveMessagingTarget(params: {
   });
   if (match.kind === "single") {
     const entry = match.entry;
+    if (!entry) {
+      throw new Error("Single directory match is missing its entry");
+    }
     return {
       ok: true,
       target: {

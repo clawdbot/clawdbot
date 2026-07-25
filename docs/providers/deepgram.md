@@ -7,15 +7,15 @@ read_when:
 title: "Deepgram"
 ---
 
-Deepgram is a speech-to-text API. In OpenClaw it is used for inbound
-audio/voice-note transcription through `tools.media.audio` and for Voice Call
-streaming STT through `plugins.entries.voice-call.config.streaming`.
+Deepgram is a speech-to-text API. OpenClaw uses it for inbound audio/voice-note
+transcription through `tools.media.audio` and for Voice Call streaming STT
+through `plugins.entries.voice-call.config.streaming`.
 
-For batch transcription, OpenClaw uploads the complete audio file to Deepgram
-and injects the transcript into the reply pipeline (`{{Transcript}}` +
-`[Audio]` block). For Voice Call streaming, OpenClaw forwards live G.711
-u-law frames over Deepgram's WebSocket `listen` endpoint and emits partial or
-final transcripts as Deepgram returns them.
+Batch transcription uploads the complete audio file to Deepgram and injects
+the transcript into the reply pipeline (`{{Transcript}}` + `[Audio]` block).
+Voice Call streaming forwards live G.711 u-law frames over Deepgram's
+WebSocket `listen` endpoint and emits partial/final transcripts as Deepgram
+returns them.
 
 | Detail        | Value                                                      |
 | ------------- | ---------------------------------------------------------- |
@@ -28,12 +28,9 @@ final transcripts as Deepgram returns them.
 
 <Steps>
   <Step title="Set your API key">
-    Add your Deepgram API key to the environment:
-
-    ```
+    ```bash
     DEEPGRAM_API_KEY=dg_...
     ```
-
   </Step>
   <Step title="Enable the audio provider">
     ```json5
@@ -57,13 +54,14 @@ final transcripts as Deepgram returns them.
 
 ## Configuration options
 
-| Option            | Path                                                         | Description                           |
-| ----------------- | ------------------------------------------------------------ | ------------------------------------- |
-| `model`           | `tools.media.audio.models[].model`                           | Deepgram model id (default: `nova-3`) |
-| `language`        | `tools.media.audio.models[].language`                        | Language hint (optional)              |
-| `detect_language` | `tools.media.audio.providerOptions.deepgram.detect_language` | Enable language detection (optional)  |
-| `punctuate`       | `tools.media.audio.providerOptions.deepgram.punctuate`       | Enable punctuation (optional)         |
-| `smart_format`    | `tools.media.audio.providerOptions.deepgram.smart_format`    | Enable smart formatting (optional)    |
+| Option     | Path                            | Description                           |
+| ---------- | ------------------------------- | ------------------------------------- |
+| `model`    | `tools.media.models[].model`    | Deepgram model id (default: `nova-3`) |
+| `language` | `tools.media.models[].language` | Language hint (optional)              |
+
+`providerOptions.deepgram` merges extra query params directly into the
+Deepgram `/listen` request, so any Deepgram-supported param name works
+(for example `detect_language`, `punctuate`, `smart_format`):
 
 <Tabs>
   <Tab title="With language hint">
@@ -108,15 +106,16 @@ final transcripts as Deepgram returns them.
 The bundled `deepgram` plugin also registers a realtime transcription provider
 for the Voice Call plugin.
 
-| Setting         | Config path                                                             | Default                          |
-| --------------- | ----------------------------------------------------------------------- | -------------------------------- |
-| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY` |
-| Model           | `...deepgram.model`                                                     | `nova-3`                         |
-| Language        | `...deepgram.language`                                                  | (unset)                          |
-| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                          |
-| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                           |
-| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                            |
-| Interim results | `...deepgram.interimResults`                                            | `true`                           |
+| Setting         | Config path                                                             | Default                                      |
+| --------------- | ----------------------------------------------------------------------- | -------------------------------------------- |
+| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY`             |
+| Base URL        | `...deepgram.baseUrl`                                                   | `DEEPGRAM_BASE_URL` or Deepgram's public API |
+| Model           | `...deepgram.model`                                                     | `nova-3`                                     |
+| Language        | `...deepgram.language`                                                  | (unset)                                      |
+| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                      |
+| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                       |
+| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
+| Interim results | `...deepgram.interimResults`                                            | `true`                                       |
 
 ```json5
 {
@@ -143,6 +142,12 @@ for the Voice Call plugin.
 }
 ```
 
+For a [Deepgram custom endpoint](https://developers.deepgram.com/reference/custom-endpoints),
+set `baseUrl` to the endpoint root, including any base path but not `/listen`.
+Realtime endpoints accept `http://`, `https://`, `ws://`, and `wss://`. HTTP
+maps to WS, HTTPS maps to WSS, and explicit WebSocket schemes stay unchanged.
+Malformed URLs and other schemes fail during session setup.
+
 <Note>
 Voice Call receives telephony audio as 8 kHz G.711 u-law. The Deepgram
 streaming provider defaults to `encoding: "mulaw"` and `sampleRate: 8000`, so
@@ -157,8 +162,7 @@ Twilio media frames can be forwarded directly.
     the simplest path.
   </Accordion>
   <Accordion title="Proxy and custom endpoints">
-    Override endpoints or headers with `tools.media.audio.baseUrl` and
-    `tools.media.audio.headers` when using a proxy.
+    Override endpoints or headers on the Deepgram `tools.media.models[]` entry when using a proxy.
   </Accordion>
   <Accordion title="Output behavior">
     Output follows the same audio rules as other providers (size caps, timeouts,

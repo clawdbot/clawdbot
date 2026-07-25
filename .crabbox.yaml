@@ -1,14 +1,17 @@
 profile: openclaw-check
-# Default OpenClaw runner spend to the Azure-backed Crabbox account.
-# Use `--provider aws` only for AWS-specific runner proof.
-provider: azure
+# Default OpenClaw remote proof to Blacksmith Testbox through Crabbox: the
+# delegated CI environment owns checkout/hydration and leases reliably.
+# Use `--provider aws` for direct AWS runner proof; `--provider azure` spends
+# the Azure-backed credit account (its coordinator has stalled under load).
+provider: blacksmith-testbox
 class: standard
 capacity:
+  # Class/capacity apply only to direct VM providers (`--provider aws|azure`);
+  # delegated Blacksmith runs ignore them. Keep explicit on-demand capacity
+  # instead of low-priority spot, whose regional quota is too small for broad
+  # maintainer proof or parallel Crabbox lanes.
   market: on-demand
   strategy: most-available
-  # The Azure-backed billing account carries the OpenClaw runner credits; use
-  # explicit on-demand capacity instead of low-priority spot, whose regional
-  # quota is too small for broad maintainer proof or parallel Crabbox lanes.
   hints: true
 actions:
   workflow: .github/workflows/crabbox-hydrate.yml

@@ -30,16 +30,19 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Arcee AI (Trinity models)](/providers/arcee)
 - [Azure Speech](/providers/azure-speech)
+- [Baseten (Inkling + Model APIs)](/providers/baseten)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Cerebras](/providers/cerebras)
 - [Chutes](/providers/chutes)
-- [Cohere](/providers/cohere)
+- [ClawRouter (managed multi-provider routing)](/providers/clawrouter)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [Cohere](/providers/cohere)
 - [ComfyUI](/providers/comfy)
 - [DeepSeek](/providers/deepseek)
 - [ds4 (local DeepSeek V4)](/providers/ds4)
 - [ElevenLabs](/providers/elevenlabs)
 - [fal](/providers/fal)
+- [Featherless AI](/providers/featherless)
 - [Fireworks](/providers/fireworks)
 - [GitHub Copilot](/providers/github-copilot)
 - [GMI Cloud](/providers/gmi)
@@ -51,11 +54,12 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [LM Studio (local models)](/providers/lmstudio)
+- [LongCat](/providers/longcat)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
-- [NVIDIA](/providers/nvidia)
 - [NovitaAI](/providers/novita)
+- [NVIDIA](/providers/nvidia)
 - [Ollama (cloud + local models)](/providers/ollama)
 - [Ollama Cloud](/providers/ollama-cloud)
 - [OpenAI (API + Codex)](/providers/openai)
@@ -65,13 +69,12 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
-- [Qwen OAuth / Portal](/providers/qwen-oauth)
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
-- [Tencent Cloud (TokenHub)](/providers/tencent)
+- [Tencent Cloud (TokenHub / TokenPlan)](/providers/tencent)
 - [Together AI](/providers/together)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
@@ -84,7 +87,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Shared overview pages
 
-- [Additional bundled variants](/providers/models#additional-bundled-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
+- [Additional provider variants](/providers/models#additional-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
 - [Image Generation](/tools/image-generation) - Shared `image_generate` tool, provider selection, and failover
 - [Music Generation](/tools/music-generation) - Shared `music_generate` tool, provider selection, and failover
 - [Video Generation](/tools/video-generation) - Shared `video_generate` tool, provider selection, and failover
@@ -94,9 +97,9 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Deepgram (audio transcription)](/providers/deepgram)
 - [ElevenLabs](/providers/elevenlabs#speech-to-text)
 - [Mistral](/providers/mistral#audio-transcription-voxtral)
-- [OpenAI](/providers/openai#speech-to-text)
+- [OpenAI](/providers/openai)
 - [SenseAudio](/providers/senseaudio)
-- [xAI](/providers/xai#speech-to-text)
+- [xAI](/providers/xai)
 
 ## Community tools
 

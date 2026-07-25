@@ -11,6 +11,7 @@ import {
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
+  BrowserOpenResult,
   BrowserStatus,
   BrowserTab,
   BrowserTransport,
@@ -44,7 +45,12 @@ function resolveBrowserClientTimeoutMs(
 }
 
 function withProfilePath(baseUrl: string | undefined, path: string, profile?: string): string {
-  return withBaseUrl(baseUrl, `${path}${buildProfileQuery(profile)}`);
+  const profileQuery = buildProfileQuery(profile);
+  if (!profileQuery) {
+    return withBaseUrl(baseUrl, path);
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return withBaseUrl(baseUrl, `${path}${separator}${profileQuery.slice(1)}`);
 }
 
 async function sendProfilePost(
@@ -65,12 +71,15 @@ async function sendTabTargetRequest(params: {
   method: "POST" | "DELETE";
   opts: BrowserClientProfileOptions | undefined;
   body?: object;
-}): Promise<void> {
-  await fetchBrowserJson(withProfilePath(params.baseUrl, params.path, params.opts?.profile), {
-    method: params.method,
-    ...(params.body ? { headers: JSON_HEADERS, body: JSON.stringify(params.body) } : {}),
-    timeoutMs: resolveBrowserClientTimeoutMs(params.opts, 5000),
-  });
+}): Promise<{ ok: true; targetId?: string }> {
+  return await fetchBrowserJson(
+    withProfilePath(params.baseUrl, params.path, params.opts?.profile),
+    {
+      method: params.method,
+      ...(params.body ? { headers: JSON_HEADERS, body: JSON.stringify(params.body) } : {}),
+      timeoutMs: resolveBrowserClientTimeoutMs(params.opts, 5000),
+    },
+  );
 }
 
 /** Profile status record returned by browser profile listing. */
@@ -80,13 +89,29 @@ export type ProfileStatus = {
   cdpPort: number | null;
   cdpUrl: string | null;
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "extension";
   running: boolean;
   tabCount: number;
   isDefault: boolean;
   isRemote: boolean;
   missingFromConfig?: boolean;
   reconcileReason?: string | null;
+};
+
+export type SystemProfileInfo = {
+  browser: "chrome" | "brave" | "edge" | "chromium";
+  id: string;
+  name: string;
+  hasCookies: boolean;
+};
+
+export type BrowserImportProfileResult = {
+  ok: true;
+  systemProfile: string;
+  into: string;
+  browser: SystemProfileInfo["browser"];
+  cookies: { total: number; imported: number; failed: number; skipped: number };
+  domains: string[];
 };
 
 /** Result returned when a managed browser profile directory is reset. */
@@ -178,6 +203,35 @@ export async function browserProfiles(
     },
   );
   return res.profiles ?? [];
+}
+
+/** List Chrome-family profiles available on the local macOS host. */
+export async function browserSystemProfiles(
+  baseUrl?: string,
+  opts?: { browser?: string; timeoutMs?: number },
+): Promise<SystemProfileInfo[]> {
+  const query = opts?.browser ? `?browser=${encodeURIComponent(opts.browser)}` : "";
+  const res = await fetchBrowserJson<{ systemProfiles: SystemProfileInfo[] }>(
+    withBaseUrl(baseUrl, `/system-profiles${query}`),
+    { timeoutMs: resolveBrowserClientTimeoutMs(opts, 3000) },
+  );
+  return res.systemProfiles ?? [];
+}
+
+/** Import system-profile cookies into a managed browser profile. */
+export async function browserImportProfile(
+  baseUrl: string | undefined,
+  opts: { browser?: string; systemProfile?: string; into?: string; domains?: string[] },
+): Promise<BrowserImportProfileResult> {
+  return await fetchBrowserJson<BrowserImportProfileResult>(
+    withBaseUrl(baseUrl, "/profiles/import"),
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(opts),
+      timeoutMs: 120_000,
+    },
+  );
 }
 
 /** Start the selected browser profile. */
@@ -291,13 +345,16 @@ export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
   opts?: { profile?: string; label?: string; timeoutMs?: number },
-): Promise<BrowserTab> {
-  return await fetchBrowserJson<BrowserTab>(withProfilePath(baseUrl, "/tabs/open", opts?.profile), {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
-    timeoutMs: resolveBrowserClientTimeoutMs(opts, 15000),
-  });
+): Promise<BrowserOpenResult> {
+  return await fetchBrowserJson<BrowserOpenResult>(
+    withProfilePath(baseUrl, "/tabs/open", opts?.profile),
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
+      timeoutMs: resolveBrowserClientTimeoutMs(opts, 15000),
+    },
+  );
 }
 
 /** Focus an existing browser tab. */
@@ -305,9 +362,9 @@ export async function browserFocusTab(
   baseUrl: string | undefined,
   targetId: string,
   opts?: { profile?: string; timeoutMs?: number },
-): Promise<void> {
+): Promise<{ ok: true; targetId?: string }> {
   const body = { targetId };
-  await sendTabTargetRequest({ baseUrl, path: "/tabs/focus", method: "POST", opts, body });
+  return await sendTabTargetRequest({ baseUrl, path: "/tabs/focus", method: "POST", opts, body });
 }
 
 /** Close an existing browser tab. */
@@ -317,6 +374,16 @@ export async function browserCloseTab(
   opts?: { profile?: string; timeoutMs?: number },
 ): Promise<void> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
+  await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
+}
+
+/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
+export async function browserCloseTabByRawTargetId(
+  baseUrl: string | undefined,
+  targetId: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
+  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
   await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 

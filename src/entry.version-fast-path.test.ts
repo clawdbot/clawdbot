@@ -83,4 +83,45 @@ describe("entry root version fast path", () => {
       }),
     ).toBe(false);
   });
+
+  it("calls exit(1) via injected exit hook when resolveVersion rejects", async () => {
+    const exit = vi.fn();
+    const output = vi.fn();
+    const resolveVersion = vi
+      .fn<() => Promise<never>>()
+      .mockRejectedValue(new Error("version resolution failed"));
+
+    expect(
+      tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
+        output,
+        exit,
+        resolveVersion,
+      }),
+    ).toBe(true);
+    await flushVersionFastPath();
+    expect(resolveVersion).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(output).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls injected onError when provided and resolveVersion rejects", async () => {
+    const exit = vi.fn();
+    const onError = vi.fn();
+    const resolveVersion = vi
+      .fn<() => Promise<never>>()
+      .mockRejectedValue(new Error("version resolution failed"));
+
+    expect(
+      tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
+        exit,
+        onError,
+        resolveVersion,
+      }),
+    ).toBe(true);
+    await flushVersionFastPath();
+    expect(resolveVersion).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(exit).not.toHaveBeenCalled();
+  });
 });

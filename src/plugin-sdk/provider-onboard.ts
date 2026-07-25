@@ -1,7 +1,10 @@
 // Keep provider onboarding helpers dependency-light so bundled provider plugins
 // do not pull heavyweight runtime graphs at activation time.
 
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
@@ -140,7 +143,9 @@ function resolveProviderModelMergeState(
   providerId: string,
 ): ProviderModelMergeState {
   const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProviderKey = findNormalizedProviderKey(providers, providerId);
+  const existingProviderKey = Object.hasOwn(providers, providerId)
+    ? providerId
+    : findNormalizedProviderKey(providers, providerId);
   const existingProvider =
     existingProviderKey !== undefined
       ? (providers[existingProviderKey] as ModelProviderConfig | undefined)
@@ -150,8 +155,11 @@ function resolveProviderModelMergeState(
     : [];
   // Collapse case/alias variants into the canonical provider key before writing,
   // otherwise onboarding can leave two provider blocks for the same backend.
-  if (existingProviderKey && existingProviderKey !== providerId) {
-    delete providers[existingProviderKey];
+  const normalizedProviderId = normalizeProviderId(providerId);
+  for (const key of Object.keys(providers)) {
+    if (key !== providerId && normalizeProviderId(key) === normalizedProviderId) {
+      delete providers[key];
+    }
   }
   return {
     providers,
@@ -258,6 +266,84 @@ export function withAgentModelAliases(
   return next;
 }
 
+function isMergeableProviderConfig(
+  value: ModelProviderConfig | undefined,
+): value is ModelProviderConfig {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function mergeOnboardProviderRequest(
+  existing: ModelProviderConfig["request"],
+  patch: ModelProviderConfig["request"],
+): ModelProviderConfig["request"] {
+  if (!existing) {
+    return patch;
+  }
+  const merged = { ...existing, ...patch };
+  // Keep operator transport policy, but never resurrect nested credentials
+  // that the onboarding owner intentionally omitted from its patch.
+  if (!patch || !("auth" in patch)) {
+    delete merged.auth;
+  }
+  if (!patch || !("headers" in patch)) {
+    delete merged.headers;
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergeOnboardProviderConfigs(
+  existingProviders: Record<string, ModelProviderConfig> | undefined,
+  patchProviders: Record<string, ModelProviderConfig>,
+): Record<string, ModelProviderConfig> {
+  const merged: Record<string, ModelProviderConfig> = { ...existingProviders };
+  for (const [providerId, providerConfig] of Object.entries(patchProviders)) {
+    const normalizedProviderId = normalizeProviderId(providerId);
+    const patchProviderKey = Object.hasOwn(patchProviders, normalizedProviderId)
+      ? normalizedProviderId
+      : findNormalizedProviderKey(patchProviders, providerId);
+    if (providerId !== patchProviderKey) {
+      continue;
+    }
+    const existingProviderKey = findNormalizedProviderKey(existingProviders ?? {}, providerId);
+    const existingProvider =
+      existingProviders?.[providerId] ??
+      (existingProviderKey ? existingProviders?.[existingProviderKey] : undefined);
+    for (const key of Object.keys(existingProviders ?? {})) {
+      // The patch owns the canonical key; retaining its old case variant would
+      // leave two runtime candidates with conflicting auth and endpoint state.
+      if (key !== providerId && normalizeProviderId(key) === normalizedProviderId) {
+        delete merged[key];
+      }
+    }
+    if (
+      !isMergeableProviderConfig(existingProvider) ||
+      !isMergeableProviderConfig(providerConfig)
+    ) {
+      merged[providerId] = providerConfig;
+      continue;
+    }
+    const nextProvider = { ...existingProvider, ...providerConfig };
+    for (const key of ["apiKey", "auth", "authHeader", "headers"] as const) {
+      if (!(key in providerConfig)) {
+        delete nextProvider[key];
+      }
+    }
+    if (!("request" in providerConfig) || providerConfig.request) {
+      const mergedRequest = mergeOnboardProviderRequest(
+        existingProvider.request,
+        providerConfig.request,
+      );
+      if (mergedRequest) {
+        nextProvider.request = mergedRequest;
+      } else {
+        delete nextProvider.request;
+      }
+    }
+    merged[providerId] = nextProvider;
+  }
+  return merged;
+}
+
 /** Write onboarding-auth model aliases and provider configs into the canonical config sections. */
 export function applyOnboardAuthAgentModelsAndProviders(
   cfg: OpenClawConfig,
@@ -270,6 +356,7 @@ export function applyOnboardAuthAgentModelsAndProviders(
     ...cfg.agents?.defaults?.models,
     ...params.agentModels,
   });
+  const mergedProviders = mergeOnboardProviderConfigs(cfg.models?.providers, params.providers);
   return {
     ...cfg,
     agents: {
@@ -280,8 +367,9 @@ export function applyOnboardAuthAgentModelsAndProviders(
       },
     },
     models: {
+      ...cfg.models,
       mode: cfg.models?.mode ?? "merge",
-      providers: params.providers,
+      providers: mergedProviders,
     },
   };
 }
@@ -568,7 +656,7 @@ export function createModelCatalogPresetAppliers<TArgs extends unknown[]>(params
   });
 }
 
-/** Ensure static model allowlists include a provider model ref after onboarding. */
+/** Ensure static per-model config includes a provider model ref after onboarding. */
 export function ensureModelAllowlistEntry(params: {
   cfg: OpenClawConfig;
   modelRef: string;

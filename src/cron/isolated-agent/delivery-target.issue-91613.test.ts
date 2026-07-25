@@ -3,7 +3,7 @@
 // value that drains replies to the wrong room and replays there after a restart). It must refuse;
 // crons carrying an explicit target / their own delivery context are unaffected.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../../infra/outbound/targets.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { extractDeliveryInfoMock } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
@@ -31,9 +32,13 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: vi.fn(),
-}));
+vi.mock("../../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = vi.fn();
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
@@ -193,10 +198,14 @@ function setLastSessionEntry(params: {
   setMainSessionEntry({
     sessionId: params.sessionId,
     updatedAt: 1000,
-    lastChannel: params.lastChannel,
-    lastTo: params.lastTo,
-    ...(params.lastThreadId ? { lastThreadId: params.lastThreadId } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: params.lastChannel,
+        to: params.lastTo,
+        threadId: params.lastThreadId,
+        accountId: params.lastAccountId,
+      },
+    }),
   });
 }
 

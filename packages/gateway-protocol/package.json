@@ -1,10 +1,34 @@
 {
   "name": "@openclaw/gateway-protocol",
-  "version": "0.0.0-private",
-  "private": true,
-  "files": [
-    "dist"
+  "version": "2026.7.2",
+  "description": "Typed schemas and runtime validators for the OpenClaw Gateway WebSocket protocol",
+  "keywords": [
+    "gateway",
+    "openclaw",
+    "protocol",
+    "typebox",
+    "websocket"
   ],
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "packages/gateway-protocol"
+  },
+  "files": [
+    "dist",
+    "npm-shrinkwrap.json",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "protocol.schema.json"
+  ],
+  "sideEffects": false,
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -24,6 +48,16 @@
       "import": "./dist/connect-error-details.mjs",
       "default": "./dist/connect-error-details.mjs"
     },
+    "./frame-guards": {
+      "types": "./dist/frame-guards.d.mts",
+      "import": "./dist/frame-guards.mjs",
+      "default": "./dist/frame-guards.mjs"
+    },
+    "./gateway-error-details": {
+      "types": "./dist/gateway-error-details.d.mts",
+      "import": "./dist/gateway-error-details.mjs",
+      "default": "./dist/gateway-error-details.mjs"
+    },
     "./schema": {
       "types": "./dist/schema.d.mts",
       "import": "./dist/schema.mjs",
@@ -41,9 +75,21 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/client-info.ts src/connect-error-details.ts src/schema.ts src/startup-unavailable.ts src/version.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/client-info.ts src/connect-error-details.ts src/frame-guards.ts src/gateway-error-details.ts src/schema.ts src/startup-unavailable.ts src/version.ts --no-config --platform node --format esm --dts --out-dir dist --clean",
+    "prepack": "pnpm run build && node --import tsx ../../scripts/protocol-gen.ts --out ./protocol.schema.json"
   },
   "dependencies": {
-    "typebox": "1.1.39"
+    "typebox": "1.3.6"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "openclaw": {
+    "release": {
+      "publishToNpm": true
+    }
   }
 }

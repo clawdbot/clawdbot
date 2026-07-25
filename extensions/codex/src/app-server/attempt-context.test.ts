@@ -2,19 +2,49 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
-  remapCodexContextFilePath,
+  readMirroredSessionHistoryMessages,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearMemoryPluginState();
+});
+
 describe("Codex app-server attempt context", () => {
+  it("treats missing mirrored session history as empty without hook warning", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-attempt-context-history-"));
+    const sessionFile = path.join(dir, "session.jsonl");
+    try {
+      await expect(
+        readMirroredSessionHistoryMessages({
+          sessionFile,
+          sessionId: "codex-session",
+          sessionKey: "codex-session",
+        }),
+      ).resolves.toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
     const tools = [
       {
@@ -63,7 +93,6 @@ describe("Codex app-server attempt context", () => {
         contextFiles: [],
         promptContextFiles: [],
         developerInstructionFiles: [],
-        heartbeatReferenceFiles: [],
       },
       skillsPrompt: "",
       tools,
@@ -117,33 +146,54 @@ describe("Codex app-server attempt context", () => {
     expect(context.memoryToolRouted).toBe(false);
   });
 
-  it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/real/workspace/..context/SOUL.md",
-          content: "Soul voice goes here.",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/sandbox/workspace/..context/SOUL.md",
-      content: "Soul voice goes here.",
+  it("passes agent context to Codex memory collaboration guidance", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-memory-"));
+    let observedContext:
+      | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
+      | undefined;
+    registerMemoryCapability("memory-core", {
+      promptBuilder: (context) => {
+        observedContext = context;
+        return [
+          "## Agent Memory",
+          `agent=${context.agentId} session=${context.agentSessionKey}`,
+          "",
+        ];
+      },
     });
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/outside/SOUL.md",
-          content: "outside",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/outside/SOUL.md",
-      content: "outside",
-    });
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:marketing-agent:session-1",
+          config: {
+            agents: {
+              defaults: { workspace: workspaceDir },
+              list: [{ id: "marketing-agent", default: true, workspace: workspaceDir }],
+            },
+          },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sessionKey: "agent:marketing-agent:session-1",
+        sessionAgentId: "marketing-agent",
+        memoryToolNames: ["memory_search", "memory_get"],
+        sandboxed: true,
+      });
+
+      expect(context.memoryToolRouted).toBe(true);
+      expect(observedContext).toMatchObject({
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:session-1",
+        sandboxed: true,
+      });
+      expect(context.memoryCollaborationInstructions).toContain(
+        "agent=marketing-agent session=agent:marketing-agent:session-1",
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("reads and compares thread-bootstrap context-engine projections", () => {

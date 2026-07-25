@@ -1,0 +1,31 @@
+title: Active Talk agent-run control boundaries
+
+scenario:
+  id: active-talk-agent-run-status
+  surface: voice
+  category: voice.realtime-talk-sessions
+  coverage:
+    primary:
+      - voice.active-talk-agent-run-status
+  objective: Verify a real Gateway Talk session drives status, steering, follow-up, and cancellation against one active agent run.
+  successCriteria:
+    - A registered mock realtime provider creates a browser-owned Talk session with consult and control tools through Gateway RPC.
+    - A consult tool call starts a real active agent run through the Gateway chat path.
+    - Status, steering, and follow-up RPCs observe and queue work to that active run.
+    - Cancellation RPC aborts that same active run from the owning browser connection.
+  docsRefs:
+    - docs/nodes/talk.md
+    - docs/web/control-ui.md
+  codeRefs:
+    - src/gateway/server-methods/talk-client.ts
+    - src/talk/agent-run-control.ts
+    - test/e2e/qa-lab/runtime/media-talk-gateway.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/media-talk-gateway.ts
+    summary: Starts a real Gateway and persistent WebChat client, creates a Talk session, starts an agent consult, and exercises status, steer, follow-up, and cancel RPCs.
+    args:
+      - --scenario
+      - active-talk-agent-run-status
+      - --artifact-base
+      - ${outputDir}

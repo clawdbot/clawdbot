@@ -1,6 +1,11 @@
 // Matrix tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { MatrixConfigSchema } from "./config-schema.js";
+import { MatrixChannelConfigSchema } from "./config-schema.js";
+
+const MatrixConfigSchema = MatrixChannelConfigSchema.runtime;
+if (!MatrixConfigSchema) {
+  throw new Error("expected Matrix runtime config schema");
+}
 
 describe("MatrixConfigSchema SecretInput", () => {
   it("accepts SecretRef accessToken at top-level", () => {
@@ -68,7 +73,9 @@ describe("MatrixConfigSchema SecretInput", () => {
     if (!result.success) {
       throw new Error("expected schema parse to succeed");
     }
-    expect(result.data.groups?.["!room:example.org"]?.account).toBe("axis");
+    expect(result.data).toMatchObject({
+      groups: { "!room:example.org": { account: "axis" } },
+    });
   });
 
   it("accepts legacy room-level account assignments", () => {
@@ -86,25 +93,48 @@ describe("MatrixConfigSchema SecretInput", () => {
     if (!result.success) {
       throw new Error("expected schema parse to succeed");
     }
-    expect(result.data.rooms?.["!room:example.org"]?.account).toBe("axis");
+    expect(result.data).toMatchObject({
+      rooms: { "!room:example.org": { account: "axis" } },
+    });
   });
 
-  it("accepts quiet Matrix streaming mode", () => {
+  it.each(["groups", "rooms"] as const)("rejects unknown %s entry fields", (scope) => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
-      streaming: "quiet",
+      [scope]: {
+        "!room:example.org": {
+          enabled: true,
+          unknownSetting: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts nested quiet Matrix streaming mode with delivery controls", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      streaming: {
+        mode: "quiet",
+        chunkMode: "newline",
+        block: { enabled: true, coalesce: { idleMs: 100 } },
+      },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts scalar progress Matrix streaming mode", () => {
+  it.each([
+    ["scalar streaming mode", { streaming: "quiet" }],
+    ["boolean streaming", { streaming: true }],
+  ])("rejects legacy %s spelling", (_name, overrides) => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
-      streaming: "progress",
+      ...overrides,
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("accepts Matrix streaming preview tool progress config", () => {
@@ -117,6 +147,7 @@ describe("MatrixConfigSchema SecretInput", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
         preview: {
           toolProgress: true,

@@ -1,39 +1,162 @@
 /** Tests CLI JSON/JSONL output parsing, streamed deltas, and error extraction. */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
-  parseCliJson,
-  parseCliJsonl,
-  supportsCliJsonlToolEvents,
+  formatCliOutputError,
+  parseCliOutput,
+  type CliThinkingProgress,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
-describe("supportsCliJsonlToolEvents", () => {
-  it.each([
-    ["Claude provider", { command: "claude", output: "jsonl" as const }, "claude-cli", true],
-    [
-      "explicit Claude dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "claude-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["Gemini provider", { command: "gemini", output: "jsonl" as const }, "google-gemini-cli", true],
-    [
-      "explicit Gemini dialect",
-      { command: "custom", output: "jsonl" as const, jsonlDialect: "gemini-stream-json" as const },
-      "custom-cli",
-      true,
-    ],
-    ["generic JSONL", { command: "custom", output: "jsonl" as const }, "custom-cli", false],
-  ])("%s: %s", (_name, backend, providerId, expected) => {
-    expect(supportsCliJsonlToolEvents({ backend, providerId })).toBe(expected);
-  });
-});
+type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
+
+function parseCliJson(raw: string, backend: ParseCliOutputParams["backend"], providerId = "") {
+  return parseCliOutput({ raw, backend, providerId, outputMode: "json" });
+}
+
+function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
+  return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
+}
 
 describe("parseCliJson", () => {
+  it("preserves Claude max-turn terminal context in JSON mode", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "session-json-max-turns",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (3)"],
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-json-max-turns",
+      usage: undefined,
+      errorText: "Reached maximum number of turns (3)",
+      terminalFailure: { reason: "max_turns", limit: 3 },
+    });
+  });
+
+  it("classifies Claude is_error JSON results as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: 'API Error: 400 {"error":{"message":"Bad request"}}',
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "Bad request",
+    });
+  });
+
+  it("classifies generic is_error JSON results as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        is_error: true,
+        result: "429 rate limit exceeded",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "429 rate limit exceeded",
+    });
+  });
+
+  it("keeps successful JSON result message payloads as assistant text", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        message: "done",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("does not classify null JSON result error fields as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        error: null,
+        message: "done",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("classifies JSON status error result payloads as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        status: "error",
+        result: "rate limit",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "rate limit",
+    });
+  });
+
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
     const result = parseCliJson(
       [
@@ -669,6 +792,52 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("preserves streamed Claude text when the final result text is empty", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-456" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Hello" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " world" },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-456",
+          result: "",
+          usage: { input_tokens: 18, output_tokens: 4 },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Hello world",
+      sessionId: "session-456",
+      usage: {
+        input: 18,
+        output: 4,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
   it("unwraps nested Claude agent result JSON from stream-json output", () => {
     const result = parseCliJsonl(
       [
@@ -752,11 +921,209 @@ describe("parseCliJsonl", () => {
 
     expect(result).toBe(message);
   });
+
+  it("classifies Claude is_error stream-json results as provider errors", () => {
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    const result = parseCliJsonl(
+      jsonl,
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-api-error",
+      usage: undefined,
+      errorText: message,
+    });
+  });
+
+  it("preserves Claude max-turn terminal context for actionable run errors", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "session-max-turns",
+        num_turns: 2,
+        stop_reason: "tool_use",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-max-turns",
+      usage: undefined,
+      errorText: "Reached maximum number of turns (1)",
+      terminalFailure: {
+        reason: "max_turns",
+        limit: 1,
+      },
+    });
+    expect(
+      formatCliOutputError(result!, {
+        runId: "run-max-turns",
+        sessionId: "openclaw-session-max-turns",
+      }),
+    ).toBe(
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+        "OpenClaw run: run-max-turns. OpenClaw session: openclaw-session-max-turns. " +
+        "Claude session: session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    );
+  });
+
+  it("warns that terminal_reason-only max-turn results may have run tools", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        session_id: "session-terminal-reason-only",
+        terminal_reason: "max_turns",
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-terminal-reason-only",
+      usage: undefined,
+      errorText: "Reached maximum number of turns.",
+      terminalFailure: { reason: "max_turns" },
+    });
+    expect(formatCliOutputError(result!)).toBe(
+      "Claude CLI stopped after reaching the maximum number of turns. " +
+        "Claude session: session-terminal-reason-only. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "Retry with a higher --max-turns value or a narrower task.",
+    );
+  });
+
+  it("does not apply Claude terminal semantics to an explicit Gemini dialect", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        terminal_reason: "max_turns",
+        errors: ["Reached maximum number of turns (1)"],
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "claude-cli",
+    );
+
+    expect(result?.terminalFailure).toBeUndefined();
+  });
+});
+
+describe("parseCliOutput", () => {
+  it("uses streamed Claude assistant text when the result envelope is missing", () => {
+    const raw = [
+      JSON.stringify({ type: "init", session_id: "session-stream-missing-result" }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "partial answer" },
+        },
+      }),
+    ].join("\n");
+
+    const result = parseCliOutput({
+      raw,
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "partial answer",
+      sessionId: "session-stream-missing-result",
+      usage: undefined,
+    });
+  });
+
+  it("fails stream-json output without result or assistant text instead of returning raw JSONL", () => {
+    const raw = JSON.stringify({ type: "init", session_id: "session-empty" });
+
+    const result = parseCliOutput({
+      raw,
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-empty",
+      usage: undefined,
+      errorText: "CLI stream-json output ended without a result event.",
+    });
+  });
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  it("surfaces codex-exec todo snapshots as typed plan updates", () => {
+    const plans: Array<{ steps: Array<{ step: string; status: string }> }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "codex", output: "jsonl", sessionIdFields: ["thread_id"] },
+      providerId: "codex-cli",
+      onAssistantDelta: () => {},
+      onPlanUpdate: (plan) => plans.push(plan),
+    });
+
+    parser.push(
+      `${JSON.stringify({
+        type: "item.updated",
+        item: {
+          type: "todo_list",
+          items: [
+            { text: "Inspect", completed: true },
+            { text: "Patch", completed: false },
+          ],
+        },
+      })}\n`,
+    );
+
+    expect(plans).toEqual([
+      {
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "pending" },
+        ],
+      },
+    ]);
+  });
+
   it("streams Claude stream-json deltas for an explicit backend dialect", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const sessionIds: string[] = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -766,6 +1133,7 @@ describe("createCliJsonlStreamingParser", () => {
       },
       providerId: "local-cli",
       onAssistantDelta: (delta) => deltas.push(delta),
+      onSessionId: (sessionId) => sessionIds.push(sessionId),
     });
 
     parser.push(
@@ -785,6 +1153,598 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+    expect(sessionIds).toEqual(["session-stream"]);
+  });
+
+  it("uses streamed Claude assistant text when no result envelope arrives", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream-no-result" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "streamed answer" },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "streamed answer",
+      sessionId: "session-stream-no-result",
+      usage: undefined,
+    });
+  });
+
+  it("preserves streamed Claude text when the final result event is empty", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "hello" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " world" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-stream", result: "" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "hello world",
+      sessionId: "session-stream",
+      usage: undefined,
+    });
+  });
+
+  it("streams thinking deltas, skips signature deltas, and dedupes the snapshot", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Let me think" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: " harder." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "signature_delta", signature: "opaque-signature" },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            content: [
+              { type: "thinking", thinking: "Let me think harder.", signature: "opaque-signature" },
+              { type: "text", text: "Answer." },
+            ],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "Let me think", delta: "Let me think", isReasoningSnapshot: true },
+      { text: "Let me think harder.", delta: " harder.", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("emits snapshot thinking blocks when no thinking deltas streamed", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-1",
+          content: [
+            { type: "thinking", thinking: "Snapshot-only reasoning.", signature: "sig" },
+            { type: "redacted_thinking", data: "opaque-blob" },
+            { type: "text", text: "Answer." },
+          ],
+        },
+      }),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      {
+        text: "Snapshot-only reasoning.",
+        delta: "Snapshot-only reasoning.",
+        isReasoningSnapshot: true,
+      },
+    ]);
+  });
+
+  it("replaces per-index thinking when assistant snapshots revise non-prefix text", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "rough draft" },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            content: [
+              { type: "thinking", thinking: "revised thought", signature: "sig" },
+              { type: "text", text: "Answer." },
+            ],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "rough draft", delta: "rough draft", isReasoningSnapshot: true },
+      { text: "revised thought", delta: "revised thought", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("dedupes per content-block index across multiple thinking blocks", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "A" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 1,
+            delta: { type: "thinking_delta", thinking: "B" },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            content: [
+              { type: "thinking", thinking: "A", signature: "sig-a" },
+              { type: "thinking", thinking: "B", signature: "sig-b" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    // Snapshot blocks "A" (index 0) and "B" (index 1) were already streamed on
+    // their own indexes, so the snapshot must not re-emit either one.
+    expect(thinking).toEqual([
+      { text: "A", delta: "A", isReasoningSnapshot: true },
+      { text: "AB", delta: "B", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("dedupes snapshot thinking after tool-interleaved multi-block streaming", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "A" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 1,
+            delta: { type: "input_json_delta", partial_json: '{"file_path":"x"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 1 },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 2,
+            delta: { type: "thinking_delta", thinking: "B" },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            content: [
+              { type: "thinking", thinking: "A", signature: "sig-a" },
+              { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "x" } },
+              { type: "thinking", thinking: "B", signature: "sig-b" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "A", delta: "A", isReasoningSnapshot: true },
+      { text: "AB", delta: "B", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("streams indexless thinking deltas from content block framing", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: { id: "msg-1" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "thinking" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "thinking_delta", thinking: "A" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop" },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "input_json_delta", partial_json: '{"file_path":"x"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop" },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "thinking" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "thinking_delta", thinking: "B" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            content: [{ type: "text", text: "Answer." }],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "A", delta: "A", isReasoningSnapshot: true },
+      { text: "AB", delta: "B", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("emits token progress for Claude CLI 2.1 empty thinking deltas", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const progress: CliThinkingProgress[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+      onThinkingProgress: (payload) => progress.push(payload),
+    });
+
+    parser.push(readFileSync("test/fixtures/cli/claude-2.1-thinking-progress.jsonl", "utf8"));
+    parser.finish();
+
+    expect(thinking).toEqual([]);
+    expect(progress).toEqual([
+      { progressTokens: 50 },
+      { progressTokens: 200 },
+      { progressTokens: 300 },
+    ]);
+  });
+
+  it("resets per-index thinking state on a new message within the same turn (tool round-trip)", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: { id: "msg-A" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Hello " },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "world" },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-A",
+            content: [{ type: "thinking", thinking: "Hello world" }],
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: { id: "msg-B" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "New " },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "thought" },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-B",
+            content: [{ type: "thinking", thinking: "New thought" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "Hello ", delta: "Hello ", isReasoningSnapshot: true },
+      { text: "Hello world", delta: "world", isReasoningSnapshot: true },
+      { text: "New ", delta: "New ", isReasoningSnapshot: true },
+      { text: "New thought", delta: "thought", isReasoningSnapshot: true },
+    ]);
+  });
+
+  it("ignores indexless thinking deltas without content block framing", () => {
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "thinking_delta", thinking: "orphaned" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: "0",
+            delta: { type: "thinking_delta", thinking: "also orphaned" },
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([]);
   });
 
   it("streams Gemini message deltas and tool events", () => {
@@ -868,6 +1828,7 @@ describe("createCliJsonlStreamingParser", () => {
       {
         toolCallId: "tool-1",
         name: "mcp_openclaw_create_goal",
+        kind: "tool_use",
         args: { objective: "Update files" },
       },
     ]);
@@ -1023,6 +1984,13 @@ describe("createCliJsonlStreamingParser", () => {
       cacheWrite: undefined,
       total: undefined,
     });
+    expect(output?.diagnosticUsage).toEqual({
+      input: 30,
+      output: 15,
+      cacheRead: 300,
+      cacheWrite: undefined,
+      total: undefined,
+    });
   });
 
   it("surfaces Claude tool_use start and result events", () => {
@@ -1071,7 +2039,9 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(starts).toEqual([{ toolCallId: "toolu_1", name: "Bash", args: { command: "ls -la" } }]);
+    expect(starts).toEqual([
+      { toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: { command: "ls -la" } },
+    ]);
     expect(results).toEqual([
       { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
     ]);
@@ -1126,7 +2096,12 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(starts).toEqual([
-      { toolCallId: "toolu_chunked", name: "Bash", args: { command: "echo hi" } },
+      {
+        toolCallId: "toolu_chunked",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "echo hi" },
+      },
     ]);
   });
 
@@ -1170,7 +2145,7 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(starts).toEqual([{ toolCallId: "toolu_bad", name: "Bash", args: {} }]);
+    expect(starts).toEqual([{ toolCallId: "toolu_bad", name: "Bash", kind: "tool_use", args: {} }]);
   });
 
   it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
@@ -1214,7 +2189,12 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(starts).toEqual([
-      { toolCallId: "toolu_hosted", name: "web_search", args: { query: "openclaw" } },
+      {
+        toolCallId: "toolu_hosted",
+        name: "web_search",
+        kind: type,
+        args: { query: "openclaw" },
+      },
     ]);
   });
 
@@ -1281,7 +2261,12 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(starts).toEqual([
-      { toolCallId: fixture.toolCallId, name: fixture.name, args: fixture.input },
+      {
+        toolCallId: fixture.toolCallId,
+        name: fixture.name,
+        kind: fixture.useType,
+        args: fixture.input,
+      },
     ]);
     expect(results).toEqual([
       {
@@ -1619,3 +2604,4 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

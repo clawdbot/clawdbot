@@ -5,10 +5,11 @@ scenario:
   surface: cron
   coverage:
     primary:
-      - scheduling.cron
+      - automation.isolated-cron-execution
+      - automation.run-history-cron
     secondary:
-      - channels.qa-channel
-      - scheduling.dedup
+      - channels.qa-channel-final-reply
+      - automation.run-history-dedup
   objective: Verify one naturally fired cron run in a single gateway uptime produces exactly one qa-channel delivery for its marker.
   successCriteria:
     - A one-shot cron job fires from the scheduler timer without cron.run force mode.
@@ -26,8 +27,8 @@ scenario:
   execution:
     kind: flow
     summary: Let one cron job fire from the natural scheduler timer and assert qa-channel does not receive a duplicate delivery for the same marker.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       channelId: qa-room
       channelTitle: QA Room
       fireDelayMs: 12000

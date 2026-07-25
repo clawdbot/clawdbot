@@ -1,8 +1,8 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-export const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
 export const PLAIN_GH_SYSTEM_CANDIDATES = [
   // Prefer package-manager opt paths: bin/gh may intentionally be an Octopool shim.
   "/opt/homebrew/opt/gh/bin/gh",
@@ -88,10 +88,11 @@ export function execPlainGh(args, options = {}) {
   });
 }
 
-export function spawnPlainGh(args, options = {}) {
+export function execGhApiRead(endpoint, options = {}) {
   const env = plainGhEnv(options.env ?? process.env);
-  const ghBin = resolvePlainGhBin(env);
-  return spawnSync(ghBin, args, {
+  // Keep reads on the normal PATH shim; OPENCLAW_GH_BIN pins maintainer writes.
+  delete env.OPENCLAW_GH_BIN;
+  return execFileSync("gh", ["api", endpoint, "--method", "GET"], {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,

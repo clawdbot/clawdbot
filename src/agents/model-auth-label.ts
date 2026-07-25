@@ -33,6 +33,7 @@ export function resolveModelAuthLabel(params: {
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
   workspaceDir?: string;
+  codexCliCredentialsHome?: string;
   includeExternalProfiles?: boolean;
   acceptedProviderIds?: readonly string[];
 }): string | undefined {
@@ -118,6 +119,18 @@ export function resolveModelAuthLabel(params: {
     return "unknown";
   }
 
+  if (
+    params.codexCliCredentialsHome &&
+    (providerKey === "openai" || providerKey === "codex") &&
+    readCodexCliCredentialsCached({
+      codexHome: params.codexCliCredentialsHome,
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    })
+  ) {
+    return "oauth (codex-cli)";
+  }
+
   const envKey = resolveEnvApiKey(providerKey, process.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -135,11 +148,17 @@ export function resolveModelAuthLabel(params: {
   ) {
     return "oauth (codex-cli)";
   }
-  if (
-    providerKey === "claude-cli" &&
-    readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
-  ) {
-    return "oauth (claude-cli)";
+  if (providerKey === "claude-cli") {
+    const auth = readClaudeCliCredentialsCached({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+    if (auth?.type === "api_key_helper") {
+      return "api-key-helper (claude-cli)";
+    }
+    if (auth) {
+      return "oauth (claude-cli)";
+    }
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

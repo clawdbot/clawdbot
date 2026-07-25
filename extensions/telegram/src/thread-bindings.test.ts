@@ -11,6 +11,9 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
 const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
 
@@ -32,7 +35,6 @@ import {
   createTelegramThreadBindingManager as createTelegramThreadBindingManagerImpl,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
-  setTelegramThreadBindingStoreForTest,
 } from "./thread-bindings.js";
 
 type ThreadBindingStoreEntry = ReturnType<
@@ -82,15 +84,27 @@ describe("telegram thread bindings", () => {
     });
   }
 
+  function installThreadBindingStore(
+    store: PluginStateSyncKeyedStore<ThreadBindingStoreEntry>,
+  ): void {
+    threadBindingStore = store;
+    setTelegramRuntime({
+      state: {
+        openSyncKeyedStore: (() =>
+          threadBindingStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+  }
+
   function storedBindings(): ThreadBindingStoreEntry[] {
     return threadBindingStore.entries().map((entry) => entry.value);
   }
 
   beforeEach(async () => {
     resetPluginStateStoreForTests({ closeDatabase: false });
-    threadBindingStore = createThreadBindingStore();
+    installThreadBindingStore(createThreadBindingStore());
     threadBindingStore.clear();
-    setTelegramThreadBindingStoreForTest(threadBindingStore);
     readAcpSessionEntryMock.mockReset();
     const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
       "openclaw/plugin-sdk/acp-runtime",
@@ -102,7 +116,7 @@ describe("telegram thread bindings", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await testing.resetTelegramThreadBindingsForTests();
-    setTelegramThreadBindingStoreForTest(undefined);
+    clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
     if (stateDirOverride) {
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
@@ -204,9 +218,6 @@ describe("telegram thread bindings", () => {
       import.meta.url,
       "./thread-bindings.js?scope=shared-b",
     );
-    bindingsA.setTelegramThreadBindingStoreForTest(threadBindingStore);
-    bindingsB.setTelegramThreadBindingStoreForTest(threadBindingStore);
-
     await bindingsA.testing.resetTelegramThreadBindingsForTests();
 
     try {
@@ -243,8 +254,6 @@ describe("telegram thread bindings", () => {
       ).toBe("agent:main:subagent:child-shared");
     } finally {
       await bindingsA.testing.resetTelegramThreadBindingsForTests();
-      bindingsA.setTelegramThreadBindingStoreForTest(undefined);
-      bindingsB.setTelegramThreadBindingStoreForTest(undefined);
     }
   });
 
@@ -408,7 +417,7 @@ describe("telegram thread bindings", () => {
   });
 
   it("starts with empty bindings when the plugin-state store cannot be read", () => {
-    setTelegramThreadBindingStoreForTest({
+    installThreadBindingStore({
       ...threadBindingStore,
       entries() {
         throw new Error("state unavailable");
@@ -603,7 +612,7 @@ describe("telegram thread bindings", () => {
         },
       });
 
-      setTelegramThreadBindingStoreForTest({
+      installThreadBindingStore({
         ...threadBindingStore,
         register() {
           throw new Error("persist boom");

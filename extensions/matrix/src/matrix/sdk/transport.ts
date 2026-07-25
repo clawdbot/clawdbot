@@ -250,7 +250,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
         headers.delete("content-length");
       }
 
-      void response.body?.cancel();
+      void response.body?.cancel().catch(() => undefined);
       await closeDispatcher(dispatcher);
       currentUrl = nextUrl;
     } catch (error) {
@@ -365,25 +365,22 @@ export async function performMatrixRequest(params: {
 
   try {
     if (params.raw) {
-      if (params.maxBytes) {
-        await enforceDeclaredResponseSize({
-          response,
-          maxBytes: params.maxBytes,
-          createError: (length) =>
-            new MatrixMediaSizeLimitError(
-              `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
-            ),
-        });
-      }
-      const bytes = params.maxBytes
-        ? await readResponseWithLimit(response, params.maxBytes, {
-            onOverflow: ({ maxBytes, size }) =>
-              new MatrixMediaSizeLimitError(
-                `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
-              ),
-            chunkTimeoutMs: params.readIdleTimeoutMs,
-          })
-        : Buffer.from(await response.arrayBuffer());
+      const rawMaxBytes = params.maxBytes ?? MATRIX_SDK_RESPONSE_MAX_BYTES;
+      await enforceDeclaredResponseSize({
+        response,
+        maxBytes: rawMaxBytes,
+        createError: (length) =>
+          new MatrixMediaSizeLimitError(
+            `Matrix media exceeds configured size limit (${length} bytes > ${rawMaxBytes} bytes)`,
+          ),
+      });
+      const bytes = await readResponseWithLimit(response, rawMaxBytes, {
+        onOverflow: ({ maxBytes, size }) =>
+          new MatrixMediaSizeLimitError(
+            `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
+          ),
+        chunkTimeoutMs: params.readIdleTimeoutMs,
+      });
       return {
         response,
         text: bytes.toString("utf8"),

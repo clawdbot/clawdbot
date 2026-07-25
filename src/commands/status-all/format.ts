@@ -242,6 +242,7 @@ export function buildStatusOverviewSurfaceRows(params: {
   tailscaleMode: string;
   tailscaleDns?: string | null;
   tailscaleHttpsUrl?: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   tailscaleBackendState?: string | null;
   includeBackendStateWhenOff?: boolean;
   includeBackendStateWhenOn?: boolean;
@@ -278,6 +279,9 @@ export function buildStatusOverviewSurfaceRows(params: {
   const { dashboardUrl, gatewayValue, gatewaySelfValue, gatewayServiceValue, nodeServiceValue } =
     buildStatusGatewaySurfaceValues({
       cfg: params.cfg,
+      ...(params.advertisedControlUiLinks
+        ? { advertisedControlUiLinks: params.advertisedControlUiLinks }
+        : {}),
       gatewayMode: params.gatewayMode,
       remoteUrlMissing: params.remoteUrlMissing,
       gatewayConnection: params.gatewayConnection,
@@ -401,6 +405,7 @@ export function buildGatewayStatusSummaryParts(params: {
 /** Builds gateway/dashboard/service values for overview rows. */
 export function buildStatusGatewaySurfaceValues(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
   gatewayConnection: StatusGatewayConnection;
@@ -444,7 +449,8 @@ export function buildStatusGatewaySurfaceValues(params: {
         : ""
     }${gatewaySelfValue ? ` · ${gatewaySelfValue}` : ""}`;
   return {
-    dashboardUrl: resolveStatusDashboardUrl({ cfg: params.cfg }),
+    dashboardUrl:
+      params.advertisedControlUiLinks?.httpUrl ?? resolveStatusDashboardUrl({ cfg: params.cfg }),
     gatewayValue,
     gatewaySelfValue,
     gatewayServiceValue: formatStatusServiceValue({

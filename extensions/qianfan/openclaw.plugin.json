@@ -53,7 +53,7 @@
       }
     },
     "discovery": {
-      "qianfan": "static"
+      "qianfan": "refreshable"
     }
   },
   "providerAuthChoices": [
@@ -61,6 +61,7 @@
       "provider": "qianfan",
       "method": "api-key",
       "choiceId": "qianfan-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Qianfan API key",
       "groupId": "qianfan",
       "groupLabel": "Qianfan",

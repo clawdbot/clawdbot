@@ -12,7 +12,7 @@ function isCanonicalPeerKind(value: string | undefined): value is CanonicalPeerK
   return CANONICAL_PEER_KINDS.has(value ?? "");
 }
 
-export type CanonicalSessionPeerShape = {
+type CanonicalSessionPeerShape = {
   channel?: string;
   chatType: Exclude<SessionKeyChatType, "unknown">;
 };
@@ -93,7 +93,7 @@ function deriveBuiltInLegacySessionChatType(
   return undefined;
 }
 
-export function deriveSessionChatTypeFromScopedKey(
+function deriveSessionChatTypeFromScopedKey(
   scopedSessionKey: string,
   deriveLegacySessionChatTypes: Array<
     (scopedSessionKey: string) => SessionKeyChatType | undefined

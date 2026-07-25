@@ -4,8 +4,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
-import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
+import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
+import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -33,6 +36,42 @@ const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
 ] as const;
+// npm excludes dist/**/*.map; sidecars would bypass that rule and ship source
+// maps that the browser never needs during normal runtime.
+const controlUiPrecompressedAssetExtensions = new Set([
+  ".css",
+  ".js",
+  ".json",
+  ".svg",
+  ".txt",
+  ".wasm",
+  ".webmanifest",
+]);
+
+export function createControlUiPrecompressedAssetVariants(
+  fileName: string,
+  source: string | Uint8Array,
+): Array<{ fileName: string; source: Buffer }> {
+  if (
+    !fileName.startsWith("assets/") ||
+    !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
+  ) {
+    return [];
+  }
+  const body = typeof source === "string" ? Buffer.from(source) : Buffer.from(source);
+  return [
+    {
+      fileName: `${fileName}.br`,
+      source: brotliCompressSync(body, {
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+      }),
+    },
+    {
+      fileName: `${fileName}.gz`,
+      source: gzipSync(body, { level: 9 }),
+    },
+  ];
+}
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
@@ -48,26 +87,21 @@ function normalizeBase(input: string): string {
   return `${trimmed}/`;
 }
 
-function normalizeBuildId(input: string): string {
-  const normalized = input.trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
-  return normalized.slice(0, 96) || "dev";
-}
-
-function readPackageVersion(): string {
+function readPackageVersion(): string | null {
   try {
     const raw = fs.readFileSync(path.join(repoRoot, "package.json"), "utf8");
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" && parsed.version.trim()
       ? parsed.version.trim()
-      : "dev";
+      : null;
   } catch {
-    return "dev";
+    return null;
   }
 }
 
-function readGitShortSha(): string | null {
+function readGitCommit(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--short=12", "HEAD"], {
+    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -77,15 +111,129 @@ function readGitShortSha(): string | null {
   }
 }
 
-function resolveControlUiBuildId(): string {
-  const explicit =
-    process.env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim() || process.env.OPENCLAW_VERSION?.trim();
-  if (explicit) {
-    return normalizeBuildId(explicit);
+function readGitBranch(): string | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return raw.trim() || null;
+  } catch {
+    return null;
   }
-  const version = readPackageVersion();
-  const gitSha = readGitShortSha();
-  return normalizeBuildId(gitSha ? `${version}-${gitSha}` : version);
+}
+
+function readGitCommitTimestamp(commit: string): string | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "show", "-s", "--format=%ct", commit], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const seconds = Number.parseInt(raw.trim(), 10);
+    const date = new Date(seconds * 1000);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function readGitDirty(): boolean | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return Boolean(raw.trim());
+  } catch {
+    return null;
+  }
+}
+
+type ControlUiBuildInfoSources = {
+  env?: NodeJS.ProcessEnv;
+  now?: () => Date;
+  readPackageVersion?: () => string | null;
+  readGitCommit?: () => string | null;
+  readGitCommitTimestamp?: (commit: string) => string | null;
+  readGitBranch?: () => string | null;
+  readGitDirty?: () => boolean | null;
+};
+
+function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
+  const explicit = value?.trim();
+  if (explicit) {
+    const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
+    if (!timestamp) {
+      throw new Error(
+        "OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z",
+      );
+    }
+    return timestamp;
+  }
+  const candidate = now();
+  return Number.isNaN(candidate.getTime()) ? null : candidate.toISOString();
+}
+
+export function resolveControlUiBuildInfo(
+  sources: ControlUiBuildInfoSources = {},
+): ControlUiBuildInfo {
+  const env = sources.env ?? process.env;
+  const version = (sources.readPackageVersion ?? readPackageVersion)();
+  const explicitCommitSource = [
+    { name: "GIT_COMMIT", value: env.GIT_COMMIT?.trim() },
+    { name: "GIT_SHA", value: env.GIT_SHA?.trim() },
+  ].find((source) => source.value);
+  const explicitCommit = explicitCommitSource?.value;
+  const envCommit = explicitCommit
+    ? normalizeControlUiBuildInfo({ commit: explicitCommit }).commit
+    : null;
+  if (explicitCommitSource && !envCommit) {
+    throw new Error(`${explicitCommitSource.name} must be a full 40-character hexadecimal SHA`);
+  }
+  const gitCommit = explicitCommit ? null : (sources.readGitCommit ?? readGitCommit)();
+  const normalizedGitCommit = normalizeControlUiBuildInfo({ commit: gitCommit }).commit;
+  if (gitCommit?.trim() && !normalizedGitCommit) {
+    throw new Error("git rev-parse HEAD must return a full 40-character hexadecimal SHA");
+  }
+  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
+  const githubCommit = explicitCommit || gitCommit?.trim() ? null : env.GITHUB_SHA?.trim();
+  const normalizedGithubCommit = normalizeControlUiBuildInfo({ commit: githubCommit }).commit;
+  if (githubCommit && !normalizedGithubCommit) {
+    throw new Error("GITHUB_SHA must be a full 40-character hexadecimal SHA");
+  }
+  const commit = envCommit ?? normalizedGitCommit ?? normalizedGithubCommit;
+  // Commit time is advisory identity like branch/dirty: read from the local
+  // object store for the exact embedded commit, null when no checkout has it
+  // (e.g. GITHUB_SHA-only builds). It must never block a build.
+  const commitAt = commit
+    ? normalizeControlUiBuildInfo({
+        commitAt: (sources.readGitCommitTimestamp ?? readGitCommitTimestamp)(commit),
+      }).commitAt
+    : null;
+  const builtAt = normalizeBuildTimestamp(
+    env.OPENCLAW_BUILD_TIMESTAMP,
+    sources.now ?? (() => new Date()),
+  );
+  // Branch/dirty identity is advisory: the readers return null instead of
+  // throwing, so malformed environment or Git state never blocks a build.
+  // Tags must not be presented as branches in GitHub-built artifacts.
+  const githubBranch = env.GITHUB_REF_TYPE === "branch" ? env.GITHUB_REF_NAME : null;
+  const branch =
+    normalizeControlUiBuildInfo({ branch: env.GIT_BRANCH }).branch ??
+    normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
+    normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
+  const dirty = (sources.readGitDirty ?? readGitDirty)();
+  const metadata = { version, commit, builtAt };
+  const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
+  return {
+    ...metadata,
+    commitAt,
+    branch,
+    dirty,
+    buildId: normalizeControlUiBuildInfo(
+      explicitBuildId ? { ...metadata, buildId: explicitBuildId } : metadata,
+    ).buildId,
+  };
 }
 
 function escapeRegExp(input: string): string {
@@ -153,10 +301,30 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "number-coercion"),
+    sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("workboard-contract"),
+  ];
+}
+
+export function resolveExternalPackageAliasesForVite(
+  resolvePackage: (specifier: string) => string = require.resolve,
+): ControlUiViteAlias[] {
+  const packageRoot = (specifier: string) =>
+    path.dirname(resolvePackage(`${specifier}/package.json`));
+  return [
+    {
+      find: "@openclaw/libterminal/browser",
+      replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),
+    },
+    {
+      find: "@openclaw/uirouter",
+      replacement: path.join(packageRoot("@openclaw/uirouter"), "dist/index.js"),
+    },
   ];
 }
 
@@ -184,7 +352,7 @@ function normalizeViteImporterPath(importer: string): string {
 }
 
 export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
-  const browserRedactPath = path.join(here, "src/ui/browser-redact.ts");
+  const browserRedactPath = path.join(here, "src/lib/browser-redact.ts");
   const sharedRedactImporters = new Set([
     path.join(repoRoot, "src/agents/tool-display-common.ts"),
     path.join(repoRoot, "src/agents/tool-display-exec.ts"),
@@ -213,7 +381,7 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
     closeBundle() {
       const swPath = path.join(outDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
-      const source = fs.readFileSync(fs.existsSync(swPath) ? swPath : publicSwPath, "utf8");
+      const source = fs.readFileSync(publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
       const updated = source.replace(placeholder, JSON.stringify(buildId));
       if (updated === source) {
@@ -225,15 +393,34 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
   };
 }
 
+function controlUiPrecompressedAssetsPlugin(): Plugin {
+  return {
+    name: "control-ui-precompressed-assets",
+    apply: "build",
+    writeBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        // Vite's post-build import analysis rewrites lazy preload markers in a
+        // later generateBundle hook. Read from disk here so sidecars always
+        // encode the exact final bytes that the identity response serves.
+        const source = fs.readFileSync(path.join(outDir, output.fileName));
+        for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, source)) {
+          fs.writeFileSync(path.join(outDir, variant.fileName), variant.source);
+        }
+      }
+    },
+  };
+}
+
 export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
-  const bootstrapConfigPath = base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
-  const controlUiBuildId = resolveControlUiBuildId();
+  const bootstrapConfigPath =
+    base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
+  const buildInfo = resolveControlUiBuildInfo();
   return {
     base,
     define: {
-      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify(controlUiBuildId),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
     },
     publicDir: path.resolve(here, "public"),
     optimizeDeps: {
@@ -247,6 +434,7 @@ export default function controlUiViteConfig(): UserConfig {
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
         ...resolveSourcePackageAliasesForVite(),
         ...resolveTsconfigPathAliasesForVite(),
       ],
@@ -255,9 +443,13 @@ export default function controlUiViteConfig(): UserConfig {
       outDir,
       emptyOutDir: true,
       sourcemap: true,
-      rollupOptions: {
+      rolldownOptions: {
+        // Explicit groups do not absorb each other's dependencies. These settings
+        // preserve execution order while keeping the startup chunks bounded.
+        preserveEntrySignatures: "allow-extension",
         output: {
-          manualChunks: controlUiManualChunk,
+          codeSplitting: controlUiCodeSplitting,
+          strictExecutionOrder: true,
         },
       },
       // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.
@@ -270,7 +462,8 @@ export default function controlUiViteConfig(): UserConfig {
     },
     plugins: [
       controlUiBrowserOnlySharedModuleAliases(),
-      controlUiServiceWorkerBuildIdPlugin(controlUiBuildId),
+      controlUiPrecompressedAssetsPlugin(),
+      controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

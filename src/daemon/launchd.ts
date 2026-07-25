@@ -1,14 +1,16 @@
 /** macOS LaunchAgent installer, runtime inspection, and lifecycle controls. */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { parseTcpPort } from "../infra/tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
 import {
@@ -22,6 +24,7 @@ import {
 import { execFileUtf8 } from "./exec-file.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
+  LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   readLaunchAgentProgramArgumentsFromFile,
@@ -31,6 +34,7 @@ import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -43,7 +47,9 @@ import type {
 } from "./service-types.js";
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
-const LAUNCH_AGENT_PLIST_MODE = 0o600;
+// launchd rejects user LaunchAgent plists without group/other read access on
+// current macOS. Secrets stay in the separate 0600 environment file.
+const LAUNCH_AGENT_PLIST_MODE = 0o644;
 const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
@@ -51,13 +57,24 @@ const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
+const OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN =
+  /^ai\.openclaw\.[A-Za-z0-9._-]+\.update\.[A-Za-z0-9._-]+$/;
+const OPENCLAW_DIRECT_CLI_NAMES = new Set(["openclaw", "openclaw.mjs"]);
+const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe"]);
+const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
+const LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS = 2_000;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
   pid?: number;
   lastExitStatus?: number;
+};
+
+type OpenClawUpdateLaunchdLabelCandidate = {
+  label: string;
+  requiresMetadata: boolean;
 };
 
 function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
@@ -71,6 +88,22 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
   // Manual update jobs include a timestamp-like suffix and should be cleaned up
   // without matching arbitrary ai.openclaw labels.
   return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+function normalizeOpenClawUpdateLaunchdLabelCandidate(
+  label: unknown,
+): OpenClawUpdateLaunchdLabelCandidate | null {
+  const normalized = normalizeOpenClawUpdateLaunchdLabel(label);
+  if (normalized) {
+    return { label: normalized, requiresMetadata: false };
+  }
+  if (typeof label !== "string") {
+    return null;
+  }
+  const trimmed = label.trim();
+  return OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed)
+    ? { label: trimmed, requiresMetadata: true }
+    : null;
 }
 
 function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): boolean {
@@ -90,19 +123,19 @@ function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): bo
 
 function resolveCurrentOpenClawUpdateLaunchdJobLabel(
   env: NodeJS.ProcessEnv = process.env,
-): string | null {
+): OpenClawUpdateLaunchdLabelCandidate | null {
   for (const label of [
     env.LAUNCH_JOB_LABEL,
     env.LAUNCH_JOB_NAME,
     env.XPC_SERVICE_NAME,
     env.OPENCLAW_LAUNCHD_LABEL,
   ]) {
-    const normalized = normalizeOpenClawUpdateLaunchdLabel(label);
-    if (normalized) {
-      if (isCurrentGatewayLaunchdLabel(normalized, env)) {
+    const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(label);
+    if (candidate) {
+      if (isCurrentGatewayLaunchdLabel(candidate.label, env)) {
         continue;
       }
-      return normalized;
+      return candidate;
     }
   }
   return null;
@@ -219,8 +252,11 @@ function isLaunchAgentEnvironmentWrapperArgs(params: {
   wrapperPath: string;
 }): boolean {
   return (
-    params.programArguments[0] === params.wrapperPath &&
-    params.programArguments[1] === params.envFilePath
+    (params.programArguments[0] === params.wrapperPath &&
+      params.programArguments[1] === params.envFilePath) ||
+    (params.programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
+      params.programArguments[1] === params.wrapperPath &&
+      params.programArguments[2] === params.envFilePath)
   );
 }
 
@@ -274,7 +310,12 @@ async function prepareLaunchAgentProgramArguments(params: {
   }
 
   return {
-    programArguments: [wrapperPath, envFilePath, ...params.programArguments],
+    programArguments: [
+      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+      wrapperPath,
+      envFilePath,
+      ...params.programArguments,
+    ],
   };
 }
 
@@ -339,10 +380,38 @@ async function execLaunchctl(
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
 }
 
+function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
+  const probe = spawnSync("launchctl", ["print", serviceTarget], {
+    encoding: "utf8",
+    timeout: LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS,
+  });
+  const result = {
+    stdout: probe.stdout ?? "",
+    stderr: probe.error?.message ?? probe.stderr ?? "",
+    code: probe.error ? 1 : (probe.status ?? 1),
+  };
+  if (result.code !== 0) {
+    throw new Error(`launchctl print failed: ${formatLaunchctlResultDetail(result)}`);
+  }
+  const pid = parseLaunchctlPrint(result.stdout || result.stderr || "").pid;
+  if (pid === undefined) {
+    throw new Error("launchctl print did not report a running pid");
+  }
+  return pid;
+}
+
 export function parseLaunchctlListOpenClawUpdateJobs(
   output: string,
 ): StaleOpenClawUpdateLaunchdJob[] {
-  const jobs: StaleOpenClawUpdateLaunchdJob[] = [];
+  return parseLaunchctlListOpenClawUpdateJobCandidates(output)
+    .filter((job) => !job.requiresMetadata)
+    .map(({ requiresMetadata: _requiresMetadata, ...job }) => job);
+}
+
+function parseLaunchctlListOpenClawUpdateJobCandidates(
+  output: string,
+): Array<StaleOpenClawUpdateLaunchdJob & OpenClawUpdateLaunchdLabelCandidate> {
+  const jobs: Array<StaleOpenClawUpdateLaunchdJob & OpenClawUpdateLaunchdLabelCandidate> = [];
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) {
@@ -350,19 +419,63 @@ export function parseLaunchctlListOpenClawUpdateJobs(
     }
     const parts = line.split(/\s+/);
     const [pidRaw, statusRaw, ...labelParts] = parts;
-    const label = normalizeOpenClawUpdateLaunchdLabel(labelParts.join(" "));
-    if (!label) {
+    const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(labelParts.join(" "));
+    if (!candidate) {
       continue;
     }
     const pid = pidRaw === "-" ? undefined : parseStrictPositiveInteger(pidRaw ?? "");
     const lastExitStatus = parseStrictInteger(statusRaw ?? "");
     jobs.push({
-      label,
+      label: candidate.label,
+      requiresMetadata: candidate.requiresMetadata,
       ...(pid !== undefined ? { pid } : {}),
       ...(lastExitStatus !== undefined ? { lastExitStatus } : {}),
     });
   }
   return jobs.toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+function hasOpenClawUpdateLaunchdMarker(env: Record<string, string | undefined> | undefined) {
+  return env?.OPENCLAW_UPDATE_RUN_HANDOFF?.trim() === "1";
+}
+
+function isOpenClawUpdateCommandPrefix(programArguments: string[], updateIndex: number): boolean {
+  if (updateIndex === 1) {
+    const cliName = path.basename(programArguments[0] ?? "").toLowerCase();
+    return OPENCLAW_DIRECT_CLI_NAMES.has(cliName);
+  }
+  if (updateIndex !== 2) {
+    return false;
+  }
+  const runtimeName = path.basename(programArguments[0] ?? "").toLowerCase();
+  const entryName = path.basename(programArguments[1] ?? "").toLowerCase();
+  return OPENCLAW_NODE_RUNTIME_NAMES.has(runtimeName) && OPENCLAW_SCRIPT_NAMES.has(entryName);
+}
+
+function isOpenClawUpdateProgramArguments(programArguments: string[] | undefined): boolean {
+  if (!Array.isArray(programArguments) || programArguments.length === 0) {
+    return false;
+  }
+  const updateIndex = programArguments.findIndex((arg) => arg.trim() === "update");
+  if (updateIndex < 0 || !programArguments.slice(updateIndex + 1).includes("--yes")) {
+    return false;
+  }
+  return (
+    isOpenClawUpdateCommandPrefix(programArguments, updateIndex) &&
+    !programArguments.some((arg) => arg.trim() === "gateway")
+  );
+}
+
+async function isLaunchdJobConfirmedOpenClawUpdater(params: {
+  label: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const plistPath = resolveLaunchAgentPlistPathForLabel(params.env, params.label);
+  const command = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  return (
+    hasOpenClawUpdateLaunchdMarker(command?.environment) ||
+    isOpenClawUpdateProgramArguments(command?.programArguments)
+  );
 }
 
 export async function findStaleOpenClawUpdateLaunchdJobs(
@@ -377,62 +490,87 @@ export async function findStaleOpenClawUpdateLaunchdJobs(
   }
   // Never report the active gateway label as stale even when a wrapper exposes
   // update-like launchd metadata through the current environment.
-  return parseLaunchctlListOpenClawUpdateJobs(result.stdout).filter(
-    (job) => !isCurrentGatewayLaunchdLabel(job.label, env),
-  );
+  const jobs: StaleOpenClawUpdateLaunchdJob[] = [];
+  for (const job of parseLaunchctlListOpenClawUpdateJobCandidates(result.stdout)) {
+    if (isCurrentGatewayLaunchdLabel(job.label, env)) {
+      continue;
+    }
+    if (
+      job.requiresMetadata &&
+      !(await isLaunchdJobConfirmedOpenClawUpdater({ label: job.label, env }))
+    ) {
+      continue;
+    }
+    jobs.push({
+      label: job.label,
+      ...(job.pid !== undefined ? { pid: job.pid } : {}),
+      ...(job.lastExitStatus !== undefined ? { lastExitStatus: job.lastExitStatus } : {}),
+    });
+  }
+  return jobs;
 }
 
-export async function disableOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
-  const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
-  if (process.platform !== "darwin" || !normalizedLabel) {
+async function disableOpenClawUpdateLaunchdJobCandidate(params: {
+  candidate: OpenClawUpdateLaunchdLabelCandidate;
+  env: NodeJS.ProcessEnv;
+  trustCurrentEnvMarker: boolean;
+}): Promise<boolean> {
+  if (process.platform !== "darwin") {
     return false;
   }
-  const serviceTarget = `${resolveGuiDomain()}/${assertValidLaunchAgentLabel(normalizedLabel)}`;
+  if (
+    params.candidate.requiresMetadata &&
+    !(
+      (params.trustCurrentEnvMarker && hasOpenClawUpdateLaunchdMarker(params.env)) ||
+      (await isLaunchdJobConfirmedOpenClawUpdater({
+        label: params.candidate.label,
+        env: params.env,
+      }))
+    )
+  ) {
+    return false;
+  }
+  const serviceTarget = `${resolveGuiDomain()}/${assertValidLaunchAgentLabel(params.candidate.label)}`;
   const result = await execLaunchctl(["disable", serviceTarget]);
   return result.code === 0;
+}
+
+export async function disableOpenClawUpdateLaunchdJob(
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(label);
+  if (!candidate) {
+    return false;
+  }
+  return await disableOpenClawUpdateLaunchdJobCandidate({
+    candidate,
+    env,
+    trustCurrentEnvMarker: false,
+  });
 }
 
 export async function disableCurrentOpenClawUpdateLaunchdJob(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const label = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
-  if (!label) {
+  const candidate = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
+  if (!candidate) {
     return false;
   }
-  return await disableOpenClawUpdateLaunchdJob(label);
-}
-
-function parseGatewayPortFromProgramArguments(
-  programArguments: string[] | undefined,
-): number | null {
-  if (!Array.isArray(programArguments) || programArguments.length === 0) {
-    return null;
-  }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const current = programArguments[index]?.trim();
-    if (!current) {
-      continue;
-    }
-    if (current === "--port") {
-      const next = parseTcpPort(programArguments[index + 1] ?? "");
-      if (next !== null) {
-        return next;
-      }
-      continue;
-    }
-    if (current.startsWith("--port=")) {
-      const value = parseTcpPort(current.slice("--port=".length));
-      if (value !== null) {
-        return value;
-      }
-    }
-  }
-  return null;
+  return await disableOpenClawUpdateLaunchdJobCandidate({
+    candidate,
+    env,
+    // Detached handoffs preserve the configured label, so only launchd-backed
+    // current-process identity may turn the ambient marker into proof.
+    trustCurrentEnvMarker: isCurrentProcessLaunchdServiceLabel(candidate.label, env, {
+      allowConfiguredLabelFallback: false,
+    }),
+  });
 }
 
 async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
-  const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
+  const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {
     return fromArgs;
   }
@@ -492,12 +630,20 @@ async function bootstrapLaunchAgentOrThrow(params: {
   serviceTarget: string;
   plistPath: string;
   actionHint: string;
+  onMutation?: (mode: "enable" | "bootstrap") => void;
+  skipEnable?: boolean;
 }) {
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
-  await execLaunchctl(["enable", params.serviceTarget]);
+  if (!params.skipEnable) {
+    const enable = await execLaunchctl(["enable", params.serviceTarget]);
+    if (enable.code === 0) {
+      params.onMutation?.("enable");
+    }
+  }
   const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
   if (boot.code === 0) {
+    params.onMutation?.("bootstrap");
     return;
   }
   const detail = (boot.stderr || boot.stdout).trim();
@@ -511,10 +657,15 @@ async function bootstrapLaunchAgentOrThrow(params: {
   if (isLaunchctlOperationAlreadyInProgress(detail)) {
     const state = await probeLaunchAgentState(params.serviceTarget);
     if (state.state === "running" || state.state === "stopped") {
+      params.onMutation?.("bootstrap");
       return;
     }
   }
   throw new Error(`launchctl bootstrap failed: ${detail}`);
+}
+
+async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 }
 
 async function ensureSecureDirectory(
@@ -644,12 +795,18 @@ function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: n
 
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
+  warn?: (message: string) => void;
 }): Promise<LaunchAgentBootstrapRepairResult> {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   const serviceTarget = `${domain}/${label}`;
+  // Rewrite first so legacy inline environment secrets move into the private
+  // env file before the plist becomes world-readable for launchd.
+  const warn =
+    args.warn ?? ((message: string) => process.stderr.write(`${formatLine("Warning", message)}\n`));
+  await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   let repairStatus: "repaired" | "already-loaded" = "repaired";
@@ -719,7 +876,7 @@ export async function uninstallLaunchAgent({
   }
 }
 
-function isLaunchctlNotLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
+export function isLaunchctlNotLoaded(res: { stdout: string; stderr: string }): boolean {
   const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return (
     detail.includes("no such process") ||
@@ -750,16 +907,17 @@ function formatLaunchctlResultDetail(res: {
   stderr: string;
   code: number;
 }): string {
-  return sanitizeForLog((res.stderr || res.stdout).replace(/[\r\n\t]+/g, " "))
+  const sanitized = sanitizeForLog((res.stderr || res.stdout).replace(/[\r\n\t]+/g, " "))
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1000);
+    .trim();
+  return truncateUtf16Safe(sanitized, 1000);
 }
 
 async function bootoutLaunchAgentOrThrow(params: {
   serviceTarget: string;
   warning: string;
   stdout: NodeJS.WritableStream;
+  onMutation?: () => void;
 }): Promise<void> {
   const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
   if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
@@ -767,6 +925,7 @@ async function bootoutLaunchAgentOrThrow(params: {
       `${params.warning}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
     );
   }
+  params.onMutation?.();
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
 }
 
@@ -853,11 +1012,13 @@ export async function stopLaunchAgent({
   stdout,
   env,
   disable: persistDisable,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
   if (
     isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
@@ -875,6 +1036,7 @@ export async function stopLaunchAgent({
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    reportMutation("bootout");
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
     return;
@@ -888,11 +1050,13 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
+      onMutation: () => reportMutation("disable-bootout"),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
+  reportMutation("disable");
 
   // `launchctl stop` targets the plain label (not the fully-qualified service target).
   const stop = await execLaunchctl(["stop", label]);
@@ -901,11 +1065,14 @@ export async function stopLaunchAgent({
       serviceTarget,
       stdout,
       warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
+      onMutation: () => reportMutation("disable-bootout"),
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
+
+  reportMutation("disable-stop");
 
   const stopState = await waitForLaunchAgentStopped(serviceTarget);
   if (stopState.state !== "stopped" && stopState.state !== "not-loaded") {
@@ -913,7 +1080,12 @@ export async function stopLaunchAgent({
       stopState.state === "unknown"
         ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
         : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
-    await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
+    await bootoutLaunchAgentOrThrow({
+      serviceTarget,
+      stdout,
+      warning,
+      onMutation: () => reportMutation("disable-bootout"),
+    });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
@@ -975,7 +1147,7 @@ async function writeLaunchAgentPlist({
     environment: prepared.inlineEnvironment,
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
-  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  await ensureLaunchAgentPlistReadable(plistPath);
   return { plistPath, stdoutPath };
 }
 
@@ -1076,10 +1248,11 @@ async function rewriteLaunchAgentPlistForRestart({
   });
   const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
   if (previousPlist === plist) {
+    await ensureLaunchAgentPlistReadable(plistPath);
     return false;
   }
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
-  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  await ensureLaunchAgentPlistReadable(plistPath);
   return true;
 }
 
@@ -1087,6 +1260,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   domain: string;
   serviceTarget: string;
   plistPath: string;
+  onMutation?: (mode: "enable" | "bootstrap") => void;
 }): Promise<void> {
   const probe = await execLaunchctl(["print", params.serviceTarget]);
   if (probe.code === 0) {
@@ -1098,22 +1272,63 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
       serviceTarget: params.serviceTarget,
       plistPath: params.plistPath,
       actionHint: "openclaw gateway start",
+      onMutation: params.onMutation,
     });
   } catch {
     // Best-effort only. Preserve the original kickstart failure below.
   }
 }
 
+export async function startLaunchAgent({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  const serviceTarget = `${domain}/${label}`;
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
+
+  // Enable is an independent mutation; audit it even if the later launch fails.
+  const enable = await execLaunchctl(["enable", serviceTarget]);
+  const enabled = enable.code === 0;
+  if (enabled) {
+    reportMutation("enable");
+  }
+
+  const start = await execLaunchctl(["kickstart", serviceTarget]);
+  if (start.code === 0) {
+    reportMutation("kickstart");
+  } else if (isLaunchctlNotLoaded(start)) {
+    await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath,
+      actionHint: "openclaw gateway start",
+      onMutation: reportMutation,
+      skipEnable: enabled,
+    });
+  } else {
+    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+  }
+
+  writeLaunchAgentActionLine(stdout, "Started LaunchAgent", serviceTarget);
+}
+
 export async function restartLaunchAgent({
   stdout,
   env,
   warn,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
@@ -1132,23 +1347,39 @@ export async function restartLaunchAgent({
       waitForPid: process.pid,
     });
     if (!handoff.ok) {
-      throw new Error(`launchd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
+      throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
+    reportMutation(plistReloadNeeded ? "handoff-reload" : "handoff-kickstart");
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
   }
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
-    cleanStaleGatewayProcessesSync(cleanupPort);
+    cleanStaleGatewayProcessesSync(cleanupPort, {
+      // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
+      // during enumeration must be protected before candidate filtering/signals.
+      resolveProtectedPid: () => readLaunchAgentPidForCleanupSync(serviceTarget),
+    });
     const diagnostics = await inspectPortUsage(cleanupPort).catch(() => null);
     if (diagnostics?.status === "busy") {
-      throw new Error(
-        [
-          `gateway port ${cleanupPort} is still busy before LaunchAgent restart`,
-          ...formatPortDiagnostics(diagnostics),
-        ].join("\n"),
-      );
+      const runtime = await readLaunchAgentRuntime(serviceEnv);
+      const managedPid = runtime.pid;
+      // Only the current supervised PID may keep the port busy before a
+      // disruptive restart. Re-read after cleanup to close over a concurrent
+      // launchd respawn rather than trusting the protected pre-cleanup PID.
+      const ownedByLaunchAgent =
+        managedPid !== undefined &&
+        diagnostics.listeners.length > 0 &&
+        diagnostics.listeners.every((listener) => listener.pid === managedPid);
+      if (!ownedByLaunchAgent) {
+        throw new Error(
+          [
+            `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
+            ...formatPortDiagnostics(diagnostics),
+          ].join("\n"),
+        );
+      }
     }
   }
   const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
@@ -1161,18 +1392,25 @@ export async function restartLaunchAgent({
 
   // `openclaw gateway restart` is an explicit operator request to bring the
   // LaunchAgent back, so clear any persisted disabled state before restart.
-  await execLaunchctl(["enable", serviceTarget]);
+  const enable = await execLaunchctl(["enable", serviceTarget]);
+  if (enable.code === 0) {
+    reportMutation("enable");
+  }
 
   if (plistReloadNeeded) {
     const bootout = await execLaunchctl(["bootout", serviceTarget]);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
+    if (bootout.code === 0) {
+      reportMutation("bootout");
+    }
     await bootstrapLaunchAgentOrThrow({
       domain,
       serviceTarget,
       plistPath,
       actionHint: "openclaw gateway restart",
+      onMutation: reportMutation,
     });
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
@@ -1180,12 +1418,18 @@ export async function restartLaunchAgent({
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
+    reportMutation("kickstart");
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }
 
   if (!isLaunchctlNotLoaded(start)) {
-    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
+    await ensureLaunchAgentLoadedAfterFailure({
+      domain,
+      serviceTarget,
+      plistPath,
+      onMutation: reportMutation,
+    });
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
@@ -1195,7 +1439,9 @@ export async function restartLaunchAgent({
     serviceTarget,
     plistPath,
     actionHint: "openclaw gateway restart",
+    onMutation: reportMutation,
   });
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

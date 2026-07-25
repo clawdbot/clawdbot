@@ -1,7 +1,9 @@
 // Normalizes provider model compatibility metadata from plugins.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
+import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
+import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import "../llm/ai-transport-host.js";
 import type { Model } from "../llm/types.js";
 
 export function extractModelCompat(
@@ -43,37 +45,15 @@ export function hasToolSchemaProfile(
   return extractModelCompat(modelOrCompat)?.toolSchemaProfile === profile;
 }
 
-export function hasNativeWebSearchTool(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
-  return extractModelCompat(modelOrCompat)?.nativeWebSearchTool === true;
-}
-
 export function resolveToolCallArgumentsEncoding(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): ModelCompatConfig["toolCallArgumentsEncoding"] | undefined {
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }
 
-export function resolveUnsupportedToolSchemaKeywords(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): ReadonlySet<string> {
-  const keywords = extractModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
-  return new Set(
-    normalizeStringEntries(
-      keywords.filter((keyword): keyword is string => typeof keyword === "string"),
-    ),
-  );
-}
-
-export function shouldOmitEmptyArrayItems(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
-  const compat = extractModelCompat(modelOrCompat) as
-    | (ModelCompatConfig & { omitEmptyArrayItems?: unknown })
-    | undefined;
-  return compat?.omitEmptyArrayItems === true;
-}
+// Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);
+// re-export so existing core/plugin callers keep one canonical import site.
+export { resolveUnsupportedToolSchemaKeywords };
 
 function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
@@ -103,7 +83,7 @@ export function normalizeModelCompat(model: Model): Model {
 
   const compat = model.compat ?? undefined;
   const detectedCompatDefaults = baseUrl
-    ? detectOpenAICompletionsCompat(model).defaults
+    ? detectOpenAICompletionsCompat(model, resolveProviderRequestCapabilities).defaults
     : undefined;
   const needsForce = Boolean(
     detectedCompatDefaults &&

@@ -28,28 +28,30 @@
  *     via buildClaudeLiveArgs) — covered here.
  */
 import { describe, expect, it } from "vitest";
-import type { CliBackendConfig } from "../../config/types.js";
-import { buildClaudeLiveArgs } from "./claude-live-session.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import { buildClaudeLiveArgs } from "./claude-live-session.test-support.js";
 import { buildCliArgs, resolveSystemPromptUsage } from "./helpers.js";
 
 // Minimal backend config matching the Anthropic claude-cli backend shape.
 const CLAUDE_BACKEND_BASE: Pick<
   CliBackendConfig,
+  | "command"
   | "systemPromptFileArg"
   | "systemPromptArg"
   | "systemPromptFileConfigKey"
   | "systemPromptWhen"
-  | "sessionArg"
+  | "sessionArgs"
   | "modelArg"
   | "input"
   | "output"
   | "liveSession"
 > = {
+  command: "claude",
   systemPromptFileArg: "--append-system-prompt-file",
   systemPromptArg: undefined,
   systemPromptFileConfigKey: undefined,
   systemPromptWhen: "always",
-  sessionArg: "--session-id",
+  sessionArgs: ["--session-id", "{sessionId}"],
   modelArg: "--model",
   input: "stdin",
   output: "jsonl",
@@ -136,6 +138,21 @@ describe("buildCliArgs — issue #80374", () => {
     expect(args).not.toContain(PROMPT_FILE);
   });
 
+  it("soft system-prompt drift includes --append-system-prompt-file on legacy resume", () => {
+    const args = buildCliArgs({
+      backend: BACKEND_FIRST as CliBackendConfig,
+      baseArgs: BASE_ARGS,
+      modelId: "claude-haiku-4-5",
+      sessionId: "test-session-id",
+      systemPrompt: SYSTEM_PROMPT,
+      systemPromptFilePath: PROMPT_FILE,
+      useResume: true,
+      sendSystemPromptOnResume: true,
+    });
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toContain(PROMPT_FILE);
+  });
+
   it("new 'always': includes --append-system-prompt-file on resume (issue #80374)", () => {
     const args = buildCliArgs({
       backend: BACKEND_ALWAYS as CliBackendConfig,
@@ -165,6 +182,41 @@ describe("buildCliArgs — issue #80374", () => {
         `systemPromptWhen=${backend.systemPromptWhen} should include flag on fresh session`,
       ).toContain("--append-system-prompt-file");
     }
+  });
+
+  it("appends a configured fork argument only to the marked resume", () => {
+    const backend = { ...BACKEND_ALWAYS, forkArg: "--fork-session" } as CliBackendConfig;
+    const resumed = buildCliArgs({
+      backend,
+      baseArgs: ["--resume", "source-session"],
+      modelId: "claude-haiku-4-5",
+      sessionId: "source-session",
+      useResume: true,
+      forkResume: true,
+    });
+    const subsequent = buildCliArgs({
+      backend,
+      baseArgs: ["--resume", "forked-session"],
+      modelId: "claude-haiku-4-5",
+      sessionId: "forked-session",
+      useResume: true,
+      forkResume: false,
+    });
+    expect(resumed).toContain("--fork-session");
+    expect(subsequent).not.toContain("--fork-session");
+  });
+
+  it("rejects a marked fork when the backend has no fork argument", () => {
+    expect(() =>
+      buildCliArgs({
+        backend: BACKEND_ALWAYS as CliBackendConfig,
+        baseArgs: ["--resume", "source-session"],
+        modelId: "claude-haiku-4-5",
+        sessionId: "source-session",
+        useResume: true,
+        forkResume: true,
+      }),
+    ).toThrow("does not support forked session resume");
   });
 });
 

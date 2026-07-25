@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 
 let createOpenClawCodingTools: typeof import("./agent-tools.js").createOpenClawCodingTools;
 
@@ -117,9 +117,13 @@ vi.mock("./channel-tools.js", () => ({
   listChannelAgentTools: () => [],
 }));
 
-vi.mock("./openclaw-tools.js", () => ({
-  createOpenClawTools: () => [],
-}));
+vi.mock("./openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./openclaw-tools.js")>();
+  return {
+    createOpenClawTools: () => [],
+    filterToolsByClientCaps: actual.filterToolsByClientCaps,
+  };
+});
 
 vi.mock("./bash-tools.exec-host-shared.js", async () => {
   const mod = await vi.importActual<typeof import("./bash-tools.exec-host-shared.js")>(
@@ -165,6 +169,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
     ...mod,
     loadExecApprovals: () => approvals.file,
     resolveExecApprovals: () => approvals,
+    resolveExecApprovalsLocked: async () => approvals,
   };
 });
 
@@ -199,8 +204,7 @@ async function createSafeBinsExecTool(params: {
     tools: {
       exec: {
         host: "gateway",
-        security: "allowlist",
-        ask: "off",
+        mode: "allowlist",
         safeBins: params.safeBins,
         safeBinProfiles: params.safeBinProfiles,
       },

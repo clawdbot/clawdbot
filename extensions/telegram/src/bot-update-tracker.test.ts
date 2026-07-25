@@ -1,10 +1,14 @@
 // Telegram tests cover bot update tracker plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  createTelegramUpdateTracker,
-  type TelegramUpdateTrackerState,
-} from "./bot-update-tracker.js";
+import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
+
+// Mirrors the tracker-internal retention bound; update together with bot-update-tracker.ts.
+const ACCEPTED_UPDATE_ID_RETENTION = 10_000;
+
+type TelegramUpdateTrackerState = ReturnType<
+  ReturnType<typeof createTelegramUpdateTracker>["getState"]
+>;
 
 const updateCtx = (updateId: number): TelegramUpdateKeyContext => ({
   update: { update_id: updateId },
@@ -185,10 +189,9 @@ describe("createTelegramUpdateTracker", () => {
     }
     tracker.finishUpdate(oldReplay.update, { completed: true });
 
-    expect(tracker.beginUpdate(updateCtx(42))).toEqual({
-      accepted: false,
-      reason: "accepted-watermark",
-    });
+    // Second begin is rejected (numeric set and/or semantic key). After persist
+    // advances, the numeric id may already be pruned below the persisted floor.
+    expect(tracker.beginUpdate(updateCtx(42)).accepted).toBe(false);
     expectTrackerState(tracker.getState(), {
       highestAcceptedUpdateId: 43,
       highestCompletedUpdateId: 43,
@@ -196,6 +199,167 @@ describe("createTelegramUpdateTracker", () => {
       pendingUpdateIds: [],
       failedUpdateIds: [],
     } satisfies Partial<TelegramUpdateTrackerState>);
+  });
+
+  it("dispatches a delayed lower update id after newer cross-lane ids complete", () => {
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: null,
+      persistenceFloorUpdateId: 100,
+      ackPolicy: "after_agent_dispatch",
+    });
+
+    // Lane B finishes newer global update ids while lane A still holds N+1.
+    const laterA = tracker.beginUpdate(updateCtx(102));
+    const laterB = tracker.beginUpdate(updateCtx(103));
+    if (!laterA.accepted || !laterB.accepted) {
+      throw new Error("expected later cross-lane updates to be accepted");
+    }
+    tracker.finishUpdate(laterA.update, { completed: true });
+    tracker.finishUpdate(laterB.update, { completed: true });
+
+    // Delayed durable-spool replay of N+1 must still dispatch exactly once.
+    const delayed = tracker.beginUpdate(updateCtx(101));
+    if (!delayed.accepted) {
+      throw new Error("expected delayed cross-lane spool replay to be accepted");
+    }
+    tracker.finishUpdate(delayed.update, { completed: true });
+
+    expect(tracker.beginUpdate(updateCtx(101))).toEqual({
+      accepted: false,
+      reason: "accepted-watermark",
+    });
+    expectTrackerState(tracker.getState(), {
+      highestAcceptedUpdateId: 103,
+      highestCompletedUpdateId: 103,
+      pendingUpdateIds: [],
+      failedUpdateIds: [],
+    } satisfies Partial<TelegramUpdateTrackerState>);
+  });
+
+  it("accepts a delayed group mention after newer cross-lane ids so routing can run", () => {
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: null,
+      persistenceFloorUpdateId: 200,
+      ackPolicy: "after_agent_dispatch",
+    });
+
+    const later = tracker.beginUpdate(updateCtx(202));
+    if (!later.accepted) {
+      throw new Error("expected later update to be accepted");
+    }
+    tracker.finishUpdate(later.update, { completed: true });
+
+    // Mention-shaped payload uses the same beginUpdate gate as any other update;
+    // watermark must not drop it before normal user_request mention routing.
+    const mention = tracker.beginUpdate({
+      update: {
+        update_id: 201,
+        message: {
+          message_id: 10,
+          text: "@bot hello",
+          entities: [{ type: "mention", offset: 0, length: 4 }],
+          chat: { id: -100, type: "supergroup", title: "group" },
+          date: 1,
+        },
+      },
+    });
+    if (!mention.accepted) {
+      throw new Error("expected delayed mention update to be accepted for user_request routing");
+    }
+    tracker.finishUpdate(mention.update, { completed: true });
+    expect(tracker.beginUpdate(updateCtx(201))).toEqual({
+      accepted: false,
+      reason: "accepted-watermark",
+    });
+  });
+
+  it("bounds accepted-id memory without a persist callback via retention window", () => {
+    // No onAcceptedUpdateId: persisted floor never advances past the option floor.
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: null,
+      persistenceFloorUpdateId: 0,
+      ackPolicy: "after_agent_dispatch",
+    });
+    const firstId = 1;
+    const lastId = ACCEPTED_UPDATE_ID_RETENTION + 50;
+    for (let updateId = firstId; updateId <= lastId; updateId += 1) {
+      const begun = tracker.beginUpdate(updateCtx(updateId));
+      if (!begun.accepted) {
+        throw new Error(`expected update ${updateId} to be accepted`);
+      }
+      tracker.finishUpdate(begun.update, { completed: true });
+    }
+    // Ids far below the retention window may be pruned; recent ids stay suppressed.
+    expect(tracker.beginUpdate(updateCtx(firstId)).accepted).toBe(true);
+    expect(tracker.beginUpdate(updateCtx(lastId))).toEqual({
+      accepted: false,
+      reason: "accepted-watermark",
+    });
+  });
+
+  it("does not prune pending or failed accepted ids from the retention window", () => {
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: null,
+      persistenceFloorUpdateId: 0,
+      ackPolicy: "after_agent_dispatch",
+    });
+    const pendingId = 1;
+    const failedId = 2;
+    const pending = tracker.beginUpdate(updateCtx(pendingId));
+    const failed = tracker.beginUpdate(updateCtx(failedId));
+    if (!pending.accepted || !failed.accepted) {
+      throw new Error("expected seed updates to be accepted");
+    }
+    tracker.finishUpdate(failed.update, { completed: false });
+
+    const lastId = ACCEPTED_UPDATE_ID_RETENTION + 50;
+    for (let updateId = 3; updateId <= lastId; updateId += 1) {
+      const begun = tracker.beginUpdate(updateCtx(updateId));
+      if (!begun.accepted) {
+        throw new Error(`expected update ${updateId} to be accepted`);
+      }
+      tracker.finishUpdate(begun.update, { completed: true });
+    }
+
+    // Pending ids stay in the numeric set (never pruned) so re-begin is rejected
+    // as accepted-watermark, not re-dispatched.
+    expect(tracker.beginUpdate(updateCtx(pendingId))).toEqual({
+      accepted: false,
+      reason: "accepted-watermark",
+    });
+    const failedRetry = tracker.beginUpdate(updateCtx(failedId));
+    if (!failedRetry.accepted) {
+      throw new Error("expected failed update retry to be accepted");
+    }
+    tracker.finishUpdate(failedRetry.update, { completed: true });
+    // After success, re-begin is rejected (numeric and/or semantic).
+    expect(tracker.beginUpdate(updateCtx(failedId)).accepted).toBe(false);
+  });
+
+  it("prunes accepted ids at or below the persisted Bot API offset", async () => {
+    const onAcceptedUpdateId = vi.fn();
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: 100,
+      onAcceptedUpdateId,
+    });
+    const early = tracker.beginUpdate(updateCtx(101));
+    if (!early.accepted) {
+      throw new Error("expected early update to be accepted");
+    }
+    tracker.finishUpdate(early.update, { completed: true });
+    await flushTrackerMicrotasks();
+    expect(onAcceptedUpdateId).toHaveBeenCalledWith(101);
+
+    const later = tracker.beginUpdate(updateCtx(102));
+    if (!later.accepted) {
+      throw new Error("expected later update to be accepted");
+    }
+    tracker.finishUpdate(later.update, { completed: true });
+    await flushTrackerMicrotasks();
+
+    // Recent completed id stays suppressed; early completed id is eligible for
+    // numeric prune once <= highestPersisted (semantic/spool still guard dups).
+    expect(tracker.beginUpdate(updateCtx(102)).accepted).toBe(false);
   });
 
   it("serializes and coalesces accepted offset persistence", async () => {

@@ -13,6 +13,7 @@ import {
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
+import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -83,19 +84,6 @@ function formatCompactionReason(reason?: string): string | undefined {
     default:
       return text;
   }
-}
-
-function isCodexNativeCompactionStartedResult(result: { result?: { details?: unknown } }): boolean {
-  const details = result.result?.details;
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return false;
-  }
-  const record = details as Record<string, unknown>;
-  return (
-    record.backend === "codex-app-server" &&
-    record.signal === "thread/compact/start" &&
-    record.pending === true
-  );
 }
 
 function resolveManualCompactContextTokenBudget(params: {
@@ -219,7 +207,16 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
-    await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    if (!drained) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚙️ Compaction unavailable: the previous run is still stopping.",
+          isStatusNotice: true,
+        },
+      };
+    }
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -230,7 +227,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       ? params.agentDir
       : resolveAgentDir(params.cfg, sessionAgentId);
   const customInstructions = extractCompactInstructions({
-    rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
+    rawBody: params.ctx.commandText,
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: sessionAgentId,
@@ -246,10 +243,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
   const result = await runtime.compactEmbeddedAgentSession({
+    abortSignal: params.opts?.abortSignal,
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
+    clientCaps: params.ctx.GatewayClientCaps,
     groupId: targetSessionEntry.groupId,
     groupChannel: targetSessionEntry.groupChannel,
     groupSpace: targetSessionEntry.space,
@@ -258,6 +257,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
+    inputProvenance: params.ctx.InputProvenance,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       targetSessionEntry,
@@ -273,9 +273,19 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     provider: params.provider,
     model: params.model,
     authProfileId: targetSessionEntry.authProfileOverride,
+    authProfileIdSource:
+      targetSessionEntry.authProfileOverrideSource ??
+      (targetSessionEntry.authProfileOverride
+        ? typeof targetSessionEntry.authProfileOverrideCompactionCount === "number"
+          ? "auto"
+          : "user"
+        : undefined),
     contextTokenBudget,
     agentHarnessId:
-      targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
+      targetSessionEntry.modelSelectionLocked === true
+        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
+        : targetSessionEntry.agentHarnessId,
+    modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,
@@ -287,20 +297,17 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
-  const codexNativeCompactionStarted = isCodexNativeCompactionStartedResult(result);
   const compactLabel =
     result.ok || isCompactionSkipReason(result.reason)
-      ? codexNativeCompactionStarted
-        ? "Codex compaction started"
-        : result.compacted
-          ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
-            : result.result?.tokensBefore
-              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
-              : "Compacted"
-          : "Compaction skipped"
+      ? result.compacted
+        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
+          : result.result?.tokensBefore
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
+            : "Compacted"
+        : "Compaction skipped"
       : "Compaction failed";
-  if (result.ok && result.compacted && !codexNativeCompactionStarted) {
+  if (result.ok && result.compacted) {
     await runtime.incrementCompactionCount({
       cfg: params.cfg,
       sessionEntry: targetSessionEntry,
@@ -316,7 +323,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
   const totalTokens =
-    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+    result.ok && result.compacted
+      ? tokensAfterCompaction
+      : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     contextTokenBudget ?? null,

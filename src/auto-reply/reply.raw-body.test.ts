@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "./reply/inbound-meta.js";
-import { buildReplyPromptBodies } from "./reply/prompt-prelude.js";
+import { buildReplyPromptEnvelope } from "./reply/prompt-prelude.js";
 
 describe("RawBody directive parsing", () => {
   it("handles directives and history in the prompt", () => {
@@ -28,16 +28,19 @@ describe("RawBody directive parsing", () => {
     const prefixedBody = contextPrefix
       ? `${contextPrefix}\n\n${directives.cleaned}`
       : directives.cleaned;
-    const prompt = buildReplyPromptBodies({
+    const prompt = buildReplyPromptEnvelope({
       ctx: sessionCtx,
       sessionCtx: { ...sessionCtx, BodyStripped: directives.cleaned },
-      effectiveBaseBody: prefixedBody,
+      baseBody: prefixedBody,
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
       prefixedBody,
     }).prefixedCommandBody;
 
     expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
-    expect(prompt).toContain('"sender": "Peter"');
-    expect(prompt).toContain('"body": "hello"');
+    expect(prompt).toContain("Peter: hello");
     expect(prompt).toContain("status please");
     expect(prompt).not.toContain("/think:high");
   });
@@ -55,12 +58,15 @@ describe("RawBody directive parsing", () => {
         sourceTool: "sessions_send",
       },
     });
-    const prompts = buildReplyPromptBodies({
+    const prompts = buildReplyPromptEnvelope({
       ctx: sessionCtx,
       sessionCtx,
-      effectiveBaseBody: sessionCtx.BodyForAgent,
+      baseBody: sessionCtx.BodyForAgent,
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
       prefixedBody: sessionCtx.BodyForAgent,
-      transcriptBody: sessionCtx.BodyForAgent,
     });
 
     for (const prompt of [prompts.prefixedCommandBody, prompts.queuedBody]) {

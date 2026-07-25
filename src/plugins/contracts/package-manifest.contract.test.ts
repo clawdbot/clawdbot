@@ -18,7 +18,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
-    pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
+    pluginLocalRuntimeDeps: ["google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
@@ -27,7 +27,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
+    pluginLocalRuntimeDeps: ["@pierre/diffs"],
   },
   { pluginId: "file-transfer" },
   {

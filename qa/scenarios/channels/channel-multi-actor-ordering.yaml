@@ -1,0 +1,77 @@
+title: Channel multi-actor ordering
+
+scenario:
+  id: channel-multi-actor-ordering
+  surface: channels
+  coverage:
+    primary:
+      - agent-runtime.session-turn-ordering
+    secondary:
+      - channels.room-allowlist
+  objective: Verify blocked secondary-actor traffic does not poison a later allowlisted driver turn.
+  successCriteria:
+    - The observer turn remains unanswered.
+    - The later driver turn receives the exact marker once.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/group-messages.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    profiles: { "matrix:adapter": 7, "matrix:all": 48, "matrix:transport": 47 }
+    kind: flow
+    summary: Preserve actor order across a blocked observer turn and a successful driver turn.
+    transportPolicy:
+      requireGroupMention: true
+      senderAllowlist:
+        - driver
+    config:
+      conversationId: qa-routing-ordering
+      blockedMarker: QA-BLOCKED-ACTOR-SHOULD-NOT-REPLY
+      expectedMarker: QA-MULTI-ACTOR-ORDERING-OK
+
+flow:
+  steps:
+    - name: preserves ordering after a blocked actor
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: observer
+            senderName: QA Observer
+            text:
+              expr: "`@openclaw reply exactly: ${config.blockedMarker}`"
+        - waitForNoOutbound:
+            quietMs: 1500
+            sinceIndex: { ref: outboundStartIndex }
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            textIncludes: { ref: config.expectedMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: outbound
+        - assert:
+            expr: "!state.getSnapshot().messages.some((message) => message.direction === 'outbound' && String(message.text ?? '').includes(config.blockedMarker))"
+            message:
+              expr: "`blocked actor produced a reply; transcript=${formatTransportTranscript(state)}`"
+      detailsExpr: outbound.text

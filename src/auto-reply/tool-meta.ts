@@ -1,6 +1,7 @@
-/** Formats compact tool metadata labels for auto-reply progress/status messages. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveToolDisplay } from "../agents/tool-display.js";
+/** Formats compact tool metadata labels for auto-reply progress/status messages. */
+import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { shortenHomeInString } from "../utils.js";
 
 type ToolAggregateOptions = {
@@ -123,24 +124,5 @@ function isPathLike(value: string): boolean {
 }
 
 function maybeWrapMarkdown(value: string, markdown?: boolean): string {
-  if (!markdown) {
-    return value;
-  }
-  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
-  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
-  return `${delimiter}${padding}${value}${padding}${delimiter}`;
-}
-
-function longestBacktickRun(value: string): number {
-  let longest = 0;
-  let current = 0;
-  for (const char of value) {
-    if (char === "`") {
-      current += 1;
-      longest = Math.max(longest, current);
-      continue;
-    }
-    current = 0;
-  }
-  return longest;
+  return markdown ? formatInlineCodeSpan(value) : value;
 }

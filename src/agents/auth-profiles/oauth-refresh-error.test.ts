@@ -3,13 +3,14 @@
  * Protects the recovery path that adopts a winner's fresh token instead of
  * failing over after concurrent refresh races.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   makeSeededRandom,
   randomAsciiString as randomJunk,
   randomlyCased,
 } from "./oauth-test-utils.js";
-import { isRefreshTokenReusedError } from "./oauth.js";
+import { isRefreshTokenReusedError } from "./oauth.test-support.js";
 
 describe("isRefreshTokenReusedError", () => {
   describe("positive cases", () => {
@@ -107,7 +108,10 @@ describe("isRefreshTokenReusedError", () => {
         "already been used to generate a new access token",
       ];
       for (let i = 0; i < 500; i += 1) {
-        const marker = randomlyCased(markers[i % markers.length], rng);
+        const marker = randomlyCased(
+          expectDefined(markers[i % markers.length], "markers[i % markers.length] test invariant"),
+          rng,
+        );
         const prefix = randomJunk(rng, 64);
         const suffix = randomJunk(rng, 64);
         const msg = `${prefix}${marker}${suffix}`;

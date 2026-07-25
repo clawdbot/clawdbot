@@ -29,6 +29,7 @@ export function createBlockReplyCoalescer(params: {
   let bufferReplyToId: ReplyPayload["replyToId"];
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
   let bufferIsReasoning: ReplyPayload["isReasoning"];
+  let bufferIsCommentary: ReplyPayload["isCommentary"];
   let bufferIsCompactionNotice: ReplyPayload["isCompactionNotice"];
   let bufferIsFallbackNotice: ReplyPayload["isFallbackNotice"];
   let bufferIsStatusNotice: ReplyPayload["isStatusNotice"];
@@ -48,6 +49,7 @@ export function createBlockReplyCoalescer(params: {
     bufferReplyToId = undefined;
     bufferAudioAsVoice = undefined;
     bufferIsReasoning = undefined;
+    bufferIsCommentary = undefined;
     bufferIsCompactionNotice = undefined;
     bufferIsFallbackNotice = undefined;
     bufferIsStatusNotice = undefined;
@@ -58,6 +60,7 @@ export function createBlockReplyCoalescer(params: {
     bufferReplyToId = payload.replyToId;
     bufferAudioAsVoice = payload.audioAsVoice;
     bufferIsReasoning = payload.isReasoning;
+    bufferIsCommentary = payload.isCommentary;
     bufferIsCompactionNotice = payload.isCompactionNotice;
     bufferIsFallbackNotice = payload.isFallbackNotice;
     bufferIsStatusNotice = payload.isStatusNotice;
@@ -92,6 +95,7 @@ export function createBlockReplyCoalescer(params: {
       replyToId: bufferReplyToId,
       audioAsVoice: bufferAudioAsVoice,
       isReasoning: bufferIsReasoning,
+      isCommentary: bufferIsCommentary,
       isCompactionNotice: bufferIsCompactionNotice,
       isFallbackNotice: bufferIsFallbackNotice,
       isStatusNotice: bufferIsStatusNotice,
@@ -107,8 +111,10 @@ export function createBlockReplyCoalescer(params: {
     !bufferAudioAsVoice &&
     !payload.audioAsVoice &&
     !payload.isReasoning &&
+    !payload.isCommentary &&
     !isReplyPayloadStatusNotice(payload) &&
     !bufferIsReasoning &&
+    !bufferIsCommentary &&
     !isReplyPayloadStatusNotice({
       isCompactionNotice: bufferIsCompactionNotice,
       isFallbackNotice: bufferIsFallbackNotice,
@@ -173,6 +179,7 @@ export function createBlockReplyCoalescer(params: {
     const visibilityConflict =
       bufferText &&
       (bufferIsReasoning !== payload.isReasoning ||
+        bufferIsCommentary !== payload.isCommentary ||
         bufferIsCompactionNotice !== payload.isCompactionNotice ||
         bufferIsFallbackNotice !== payload.isFallbackNotice ||
         isReplyPayloadStatusNotice({

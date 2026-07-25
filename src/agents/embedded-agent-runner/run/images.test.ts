@@ -5,21 +5,31 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
+import {
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptImageOrder,
+} from "../../../media/media-facts.js";
+import {
+  buildPersistedUserTurnMessage,
+  mergePreparedUserTurnMessageForRuntime,
+} from "../../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
-  loadImageFromRef,
-  mergePromptAttachmentImages,
-  modelSupportsImages,
-  splitPromptAndAttachmentRefs,
+  hydratePromptMediaMessages,
 } from "./images.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const TINY_GIF_BUFFER = Buffer.from([
+  71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 0, 0, 0, 255, 255, 255, 33, 249, 4, 1, 0, 0, 0, 0,
+  44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1, 0, 59,
+]);
 
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
   expect(result.detectedRefs).toHaveLength(0);
@@ -157,10 +167,10 @@ describe("detectImageReferences", () => {
   });
 
   it("does not leak parser state between calls", () => {
-    expect(detectImageReferences("[media attached: /tmp/first.png (image/png)]")).toStrictEqual([
+    expect(detectImageReferences("See /tmp/first.png")).toStrictEqual([
       { raw: "/tmp/first.png", type: "path", resolved: "/tmp/first.png" },
     ]);
-    expect(detectImageReferences("[Image: source: /tmp/second.jpg]")).toStrictEqual([
+    expect(detectImageReferences("See /tmp/second.jpg")).toStrictEqual([
       { raw: "/tmp/second.jpg", type: "path", resolved: "/tmp/second.jpg" },
     ]);
     const thirdPath = path.join(os.tmpdir(), "third.webp");
@@ -268,67 +278,6 @@ describe("detectImageReferences", () => {
     });
   });
 
-  it("detects [Image: source: ...] format from messaging systems", () => {
-    const ref = expectSingleImageReference(`What does this image show?
-[Image: source: /Users/tyleryust/Library/Messages/Attachments/IMG_0043.jpeg]`);
-
-    expect(ref).toStrictEqual({
-      raw: "/Users/tyleryust/Library/Messages/Attachments/IMG_0043.jpeg",
-      type: "path",
-      resolved: "/Users/tyleryust/Library/Messages/Attachments/IMG_0043.jpeg",
-    });
-  });
-
-  it("handles complex message attachment paths", () => {
-    const ref = expectSingleImageReference(
-      "[Image: source: /Users/tyleryust/Library/Messages/Attachments/23/03/AA4726EA-DB27-4269-BA56-1436936CC134/5E3E286A-F585-4E5E-9043-5BC2AFAFD81BIMG_0043.jpeg]",
-    );
-
-    expect(ref).toStrictEqual({
-      raw: "/Users/tyleryust/Library/Messages/Attachments/23/03/AA4726EA-DB27-4269-BA56-1436936CC134/5E3E286A-F585-4E5E-9043-5BC2AFAFD81BIMG_0043.jpeg",
-      type: "path",
-      resolved:
-        "/Users/tyleryust/Library/Messages/Attachments/23/03/AA4726EA-DB27-4269-BA56-1436936CC134/5E3E286A-F585-4E5E-9043-5BC2AFAFD81BIMG_0043.jpeg",
-    });
-  });
-
-  it("detects multiple images in [media attached: ...] format", () => {
-    // Multi-file format uses separate brackets on separate lines
-    const refs = expectImageReferenceCount(
-      `[media attached: 2 files]
-[media attached 1/2: /Users/tyleryust/.openclaw/media/IMG_6430.jpeg (image/jpeg)]
-[media attached 2/2: /Users/tyleryust/.openclaw/media/IMG_6431.jpeg (image/jpeg)]
-what about these images?`,
-      2,
-    );
-
-    expect(refs).toStrictEqual([
-      {
-        raw: "/Users/tyleryust/.openclaw/media/IMG_6430.jpeg",
-        type: "path",
-        resolved: "/Users/tyleryust/.openclaw/media/IMG_6430.jpeg",
-      },
-      {
-        raw: "/Users/tyleryust/.openclaw/media/IMG_6431.jpeg",
-        type: "path",
-        resolved: "/Users/tyleryust/.openclaw/media/IMG_6431.jpeg",
-      },
-    ]);
-  });
-
-  it("does not double-count path and url in same bracket", () => {
-    // Single file with URL (| separates path from url, not multiple files)
-    const ref = expectSingleImageReference(
-      "[media attached: /cache/IMG_6430.jpeg (image/jpeg) | /cache/IMG_6430.jpeg]",
-    );
-
-    expect(ref).toStrictEqual({
-      raw: "/cache/IMG_6430.jpeg",
-      type: "path",
-      resolved: "/cache/IMG_6430.jpeg",
-    });
-  });
-
   it("ignores remote URLs entirely (local-only)", () => {
     const refs = expectImageReferenceCount(
       `To send an image: MEDIA:https://example.com/image.jpg
@@ -346,31 +295,6 @@ Also https://cdn.mysite.com/img.jpg`,
     ]);
   });
 
-  it("handles single file format with URL (no index)", () => {
-    const ref =
-      expectSingleImageReference(`[media attached: /cache/photo.jpeg (image/jpeg) | https://example.com/url]
-what is this?`);
-
-    expect(ref).toStrictEqual({
-      raw: "/cache/photo.jpeg",
-      type: "path",
-      resolved: "/cache/photo.jpeg",
-    });
-  });
-
-  it("handles paths with spaces in filename", () => {
-    // URL after | is https, not a local path, so only the local path should be detected
-    const ref =
-      expectSingleImageReference(`[media attached: /Users/test/.openclaw/media/ChatGPT Image Apr 21, 2025.png (image/png) | https://example.com/same.png]
-what is this?`);
-
-    expect(ref).toStrictEqual({
-      raw: "/Users/test/.openclaw/media/ChatGPT Image Apr 21, 2025.png",
-      type: "path",
-      resolved: "/Users/test/.openclaw/media/ChatGPT Image Apr 21, 2025.png",
-    });
-  });
-
   it("ignores remote-host file URLs", () => {
     expectNoImageReferences("See file://attacker/share/evil.png");
   });
@@ -384,129 +308,6 @@ what is this?`);
       );
     } finally {
       platformSpy.mockRestore();
-    }
-  });
-});
-
-describe("modelSupportsImages", () => {
-  it("returns true when model input includes image", () => {
-    const model = { input: ["text", "image"] };
-    expect(modelSupportsImages(model)).toBe(true);
-  });
-
-  it("returns false when model input does not include image", () => {
-    const model = { input: ["text"] };
-    expect(modelSupportsImages(model)).toBe(false);
-  });
-
-  it("returns false when model input is undefined", () => {
-    const model = {};
-    expect(modelSupportsImages(model)).toBe(false);
-  });
-
-  it("returns false when model input is empty", () => {
-    const model = { input: [] };
-    expect(modelSupportsImages(model)).toBe(false);
-  });
-});
-
-describe("loadImageFromRef", () => {
-  it("hydrates managed inbound media URIs before workspace path resolution", async () => {
-    // Managed media URIs are canonical inbound attachment handles and should
-    // work even when workspaceOnly would reject ordinary outside paths.
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-uri-"));
-    const workspaceDir = path.join(stateDir, "workspace-agent");
-    const inboundDir = path.join(stateDir, "media", "inbound");
-    const mediaId = "telegram-photo.png";
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-
-    try {
-      const image = await loadImageFromRef(
-        {
-          raw: `media://inbound/${mediaId}`,
-          type: "media-uri",
-          resolved: `media://inbound/${mediaId}`,
-        },
-        workspaceDir,
-        { workspaceOnly: true },
-      );
-
-      expect(image?.type).toBe("image");
-      expect(image?.mimeType).toBe("image/png");
-      expect(image?.data).toBe(TINY_PNG_BASE64);
-    } finally {
-      envSnapshot.restore();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("hydrates sandbox-staged inbound media URIs", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sbx-uri-"));
-    const inboundDir = path.join(sandboxRoot, "media", "inbound");
-    const mediaId = "telegram-photo.png";
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
-
-    try {
-      const image = await loadImageFromRef(
-        {
-          raw: `media://inbound/${mediaId}`,
-          type: "media-uri",
-          resolved: `media://inbound/${mediaId}`,
-        },
-        sandboxRoot,
-        {
-          workspaceOnly: true,
-          sandbox: {
-            root: sandboxRoot,
-            bridge: createHostSandboxFsBridge(sandboxRoot),
-          },
-        },
-      );
-
-      expect(image?.type).toBe("image");
-      expect(image?.mimeType).toBe("image/png");
-      expect(image?.data).toBe(TINY_PNG_BASE64);
-    } finally {
-      await fs.rm(sandboxRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("allows sandbox-validated host paths outside default media roots", async () => {
-    const homeDir = os.homedir();
-    await fs.mkdir(homeDir, { recursive: true });
-    const sandboxParent = await fs.mkdtemp(path.join(homeDir, "openclaw-sandbox-image-"));
-    try {
-      const sandboxRoot = path.join(sandboxParent, "sandbox");
-      await fs.mkdir(sandboxRoot, { recursive: true });
-      const imagePath = path.join(sandboxRoot, "photo.png");
-      const pngB64 = TINY_PNG_BASE64;
-      await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
-
-      const image = await loadImageFromRef(
-        {
-          raw: "./photo.png",
-          type: "path",
-          resolved: "./photo.png",
-        },
-        sandboxRoot,
-        {
-          sandbox: {
-            root: sandboxRoot,
-            bridge: createHostSandboxFsBridge(sandboxRoot),
-          },
-        },
-      );
-
-      expect(image?.type).toBe("image");
-      expect(image?.mimeType).toBe("image/png");
-      expect(image?.data).toBe(TINY_PNG_BASE64);
-    } finally {
-      await fs.rm(sandboxParent, { recursive: true, force: true });
     }
   });
 });
@@ -554,6 +355,7 @@ describe("detectAndLoadPromptImages", () => {
     try {
       const result = await detectAndLoadPromptImages({
         prompt: "[media attached: ./photo.png (image/png)]\ndescribe it",
+        media: [{ path: imagePath, contentType: "image/png" }],
         workspaceDir: stateDir,
         model: { input: ["text", "image"] },
         existingImages: [{ type: "image", data: pngB64, mimeType: "image/png" }],
@@ -561,12 +363,70 @@ describe("detectAndLoadPromptImages", () => {
         workspaceOnly: true,
       });
 
-      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.detectedRefs).toEqual([{ raw: imagePath, type: "path", resolved: imagePath }]);
       expect(result.loadedCount).toBe(0);
       expect(result.skippedCount).toBe(0);
       expect(result.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a described fact identity to suppress its generated media-note path", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-described-dedupe-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `[media attached: ${imagePath} (image/png)]`,
+        media: buildInboundMediaNoteProjection({
+          media: [{ path: imagePath, contentType: "image/png" }],
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              text: "already described",
+              provider: "test",
+            },
+          ],
+        }).media,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+      });
+
+      expect(result.detectedRefs).toEqual([{ raw: imagePath, type: "path", resolved: imagePath }]);
+      expect(result.loadedCount).toBe(0);
+      expect(result.images).toEqual([]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dedupes a relative fact projection against the fact workspace", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fact-workspace-dedupe-"));
+    const stagedDir = path.join(rootDir, "staged");
+    const currentDir = path.join(rootDir, "current");
+    await fs.mkdir(stagedDir, { recursive: true });
+    await fs.mkdir(currentDir, { recursive: true });
+    await fs.writeFile(path.join(stagedDir, "photo.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+    await fs.writeFile(path.join(currentDir, "photo.png"), TINY_GIF_BUFFER);
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "[media attached: ./photo.png (image/png)]",
+        media: [{ path: "./photo.png", contentType: "image/png", workspaceDir: stagedDir }],
+        workspaceDir: currentDir,
+        model: { input: ["text", "image"] },
+        localRoots: [stagedDir, currentDir],
+      });
+
+      expect(result.loadedCount).toBe(1);
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
 
@@ -586,47 +446,138 @@ describe("detectAndLoadPromptImages", () => {
     expect(result.images).toEqual([image, image]);
   });
 
-  it("preserves attachment order when offloaded refs and inline images are mixed", () => {
-    // The model receives images in the user's attachment order, not grouped by
-    // storage mechanism.
-    const merged = mergePromptAttachmentImages({
-      imageOrder: ["offloaded", "inline"],
-      existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],
-      offloadedImages: [{ type: "image", data: "large-a", mimeType: "image/jpeg" }],
-    });
+  it("keeps offloaded-only facts when existing images have no order metadata", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-unordered-images-"));
+    const imagePath = path.join(workspaceDir, "offloaded.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const inlineImage = {
+      type: "image" as const,
+      data: TINY_GIF_BUFFER.toString("base64"),
+      mimeType: "image/gif",
+    };
 
-    expect(merged).toEqual([
-      { type: "image", data: "large-a", mimeType: "image/jpeg" },
-      { type: "image", data: "small-b", mimeType: "image/png" },
-    ]);
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "compare",
+        media: [{ path: imagePath, contentType: "image/png" }],
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        existingImages: [inlineImage],
+        imageOrder: [],
+        workspaceOnly: true,
+      });
+
+      expect(result.loadedCount).toBe(1);
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+        inlineImage,
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
-  it("classifies trailing offloaded refs separately from prompt refs", () => {
+  it("classifies prompt and attachment refs while preserving mixed attachment order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-order-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, "att-b.gif"), TINY_GIF_BUFFER);
+    await fs.writeFile(
+      path.join(inboundDir, "prompt-ref.png"),
+      Buffer.from(TINY_PNG_BASE64, "base64"),
+    );
+    await fs.writeFile(path.join(stateDir, "prompt-b.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const prompt =
-      "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.png]";
-    const refs = detectImageReferences(prompt);
+      "compare [media attached: media://inbound/prompt-ref.png] and ./prompt-b.png\n[media attached: media://inbound/att-b.gif]";
 
-    const split = splitPromptAndAttachmentRefs({
-      prompt,
-      refs,
-      imageOrder: ["inline", "offloaded"],
-    });
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt,
+        media: [{ url: "media://inbound/att-b.gif", contentType: "image/gif" }],
+        workspaceDir: stateDir,
+        model: { input: ["text", "image"] },
+        existingImages: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+        imageOrder: ["offloaded", "inline"],
+        workspaceOnly: true,
+      });
 
-    expect(split.promptRefs).toEqual([
-      {
-        raw: "media://inbound/prompt-ref.png",
-        type: "media-uri",
-        resolved: "media://inbound/prompt-ref.png",
-      },
-      { raw: "./prompt-b.png", type: "path", resolved: "./prompt-b.png" },
-    ]);
-    expect(split.attachmentRefs).toEqual([
-      {
-        raw: "media://inbound/att-b.png",
-        type: "media-uri",
-        resolved: "media://inbound/att-b.png",
-      },
-    ]);
+      expect(result.detectedRefs).toEqual([
+        {
+          raw: "media://inbound/att-b.gif",
+          type: "media-uri",
+          resolved: "media://inbound/att-b.gif",
+        },
+        { raw: "./prompt-b.png", type: "path", resolved: "./prompt-b.png" },
+      ]);
+      expect(result.loadedCount).toBe(2);
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_GIF_BUFFER.toString("base64"), mimeType: "image/gif" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an empty described-image slot in mixed attachment order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-described-image-order-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "remaining.gif";
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), TINY_GIF_BUFFER);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "compare",
+        media: [
+          { kind: "image" },
+          { kind: "image" },
+          { url: `media://inbound/${mediaId}`, contentType: "image/gif" },
+        ],
+        workspaceDir: stateDir,
+        model: { input: ["text", "image"] },
+        existingImages: [inlineImage],
+        imageOrder: ["offloaded", "inline", "offloaded"],
+      });
+
+      expect(result.images).toEqual([
+        inlineImage,
+        { type: "image", data: TINY_GIF_BUFFER.toString("base64"), mimeType: "image/gif" },
+      ]);
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not load an explicit prompt ref twice when the same fact owns it", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-fact-"));
+    await fs.writeFile(path.join(workspaceDir, "same.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "Compare ./same.png",
+        media: [{ path: "./same.png", contentType: "image/png", workspaceDir }],
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toEqual([
+        { raw: "./same.png", type: "path", resolved: "./same.png" },
+      ]);
+      expect(result.loadedCount).toBe(1);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
@@ -690,6 +641,222 @@ describe("detectAndLoadPromptImages", () => {
     } finally {
       envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the fact hydration size limit", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-size-"));
+    const imagePath = path.join(workspaceDir, "too-large.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "describe it",
+        media: [{ path: imagePath, contentType: "image/png" }],
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        maxBytes: 1,
+      });
+
+      expect(result.loadedCount).toBe(0);
+      expect(result.failedMediaCount).toBe(1);
+      expect(result.skippedCount).toBe(1);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("hydratePromptMediaMessages", () => {
+  it("hydrates queued facts in attachment order without mutating cache-stable input", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-queued-image-facts-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "queued.gif";
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), TINY_GIF_BUFFER);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
+    const message = attachRuntimePromptMediaFacts(
+      { role: "user" as const, content: [{ type: "text" as const, text: "compare" }, inlineImage] },
+      [{ url: `media://inbound/${mediaId}`, contentType: "image/gif" }],
+      ["offloaded", "inline"],
+    );
+    const options = {
+      workspaceDir: stateDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+    };
+
+    try {
+      const runtimeMessage = message as unknown as AgentMessage;
+      const first = await hydratePromptMediaMessages([runtimeMessage], options);
+      const second = await hydratePromptMediaMessages([runtimeMessage], options);
+      const firstContent = (first?.[0] as unknown as { content?: unknown })?.content;
+      const secondContent = (second?.[0] as unknown as { content?: unknown })?.content;
+
+      expect(firstContent).toEqual([
+        { type: "text", text: "compare" },
+        { type: "image", data: TINY_GIF_BUFFER.toString("base64"), mimeType: "image/gif" },
+        inlineImage,
+      ]);
+      expect(secondContent).toEqual(firstContent);
+      expect(message.content).toEqual([{ type: "text", text: "compare" }, inlineImage]);
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates a fact-owned user message whose content is a string", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-string-image-facts-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const message = attachRuntimePromptMediaFacts(
+      { role: "user" as const, content: "describe it" },
+      [{ path: imagePath, contentType: "image/png" }],
+    ) as unknown as AgentMessage;
+
+    try {
+      const result = await hydratePromptMediaMessages([message], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+      expect((result[0] as unknown as { content?: unknown }).content).toEqual([
+        { type: "text", text: "describe it" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reconstructs recent facts from serialized transcript media fields", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replayed-image-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const message = {
+      role: "user" as const,
+      content: "describe the replayed image",
+      MediaPath: imagePath,
+      MediaPaths: [imagePath],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    } as unknown as AgentMessage;
+
+    try {
+      const result = await hydratePromptMediaMessages([message], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+      expect((result[0] as unknown as { content?: unknown }).content).toEqual([
+        { type: "text", text: "describe the replayed image" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves offloaded-before-inline order across serialize and restore", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-order-"));
+    const offloadedPath = path.join(workspaceDir, "offloaded.png");
+    const inlinePath = path.join(workspaceDir, "inline.gif");
+    await fs.writeFile(offloadedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    await fs.writeFile(inlinePath, TINY_GIF_BUFFER);
+    const inlineImage = {
+      type: "image" as const,
+      data: TINY_GIF_BUFFER.toString("base64"),
+      mimeType: "image/gif",
+    };
+    const runtime = attachRuntimePromptMediaFacts(
+      { role: "user" as const, content: [{ type: "text" as const, text: "compare" }, inlineImage] },
+      [{ path: offloadedPath, contentType: "image/png" }],
+      ["offloaded", "inline"],
+    ) as unknown as AgentMessage;
+    const persisted = buildPersistedUserTurnMessage({
+      text: "compare",
+      media: [
+        { path: offloadedPath, contentType: "image/png" },
+        { path: inlinePath, contentType: "image/gif" },
+      ],
+      mediaImageLayout: {
+        slots: [
+          { kind: "offloaded", factIndex: 0 },
+          { kind: "inline", factIndex: 1 },
+        ],
+      },
+    });
+    const serialized = JSON.stringify(
+      mergePreparedUserTurnMessageForRuntime({
+        runtimeMessage: runtime,
+        preparedMessage: persisted,
+      }),
+    );
+    const restored = JSON.parse(serialized) as AgentMessage;
+
+    try {
+      expect(readRuntimePromptImageOrder(restored)).toBeUndefined();
+      const result = await hydratePromptMediaMessages([restored], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+      expect((result[0] as unknown as { content?: unknown }).content).toEqual([
+        { type: "text", text: "compare" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+        inlineImage,
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps duplicate fact slots across serialize and restore", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-duplicates-"));
+    const imagePath = path.join(workspaceDir, "same.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
+    const persisted = buildPersistedUserTurnMessage({
+      text: "compare duplicates",
+      media: [
+        { path: imagePath, contentType: "image/png" },
+        { path: imagePath, contentType: "image/png" },
+      ],
+      mediaImageLayout: {
+        slots: [
+          { kind: "offloaded", factIndex: 0 },
+          { kind: "inline", factIndex: 1 },
+        ],
+      },
+    });
+    const serialized = JSON.stringify(
+      mergePreparedUserTurnMessageForRuntime({
+        runtimeMessage: {
+          role: "user",
+          content: [{ type: "text", text: "compare duplicates" }, inlineImage],
+        } as AgentMessage,
+        preparedMessage: persisted,
+      }),
+    );
+    const restored = JSON.parse(serialized) as AgentMessage;
+
+    try {
+      const result = await hydratePromptMediaMessages([restored], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+      const content = (result[0] as unknown as { content?: unknown[] }).content ?? [];
+      expect(content.filter((block) => (block as { type?: unknown }).type === "image")).toEqual([
+        inlineImage,
+        inlineImage,
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 });

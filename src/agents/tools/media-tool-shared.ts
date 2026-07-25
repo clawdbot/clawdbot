@@ -1,10 +1,7 @@
-/**
- * Shared media tool helpers.
- *
- * Resolves provider/model config, local roots, auth availability, SSRF policy, and media reference inputs.
- */
+/** Shared media tool routing, auth, path, and reference helpers. */
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -94,7 +91,7 @@ export function applyImageGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
+  return applyAgentDefaultModelConfig(cfg, "image", imageGenerationModelConfig);
 }
 
 /**
@@ -104,7 +101,7 @@ export function applyVideoGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   videoGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "videoGenerationModel", videoGenerationModelConfig);
+  return applyAgentDefaultModelConfig(cfg, "video", videoGenerationModelConfig);
 }
 
 /**
@@ -114,7 +111,7 @@ export function applyMusicGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   musicGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "musicGenerationModel", musicGenerationModelConfig);
+  return applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig);
 }
 
 /**
@@ -137,11 +134,20 @@ export function resolveRemoteMediaSsrfPolicy(
 
 function applyAgentDefaultModelConfig(
   cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "imageGenerationModel" | "videoGenerationModel" | "musicGenerationModel",
+  key: "imageModel" | "image" | "video" | "music",
   modelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
   if (!cfg) {
     return undefined;
+  }
+  if (key === "imageModel") {
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: { ...cfg.agents?.defaults, imageModel: modelConfig },
+      },
+    };
   }
   return {
     ...cfg,
@@ -149,7 +155,7 @@ function applyAgentDefaultModelConfig(
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        [key]: modelConfig,
+        mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig },
       },
     },
   };
@@ -227,6 +233,19 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
+}
+
+export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider>(
+  providers: readonly T[] | undefined,
+) {
+  const prepared = providers ? [...providers] : undefined;
+  return prepared
+    ? {
+        getProvider: (providerId?: string) =>
+          findCapabilityProviderById({ providers: prepared, providerId, normalizeProviderId }),
+        listProviders: () => prepared,
+      }
+    : undefined;
 }
 
 /**
@@ -470,20 +489,7 @@ export function readBooleanToolParam(
   params: Record<string, unknown>,
   key: string,
 ): boolean | undefined {
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const normalized = normalizeOptionalLowercaseString(raw);
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return undefined;
+  return parseBoolean(readSnakeCaseParamRaw(params, key));
 }
 
 /**
@@ -684,7 +690,17 @@ export async function resolveModelRuntimeApiKey(params: {
     model: params.model,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    secretSentinels: true,
   });
+  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
+  // empty sentinel out of auth storage and pass it through to the stream.
+  if (
+    !apiKeyInfo.apiKey?.trim() &&
+    apiKeyInfo.mode === "aws-sdk" &&
+    params.model.api === "bedrock-converse-stream"
+  ) {
+    return "";
+  }
   const apiKey = requireApiKey(apiKeyInfo, params.model.provider);
   params.authStorage.setRuntimeApiKey(params.model.provider, apiKey);
   return apiKey;

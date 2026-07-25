@@ -5,7 +5,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isUiTestTarget, isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
+import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
+import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
@@ -31,12 +32,12 @@ export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
-const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
+const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
-const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
+export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_VITEST_CONFIG, DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   ["test/vitest/vitest.ui-e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
@@ -51,11 +52,12 @@ const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ],
   ["test/vitest/vitest.infra.config.ts", DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  [GATEWAY_SERVER_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
 ]);
-const TOOLING_EXCLUDED_TESTS = new Set([
+export const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
-  "test/scripts/openclaw-e2e-instance.test.ts",
+  ...toolingIsolatedTestFiles,
 ]);
 const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
@@ -348,25 +350,39 @@ function resolveExplicitVitestMode(argv) {
   return mode;
 }
 
+function resolveVitestCompileCacheSafeEnv(env) {
+  if (!env.NODE_COMPILE_CACHE && !env.NODE_COMPILE_CACHE_PORTABLE) {
+    return env;
+  }
+  // Coverage can be enabled inside a dynamic Vitest config, which this wrapper
+  // cannot know before spawning. Keep the cache for orchestration/build tools,
+  // but never let a Vitest child deserialize bytecode into V8 coverage.
+  const spawnEnv = { ...env, NODE_DISABLE_COMPILE_CACHE: "1" };
+  delete spawnEnv.NODE_COMPILE_CACHE;
+  delete spawnEnv.NODE_COMPILE_CACHE_PORTABLE;
+  return spawnEnv;
+}
+
 /**
  * Adds default watchdog env for non-watch Vitest runs.
  */
 export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
+  const baseEnv = resolveVitestCompileCacheSafeEnv(env);
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
-    return env;
+    return baseEnv;
   }
-  if (explicitMode !== "run" && !isTruthyEnvValue(env.CI)) {
-    return env;
+  if (explicitMode !== "run" && !isTruthyEnvValue(baseEnv.CI)) {
+    return baseEnv;
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
-  const hasTimeout = Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
+  const hasTimeout = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
   const timeoutMs = hasTimeout
-    ? parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
+    ? parsePositiveInt(baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
     : defaultTimeoutMs;
-  const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
+  const hasHeartbeat = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
-    ...env,
+    ...baseEnv,
     ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
@@ -424,13 +440,8 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
 /**
  * Applies local Vitest scheduling and native worker budget env.
  */
-export function resolveVitestSpawnEnv(env = process.env) {
-  const nextEnv = resolveLocalVitestEnv(env);
-  const linkedSourceBundledPluginsEnv = resolveLinkedSourceBundledPluginsEnv(nextEnv);
-  const baseEnv =
-    Object.keys(linkedSourceBundledPluginsEnv).length > 0
-      ? { ...nextEnv, ...linkedSourceBundledPluginsEnv }
-      : nextEnv;
+function resolveVitestSpawnEnv(env = process.env) {
+  const baseEnv = resolveLocalVitestEnv(env);
   if (!shouldApplyNativeWorkerBudget(baseEnv)) {
     return baseEnv;
   }
@@ -458,59 +469,6 @@ function resolveNativeWorkerCount(env) {
 
 function resolveExplicitVitestWorkerBudget(env) {
   return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
-}
-
-function hasUsableSourceBundledPluginsDir(extensionsDir, fsImpl = fs) {
-  if (!fsImpl.existsSync(extensionsDir)) {
-    return false;
-  }
-  try {
-    return fsImpl.readdirSync(extensionsDir, { withFileTypes: true }).some((entry) => {
-      if (!entry.isDirectory()) {
-        return false;
-      }
-      const pluginDir = path.join(extensionsDir, entry.name);
-      return (
-        fsImpl.existsSync(path.join(pluginDir, "package.json")) ||
-        fsImpl.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
-function isSymlinkedNodeModules(baseDir, fsImpl = fs) {
-  try {
-    return fsImpl.lstatSync(path.join(baseDir, "node_modules")).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-export function resolveLinkedSourceBundledPluginsEnv(
-  env = process.env,
-  { baseDir = repoRoot, fsImpl = fs } = {},
-) {
-  if (env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim()) {
-    return {};
-  }
-  const workingDir = env.PWD?.trim();
-  if (!workingDir || path.resolve(workingDir) !== path.resolve(baseDir)) {
-    return {};
-  }
-  if (!isSymlinkedNodeModules(baseDir, fsImpl)) {
-    return {};
-  }
-  const extensionsDir = path.join(baseDir, "extensions");
-  if (!hasUsableSourceBundledPluginsDir(extensionsDir, fsImpl)) {
-    return {};
-  }
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: extensionsDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR:
-      env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR?.trim() || "1",
-  };
 }
 
 /**
@@ -582,7 +540,10 @@ function isExplicitProjectRouterTargetArg(arg, cwd = process.cwd(), fsImpl = fs)
     return true;
   }
   const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
-  return fsImpl.existsSync(filePath) && isDelegableBroadProjectRouterTarget(arg, cwd);
+  return fsImpl.existsSync(filePath)
+    ? isDelegableBroadProjectRouterTarget(arg, cwd)
+    : path.extname(arg) === "" &&
+        /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
 }
 
 function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {
@@ -609,6 +570,24 @@ function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg
 function collectExplicitProjectRouterTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
   return collectExplicitFileTargetArgs(argv, (arg) =>
     isExplicitProjectRouterTargetArg(arg, cwd, fsImpl),
+  );
+}
+
+function isExplicitDirectoryTargetArg(arg, cwd = process.cwd(), fsImpl = fs) {
+  if (!isPathLikeExplicitFileArg(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  const targetPath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+  try {
+    return fsImpl.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function collectExplicitDirectoryTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
+  return collectExplicitFileTargetArgs(argv, (arg) =>
+    isExplicitDirectoryTargetArg(arg, cwd, fsImpl),
   );
 }
 
@@ -793,6 +772,18 @@ export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (hasExplicitVitestConfigArg(argv)) {
     return argv;
   }
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs = separatorIndex < 0 ? argv : argv.slice(0, separatorIndex);
+  const hasExplicitIsolation = optionArgs.some(
+    (arg) => arg === "--isolate" || arg === "--no-isolate" || arg.startsWith("--isolate="),
+  );
+  if (!hasExplicitIsolation && collectExplicitDirectoryTargetArgs(argv, cwd).length > 1) {
+    // Mixed directory selectors can activate overlapping Vitest projects.
+    // Isolate their module caches so one project's mocks cannot poison another.
+    const resolved = [...argv];
+    resolved.splice(separatorIndex < 0 ? resolved.length : separatorIndex, 0, "--isolate");
+    return resolved;
+  }
   const testTargets = argv
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
@@ -802,16 +793,10 @@ export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (testTargets.length > 0 && testTargets.every(isToolingTestTarget)) {
     return withImplicitVitestConfig(argv, TOOLING_VITEST_CONFIG);
   }
-  if (testTargets.length === 0 || !testTargets.every(isUnitUiTestTarget)) {
-    if (
-      testTargets.length > 0 &&
-      testTargets.every((target) => isUiTestTarget(target) && !isUnitUiTestTarget(target))
-    ) {
-      return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
-    }
-    return argv;
+  if (testTargets.length > 0 && testTargets.every(isUiTestTarget)) {
+    return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
   }
-  return withImplicitVitestConfig(argv, UNIT_UI_VITEST_CONFIG);
+  return argv;
 }
 
 function spawnVitestProcess({ pnpmArgs, spawnParams }) {
@@ -957,7 +942,7 @@ export function installVitestNoOutputWatchdog(params) {
 /**
  * Forwards child output while optionally suppressing complete stderr lines.
  */
-export function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
+function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
   if (!stream) {
     return;
   }
@@ -1063,9 +1048,9 @@ export function resolveTestProjectsRunnerSpawnParams(env, platform = process.pla
   };
 }
 
-function spawnTestProjectsRunner(argv, env) {
+function spawnTestProjectsRunner(argv, env, options = {}) {
   let forwardedSignal = null;
-  const child = spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+  const child = spawn(process.execPath, [options.runnerPath ?? testProjectsRunnerPath, ...argv], {
     ...resolveTestProjectsRunnerSpawnParams(env),
   });
   const teardown = installVitestProcessGroupCleanup({
@@ -1077,6 +1062,30 @@ function spawnTestProjectsRunner(argv, env) {
     },
   });
   return { child, getForwardedSignal: () => forwardedSignal, teardown };
+}
+
+export function runTestProjectsDelegation(argv, env, options = {}) {
+  const { child, getForwardedSignal, teardown } = spawnTestProjectsRunner(argv, env, options);
+  child.on("exit", (code, signal) => {
+    teardown();
+    const forwardedSignal = getForwardedSignal();
+    if (forwardedSignal) {
+      forceKillVitestProcessGroup(child);
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+  child.on("error", (error) => {
+    teardown();
+    console.error(error);
+    process.exit(1);
+  });
+  return child;
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -1098,26 +1107,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const { child, getForwardedSignal, teardown } = spawnTestProjectsRunner(delegatedArgs, env);
-    child.on("exit", (code, signal) => {
-      teardown();
-      const forwardedSignal = getForwardedSignal();
-      if (forwardedSignal) {
-        forceKillVitestProcessGroup(child);
-        process.kill(process.pid, forwardedSignal);
-        return;
-      }
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      process.exit(code ?? 1);
-    });
-    child.on("error", (error) => {
-      teardown();
-      console.error(error);
-      process.exit(1);
-    });
+    runTestProjectsDelegation(delegatedArgs, env);
     return;
   }
 

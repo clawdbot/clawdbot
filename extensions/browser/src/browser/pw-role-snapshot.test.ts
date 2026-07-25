@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
-  getRoleSnapshotStats,
+  finalizeRoleSnapshot,
   parseRoleRef,
 } from "./pw-role-snapshot.js";
 
@@ -56,14 +56,91 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=e1]');
   });
 
-  it("computes stats", () => {
-    const aria = ['- button "OK"', '- button "Cancel"'].join("\n");
-    const res = buildRoleSnapshotFromAriaSnapshot(aria);
-    const stats = getRoleSnapshotStats(res.snapshot, res.refs);
-    expect(stats.refs).toBe(2);
-    expect(stats.interactive).toBe(2);
-    expect(stats.lines).toBeGreaterThan(0);
-    expect(stats.chars).toBeGreaterThan(0);
+  it("caps complete lines and derives refs and stats from the returned snapshot", () => {
+    const first = '- button "Visible" [ref=e1]';
+    const second = `- button "Hidden ${"X".repeat(100)} 🙂" [ref=e2]`;
+    const marker = "[...TRUNCATED - page too large]";
+    const result = finalizeRoleSnapshot({
+      snapshot: `${first}\n${second}`,
+      refs: {
+        e1: { role: "button", name: "Visible" },
+        e2: { role: "button", name: "Hidden 🙂" },
+      },
+      maxChars: first.length + 2 + marker.length,
+    });
+
+    expect(result).toEqual({
+      snapshot: `${first}\n\n${marker}`,
+      truncated: true,
+      refs: { e1: { role: "button", name: "Visible" } },
+      stats: {
+        lines: 3,
+        chars: first.length + 2 + marker.length,
+        refs: 1,
+        interactive: 1,
+      },
+    });
+    expect(result.snapshot).not.toContain("\ud83d");
+  });
+
+  it("does not treat hostile ref-like page text as a returned ref", () => {
+    const result = finalizeRoleSnapshot({
+      snapshot: [
+        '- button "Visible \\" [ref=e2]" [ref=e1]',
+        "- button: attacker [ref=e2]",
+        "",
+        "Links:",
+        "1. [ref=e3] -> https://example.com/",
+      ].join("\n"),
+      refs: {
+        e1: { role: "button" },
+        e2: { role: "button" },
+        e3: { role: "link" },
+      },
+    });
+
+    expect(result.refs).toEqual({ e1: { role: "button" } });
+    expect(result.stats.refs).toBe(1);
+  });
+
+  it("uses a bounded marker for budgets too small for a snapshot line", () => {
+    const result = finalizeRoleSnapshot({
+      snapshot: '- button "Visible" [ref=e1]',
+      refs: { e1: { role: "button" } },
+      maxChars: 1,
+    });
+
+    expect(result).toEqual({
+      snapshot: "…",
+      truncated: true,
+      refs: {},
+      stats: { lines: 1, chars: 1, refs: 0, interactive: 0 },
+    });
+  });
+
+  it("keeps maxChars zero uncapped", () => {
+    const snapshot = '- button "Visible" [ref=e1]';
+    const result = finalizeRoleSnapshot({
+      snapshot,
+      refs: { e1: { role: "button" } },
+      maxChars: 0,
+    });
+
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.truncated).toBeUndefined();
+    expect(result.refs).toEqual({ e1: { role: "button" } });
+  });
+
+  it("treats sub-unit internal budgets as uncapped", () => {
+    const snapshot = '- button "Visible" [ref=e1]';
+    const result = finalizeRoleSnapshot({
+      snapshot,
+      refs: { e1: { role: "button" } },
+      maxChars: 0.5,
+    });
+
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.truncated).toBeUndefined();
   });
 
   it("returns a helpful message when no interactive elements exist", () => {

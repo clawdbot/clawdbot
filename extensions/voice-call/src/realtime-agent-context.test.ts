@@ -2,9 +2,10 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import type { CoreAgentDeps } from "./core-bridge.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
@@ -64,7 +65,7 @@ describe("buildRealtimeVoiceInstructions", () => {
     await writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Claw Voice\nVibe: snappy\n");
     await writeFile(path.join(workspaceDir, "SECRET.md"), "do not include\n");
 
-    const coreConfig = { agents: { list: [{ id: "voice" }] } } as CoreConfig;
+    const coreConfig = { agents: { list: [{ id: "voice" }] } } as OpenClawConfig;
 
     const instructions = await buildRealtimeVoiceInstructions({
       baseInstructions: "Base voice instructions.",
@@ -80,6 +81,7 @@ describe("buildRealtimeVoiceInstructions", () => {
       }),
       coreConfig,
       agentRuntime: createAgentRuntime(workspaceDir),
+      agentId: "voice",
     });
 
     expect(instructions).toContain("OpenClaw agent voice context:");
@@ -92,5 +94,30 @@ describe("buildRealtimeVoiceInstructions", () => {
     expect(instructions).toContain("Stay quick, direct, and warm.");
     expect(instructions).toContain("### IDENTITY.md");
     expect(instructions).not.toContain("do not include");
+  });
+
+  it("truncates injected context without splitting UTF-16 surrogate pairs", async () => {
+    const agentId = "abc🚀tail";
+    const expectedContext = "OpenClaw agent voice context:\n\n- Agent id: abc";
+    const config = createConfig({
+      agentContext: {
+        enabled: true,
+        maxChars: expectedContext.length + 33,
+        includeIdentity: false,
+        includeWorkspaceFiles: false,
+        files: [],
+      },
+    });
+    config.agentId = agentId;
+
+    const instructions = await buildRealtimeVoiceInstructions({
+      baseInstructions: "Base voice instructions.",
+      config,
+      coreConfig: { agents: { list: [{ id: agentId }] } } as OpenClawConfig,
+      agentRuntime: createAgentRuntime("/unused"),
+      agentId,
+    });
+
+    expect(instructions).toBe(`Base voice instructions.\n\n${expectedContext}\n[truncated]`);
   });
 });

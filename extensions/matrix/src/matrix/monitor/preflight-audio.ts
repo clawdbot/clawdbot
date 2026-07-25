@@ -1,22 +1,20 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-
-type MatrixPreflightAudioRuntime = typeof import("./preflight-audio.runtime.js");
 const MATRIX_DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
-let matrixPreflightAudioRuntimePromise: Promise<MatrixPreflightAudioRuntime> | undefined;
-
-function loadMatrixPreflightAudioRuntime(): Promise<MatrixPreflightAudioRuntime> {
-  matrixPreflightAudioRuntimePromise ??= import("./preflight-audio.runtime.js");
-  return matrixPreflightAudioRuntimePromise;
-}
+const loadMatrixPreflightAudioRuntime = createLazyRuntimeModule(
+  () => import("./preflight-audio.runtime.js"),
+);
 
 export function formatMatrixAudioTranscript(transcript: string): string {
   return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
 }
 
 function formatMatrixAudioTranscriptEcho(transcript: string, format: string): string {
-  return format.replace("{transcript}", transcript);
+  // Function replacer keeps `$` sequences in the transcript literal instead of
+  // being parsed as String.prototype.replace substitution patterns.
+  return format.replace("{transcript}", () => transcript);
 }
 
 function suppressMatrixPreflightAudioEcho(cfg: OpenClawConfig): OpenClawConfig {
@@ -70,8 +68,7 @@ export async function resolveMatrixPreflightAudioTranscript(params: {
     }
     const transcript = await transcribeFirstAudio({
       ctx: {
-        MediaPaths: [params.mediaPath],
-        MediaTypes: params.mediaContentType ? [params.mediaContentType] : undefined,
+        media: [{ path: params.mediaPath, contentType: params.mediaContentType }],
         Provider: "matrix",
         Surface: "matrix",
         OriginatingChannel: "matrix",

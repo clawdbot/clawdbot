@@ -11,6 +11,7 @@ import {
 } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
+import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
@@ -21,6 +22,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   NormalizedOutboundPayload,
@@ -35,12 +38,15 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { retryAsync } from "../../infra/retry.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
+  isCronSessionKey,
   parseThreadSessionSuffix,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -48,8 +54,13 @@ import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
+import { resolveCronLifecycleRevisionIdentity } from "./run-session-state.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
-import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
+import {
+  cleanupCronRunSessionAfterRun,
+  type CronRunSessionCleanupOutcome,
+} from "./session-cleanup.js";
+import { loadCronSessionEntryLatest } from "./session.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
@@ -96,7 +107,7 @@ export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
 }
 
 /** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
-export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
+type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 type DispatchCronDeliveryParams = {
   cfg: OpenClawConfig;
@@ -107,6 +118,9 @@ type DispatchCronDeliveryParams = {
   agentSessionKey: string;
   runSessionKey: string;
   sessionId: string;
+  lifecycleRevision: string;
+  sessionUpdatedAt: number;
+  beforeSessionDelete?: () => void;
   runStartedAt: number;
   runEndedAt: number;
   timeoutMs: number;
@@ -130,28 +144,30 @@ type DispatchCronDeliveryParams = {
   ) => RunCronAgentTurnResult;
 };
 
+type DirectCronTranscriptMirror = {
+  sessionKey: string;
+  agentId: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  text?: string;
+  mediaUrls?: string[];
+  storePath?: string;
+  idempotencyKey: string;
+  config: OpenClawConfig;
+};
+
 /** Mutable delivery-dispatch accumulator returned to the isolated cron runner. */
-export type DispatchCronDeliveryState = {
+type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  deliveryError?: string;
   cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
   deliveryPayloads: ReplyPayload[];
 };
-
-const TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
-  /\berrorcode=unavailable\b/i,
-  /\bstatus\s*[:=]\s*"?unavailable\b/i,
-  /\bUNAVAILABLE\b/,
-  /no active .* listener/i,
-  /gateway not connected/i,
-  /gateway closed \(1006/i,
-  /gateway timeout/i,
-  /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
-];
 
 const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
@@ -247,12 +263,18 @@ export async function cleanupDirectCronSession(params: {
   job: CronJob;
   agentSessionKey: string;
   sessionId: string;
+  lifecycleRevision: string;
+  sessionUpdatedAt: number;
+  beforeSessionDelete?: () => void;
   retireReason: string;
 }): Promise<void> {
   await cleanupCronRunSessionAfterRun({
     job: params.job,
     agentSessionKey: params.agentSessionKey,
     sessionId: params.sessionId,
+    lifecycleRevision: params.lifecycleRevision,
+    sessionUpdatedAt: params.sessionUpdatedAt,
+    beforeDelete: params.beforeSessionDelete,
     reason: params.retireReason,
   });
 }
@@ -273,7 +295,7 @@ function cloneDeliveryResults(
 }
 
 function pruneCompletedDirectCronDeliveries(now: number) {
-  const ttlMs = process.env.OPENCLAW_TEST_FAST === "1" ? 60_000 : 24 * 60 * 60 * 1000;
+  const ttlMs = isFastTestRuntimeEnv() ? 60_000 : 24 * 60 * 60 * 1000;
   for (const [key, entry] of COMPLETED_DIRECT_CRON_DELIVERIES) {
     if (now - entry.ts >= ttlMs) {
       COMPLETED_DIRECT_CRON_DELIVERIES.delete(key);
@@ -434,7 +456,39 @@ function resolveCronAwarenessText(params: {
         normalizeOptionalString(params.synthesizedText));
 }
 
-export function formatTargetCronDeliveryAwarenessText(text: string): string {
+function resolveDirectCronSummaryFallbackText(params: {
+  outputText?: string;
+  summary?: string;
+  synthesizedText?: string;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.outputText) ??
+    normalizeOptionalString(params.summary) ??
+    normalizeOptionalString(params.synthesizedText)
+  );
+}
+
+function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
+  return (
+    Boolean(payload.channelData) &&
+    !hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false })
+  );
+}
+
+function resolveDirectCronFallbackSourceIndex(
+  payloads: ReplyPayload[],
+  fallbackText: string | undefined,
+): number | undefined {
+  if (!fallbackText) {
+    return undefined;
+  }
+  const index = payloads.findLastIndex(
+    (payload) => normalizeOptionalString(payload.text) === fallbackText,
+  );
+  return index >= 0 ? index : undefined;
+}
+
+function formatTargetCronDeliveryAwarenessText(text: string): string {
   return `A scheduled cron job delivered this message to this channel:\n${text}`;
 }
 
@@ -676,7 +730,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
 }
 
 /** Resolves the transcript mirror session for direct cron delivery. */
-export async function resolveDirectCronDeliverySessionKey(params: {
+async function resolveDirectCronDeliverySessionKey(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
@@ -804,15 +858,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
 
 async function appendDirectCronDeliveryTranscriptMirror(params: {
   job: CronJob;
-  mirror: {
-    sessionKey: string;
-    agentId: string;
-    text?: string;
-    mediaUrls?: string[];
-    storePath?: string;
-    idempotencyKey: string;
-    config: OpenClawConfig;
-  };
+  mirror: DirectCronTranscriptMirror;
 }): Promise<void> {
   if (!params.mirror.text && !params.mirror.mediaUrls?.length) {
     return;
@@ -832,14 +878,91 @@ async function appendDirectCronDeliveryTranscriptMirror(params: {
   }
 }
 
+async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
+  job: CronJob;
+  mirror: DirectCronTranscriptMirror;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  const storePath = params.mirror.storePath;
+  const initial = storePath
+    ? loadCronSessionEntryLatest(storePath, params.mirror.sessionKey)
+    : undefined;
+  const expectedSessionId = params.mirror.expectedSessionId ?? initial?.sessionId;
+  const expectedLifecycleRevision =
+    params.mirror.expectedLifecycleRevision ?? initial?.lifecycleRevision;
+  if (!storePath || !expectedSessionId) {
+    await logCronDeliveryWarn(
+      `[cron:${params.job.id}] skipped transcript mirror without an exact session identity`,
+    );
+    return;
+  }
+  const admittedMirror = {
+    ...params.mirror,
+    expectedSessionId,
+    ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+  };
+
+  try {
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [
+        params.mirror.sessionKey,
+        expectedSessionId,
+        expectedLifecycleRevision
+          ? resolveCronLifecycleRevisionIdentity(expectedLifecycleRevision)
+          : undefined,
+      ],
+      signal: params.abortSignal,
+      assertAllowed: () => {
+        const latest = loadCronSessionEntryLatest(storePath, params.mirror.sessionKey);
+        if (
+          latest?.sessionId !== expectedSessionId ||
+          (expectedLifecycleRevision !== undefined &&
+            latest.lifecycleRevision !== expectedLifecycleRevision)
+        ) {
+          throw new Error(
+            `Session "${params.mirror.sessionKey}" changed before transcript mirror.`,
+          );
+        }
+        const archivedError = resolveSessionWorkStartError(params.mirror.sessionKey, latest);
+        if (archivedError) {
+          throw new Error(archivedError);
+        }
+      },
+    });
+    try {
+      await admission.run(() =>
+        appendDirectCronDeliveryTranscriptMirror({
+          job: params.job,
+          mirror: admittedMirror,
+        }),
+      );
+    } finally {
+      admission.release();
+    }
+  } catch (err) {
+    await logCronDeliveryWarn(
+      `[cron:${params.job.id}] skipped transcript mirror: ${formatErrorMessage(err)}`,
+    );
+  }
+}
+
 /** Clears the direct-delivery idempotency cache for deterministic tests. */
-export function resetCompletedDirectCronDeliveriesForTests() {
+function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
 
 /** Returns the direct-delivery idempotency cache size for tests. */
-export function getCompletedDirectCronDeliveriesCountForTests(): number {
+function getCompletedDirectCronDeliveriesCountForTests(): number {
   return COMPLETED_DIRECT_CRON_DELIVERIES.size;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronDeliveryDispatchTestApi")] =
+    {
+      resetCompletedDirectCronDeliveriesForTests,
+      getCompletedDirectCronDeliveriesCountForTests,
+    };
 }
 
 function summarizeDirectCronDeliveryError(error: unknown): string {
@@ -864,45 +987,48 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   if (PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
     return false;
   }
-  return TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+  return isProvenDeliveryNotSentError(error);
 }
-
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
-  return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
-    ? [0, 0, 0]
-    : [5_000, 10_000, 20_000];
+  return isFastTestRuntimeEnv() ? [0, 0, 0] : [5_000, 10_000, 20_000];
 }
 
 async function retryTransientDirectCronDelivery<T>(params: {
   jobId: string;
   signal?: AbortSignal;
   run: () => Promise<T>;
+  shouldRetryError?: (err: unknown) => boolean;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
-    if (params.signal?.aborted) {
-      throw new Error("cron delivery aborted");
-    }
-    try {
-      return await params.run();
-    } catch (err) {
-      if (!isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
-        throw err;
-      }
-      const nextAttempt = retryIndex + 2;
-      const maxAttempts = retryDelaysMs.length + 1;
-      await logCronDeliveryWarn(
-        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
-      );
-      await sleepWithAbort(delayMs, params.signal);
-    }
-  }
   if (params.signal?.aborted) {
     throw new Error("cron delivery aborted");
   }
-  return await params.run();
+  const runWithAbortCheck = async () => {
+    if (params.signal?.aborted) {
+      throw new Error("cron delivery aborted");
+    }
+    return await params.run();
+  };
+  return await retryAsync(runWithAbortCheck, {
+    attempts: retryDelaysMs.length + 1,
+    minDelayMs: 0,
+    maxDelayMs: Math.max(...retryDelaysMs),
+    delayMs: ({ attempt }) => retryDelaysMs[attempt - 1] ?? 0,
+    shouldRetry: (err) =>
+      params.signal?.aborted !== true &&
+      isTransientDirectCronDeliveryError(err) &&
+      (params.shouldRetryError?.(err) ?? true),
+    onRetry: async ({ attempt, maxAttempts, delayMs, err }) => {
+      await logCronDeliveryWarn(
+        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
+      );
+      if (delayMs === 0) {
+        await sleepWithAbort(0, params.signal);
+      }
+    },
+    sleep: async (delayMs) => await sleepWithAbort(delayMs, params.signal),
+  });
 }
-
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
@@ -916,11 +1042,14 @@ export async function dispatchCronDelivery(
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
+  let deliveryError: string | undefined;
   let directCronSessionCleanupAttempted = false;
+  let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
     ...(result ? { result } : {}),
     delivered,
     deliveryAttempted,
+    ...(deliveryError ? { deliveryError } : {}),
     cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
     summary,
     outputText,
@@ -941,19 +1070,32 @@ export async function dispatchCronDelivery(
       deliveryAttempted,
       ...params.telemetry,
     });
-  const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
+  const cleanupDirectCronSessionIfNeeded = async (): Promise<CronRunSessionCleanupOutcome> => {
     if (directCronSessionCleanupAttempted) {
-      return;
+      return "not-requested";
     }
-    const cleanupAttempted = await cleanupCronRunSessionAfterRun({
+    const cleanupOutcome = await cleanupCronRunSessionAfterRun({
       job: params.job,
       agentSessionKey: params.agentSessionKey,
       sessionId: params.sessionId,
+      lifecycleRevision: params.lifecycleRevision,
+      sessionUpdatedAt: params.sessionUpdatedAt,
+      beforeDelete: params.beforeSessionDelete,
       reason: "cron-delete-after-run-fallback",
     });
-    if (cleanupAttempted) {
+    if (cleanupOutcome !== "not-requested") {
       directCronSessionCleanupAttempted = true;
     }
+    const survivingMirror = deferredDeletingSessionMirror;
+    deferredDeletingSessionMirror = undefined;
+    if (cleanupOutcome !== "not-requested" && cleanupOutcome !== "deleted" && survivingMirror) {
+      await appendAdmittedDirectCronDeliveryTranscriptMirror({
+        job: params.job,
+        mirror: survivingMirror,
+        abortSignal: params.abortSignal,
+      });
+    }
+    return cleanupOutcome;
   };
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;
@@ -985,23 +1127,61 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const rawPayloads =
-        deliveryPayloads.length > 0
-          ? deliveryPayloads
-          : synthesizedText
-            ? [{ text: synthesizedText }]
-            : [];
-      const normalizedPayloads = rawPayloads
-        .map((p) => {
-          if (!p.text) {
-            return p;
-          }
-          const normalized = normalizeSilentReplyText(p.text);
-          return Object.assign({}, p, {
-            text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-          });
-        })
-        .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      const summaryFallbackText = resolveDirectCronSummaryFallbackText({
+        outputText,
+        summary,
+        synthesizedText,
+      });
+      const normalizedSummaryFallback = summaryFallbackText
+        ? normalizeSilentReplyText(summaryFallbackText)
+        : undefined;
+      const normalizedSummaryFallbackText =
+        normalizedSummaryFallback?.strippedTrailingSilentToken === true
+          ? undefined
+          : normalizedSummaryFallback?.text;
+      const normalizeDirectPayload = (payload: ReplyPayload): ReplyPayload => {
+        const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
+        return normalized
+          ? {
+              ...payload,
+              text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+            }
+          : payload;
+      };
+      const normalizedDeliveryPayloads = deliveryPayloads
+        .map(normalizeDirectPayload)
+        .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
+      const existingFallbackSourceIndex = resolveDirectCronFallbackSourceIndex(
+        normalizedDeliveryPayloads,
+        normalizedSummaryFallbackText,
+      );
+      const needsFallbackSource =
+        Boolean(normalizedSummaryFallbackText) &&
+        normalizedDeliveryPayloads.some(shouldAttachDirectCronFallbackText) &&
+        existingFallbackSourceIndex === undefined;
+      const fallbackSourceIndex = needsFallbackSource ? 0 : existingFallbackSourceIndex;
+      const directPayloads = needsFallbackSource
+        ? [{ text: normalizedSummaryFallbackText }, ...normalizedDeliveryPayloads]
+        : normalizedDeliveryPayloads;
+      let normalizedPayloads: ReplyPayload[] = [];
+      for (const payload of directPayloads) {
+        normalizedPayloads.push(
+          shouldAttachDirectCronFallbackText(payload) && normalizedSummaryFallbackText
+            ? {
+                ...payload,
+                fallbackText: {
+                  text: normalizedSummaryFallbackText,
+                  ...(fallbackSourceIndex !== undefined
+                    ? { replacesPayloadIndex: fallbackSourceIndex }
+                    : {}),
+                },
+              }
+            : payload,
+        );
+      }
+      if (normalizedPayloads.length === 0 && normalizedSummaryFallbackText) {
+        normalizedPayloads = [{ text: normalizedSummaryFallbackText }];
+      }
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
@@ -1081,23 +1261,27 @@ export async function dispatchCronDelivery(
         deliverySessionKey,
         awarenessMainSessionKey,
       );
+      const mirrorTargetsDeletingRunSession =
+        params.job.deleteAfterRun === true &&
+        isCronSessionKey(params.agentSessionKey) &&
+        isSameSessionKey(deliverySessionKey, params.agentSessionKey);
 
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
       let hadPartialFailure = false;
-      let partialDeliverySucceededBeforeFailure = false;
+      let payloadMayHaveReachedRecipientBeforeFailure = false;
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
       const onError = params.deliveryBestEffort
         ? (err: unknown, _payload: unknown) => {
             hadPartialFailure = true;
+            deliveryError ??= formatErrorMessage(err);
             logCronDeliveryErrorDeferred(
               `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
             );
           }
         : undefined;
-
       const runDelivery = async () => {
         attemptedPayloadsForMirror.length = 0;
         const send = await sendDurableMessageBatch({
@@ -1124,15 +1308,25 @@ export async function dispatchCronDelivery(
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
         });
+        // No durable id is still ambiguous: the adapter was already invoked.
+        payloadMayHaveReachedRecipientBeforeFailure ||=
+          send.payloadOutcomes?.some(
+            (outcome) =>
+              outcome.status === "sent" ||
+              (outcome.status === "failed" && outcome.sentBeforeError) ||
+              (outcome.status === "suppressed" &&
+                outcome.reason === "adapter_returned_no_identity"),
+          ) ?? false;
         if (send.status === "failed") {
           throw send.error;
         }
         if (send.status === "partial_failed") {
-          partialDeliverySucceededBeforeFailure = send.results.length > 0;
+          payloadMayHaveReachedRecipientBeforeFailure = true;
           if (!params.deliveryBestEffort) {
             throw send.error;
           }
           hadPartialFailure = true;
+          deliveryError ??= formatErrorMessage(send.error);
         }
         return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
       };
@@ -1143,6 +1337,7 @@ export async function dispatchCronDelivery(
               jobId: params.job.id,
               signal: params.abortSignal,
               run: runDelivery,
+              shouldRetryError: () => !payloadMayHaveReachedRecipientBeforeFailure,
             })
           : await runDelivery();
       } catch (err) {
@@ -1152,7 +1347,7 @@ export async function dispatchCronDelivery(
           to: delivery.to,
           threadId: stringifyRouteThreadId(delivery.threadId),
           error: err,
-          partialDelivered: partialDeliverySucceededBeforeFailure,
+          partialDelivered: payloadMayHaveReachedRecipientBeforeFailure,
         });
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
@@ -1217,6 +1412,12 @@ export async function dispatchCronDelivery(
         const transcriptMirror = {
           sessionKey: deliverySessionKey,
           agentId: params.agentId,
+          ...(mirrorTargetsDeletingRunSession
+            ? {
+                expectedSessionId: params.sessionId,
+                expectedLifecycleRevision: params.lifecycleRevision,
+              }
+            : {}),
           text: mirrorText,
           // Keep cron delivery mirrors text-first: non-audio attachment names
           // are folded into mirrorText so media does not replace delivered text.
@@ -1227,10 +1428,15 @@ export async function dispatchCronDelivery(
           idempotencyKey: deliveryIdempotencyKey,
           config: params.cfgWithAgentDefaults,
         };
-        await appendDirectCronDeliveryTranscriptMirror({
-          job: params.job,
-          mirror: transcriptMirror,
-        });
+        if (mirrorTargetsDeletingRunSession) {
+          deferredDeletingSessionMirror = transcriptMirror;
+        } else {
+          await appendAdmittedDirectCronDeliveryTranscriptMirror({
+            job: params.job,
+            mirror: transcriptMirror,
+            abortSignal: params.abortSignal,
+          });
+        }
       }
       if (
         delivered &&
@@ -1267,6 +1473,7 @@ export async function dispatchCronDelivery(
       await logCronDeliveryError(
         `[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`,
       );
+      deliveryError = formatErrorMessage(err);
       return null;
     }
   };
@@ -1407,12 +1614,16 @@ export async function dispatchCronDelivery(
       if (!params.deliveryBestEffort) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
+      delivered = false;
+      deliveryError = params.resolvedDelivery.error.message;
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
       return buildDeliveryState(
         params.withRunSession({
           status: "ok",
           summary,
           outputText,
+          delivered,
+          deliveryError,
           deliveryAttempted,
           ...params.telemetry,
         }),
@@ -1439,3 +1650,4 @@ export async function dispatchCronDelivery(
 
   return buildDeliveryState();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

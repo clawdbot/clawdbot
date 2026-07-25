@@ -7,7 +7,11 @@ export {
   isNativeQwenBaseUrl,
   isQwen36PlusSupportedBaseUrl,
   isQwenCodingPlanBaseUrl,
+  isQwenStandardOnlyModelId,
+  QWEN_36_FLASH_MODEL_ID,
   QWEN_36_PLUS_MODEL_ID,
+  QWEN_37_MAX_MODEL_ID,
+  QWEN_37_PLUS_MODEL_ID,
   QWEN_BASE_URL,
   QWEN_CN_BASE_URL,
   QWEN_DEFAULT_COST,
@@ -16,6 +20,15 @@ export {
   QWEN_GLOBAL_BASE_URL,
   QWEN_STANDARD_CN_BASE_URL,
   QWEN_STANDARD_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
+  QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+  QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
+  QWEN_TOKEN_PLAN_MODEL_CATALOG,
+  QWEN_TOKEN_PLAN_PROVIDER_ID,
+  type QwenTokenPlanRegion,
+  resolveQwenTokenPlanBaseUrl,
   QWEN_MODEL_CATALOG,
   applyModelStudioNativeStreamingUsageCompat,
   buildModelStudioDefaultModelDefinition,
@@ -31,5 +44,9 @@ export {
   MODELSTUDIO_STANDARD_GLOBAL_BASE_URL,
   MODELSTUDIO_MODEL_CATALOG,
 } from "./models.js";
-export { buildModelStudioProvider, buildQwenProvider } from "./provider-catalog.js";
+export {
+  buildModelStudioProvider,
+  buildQwenProvider,
+  buildQwenTokenPlanProvider,
+} from "./provider-catalog.js";
 export { createQwenThinkingWrapper, wrapQwenProviderStream } from "./stream.js";

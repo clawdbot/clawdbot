@@ -7,111 +7,134 @@ read_when:
 title: "Operator scopes"
 ---
 
-Operator scopes define what a Gateway client may do after it authenticates.
+Operator scopes gate what a Gateway client can do after it authenticates.
 They are a control-plane guardrail inside one trusted Gateway operator domain,
-not hostile multi-tenant isolation. If you need strong separation between
-people, teams, or machines, run separate Gateways under separate OS users or
-hosts.
+not hostile multi-tenant isolation. For strong separation between people,
+teams, or machines, run separate Gateways under separate OS users or hosts.
 
 Related: [Security](/gateway/security), [Gateway protocol](/gateway/protocol),
 [Gateway pairing](/gateway/pairing), [Devices CLI](/cli/devices).
 
 ## Roles
 
-Gateway WebSocket clients connect with one role:
+Every Gateway WebSocket client connects with one role:
 
 - `operator`: control-plane clients such as CLI, Control UI, automation, and
   trusted helper processes.
-- `node`: capability hosts such as macOS, iOS, Android, or headless nodes that
-  expose commands through `node.invoke`.
+- `node`: capability hosts (macOS, iOS, Android, headless) that expose
+  commands through `node.invoke`.
 
-Operator RPC methods require the `operator` role. Node-originated methods
+Operator RPC methods require the `operator` role; node-originated methods
 require the `node` role.
 
 ## Scope levels
 
-| Scope                   | Meaning                                                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`         | Read-only status, lists, catalog, logs, session reads, and other non-mutating control-plane calls.                                                                                    |
-| `operator.write`        | Normal mutating operator actions such as sending messages, invoking tools, updating talk/voice settings, and node command relay. Also satisfies `operator.read`.                      |
-| `operator.admin`        | Administrative control-plane access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, sensitive reserved namespaces, and high-risk approvals. |
-| `operator.pairing`      | Device and node pairing management, including listing, approving, rejecting, removing, rotating, and revoking pairing records or device tokens.                                       |
-| `operator.approvals`    | Exec and plugin approval APIs.                                                                                                                                                        |
-| `operator.talk.secrets` | Reading Talk configuration with secrets included.                                                                                                                                     |
+| Scope                   | Meaning                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator.read`         | Read-only status, lists, catalog, logs, session reads, and other non-mutating calls.                                                                          |
+| `operator.write`        | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
+| `operator.admin`        | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
+| `operator.pairing`      | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
+| `operator.approvals`    | Exec and plugin approval APIs.                                                                                                                                |
+| `operator.questions`    | Listing, reading, answering, and resolving interactive questions.                                                                                             |
+| `operator.talk.secrets` | Reading Talk configuration with secrets included.                                                                                                             |
 
-Unknown future `operator.*` scopes require an exact match unless the caller has
-`operator.admin`.
+Unknown future `operator.*` scopes require an exact match unless the caller
+already holds `operator.admin`.
 
 ## Method scope is only the first gate
 
-Each Gateway RPC has a least-privilege method scope. That method scope decides
-whether the request can reach the handler. Some handlers then apply stricter
-approval-time checks based on the concrete thing being approved or mutated.
+Each Gateway RPC has a least-privilege method scope that decides whether a
+request reaches its handler. Params-aware methods derive that scope before
+dispatch so authorization failures have one canonical structured response:
 
-Examples:
+- `agent` needs `operator.write` for ordinary turns and `operator.admin` for
+  `/new` or `/reset` session lifecycle commands.
+- `node.invoke` needs `operator.write` for ordinary relay commands and
+  `operator.admin` for `browser.proxy`, `fs.listDir`, and `terminal.upload`.
+- `talk.config` needs `operator.read`; `includeSecrets: true` also needs
+  `operator.talk.secrets`.
+
+Some handlers then apply stricter checks based on the concrete thing being
+approved or mutated:
 
 - `device.pair.approve` is reachable with `operator.pairing`, but approving an
   operator device can only mint or preserve scopes the caller already holds.
 - `node.pair.approve` is reachable with `operator.pairing`, then derives extra
-  approval scopes from the pending node command list.
-- `chat.send` is normally a write-scoped method, but persistent `/config set`
-  and `/config unset` require `operator.admin` at command level.
+  approval scopes from the pending node's declared command list.
+- `chat.send` is a write-scoped method, but the `/config set` and
+  `/config unset` chat commands require `operator.admin` on top of that,
+  regardless of the caller's chat-send scope.
 
-This lets lower-scope operators perform low-risk pairing actions without making
-all pairing approval admin-only.
+This lets lower-scope operators perform low-risk pairing actions without
+making all pairing approval admin-only.
+
+Session mutation RPCs are authorized by their negotiated operator scopes,
+independent of the connecting client's `client.id` or `client.mode`. Client
+identity can still affect connection and device-auth policy, but it neither
+grants nor removes session mutation authority.
 
 ## Device pairing approvals
 
 Device pairing records are the durable source of approved roles and scopes.
-Already paired devices do not get broader access silently: reconnects that ask
-for a broader role or broader scopes create a new pending upgrade request.
+An already-paired device does not get broader access silently: a reconnect
+that asks for a broader role or broader scopes creates a new pending upgrade
+request.
 
-When approving a device request:
+Approving a device request:
 
-- A request with no operator role does not need operator token scope approval.
-- A request for a non-operator device role, such as `node`, requires
-  `operator.admin`, even when `device.pair.approve` is reachable with
+- A request with no operator role does not need operator scope approval.
+- A request for a non-operator device role (for example `node`) requires
+  `operator.admin`, even though `device.pair.approve` itself only needs
   `operator.pairing`.
 - A request for `operator.read`, `operator.write`, `operator.approvals`,
-  `operator.pairing`, or `operator.talk.secrets` requires the caller to hold
-  those scopes, or `operator.admin`.
+  `operator.questions`, `operator.pairing`, or `operator.talk.secrets` requires
+  the caller to already hold that scope, or `operator.admin`.
 - A request for `operator.admin` requires `operator.admin`.
 - A repair request with no explicit scopes can inherit the existing operator
-  token scopes. If that existing token is admin-scoped, approval still requires
+  token's scopes; if that token is admin-scoped, approval still requires
   `operator.admin`.
 
-Non-admin shared-secret and trusted-proxy sessions can approve operator-device
-requests only inside their own declared operator scopes. Approving non-operator
-roles is admin-only even when those sessions can otherwise use
+Non-admin shared-secret and trusted-proxy sessions can only approve
+operator-device requests within their own declared operator scopes; approving
+non-operator roles is admin-only even when those sessions can otherwise use
 `operator.pairing`.
 
-For paired-device token sessions, management is also self-scoped unless the
-caller has `operator.admin`: non-admin callers see only their own pairing
-entries, can approve or reject only their own pending request, and can rotate,
-revoke, or remove only their own device entry.
+For paired-device token sessions, management is self-scoped unless the caller
+has `operator.admin`: a non-admin caller sees only its own pairing entries, and
+can approve, reject, rotate, revoke, or remove only its own device entry.
 
 ## Node pairing approvals
 
-Legacy `node.pair.*` uses a separate Gateway-owned node pairing store. WS nodes
-use device pairing with `role: node`, but the same approval-level vocabulary
-applies.
+Legacy `node.pair.*` methods use a separate Gateway-owned node pairing store.
+WS nodes use device pairing (`role: node`) instead, but the same approval
+vocabulary applies. See [Gateway pairing](/gateway/pairing) for how the two
+stores relate.
 
-`node.pair.approve` uses the pending request command list to derive additional
-required scopes:
+`node.pair.approve` derives extra required scopes from the pending request's
+command list:
 
-- Commandless request: `operator.pairing`
-- Non-exec node commands: `operator.pairing` + `operator.write`
-- `system.run`, `system.run.prepare`, or `system.which`:
-  `operator.pairing` + `operator.admin`
+| Declared commands                                                                                                    | Required scopes                       |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                 | `operator.pairing`                    |
+| ordinary node commands                                                                                               | `operator.pairing` + `operator.write` |
+| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
-Node pairing establishes identity and trust. It does not replace the node's
-own `system.run` exec approval policy.
+Approving a node declaration does not enable commands that have a separate
+runtime allowlist gate. For example, approving a node that declares
+`computer.act` requires pairing plus write scope, but only records the surface.
+An administrator or owner must still arm `computer.act`. While it remains
+armed, invoking it through `node.invoke` requires write scope, but not admin
+scope for each action.
+
+Node pairing establishes identity and trust; it does not replace a node's own
+`system.run` exec approval policy.
 
 ## Shared-secret auth
 
 Shared gateway token/password auth is treated as trusted operator access for
-that Gateway. OpenAI-compatible HTTP surfaces, `/tools/invoke`, and HTTP session
-history endpoints restore the normal full operator default scope set for
+that Gateway. OpenAI-compatible HTTP surfaces, `/tools/invoke`, and HTTP
+session-history endpoints restore the full default operator scope set for
 shared-secret bearer auth, even if a caller sends narrower declared scopes.
 
 Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,

@@ -1,7 +1,7 @@
 // Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
-import { visibleWidth } from "./ansi.js";
+import { splitGraphemes, visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 import { normalizeLowercaseStringOrEmpty } from "./string.js";
 
@@ -26,10 +26,23 @@ function splitLongWord(word: string, maxLen: number): string[] {
   if (maxLen <= 0) {
     return [word];
   }
-  const chars = Array.from(word);
+  // maxLen is a visible-column budget, so accumulate grapheme visible width (CJK/emoji count as 2
+  // columns) instead of code-point count; otherwise a wide-char run overflows the line by up to 2x.
   const parts: string[] = [];
-  for (let i = 0; i < chars.length; i += maxLen) {
-    parts.push(chars.slice(i, i + maxLen).join(""));
+  let current = "";
+  let currentWidth = 0;
+  for (const grapheme of splitGraphemes(word)) {
+    const width = visibleWidth(grapheme);
+    if (current && currentWidth + width > maxLen) {
+      parts.push(current);
+      current = "";
+      currentWidth = 0;
+    }
+    current += grapheme;
+    currentWidth += width;
+  }
+  if (current) {
+    parts.push(current);
   }
   return parts.length > 0 ? parts : [word];
 }
@@ -217,7 +230,6 @@ export function note(message: unknown, title?: string) {
   const wrappedMessage = wrapNoteMessage(message, { columns });
   clackNote(wrappedMessage, stylePromptTitle(title), {
     output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
-    format: (line) => line,
   });
 }
 

@@ -1,12 +1,18 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Shared command handler context and result contracts. */
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { TypingController } from "./typing.js";
@@ -49,6 +55,10 @@ export type HandleCommandsParams = {
     failures: Array<{ gate: string; key: string }>;
   };
   sessionEntry?: SessionEntry;
+  /** Snapshot captured before command handlers mutate the active entry. */
+  initialSessionEntry?: SessionEntry;
+  /** True only when the current command owns first creation of this session row. */
+  allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
@@ -57,6 +67,8 @@ export type HandleCommandsParams = {
   workspaceDir: string;
   opts?: GetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
+  /** Catalog snapshot prepared by model selection for status rendering. */
+  thinkingCatalog?: ThinkingCatalogEntry[];
   resolvedThinkLevel?: ThinkLevel;
   resolvedFastMode?: FastMode;
   resolvedVerboseLevel: VerboseLevel;

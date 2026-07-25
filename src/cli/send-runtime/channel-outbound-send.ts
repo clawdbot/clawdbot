@@ -25,6 +25,10 @@ type RuntimeSendOpts = {
   formatting?: OutboundDeliveryFormattingOptions;
   gifPlayback?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** @internal Opaque durable intent id for provider-side reconciliation. */
+  deliveryQueueId?: string;
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
   textMode?: "markdown" | "html";
 };
 
@@ -65,6 +69,8 @@ export function createChannelOutboundRuntimeSend(params: {
           opts.formatting ?? (opts.textMode === "html" ? { parseMode: "HTML" } : undefined),
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
+        deliveryQueueId: opts.deliveryQueueId,
+        onPlatformSendDispatch: opts.onPlatformSendDispatch,
       });
       const hasMedia = Boolean(opts.mediaUrl);
       if (opts.blocks && outbound?.sendPayload) {

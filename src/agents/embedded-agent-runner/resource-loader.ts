@@ -12,7 +12,7 @@ import { DefaultResourceLoader } from "../sessions/index.js";
 type DefaultResourceLoaderInit = ConstructorParameters<typeof DefaultResourceLoader>[0];
 
 /** Discovery options that keep embedded sessions isolated from ambient local resources. */
-export const EMBEDDED_AGENT_RESOURCE_LOADER_DISCOVERY_OPTIONS = {
+const EMBEDDED_AGENT_RESOURCE_LOADER_DISCOVERY_OPTIONS = {
   noExtensions: true,
   noSkills: true,
   noPromptTemplates: true,

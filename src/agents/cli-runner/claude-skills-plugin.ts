@@ -35,7 +35,7 @@ function sanitizeSkillDirName(name: string, used: Set<string>): string {
 }
 
 /** Returns whether a resolved skill file is readable before linking it into the Claude plugin. */
-export function isClaudeCliSkillFileAccessible(skillFilePath: string): boolean {
+function isClaudeCliSkillFileAccessible(skillFilePath: string): boolean {
   try {
     accessSync(skillFilePath);
     return true;

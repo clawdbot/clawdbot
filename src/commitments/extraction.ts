@@ -6,6 +6,7 @@ import {
 import { normalizeOptionalString as asString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
@@ -252,7 +253,11 @@ function parseDueMs(raw: string | undefined): number | undefined {
     return undefined;
   }
   const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  if (!Number.isFinite(parsed) || parseAbsoluteTimeMs(raw) === null) {
+    return undefined;
+  }
+  // The cron parser validates the ISO shape and calendar; preserve Date.parse's existing interpretation.
+  return parsed;
 }
 
 function resolveMinimumDueMs(params: {
@@ -268,7 +273,7 @@ function resolveMinimumDueMs(params: {
   return params.nowMs + intervalMs;
 }
 
-export function validateCommitmentCandidates(params: {
+function validateCommitmentCandidates(params: {
   cfg?: OpenClawConfig;
   items: CommitmentExtractionItem[];
   result: CommitmentExtractionBatchResult;
@@ -364,4 +369,9 @@ export async function persistCommitmentExtractionResult(params: {
     );
   }
   return created;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commitmentExtractionTestApi")] =
+    { validateCommitmentCandidates };
 }

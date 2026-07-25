@@ -1,12 +1,12 @@
 // Memory Core plugin module serializes full memory reindex builds across processes.
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type MemoryReindexLockHandle = {
   release: () => void;
 };
 
-export function resolveMemoryReindexLockPath(dbPath: string): string {
+function resolveMemoryReindexLockPath(dbPath: string): string {
   return `${dbPath}.reindex-lock.sqlite`;
 }
 
@@ -20,8 +20,7 @@ function isSqliteBusyError(err: unknown): boolean {
 }
 
 function openMemoryLockDatabase(lockPath: string): DatabaseSync {
-  const { DatabaseSync } = requireNodeSqlite();
-  const lockDb = new DatabaseSync(lockPath);
+  const lockDb = openNodeSqliteDatabase(lockPath);
   try {
     lockDb.exec("PRAGMA busy_timeout = 0");
     return lockDb;

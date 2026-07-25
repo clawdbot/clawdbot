@@ -1,6 +1,11 @@
 // Mistral plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyMistralModelCompat, MISTRAL_SMALL_LATEST_ID, MISTRAL_MEDIUM_3_5_ID } from "./api.js";
+import {
+  applyMistralModelCompat,
+  MISTRAL_MEDIUM_3_5_ID,
+  MISTRAL_SMALL_4_ID,
+  MISTRAL_SMALL_LATEST_ID,
+} from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -40,13 +45,17 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildMistralProvider,
+      buildStaticProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
     resolveThinkingProfile: ({ modelId }) =>
-      modelId === MISTRAL_SMALL_LATEST_ID || modelId === MISTRAL_MEDIUM_3_5_ID
+      modelId === MISTRAL_SMALL_LATEST_ID ||
+      modelId === MISTRAL_SMALL_4_ID ||
+      modelId === MISTRAL_MEDIUM_3_5_ID
         ? { levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" }
         : undefined,
     buildReplayPolicy: () => buildMistralReplayPolicy(),

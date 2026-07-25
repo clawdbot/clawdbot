@@ -11,10 +11,11 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
-import { createTlonSetupWizardBase, tlonSetupAdapter } from "./setup-core.js";
+import { createTlonSetupWizardBase, tlonSetupAdapter, tlonSetupContract } from "./setup-core.js";
 import {
   formatTargetHint,
   normalizeShip,
@@ -64,6 +65,7 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
 const tlonChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   deliveryCapabilities: {
     durableFinal: {
@@ -106,6 +108,7 @@ export const tlonPlugin = createChatChannelPlugin({
       threads: true,
     },
     setup: tlonSetupAdapter,
+    setupContract: tlonSetupContract,
     setupWizard: tlonSetupWizardProxy,
     reload: { configPrefixes: ["channels.tlon"] },
     configSchema: tlonChannelConfigSchema,

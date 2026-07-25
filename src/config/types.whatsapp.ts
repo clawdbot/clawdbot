@@ -1,24 +1,18 @@
 // Defines WhatsApp channel configuration types.
 import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
-  BlockStreamingCoalesceConfig,
-  ContextVisibilityMode,
-  DmPolicy,
-  GroupPolicy,
-  MarkdownConfig,
-  ReplyToMode,
-} from "./types.base.js";
-import type {
-  ChannelHealthMonitorConfig,
-  ChannelHeartbeatVisibilityConfig,
-} from "./types.channel-health.js";
-import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
+  ChannelReactionConfig,
+  ChannelReadReceiptConfig,
+  CommonChannelMessagingConfig,
+} from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+  /** Enable the experimental requester-bound voice-call tool. Default: false. */
+  calls?: boolean;
 };
 
 export type WhatsAppReactionLevel = ReactionLevel;
@@ -51,91 +45,28 @@ export type WhatsAppAckReactionConfig = {
   group?: "always" | "mentions" | "never";
 };
 
-type WhatsAppSharedConfig = {
-  /** Whether the WhatsApp channel is enabled. */
-  enabled?: boolean;
-  /** Direct message access policy (default: pairing). */
-  dmPolicy?: DmPolicy;
-  /** Same-phone setup (bot uses your personal WhatsApp number). */
-  selfChatMode?: boolean;
-  /** Optional allowlist for WhatsApp direct chats (E.164). */
-  allowFrom?: string[];
-  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
-  defaultTo?: string;
-  /** Optional allowlist for WhatsApp group senders (E.164). */
-  groupAllowFrom?: string[];
-  /**
-   * Controls how group messages are handled:
-   * - "open": groups bypass allowFrom, only mention-gating applies
-   * - "disabled": block all group messages entirely
-   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-   */
-  groupPolicy?: GroupPolicy;
-  /** Scope configured groupChat mentionPatterns to selected WhatsApp conversation IDs. */
-  mentionPatterns?: MentionPatternsPolicyConfig;
-  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
-  contextVisibility?: ContextVisibilityMode;
-  /** Max group messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM history overrides keyed by user ID. */
-  dms?: Record<string, DmConfig>;
-  /** Outbound text chunk size (chars). Default: 4000. */
-  textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Maximum media file size in MB. Default: 50. */
-  mediaMaxMb?: number;
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  groups?: Record<string, WhatsAppGroupConfig>;
-  /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
-  direct?: Record<string, WhatsAppDirectConfig>;
-  /** Acknowledgment reaction sent immediately upon message receipt. */
-  ackReaction?: WhatsAppAckReactionConfig;
-  /**
-   * Controls agent reaction behavior:
-   * - "off": No reactions
-   * - "ack": Only automatic ack reactions
-   * - "minimal" (default): Agent can react sparingly
-   * - "extensive": Agent can react liberally
-   */
-  reactionLevel?: WhatsAppReactionLevel;
-  /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
-  debounceMs?: number;
-  /** Reply threading mode for auto-replies (off|first|all|batched). */
-  replyToMode?: ReplyToMode;
-  /** Heartbeat visibility settings. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
-  /** Channel health monitor overrides for this channel/account. */
-  healthMonitor?: ChannelHealthMonitorConfig;
-};
+type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
+  ChannelReadReceiptConfig &
+  ChannelReactionConfig<never, WhatsAppReactionLevel, WhatsAppAckReactionConfig> & {
+    /** Same-phone setup (bot uses your personal WhatsApp number). */
+    selfChatMode?: boolean;
+    groups?: Record<string, WhatsAppGroupConfig>;
+    /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
+    direct?: Record<string, WhatsAppDirectConfig>;
+  };
 
-type WhatsAppConfigCore = {
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: string[];
-  /** Markdown formatting overrides (tables). */
-  markdown?: MarkdownConfig;
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /** Send read receipts for incoming messages (default true). */
-  sendReadReceipts?: boolean;
-  /** Inbound message prefix override (WhatsApp only). */
+type WhatsAppSpecificConfig = {
+  /** @deprecated Doctor-only legacy input. */
   messagePrefix?: string;
-  /** Outbound response prefix override. */
-  responsePrefix?: string;
 };
 
-export type WhatsAppConfig = WhatsAppConfigCore &
-  WhatsAppSharedConfig & {
+export type WhatsAppConfig = Omit<WhatsAppSharedConfig, "name"> &
+  WhatsAppSpecificConfig & {
     /** Optional per-account WhatsApp configuration (multi-account). */
     accounts?: Record<string, WhatsAppAccountConfig>;
     /** Optional default account id when multiple accounts are configured. */
     defaultAccount?: string;
-    /** Per-action tool gating (default: true for all). */
+    /** Per-action tool gating. Calls default to false; existing actions default to true. */
     actions?: WhatsAppActionConfig;
     /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
     pluginHooks?: {
@@ -144,12 +75,10 @@ export type WhatsAppConfig = WhatsAppConfigCore &
     };
   };
 
-export type WhatsAppAccountConfig = WhatsAppConfigCore &
+export type WhatsAppAccountConfig = WhatsAppSpecificConfig &
   WhatsAppSharedConfig & {
     /** Optional display name for this account (used in CLI/UI lists). */
     name?: string;
-    /** If false, do not start this WhatsApp account provider. Default: true. */
-    enabled?: boolean;
     /** Override auth directory (Baileys multi-file auth state). */
     authDir?: string;
     /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */

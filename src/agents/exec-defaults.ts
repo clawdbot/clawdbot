@@ -24,6 +24,12 @@ import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
+/** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
+export type ExecSessionDefaults = Pick<
+  SessionEntry,
+  "execHost" | "execSecurity" | "execAsk" | "execNode" | "execCwd"
+>;
+
 // Resolved exec config layers come from global config, agent config, legacy
 // session fields, and per-call overrides.
 type ResolvedExecConfig = {
@@ -34,7 +40,7 @@ type ResolvedExecConfig = {
   node?: string;
 };
 
-type ExecOverridesConfig = Omit<ResolvedExecConfig, "mode">;
+export type ExecPolicyOverrides = Omit<ResolvedExecConfig, "mode">;
 
 // Layering keeps the most specific mode/security/ask while preserving policy
 // bounds from approvals and sandbox availability later in resolution.
@@ -46,7 +52,7 @@ type LayeredExecPolicy = {
 
 function applySessionLegacyExecPolicyLayer(
   base: LayeredExecPolicy,
-  sessionEntry?: SessionEntry,
+  sessionEntry?: ExecSessionDefaults,
 ): LayeredExecPolicy {
   const security = normalizeExecSecurity(sessionEntry?.execSecurity);
   const ask = normalizeExecAsk(sessionEntry?.execAsk);
@@ -59,12 +65,12 @@ function applySessionLegacyExecPolicyLayer(
   return base;
 }
 
-// Gather the shared config state once so canExecRequestNode and
-// resolveExecDefaults stay aligned on agent/global/session precedence.
+// Gather the shared config state once so exec resolution applies one
+// agent/global/session precedence order.
 function resolveExecConfigState(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
 }): {
@@ -100,48 +106,30 @@ function resolveExecConfigState(params: {
   };
 }
 
-function resolveExecSandboxAvailability(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  sandboxAvailable?: boolean;
-}) {
-  return (
-    params.sandboxAvailable ??
-    (params.sessionKey
-      ? resolveSandboxRuntimeStatus({
-          cfg: params.cfg,
-          sessionKey: params.sessionKey,
-        }).sandboxed
-      : false)
-  );
-}
-
-/** Returns whether the current exec policy allows requesting host node execution. */
-export function canExecRequestNode(params: {
+/** Resolves whether node exec is usable and any effective node binding. */
+export function resolveNodeExecEligibility(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;
-}): boolean {
-  const { cfg, host } = resolveExecConfigState(params);
-  return isRequestedExecTargetAllowed({
-    configuredTarget: host,
-    requestedTarget: "node",
-    sandboxAvailable: resolveExecSandboxAvailability({
-      cfg,
-      sessionKey: params.sessionKey,
-      sandboxAvailable: params.sandboxAvailable,
-    }),
-  });
+}): { canExec: boolean; node?: string } {
+  const defaults = resolveExecDefaults(params);
+  const systemRunDenied = params.cfg?.gateway?.nodes?.commands?.deny?.some(
+    (command) => command.trim() === "system.run",
+  );
+  return {
+    canExec: defaults.canRequestNode && defaults.security !== "deny" && !systemRunDenied,
+    ...(defaults.node ? { node: defaults.node } : {}),
+  };
 }
 
 /** Resolves effective exec host, mode, approval policy, and node availability. */
 export function resolveExecDefaults(params: {
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  execOverrides?: ExecOverridesConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;
@@ -162,11 +150,14 @@ export function resolveExecDefaults(params: {
     agentExec,
     globalExec,
   } = resolveExecConfigState(params);
-  const sandboxAvailable = resolveExecSandboxAvailability({
-    cfg,
-    sessionKey: params.sessionKey,
-    sandboxAvailable: params.sandboxAvailable,
-  });
+  const sandboxAvailable =
+    params.sandboxAvailable ??
+    (params.sessionKey
+      ? resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: params.sessionKey,
+        }).sandboxed
+      : false);
   const resolved = resolveExecTarget({
     configuredTarget: host,
     elevatedRequested: params.elevatedRequested === true,

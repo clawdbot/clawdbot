@@ -64,6 +64,15 @@ func TestDocsI18nCommandWaitDelayUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestNormalizeThinkingDefaultsToXHighAndAcceptsMax(t *testing.T) {
+	if got := normalizeThinking(""); got != "xhigh" {
+		t.Fatalf("expected xhigh default, got %q", got)
+	}
+	if got := normalizeThinking("MAX"); got != "max" {
+		t.Fatalf("expected max normalization, got %q", got)
+	}
+}
+
 func TestIsRetryableTranslateErrorRejectsDeadlineExceeded(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +185,8 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 	for _, want := range []string{
 		"System prompt.",
 		"Return only the translated text",
+		"Do not wrap the response in an additional code fence",
+		"preserve every code fence already present in the input exactly",
 		"<openclaw_docs_i18n_input>",
 		"Hello\nworld",
 		"</openclaw_docs_i18n_input>",
@@ -183,6 +194,9 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "with no code fences") {
+		t.Fatalf("prompt must not instruct the translator to remove input fences:\n%s", prompt)
 	}
 }
 

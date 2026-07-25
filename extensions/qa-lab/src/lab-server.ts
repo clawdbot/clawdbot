@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   acquireDebugProxyCaptureStore,
@@ -10,6 +11,7 @@ import {
 import {
   closeQaHttpServer,
   handleQaBusRequest,
+  isQaMalformedJsonBodyError,
   readQaJsonBody,
   writeError,
   writeJson,
@@ -53,7 +55,6 @@ import {
   createQaRunOutputDir,
   normalizeQaRunSelection,
 } from "./run-config.js";
-import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
 
@@ -72,8 +73,12 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
-export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
+function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
   if (writeQaRequestBodyLimitError(res, error)) {
+    return;
+  }
+  if (isQaMalformedJsonBodyError(error)) {
+    writeError(res, 400, error.message);
     return;
   }
   if (error instanceof QaEvidenceGalleryError) {
@@ -242,6 +247,7 @@ function detectQaEvidenceArtifactContentType(filePath: string): string {
 }
 
 async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
+  const { qaChannelPlugin, setQaChannelRuntime } = await import("openclaw/plugin-sdk/qa-channel");
   const runtime = createQaRunnerRuntime();
   setQaChannelRuntime(runtime);
   const cfg = createQaLabConfig(params.baseUrl);
@@ -884,3 +890,4 @@ function serializeSelfCheck(result: QaSelfCheckResult) {
     scenario: result.scenarioResult,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

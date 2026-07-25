@@ -4,7 +4,7 @@
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
 /** Browser transport backing the selected profile. */
-export type BrowserTransport = "cdp" | "chrome-mcp";
+export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 type BrowserHeadlessSource =
   | "request"
   | "env"
@@ -13,11 +13,75 @@ type BrowserHeadlessSource =
   | "linux-display-fallback"
   | "default";
 
+export type BrowserGraphicsAcceleration = "hardware" | "software" | "unknown";
+
+export type BrowserGraphicsDevice = {
+  vendorId: number;
+  deviceId: number;
+  vendor: string;
+  device: string;
+  driverVendor: string;
+  driverVersion: string;
+};
+
+export type BrowserVideoDecodeCapability = {
+  profile: string;
+  minResolution: { width: number; height: number };
+  maxResolution: { width: number; height: number };
+};
+
+export type BrowserVideoEncodeCapability = {
+  profile: string;
+  maxResolution: { width: number; height: number };
+  maxFramerateNumerator: number;
+  maxFramerateDenominator: number;
+};
+
+export type BrowserGraphicsDiagnostics =
+  | {
+      status: "available";
+      observedAt: number;
+      acceleration: BrowserGraphicsAcceleration;
+      renderer: string | null;
+      vendor: string | null;
+      version: string | null;
+      backend: string | null;
+      devices: BrowserGraphicsDevice[];
+      featureStatus: Record<string, string>;
+      disabledFeatures: Array<{ feature: string; status: string }>;
+      driverBugWorkarounds: string[];
+      videoDecoding: BrowserVideoDecodeCapability[];
+      videoEncoding: BrowserVideoEncodeCapability[];
+    }
+  | {
+      status: "unavailable";
+      observedAt: number;
+      reason: string;
+    };
+
+export type BrowserTabOwnership =
+  | {
+      status: "durable";
+      nativeTargetId: string;
+      profileFingerprint: string;
+      browserInstanceFingerprint: string;
+    }
+  | {
+      status: "non-durable";
+      reason:
+        | "explicit-cdp-url-required"
+        | "target-marker-not-unique"
+        | "target-marker-lookup-failed"
+        | "target-lookup-failed"
+        | "browser-identity-unavailable"
+        | "browser-identity-lookup-failed";
+    };
+
 /** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
-  driver?: "openclaw" | "existing-session";
+  driver?: "openclaw" | "existing-session" | "extension";
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
@@ -43,6 +107,11 @@ export type BrowserStatus = {
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
+  /**
+   * Cached process-lifetime diagnostics for a locally launched managed browser.
+   * Passive status calls never launch a browser to populate this field.
+   */
+  graphics?: BrowserGraphicsDiagnostics | null;
 };
 
 /** Browser tab record exposed by tab listing and tab mutation endpoints. */
@@ -58,6 +127,12 @@ export type BrowserTab = {
   url: string;
   wsUrl?: string;
   type?: string;
+};
+
+/** Internal tab-open result. Browser tools must remove internal metadata before model output. */
+export type BrowserOpenResult = BrowserTab & {
+  ownership?: BrowserTabOwnership;
+  resolvedProfile?: string;
 };
 
 /** ARIA snapshot node exposed in structured snapshot responses. */

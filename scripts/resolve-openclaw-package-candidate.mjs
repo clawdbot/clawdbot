@@ -25,6 +25,7 @@ export const ARTIFACT_TARBALL_SCAN_MAX_ENTRIES = 10_000;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
+const FORWARDED_SIGNAL_KILL_AFTER_MS = 250;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ACTIVE_CHILD_KILLERS = new Set();
@@ -58,11 +59,11 @@ for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
         killChild("SIGKILL");
       }
       process.exit(forwardedSignalExitCode);
-    }, COMMAND_TIMEOUT_KILL_AFTER_MS);
+    }, FORWARDED_SIGNAL_KILL_AFTER_MS);
   });
 }
 export const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(alpha|beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
   return `Usage: node scripts/resolve-openclaw-package-candidate.mjs --source <ref|npm|url|trusted-url|artifact> --output-dir <dir> [options]
@@ -175,7 +176,7 @@ function resolvePackedOpenClawTarballFilename(value) {
 export function validateOpenClawPackageSpec(spec) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
 }
@@ -457,7 +458,7 @@ async function assertExpectedSha256(file, expected) {
 
 export const assertExpectedSha256ForTest = assertExpectedSha256;
 
-async function findSingleTarball(dir) {
+async function findSingleTarball(dir, maxEntries = ARTIFACT_TARBALL_SCAN_MAX_ENTRIES) {
   const root = path.resolve(ROOT_DIR, dir);
   const pending = [root];
   const tarballs = [];
@@ -471,9 +472,9 @@ async function findSingleTarball(dir) {
     const handle = await fs.opendir(currentDir);
     for await (const entry of handle) {
       scannedEntries += 1;
-      if (scannedEntries > ARTIFACT_TARBALL_SCAN_MAX_ENTRIES) {
+      if (scannedEntries > maxEntries) {
         throw new Error(
-          `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries under ${dir}; provide a smaller artifact directory containing exactly one .tgz.`,
+          `source=artifact scan exceeded ${maxEntries} filesystem entries under ${dir}; provide a smaller artifact directory containing exactly one .tgz.`,
         );
       }
 
@@ -1281,10 +1282,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
 
 async function openPackageDownloadResponse(url, options) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = resolveTimerTimeoutMs(
-    options.timeoutMs,
-    PACKAGE_URL_DOWNLOAD_TIMEOUT_MS,
-  );
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, PACKAGE_URL_DOWNLOAD_TIMEOUT_MS);
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
   let parsed = new URL(url);
@@ -1478,6 +1476,7 @@ async function resolveCandidate(options) {
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",
+        "--allow-unreleased-changelog",
         "--source-dir",
         packageSource.sourceDir,
         "--output-dir",

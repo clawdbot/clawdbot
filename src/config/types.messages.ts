@@ -1,6 +1,5 @@
 // Defines message queue and delivery configuration types.
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
-import type { TtsConfig } from "./types.tts.js";
 
 export type MentionPatternsMode = "allow" | "deny";
 
@@ -19,9 +18,10 @@ export type GroupChatConfig = {
    */
   unmentionedInbound?: "user_request" | "room_event";
   /**
-   * Controls how group/channel inbound events produce visible room replies. The
-   * message-tool mode requires explicit message sends for visible room output;
-   * final text stays private when the model misses the tool.
+   * Controls how group/channel inbound events produce model-authored room replies.
+   * The message-tool mode requires explicit message sends for normal assistant
+   * output; explicitly host-owned runtime output remains deliverable except for
+   * ambient room events.
    * Default: "automatic".
    */
   visibleReplies?: "automatic" | "message_tool";
@@ -34,7 +34,6 @@ export type DmConfig = {
 export type QueueConfig = {
   mode?: QueueMode;
   byChannel?: QueueModeByProvider;
-  debounceMs?: number;
   /** Per-channel debounce overrides (ms). */
   debounceMsByChannel?: InboundDebounceByProvider;
   cap?: number;
@@ -61,62 +60,22 @@ export type BroadcastConfig = {
   [peerId: string]: string[] | BroadcastStrategy | undefined;
 };
 
-export type AudioConfig = {
-  /** @deprecated Use tools.media.audio.models instead. */
-  transcription?: {
-    // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
-    command: string[];
-    timeoutSeconds?: number;
-  };
-};
-
-export type StatusReactionsEmojiConfig = {
-  thinking?: string;
-  tool?: string;
-  coding?: string;
-  web?: string;
-  deploy?: string;
-  build?: string;
-  concierge?: string;
-  done?: string;
-  error?: string;
-  stallSoft?: string;
-  stallHard?: string;
-  compacting?: string;
-};
-
-export type StatusReactionsTimingConfig = {
-  /** Debounce interval for intermediate states (ms). Default: 700. */
-  debounceMs?: number;
-  /** Soft stall warning timeout (ms). Default: 10000. */
-  stallSoftMs?: number;
-  /** Hard stall warning timeout (ms). Default: 30000. */
-  stallHardMs?: number;
-  /** How long to hold done emoji before cleanup (ms). Default: 1500. */
-  doneHoldMs?: number;
-  /** How long to hold error emoji before cleanup (ms). Default: 2500. */
-  errorHoldMs?: number;
-};
-
 export type StatusReactionsConfig = {
   /** Enable lifecycle status reactions (default: false). */
   enabled?: boolean;
-  /** Override default emojis. */
-  emojis?: StatusReactionsEmojiConfig;
-  /** Override default timing. */
-  timing?: StatusReactionsTimingConfig;
 };
 
 export type MessagesConfig = {
-  /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
-  messagePrefix?: string;
+  /** @deprecated Doctor-only legacy input. */
+  removeAckAfterReply?: boolean;
   /**
    * Controls how source inbound events produce visible replies across direct,
    * group, and channel conversations. Group/channel events still default to
    * `groupChat.visibleReplies` when it is set.
    *
-   * Default: "automatic". In group/channel rooms, "message_tool" keeps final
-   * text private unless the model sends visibly through the message tool.
+   * Default: "automatic". In group/channel rooms, "message_tool" keeps normal
+   * assistant output private unless the model sends visibly through the message
+   * tool; explicitly host-owned runtime output remains deliverable.
    */
   visibleReplies?: "automatic" | "message_tool";
   /**
@@ -166,19 +125,13 @@ export type MessagesConfig = {
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
-  /** Remove ack reaction after reply is sent (default: false). */
-  removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
-  /** Text-to-speech settings for outbound replies. */
-  tts?: TtsConfig;
 };
 
 export type NativeCommandsSetting = boolean | "auto";
-
-export type CommandOwnerDisplay = "raw" | "hash";
 
 /**
  * Per-provider allowlist for command authorization.
@@ -188,6 +141,10 @@ export type CommandOwnerDisplay = "raw" | "hash";
 export type CommandAllowFrom = Record<string, Array<string | number>>;
 
 export type CommandsConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  ownerDisplay?: "raw" | "hash";
+  /** @deprecated Doctor-only legacy input. */
+  ownerDisplaySecret?: string;
   /** Enable native command registration when supported (default: "auto"). */
   native?: NativeCommandsSetting;
   /** Enable native skill command registration when supported (default: "auto"). */
@@ -208,14 +165,9 @@ export type CommandsConfig = {
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */
   restart?: boolean;
-  /** Enforce access-group allowlists/policies for commands (default: true). */
-  useAccessGroups?: boolean;
   /** Explicit owner allowlist for owner-scoped commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
   /** How owner IDs are rendered in system prompts. */
-  ownerDisplay?: CommandOwnerDisplay;
-  /** Secret used to key owner ID hashes when ownerDisplay is "hash". */
-  ownerDisplaySecret?: string;
   /**
    * Per-provider allowlist restricting who can use slash commands.
    * If set, overrides the channel's allowFrom for command authorization.

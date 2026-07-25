@@ -7,7 +7,7 @@ import * as bindingRegistry from "./configured-binding-registry.js";
 const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
-const getChannelPluginMock = vi.hoisted(() => vi.fn());
+const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
@@ -16,7 +16,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("./index.js", () => ({
-  getChannelPlugin: getChannelPluginMock,
+  getLoadedChannelPlugin: getLoadedChannelPluginMock,
 }));
 
 function createConfig(options?: { bindingAgentId?: string; accountId?: string }) {
@@ -88,13 +88,13 @@ describe("configured binding registry", () => {
     resolveAgentConfigMock.mockReset().mockReturnValue(undefined);
     resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
-    getChannelPluginMock.mockReset();
+    getLoadedChannelPluginMock.mockReset();
     ensureConfiguredBindingBuiltinsRegistered();
   });
 
   it("resolves configured ACP bindings from an already loaded channel plugin", () => {
     const plugin = createDiscordAcpPlugin();
-    getChannelPluginMock.mockReturnValue(plugin);
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
 
     const resolved = bindingRegistry.resolveConfiguredBindingRecord({
       cfg: createConfig() as never,
@@ -110,7 +110,7 @@ describe("configured binding registry", () => {
 
   it("resolves configured ACP bindings from canonical conversation refs", () => {
     const plugin = createDiscordAcpPlugin();
-    getChannelPluginMock.mockReturnValue(plugin);
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
 
     const resolved = bindingRegistry.resolveConfiguredBinding({
       cfg: createConfig() as never,
@@ -139,7 +139,7 @@ describe("configured binding registry", () => {
   it("primes compiled ACP bindings from the already loaded channel registry", () => {
     const plugin = createDiscordAcpPlugin();
     const cfg = createConfig({ bindingAgentId: "codex" });
-    getChannelPluginMock.mockReturnValue(plugin);
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
 
     const primed = bindingRegistry.primeConfiguredBindingRegistry({
       cfg: cfg as never,
@@ -166,7 +166,7 @@ describe("configured binding registry", () => {
 
   it("resolves wildcard binding session keys from the compiled registry", () => {
     const plugin = createDiscordAcpPlugin();
-    getChannelPluginMock.mockReturnValue(plugin);
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
 
     const resolved = bindingRegistry.resolveConfiguredBindingRecordBySessionKey({
       cfg: createConfig({ accountId: "*" }) as never,
@@ -196,10 +196,39 @@ describe("configured binding registry", () => {
     expect(resolved).toBeNull();
   });
 
+  it("skips ordinary route bindings before reading the loaded channel registry", () => {
+    const cfg = {
+      ...createConfig(),
+      bindings: [
+        {
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: {
+              kind: "channel",
+              id: "1479098716916023408",
+            },
+          },
+        },
+      ],
+    };
+
+    expect(
+      bindingRegistry.resolveConfiguredBindingRecord({
+        cfg: cfg as never,
+        channel: "discord",
+        accountId: "default",
+        conversationId: "1479098716916023408",
+      }),
+    ).toBeNull();
+    expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
+  });
+
   it("uses the current loaded channel plugin on each resolve", () => {
     const firstPlugin = createDiscordAcpPlugin();
     const secondPlugin = createDiscordAcpPlugin();
-    getChannelPluginMock.mockReturnValueOnce(firstPlugin).mockReturnValueOnce(secondPlugin);
+    getLoadedChannelPluginMock.mockReturnValueOnce(firstPlugin).mockReturnValueOnce(secondPlugin);
     const cfg = createConfig();
 
     bindingRegistry.resolveConfiguredBindingRecord({

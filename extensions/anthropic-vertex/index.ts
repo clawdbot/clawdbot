@@ -5,7 +5,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
-  NATIVE_ANTHROPIC_REPLAY_HOOKS,
+  buildProviderReplayFamilyHooks,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -48,7 +48,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
       normalizeResolvedModel: ({ modelId, model }) =>
         normalizeAnthropicVertexResolvedModel(modelId, model),
       resolveThinkingProfile: ({ modelId, params }) =>

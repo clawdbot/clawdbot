@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/nvidia-provider",
-  "version": "2026.6.10",
+  "version": "2026.7.2",
   "private": true,
   "description": "OpenClaw NVIDIA provider plugin",
   "type": "module",

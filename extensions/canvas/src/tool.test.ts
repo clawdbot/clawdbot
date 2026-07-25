@@ -5,6 +5,21 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanvasTool } from "./tool.js";
 
+const VALID_A2UI_V08_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: { Text: { text: { literalString: "Canvas proof" }, usageHint: "body" } },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
+
 const mocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
   imageResultFromFile: vi.fn(async (params) => ({ content: [], details: params })),
@@ -60,6 +75,7 @@ describe("Canvas tool", () => {
           jsonlPath: "events.jsonl",
         }),
       ).rejects.toThrow("jsonlPath outside workspace");
+      expect(mocks.listNodes).not.toHaveBeenCalled();
       expect(mocks.callGatewayTool).not.toHaveBeenCalled();
     },
   );
@@ -96,6 +112,21 @@ describe("Canvas tool", () => {
     expect(imageResultParams?.path).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
     expect(imageResultParams?.details).toEqual({ format: "png" });
     expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
+  });
+
+  it("rejects malformed snapshot base64 before creating an image result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        format: "png",
+        base64: "Zm9=",
+      },
+    });
+    const tool = createCanvasTool();
+
+    await expect(tool.execute("tool-call-1", { action: "snapshot" })).rejects.toThrow(
+      /invalid canvas\.snapshot payload/i,
+    );
+    expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 
   it("normalizes numeric string params before invoking node canvas commands", async () => {
@@ -152,6 +183,89 @@ describe("Canvas tool", () => {
     );
   });
 
+  it("preserves an empty canvas eval result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({ payload: { result: "" } });
+    const tool = createCanvasTool();
+
+    const result = await tool.execute("tool-call-1", {
+      action: "eval",
+      javaScript: `""`,
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "" }],
+      details: { result: "" },
+    });
+  });
+
+  it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
+    const tool = createCanvasTool({ agentSessionKey: "agent:main:canvas" });
+
+    await tool.execute("tool-call-1", {
+      action: "a2ui_push",
+      jsonl: VALID_A2UI_V08_JSONL,
+    });
+
+    expect(mocks.callGatewayTool).toHaveBeenCalledTimes(1);
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "canvas.a2ui.pushJSONL",
+        params: { jsonl: VALID_A2UI_V08_JSONL },
+        idempotencyKey: expect.any(String),
+        sessionKey: "agent:main:canvas",
+      },
+    );
+  });
+
+  it.each([
+    ["malformed JSONL", "{not-json}", /Invalid A2UI JSONL/],
+    [
+      "A2UI v0.9 createSurface JSONL",
+      JSON.stringify({
+        version: "v0.9",
+        createSurface: {
+          surfaceId: "main",
+          catalogId: "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json",
+        },
+      }),
+      /OpenClaw currently supports v0\.8 only/,
+    ],
+    [
+      "legacy createSurface JSONL",
+      JSON.stringify({ createSurface: { surfaceId: "main", root: "root" } }),
+      /OpenClaw currently supports v0\.8 only/,
+    ],
+    [
+      "A2UI v0.9 deleteSurface JSONL",
+      JSON.stringify({ version: "v0.9", deleteSurface: { surfaceId: "main" } }),
+      /OpenClaw currently supports v0\.8 only/,
+    ],
+    [
+      "an unsupported explicit A2UI version",
+      JSON.stringify({ version: "v1.0", deleteSurface: { surfaceId: "main" } }),
+      /unsupported A2UI version: "v1\.0"/,
+    ],
+    [
+      "an explicit version on an A2UI v0.8 message",
+      JSON.stringify({ version: "v0.8", deleteSurface: { surfaceId: "main" } }),
+      /A2UI v0\.8 messages must not include a version field/,
+    ],
+  ])("rejects %s before resolving or invoking a node", async (_label, jsonl, message) => {
+    const tool = createCanvasTool();
+
+    await expect(
+      tool.execute("tool-call-1", {
+        action: "a2ui_push",
+        jsonl,
+      }),
+    ).rejects.toThrow(message);
+    expect(mocks.listNodes).not.toHaveBeenCalled();
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed numeric canvas params before invoking node commands", async () => {
     const tool = createCanvasTool();
 
@@ -161,6 +275,7 @@ describe("Canvas tool", () => {
         maxWidth: "800px",
       }),
     ).rejects.toThrow("maxWidth must be a positive integer");
+    expect(mocks.listNodes).not.toHaveBeenCalled();
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 

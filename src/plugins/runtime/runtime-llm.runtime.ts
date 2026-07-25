@@ -1,4 +1,5 @@
 // Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../../agents/model-ref-shared.js";
@@ -229,16 +230,11 @@ function normalizeAllowedModelRef(raw: string): string | null {
   if (trimmed === "*") {
     return "*";
   }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return null;
   }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!provider || !model) {
-    return null;
-  }
-  const normalized = normalizeModelRef(provider, model);
+  const normalized = normalizeModelRef(parsed.provider, parsed.modelId);
   return modelKey(normalized.provider, normalized.model);
 }
 
@@ -356,7 +352,9 @@ function assertAllowedModelOverride(params: {
 /**
  * Create the host-owned generic LLM completion runtime for trusted plugin callers.
  */
-export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginRuntimeCore["llm"] {
+export function createRuntimeLlm(
+  options: CreateRuntimeLlmOptions = {},
+): Pick<PluginRuntimeCore["llm"], "complete"> {
   const logger = options.logger ?? toRuntimeLogger(defaultLogger);
   return {
     complete: async (params: LlmCompleteParams): Promise<LlmCompleteResult> => {
@@ -449,6 +447,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         options: {
           maxTokens: finiteOption(params.maxTokens),
           temperature: finiteOption(params.temperature),
+          ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
         },
       });

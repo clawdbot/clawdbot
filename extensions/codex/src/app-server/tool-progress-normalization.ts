@@ -23,10 +23,7 @@ export function resolveCodexToolProgressDetailMode(
 }
 
 /** Recursively redacts sensitive strings and handles circular values in event payloads. */
-export function sanitizeCodexAgentEventValue(
-  value: unknown,
-  seen = new WeakSet<object>(),
-): unknown {
+function sanitizeCodexAgentEventValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
     return redactToolPayloadText(value);
   }

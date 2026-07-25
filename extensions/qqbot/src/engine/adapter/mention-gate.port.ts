@@ -11,7 +11,7 @@
 type ImplicitMentionKind = "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native";
 
 /** Facts about the current message's mention state. */
-export interface MentionFacts {
+interface MentionFacts {
   canDetectMention: boolean;
   wasMentioned: boolean;
   hasAnyMention?: boolean;
@@ -19,7 +19,7 @@ export interface MentionFacts {
 }
 
 /** Policy configuration for the mention gate. */
-export interface MentionPolicy {
+interface MentionPolicy {
   isGroup: boolean;
   requireMention: boolean;
   allowTextCommands: boolean;
@@ -28,7 +28,7 @@ export interface MentionPolicy {
 }
 
 /** Result of the mention gate evaluation. */
-export interface MentionGateDecision {
+interface MentionGateDecision {
   effectiveWasMentioned: boolean;
   shouldSkip: boolean;
   shouldBypassMention: boolean;

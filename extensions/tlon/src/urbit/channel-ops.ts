@@ -1,4 +1,8 @@
 // Tlon plugin module implements channel ops behavior.
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
@@ -36,6 +40,8 @@ async function putUrbitChannel(
   });
 }
 
+const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
+
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
   params: { app: string; mark: string; json: unknown; auditContext: string },
@@ -57,8 +63,14 @@ export async function pokeUrbitChannel(
 
   try {
     if (!response.ok && response.status !== 204) {
-      const errorText = await response.text().catch(() => "");
-      throw new Error(`Poke failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`);
+      const errorText = await readResponseTextLimited(response, TLON_ERROR_BODY_LIMIT_BYTES).catch(
+        () => "",
+      );
+      throw new UrbitHttpError({
+        operation: "Poke",
+        status: response.status,
+        bodyText: errorText || undefined,
+      });
     }
     return pokeId;
   } finally {
@@ -87,13 +99,14 @@ export async function scryUrbitPath(
 
   try {
     if (!response.ok) {
-      throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
+      throw new UrbitHttpError({
+        operation: `Scry for path ${params.path}`,
+        status: response.status,
+      });
     }
-    try {
-      return await response.json();
-    } catch (cause) {
-      throw new Error(`Urbit scry response was malformed JSON for path ${params.path}`, { cause });
-    }
+    // Successful scry bodies come from a remote Urbit and have no protocol size bound.
+    // Keep the shared JSON ceiling while retaining the path needed to identify the endpoint.
+    return await readProviderJsonResponse(response, `Tlon scry response for path ${params.path}`);
   } finally {
     await release();
   }

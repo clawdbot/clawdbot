@@ -3,8 +3,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -21,9 +21,38 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   return createEmptyCapabilityProviderMockModule();
 });
 
+const modelAuthTestControl = vi.hoisted(() => ({
+  forceMissingProvider: false,
+  store: undefined as AuthProfileStore | undefined,
+}));
+
+vi.mock("../agents/model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-auth.js")>();
+  return {
+    ...actual,
+    resolveApiKeyForProvider: async (
+      ...args: Parameters<typeof actual.resolveApiKeyForProvider>
+    ) => {
+      if (modelAuthTestControl.forceMissingProvider) {
+        throw new actual.ProviderAuthError(
+          "missing-provider-auth",
+          args[0].provider,
+          `No API key found for provider "${args[0].provider}".`,
+        );
+      }
+      const [params] = args;
+      return await actual.resolveApiKeyForProvider({
+        ...params,
+        store: modelAuthTestControl.store ?? params.store,
+      });
+    },
+  };
+});
+
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal()),
   resolveOwningPluginIdsForProvider: () => [],
+  resolveOwningPluginIdsForProviderRef: () => [],
 }));
 
 const AUTH_ENV = {
@@ -31,6 +60,11 @@ const AUTH_ENV = {
   REMOTE_AUDIO_API_KEY: undefined,
   OPENCLAW_AGENT_DIR: undefined,
 } satisfies Record<string, string | undefined>;
+
+beforeEach(() => {
+  modelAuthTestControl.forceMissingProvider = false;
+  modelAuthTestControl.store = undefined;
+});
 
 function createAudioProvider(
   id: string,
@@ -85,11 +119,17 @@ function createAudioCfg(params: {
       : {}),
     tools: {
       media: {
+        models: [
+          {
+            type: "provider",
+            provider: params.provider,
+            model: params.model,
+            capabilities: ["audio"],
+            ...params.entry,
+          },
+        ],
         audio: {
           enabled: true,
-          models: [
-            { type: "provider", provider: params.provider, model: params.model, ...params.entry },
-          ],
         },
       },
     },
@@ -100,9 +140,16 @@ function createVideoCfg(params: { provider: string; model: string }): OpenClawCo
   return {
     tools: {
       media: {
+        models: [
+          {
+            type: "provider",
+            provider: params.provider,
+            model: params.model,
+            capabilities: ["video"],
+          },
+        ],
         video: {
           enabled: true,
-          models: [{ type: "provider", provider: params.provider, model: params.model }],
         },
       },
     },
@@ -150,6 +197,9 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("regression #74644: plugin-only local no-auth audio provider can use no-auth", async () => {
+    // This test owns the media-provider fallback after generic auth misses;
+    // model-auth integration and profile precedence are covered below.
+    modelAuthTestControl.forceMissingProvider = true;
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture(
@@ -235,24 +285,20 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("uses OpenAI API key auth for audio when the default OpenAI profile is OAuth", async () => {
+    modelAuthTestControl.store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "oauth-chat-token",
+          refresh: "oauth-refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: "env-openai-audio-key" }, async () => {
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "oauth",
-                provider: "openai",
-                access: "oauth-chat-token",
-                refresh: "oauth-refresh-token",
-                expires: Date.now() + 60_000,
-              },
-            },
-          },
-          agentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-        );
         await withAudioFixture(
           "openclaw-openai-audio-oauth-env-key",
           async ({ ctx, media, cache }) => {
@@ -285,22 +331,18 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("prefers stored auth profile credentials over plugin-only media no-auth", async () => {
+    modelAuthTestControl.store = {
+      version: 1,
+      profiles: {
+        "local-audio:default": {
+          type: "api_key",
+          provider: "local-audio",
+          key: "stored-local-audio-key",
+        },
+      },
+    };
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              "local-audio:default": {
-                type: "api_key",
-                provider: "local-audio",
-                key: "stored-local-audio-key",
-              },
-            },
-          },
-          agentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-        );
         await withAudioFixture(
           "openclaw-local-audio-stored-profile",
           async ({ ctx, media, cache }) => {
@@ -338,6 +380,7 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("still rejects a remote audio provider without credentials", async () => {
+    modelAuthTestControl.forceMissingProvider = true;
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture("openclaw-remote-audio-no-auth", async ({ ctx, media, cache }) => {
@@ -423,6 +466,7 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("allows a media auth hook to provide an api key after normal auth misses", async () => {
+    modelAuthTestControl.forceMissingProvider = true;
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture("openclaw-local-audio-hook-key", async ({ ctx, media, cache }) => {
@@ -463,6 +507,7 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("does not allow plugin-only media provider without explicit no-auth", async () => {
+    modelAuthTestControl.forceMissingProvider = true;
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture("openclaw-local-audio-no-hook", async ({ ctx, media, cache }) => {
@@ -495,6 +540,7 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("does not allow plugin-only media provider when no-auth hook returns null", async () => {
+    modelAuthTestControl.forceMissingProvider = true;
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture("openclaw-local-audio-null-hook", async ({ ctx, media, cache }) => {
@@ -622,6 +668,7 @@ describe("runCapability local no-auth audio providers", () => {
   });
 
   it("allows explicit no-auth for plugin-only no-auth video provider", async () => {
+    modelAuthTestControl.forceMissingProvider = true;
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withVideoFixture(

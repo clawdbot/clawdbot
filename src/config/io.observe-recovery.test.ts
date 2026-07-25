@@ -11,19 +11,23 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGood,
   recoverConfigFromLastKnownGood,
-  resolveLastKnownGoodConfigPath,
-  type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type ObserveRecoveryDeps = Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"];
+
+function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -31,7 +35,7 @@ describe("config observe recovery", () => {
   const clobberedUpdateChannelConfig = { update: { channel: "beta" } };
   const clobberedUpdateChannelRaw = `${JSON.stringify(clobberedUpdateChannelConfig, null, 2)}\n`;
   const recoverableTelegramConfig = {
-    meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+    meta: { lastTouchedVersion: "2026.4.22" },
     update: { channel: "beta" },
     gateway: { mode: "local" },
     channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
@@ -98,17 +102,11 @@ describe("config observe recovery", () => {
   }
 
   async function readObserveEvents(auditPath: string): Promise<Record<string, unknown>[]> {
-    const events: Record<string, unknown>[] = [];
-    for (const line of (await fsp.readFile(auditPath, "utf-8")).trim().split("\n")) {
-      if (!line) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      if (parsed.event === "config.observe") {
-        events.push(parsed);
-      }
-    }
-    return events;
+    const stateDir = path.dirname(path.dirname(auditPath));
+    return listConfigAuditRecordsForTests({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      homedir: () => stateDir,
+    }).filter((event) => event.event === "config.observe");
   }
 
   async function listClobberFiles(configPath: string): Promise<string[]> {
@@ -272,11 +270,53 @@ describe("config observe recovery", () => {
     };
   }
 
+  function withAsyncChmodFailure(
+    deps: ObserveRecoveryDeps,
+    targetPath: string,
+    error = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" }),
+  ): ObserveRecoveryDeps {
+    const chmod = deps.fs.promises.chmod?.bind(deps.fs.promises);
+    return {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        promises: {
+          ...deps.fs.promises,
+          chmod: async (filePath, mode) => {
+            if (filePath === targetPath) {
+              throw error;
+            }
+            return await chmod?.(filePath, mode);
+          },
+        },
+      },
+    };
+  }
+
+  function withSyncChmodFailure(
+    deps: ObserveRecoveryDeps,
+    targetPath: string,
+    error = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" }),
+  ): ObserveRecoveryDeps {
+    const chmodSync = deps.fs.chmodSync?.bind(deps.fs);
+    return {
+      ...deps,
+      fs: {
+        ...deps.fs,
+        chmodSync: (filePath, mode) => {
+          if (filePath === targetPath) {
+            throw error;
+          }
+          return chmodSync?.(filePath, mode);
+        },
+      },
+    };
+  }
   it("auto-restores suspicious update-channel-only roots from backup", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         update: { channel: "beta" },
         browser: { enabled: true },
         gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
@@ -321,7 +361,7 @@ describe("config observe recovery", () => {
       const { deps, configPath, auditPath } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         update: { channel: "beta" },
         channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
       });
@@ -351,6 +391,28 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("warns when async backup restore cannot tighten config permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      const recovered = await maybeRecoverSuspiciousConfigRead({
+        deps: withAsyncChmodFailure(deps, configPath),
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      expectWarnContaining(
+        warn,
+        `Config permission hardening failed (backup restore): ${configPath}: EPERM: chmod denied`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from backup: ${configPath}`);
+    });
+  });
+
   it("auto-restores after a large size drop against last-good config", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
@@ -366,7 +428,7 @@ describe("config observe recovery", () => {
         },
       });
       const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         gateway: { mode: "local" },
       });
 
@@ -428,6 +490,16 @@ describe("config observe recovery", () => {
 
       expect(config.gateway?.mode).toBe("local");
       expectWarnContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
+  it("loadConfig skips health observation when observation is disabled", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
+      await seedConfig(configPath, { gateway: { mode: "local" } });
+
+      expect(io.loadConfig().gateway?.mode).toBe("local");
+      expect(readConfigHealthRow(home, configPath)).toBeUndefined();
     });
   });
 
@@ -941,7 +1013,26 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("writes async health state to SQLite", async () => {
+  it("warns when sync backup restore cannot tighten config permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+
+      recoverClobberedUpdateChannelSync({
+        deps: withSyncChmodFailure(deps, configPath),
+        configPath,
+      });
+
+      expectWarnContaining(
+        warn,
+        `Config permission hardening failed (backup restore): ${configPath}: EPERM: chmod denied`,
+      );
+      expectWarnContaining(warn, `Config auto-restored from backup: ${configPath}`);
+    });
+  });
+
+  it("logs async health-state write failures", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, warn } = makeDeps(home);
       const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
@@ -1016,6 +1107,62 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
+    });
+  });
+
+  it("warns when last-known-good promotion cannot tighten snapshot permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
+      const lastGoodPath = resolveLastKnownGoodConfigPath(configPath);
+
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({
+          deps: withAsyncChmodFailure(deps, lastGoodPath),
+          snapshot,
+          logger: deps.logger,
+        }),
+      ).resolves.toBe(true);
+
+      expectWarnContaining(
+        warn,
+        `Config permission hardening failed (last-known-good promotion): ${lastGoodPath}: EPERM: chmod denied`,
+      );
+    });
+  });
+
+  it("warns when last-known-good recovery cannot tighten restored config permissions", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, {
+        gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
+        channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+      });
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(true);
+
+      const brokenRaw = "{ gateway: { mode: 123 } }\n";
+      await fsp.writeFile(configPath, brokenRaw, "utf-8");
+      await expect(
+        recoverConfigFromLastKnownGood({
+          deps: withAsyncChmodFailure(deps, configPath),
+          snapshot: {
+            ...snapshot,
+            raw: brokenRaw,
+            parsed: { gateway: { mode: 123 } },
+            valid: false,
+            issues: [{ path: "gateway.mode", message: "Expected string" }],
+          },
+          reason: "test-invalid-config",
+        }),
+      ).resolves.toBe(true);
+
+      expectWarnContaining(
+        warn,
+        `Config permission hardening failed (last-known-good recovery): ${configPath}: EPERM: chmod denied`,
+      );
+      expectWarnContaining(warn, "Config auto-restored from last-known-good:");
     });
   });
 
@@ -1148,3 +1295,4 @@ describe("config observe recovery", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

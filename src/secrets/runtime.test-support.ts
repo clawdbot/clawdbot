@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -109,10 +109,6 @@ export function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
 export function resetPluginWebSearchProvidersMock() {
   resolvePluginWebSearchProvidersMock.mockReset();
   resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
-}
-
-export function getResolvePluginWebSearchProvidersMock() {
-  return resolvePluginWebSearchProvidersMock;
 }
 
 export function setupSecretsRuntimeSnapshotTestHooks(): {

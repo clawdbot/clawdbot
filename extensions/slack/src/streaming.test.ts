@@ -3,8 +3,6 @@ import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackStream,
-  extractSlackErrorCode,
-  isBenignSlackFinalizeError,
   markSlackStreamFallbackDelivered,
   SlackStreamNotDeliveredError,
   startSlackStream,
@@ -52,12 +50,15 @@ describe("stopSlackStream finalize error handling", () => {
       threadTs: "1700000000.000100",
       chunks,
       taskDisplayMode: "plan",
+      identity: { username: "Research Agent", iconEmoji: ":mag:" },
     });
 
     expect(client.chatStream).toHaveBeenCalledWith({
       channel: "C123",
       thread_ts: "1700000000.000100",
       task_display_mode: "plan",
+      username: "Research Agent",
+      icon_emoji: ":mag:",
     });
     expect(append).toHaveBeenCalledWith({ chunks });
     expect(session.delivered).toBe(true);
@@ -96,6 +97,20 @@ describe("stopSlackStream finalize error handling", () => {
 
     await expect(stopSlackStream({ session })).resolves.toEqual({});
     expect(session.stopped).toBe(true);
+  });
+
+  it("falls back when deferred stream start rejects custom identity scope", async () => {
+    const session = makeSession({
+      stopImpl: async () => {
+        throw slackApiError("missing_scope");
+      },
+    });
+    session.pendingText = "short reply";
+
+    const thrown = await stopSlackStream({ session }).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect(thrown).toMatchObject({ pendingText: "short reply", slackCode: "missing_scope" });
   });
 
   it("throws SlackStreamNotDeliveredError when user_not_found fires before any flush", async () => {
@@ -398,50 +413,5 @@ describe("stopSlackStream finalize error handling", () => {
       ts: "1700000000.500300",
       chunks: [],
     });
-  });
-});
-
-describe("error classification", () => {
-  it("isBenignSlackFinalizeError matches each allowlisted code", () => {
-    for (const code of [
-      "user_not_found",
-      "team_not_found",
-      "missing_recipient_user_id",
-      "method_not_supported_for_channel_type",
-    ]) {
-      expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(true);
-    }
-  });
-
-  it("isBenignSlackFinalizeError rejects non-listed codes", () => {
-    for (const code of [
-      "not_authed",
-      "ratelimited",
-      "channel_not_found",
-      "internal_error",
-      "fatal_error",
-    ]) {
-      expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(false);
-    }
-  });
-
-  it("extractSlackErrorCode handles data.error, message fallback, and junk shapes", () => {
-    // Canonical SDK shape
-    expect(extractSlackErrorCode(slackApiError("user_not_found"))).toBe("user_not_found");
-    // message-regex fallback when data is absent
-    expect(extractSlackErrorCode(new Error("An API error occurred: rate_limited"))).toBe(
-      "rate_limited",
-    );
-    // data.error not a string - falls through to message parse
-    const wrongShape = new Error("plain message");
-    (wrongShape as unknown as { data: unknown }).data = { error: 42 };
-    expect(extractSlackErrorCode(wrongShape)).toBeUndefined();
-    // data.error null - falls through
-    (wrongShape as unknown as { data: unknown }).data = null;
-    expect(extractSlackErrorCode(wrongShape)).toBeUndefined();
-    // Non-object error
-    expect(extractSlackErrorCode("raw string")).toBeUndefined();
-    expect(extractSlackErrorCode(null)).toBeUndefined();
-    expect(extractSlackErrorCode(undefined)).toBeUndefined();
   });
 });

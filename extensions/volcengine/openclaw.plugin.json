@@ -137,65 +137,13 @@
               "cacheRead": 0,
               "cacheWrite": 0
             }
-          },
-          {
-            "id": "glm-4.7",
-            "name": "GLM 4.7 Coding",
-            "input": ["text"],
-            "contextWindow": 200000,
-            "maxTokens": 4096,
-            "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-thinking",
-            "name": "Kimi K2 Thinking",
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 4096,
-            "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2.5",
-            "name": "Kimi K2.5 Coding",
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 4096,
-            "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "doubao-seed-code-preview-251028",
-            "name": "Doubao Seed Code Preview",
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 4096,
-            "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
           }
         ]
       }
     },
     "discovery": {
-      "volcengine": "static",
-      "volcengine-plan": "static"
+      "volcengine": "refreshable",
+      "volcengine-plan": "refreshable"
     }
   },
   "providerAuthChoices": [
@@ -203,6 +151,7 @@
       "provider": "volcengine",
       "method": "api-key",
       "choiceId": "volcengine-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Volcano Engine API key",
       "groupId": "volcengine",
       "groupLabel": "Volcano Engine",

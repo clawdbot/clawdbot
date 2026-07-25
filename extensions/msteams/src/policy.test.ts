@@ -1,7 +1,11 @@
 // Msteams tests cover policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
-import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
+import {
+  resolveMSTeamsGroupToolPolicy,
+  resolveMSTeamsReplyPolicy,
+  resolveMSTeamsRouteConfig,
+} from "./policy.js";
 
 function resolveNamedTeamRouteConfig(allowNameMatching = false) {
   const cfg: MSTeamsConfig = {
@@ -152,6 +156,146 @@ describe("msteams policy", () => {
         globalConfig: { requireMention: false, replyStyle: "thread" },
       });
       expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
+    });
+  });
+
+  describe("resolveMSTeamsGroupToolPolicy", () => {
+    it("uses stable projected keys and never raw mutable names", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            dangerouslyAllowNameMatching: true,
+            teams: {
+              "Mutable Team": {
+                channels: {
+                  "Mutable Channel": { tools: { allow: ["exec"] } },
+                },
+              },
+              "19:stable-team@thread.tacv2": {
+                channels: {
+                  "19:stable-channel@thread.tacv2": { tools: { allow: ["read"] } },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:unknown@thread.tacv2",
+          groupChannel: "Mutable Channel",
+          groupSpace: "Mutable Team",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:stable-channel@thread.tacv2",
+          groupSpace: "19:stable-team@thread.tacv2",
+        }),
+      ).toEqual({ allow: ["read"] });
+    });
+
+    it("finds a channel across teams when no team matches", () => {
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  first: { channels: { other: { tools: { deny: ["other"] } } } },
+                  second: { channels: { target: { tools: { allow: ["cross-team"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "missing-team",
+          groupId: "target",
+        }),
+      ).toEqual({ allow: ["cross-team"] });
+    });
+
+    it("falls through a policy-less matched team to the cross-team scan", () => {
+      // A matched team without any applicable policy must not swallow another
+      // team's channel deny rules (legacy resolver parity).
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  "*": {},
+                  actual: { channels: { target: { tools: { deny: ["shell"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "unknown-team",
+          groupId: "target",
+        }),
+      ).toEqual({ deny: ["shell"] });
+    });
+
+    it("does not scan across teams once a channel matched inside the selected team", () => {
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  mine: { channels: { target: {} } },
+                  other: { channels: { target: { tools: { deny: ["shell"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "mine",
+          groupId: "target",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("falls from a fieldless channel entry to its team policy", () => {
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  team: {
+                    tools: { deny: ["team"] },
+                    channels: { channel: {} },
+                  },
+                },
+              },
+            },
+          },
+          groupSpace: "team",
+          groupId: "channel",
+        }),
+      ).toEqual({ deny: ["team"] });
+    });
+
+    it("keeps slash-bearing flat scope keys collision-free", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            teams: {
+              "a/channel:b": { tools: { allow: ["slash-team"] } },
+              a: { channels: { b: { tools: { allow: ["nested-channel"] } } } },
+            },
+          },
+        },
+      };
+
+      expect(resolveMSTeamsGroupToolPolicy({ cfg, groupSpace: "a/channel:b" })).toEqual({
+        allow: ["slash-team"],
+      });
+      expect(resolveMSTeamsGroupToolPolicy({ cfg, groupSpace: "a", groupId: "b" })).toEqual({
+        allow: ["nested-channel"],
+      });
     });
   });
 });

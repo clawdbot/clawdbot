@@ -1,7 +1,13 @@
 // Agents provider tests cover provider status index construction for configured agents.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildProviderStatusIndex } from "./agents.providers.js";
+import type { OfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
+import {
+  buildProviderStatusIndex,
+  buildProviderSummaryMetadataIndex,
+  listProvidersForAgent,
+  summarizeBindings,
+} from "./agents.providers.js";
 
 const mocks = vi.hoisted(() => ({
   listReadOnlyChannelPluginsForConfig: vi.fn(),
@@ -11,6 +17,10 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveChannelDefaultAccountId: vi.fn(() => "default"),
   isChannelVisibleInConfiguredLists: vi.fn(() => true),
+  listExplicitConfiguredChannelIdsForConfig: vi.fn(() => [] as string[]),
+  resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn<
+    () => OfficialExternalPluginRepairHint | null
+  >(() => null),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -38,9 +48,20 @@ vi.mock("../channels/plugins/exposure.js", () => ({
   ) => mocks.isChannelVisibleInConfiguredLists(...args),
 }));
 
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  listExplicitConfiguredChannelIdsForConfig: mocks.listExplicitConfiguredChannelIdsForConfig,
+}));
+
+vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint:
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
+}));
+
 describe("buildProviderStatusIndex", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue([]);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
   });
 
   it("prefers inspectAccount for read-only status surfaces", async () => {
@@ -128,5 +149,135 @@ describe("buildProviderStatusIndex", () => {
     mocks.getChannelPlugin.mockReturnValue(plugin);
 
     await expect(buildProviderStatusIndex({} as OpenClawConfig)).rejects.toThrow("plugin crash");
+  });
+
+  it("keeps configured missing external channels in provider metadata", () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue(["feishu"]);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
+      channelId: "feishu",
+      pluginId: "feishu",
+      label: "Feishu",
+      installSpec: "@openclaw/feishu",
+      installCommand: "openclaw plugins install @openclaw/feishu",
+      doctorFixCommand: "openclaw doctor --fix",
+      repairHint:
+        "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    });
+
+    expect(
+      buildProviderSummaryMetadataIndex({ channels: { feishu: { appId: "cli_xxx" } } } as never),
+    ).toEqual(
+      new Map([
+        [
+          "feishu",
+          {
+            label: "Feishu",
+            defaultAccountId: "default",
+            visibleInConfiguredLists: true,
+            repairHint:
+              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("uses repair hints instead of unknown for bound missing external channels", () => {
+    const lines = listProvidersForAgent({
+      summaryIsDefault: false,
+      cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
+      bindings: [{ match: { channel: "feishu" } }] as never,
+      providerStatus: new Map(),
+      providerMetadata: new Map([
+        [
+          "feishu",
+          {
+            label: "Feishu",
+            defaultAccountId: "default",
+            visibleInConfiguredLists: true,
+            repairHint:
+              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+          },
+        ],
+      ]),
+    });
+
+    expect(lines).toEqual([
+      "Feishu default: missing plugin - Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    ]);
+  });
+
+  it("keeps bound missing external channels when runtime registry normalization is unavailable", () => {
+    mocks.normalizeChannelId.mockReturnValueOnce(null);
+
+    const lines = listProvidersForAgent({
+      summaryIsDefault: false,
+      cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
+      bindings: [{ match: { channel: "feishu" } }] as never,
+      providerStatus: new Map(),
+      providerMetadata: new Map([
+        [
+          "feishu",
+          {
+            label: "Feishu",
+            defaultAccountId: "default",
+            visibleInConfiguredLists: true,
+            repairHint:
+              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+          },
+        ],
+      ]),
+    });
+
+    expect(lines).toEqual([
+      "Feishu default: missing plugin - Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    ]);
+  });
+
+  it("shows missing external plugin repair hints for default agent summaries", () => {
+    const lines = listProvidersForAgent({
+      summaryIsDefault: true,
+      cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
+      bindings: [],
+      providerStatus: new Map(),
+      providerMetadata: new Map([
+        [
+          "feishu",
+          {
+            label: "Feishu",
+            defaultAccountId: "default",
+            visibleInConfiguredLists: true,
+            repairHint:
+              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+          },
+        ],
+      ]),
+    });
+
+    expect(lines).toEqual([
+      "Feishu default: missing plugin - Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    ]);
+  });
+
+  it("keeps route summaries when runtime registry normalization is unavailable", () => {
+    mocks.normalizeChannelId.mockReturnValueOnce(null);
+
+    expect(
+      summarizeBindings(
+        { channels: { feishu: { appId: "cli_xxx" } } } as never,
+        [{ match: { channel: "feishu" } }] as never,
+        new Map([
+          [
+            "feishu",
+            {
+              label: "Feishu",
+              defaultAccountId: "default",
+              visibleInConfiguredLists: true,
+            },
+          ],
+        ]),
+      ),
+    ).toEqual(["Feishu default"]);
   });
 });

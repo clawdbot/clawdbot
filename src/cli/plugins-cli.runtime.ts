@@ -13,11 +13,18 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import type { PluginMarketplaceListOptions, PluginRegistryOptions } from "./plugins-cli.js";
+import type {
+  PluginMarketplaceEntriesOptions,
+  PluginMarketplaceListOptions,
+  PluginMarketplaceRefreshOptions,
+  PluginRegistryOptions,
+} from "./plugins-cli.js";
 
 type PluginInstallActionOptions = {
   acknowledgeClawHubRisk?: boolean;
@@ -35,9 +42,10 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
 
 const loadPluginsConfigState = createModuleLoader(() => import("../plugins/config-state.js"));
 const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
+const loadPluginSlotSelection = createModuleLoader(() => import("../plugins/slot-selection.js"));
 const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
 const loadPluginsRegistryRefresh = createModuleLoader(
-  () => import("./plugins-registry-refresh.js"),
+  () => import("../plugins/registry-refresh.js"),
 );
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
@@ -181,13 +189,22 @@ function collectConfiguredRuntimePluginWarnings(params: {
 
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsEnableCommand(idInput: string): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginsEnableCommandUnlocked(idInput),
+  );
+}
+
+async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
   const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
   const { normalizePluginId } = await loadPluginsConfigState();
   const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { applySlotSelectionForPlugin, logSlotWarnings } = await loadPluginsCommandHelpers();
+  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
+  const { logSlotWarnings } = await loadPluginsCommandHelpers();
   const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   const snapshot = await readConfigFileSnapshot();
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
@@ -227,6 +244,14 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
 
 /** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsDisableCommand(idInput: string): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginsDisableCommandUnlocked(idInput),
+  );
+}
+
+async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
@@ -278,27 +303,27 @@ export async function runPluginsInstallAction(
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry, refreshPluginRegistry } =
     await import("../plugins/plugin-registry.js");
-  const cfg = getRuntimeConfig();
 
   if (opts.refresh) {
-    const index = await refreshPluginRegistry({
-      config: cfg,
-      reason: "manual",
-    });
-    if (opts.json) {
-      defaultRuntime.writeJson({
-        refreshed: true,
-        registry: index,
+    return await withPluginLifecycleLease({}, async () => {
+      const index = await refreshPluginRegistry({
+        config: getRuntimeConfig(),
+        reason: "manual",
       });
-      return;
-    }
-    const total = index.plugins.length;
-    const enabled = countEnabledPlugins(index.plugins);
-    defaultRuntime.log(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
-    return;
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          refreshed: true,
+          registry: index,
+        });
+        return;
+      }
+      const total = index.plugins.length;
+      const enabled = countEnabledPlugins(index.plugins);
+      defaultRuntime.log(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
+    });
   }
 
-  const inspection = await inspectPluginRegistry({ config: cfg });
+  const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
   if (opts.json) {
     defaultRuntime.writeJson({
       state: inspection.state,
@@ -443,6 +468,447 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   defaultRuntime.log(lines.join("\n"));
 }
 
+type MarketplaceRefreshPayload = {
+  source: "hosted" | "hosted-snapshot" | "bundled-fallback";
+  entries: number;
+  feed?: {
+    id: string;
+    generatedAt: string;
+    sequence: number;
+  };
+  metadata?: {
+    url: string;
+    status: number;
+    etag?: string;
+    lastModified?: string;
+    checksum?: string;
+  };
+  snapshot?: {
+    savedAt: string;
+  };
+  trust?: MarketplaceFeedTrustPayload;
+  error?: string;
+};
+
+type MarketplaceFeedTrustPayload = {
+  mode: "signed";
+  signedBy: string;
+  signatureCount: number;
+  threshold: number;
+  verifiedAt: string;
+};
+
+type MarketplaceEntryPayload = {
+  id?: string;
+  label: string;
+  kind?: string;
+  name?: string;
+  version?: string;
+  install?: {
+    defaultChoice?: string;
+    clawhubSpec?: string;
+    npmSpec?: string;
+    localPath?: string;
+    expectedIntegrity?: string;
+    minHostVersion?: string;
+  };
+};
+
+type MarketplaceFeedTelemetryOptions = {
+  expectedSha256?: string;
+  feedProfile?: string;
+  feedUrl?: string;
+  offline?: boolean;
+};
+
+function classifyMarketplaceFeedFallback(error: string | undefined): string | undefined {
+  const text = error?.toLowerCase();
+  if (!text) {
+    return undefined;
+  }
+  if (text.includes("offline mode")) {
+    return "offline";
+  }
+  if (text.includes("checksum mismatch")) {
+    return "checksum_mismatch";
+  }
+  if (text.includes("schema")) {
+    return "schema";
+  }
+  if (/http\s+304/u.test(text)) {
+    return "not_modified";
+  }
+  if (/http\s+\d{3}/u.test(text)) {
+    return "http_error";
+  }
+  if (text.includes("timed out") || text.includes("timeout")) {
+    return "timeout";
+  }
+  return "error";
+}
+
+function emitMarketplaceFeedTelemetry(params: {
+  command: "entries" | "refresh";
+  entryCount?: number;
+  failedPinnedRefresh?: boolean;
+  opts: MarketplaceFeedTelemetryOptions;
+  config?: OpenClawConfig;
+  payload: MarketplaceRefreshPayload;
+}): void {
+  const attributes: Record<string, string | number | boolean | null> = {
+    command: params.command,
+    entries: params.entryCount ?? params.payload.entries,
+    source: params.payload.source,
+  };
+  if (params.opts.feedProfile?.trim()) {
+    attributes.feedProfileProvided = true;
+  }
+  if (params.opts.feedUrl?.trim()) {
+    attributes.feedUrlOverride = true;
+  }
+  if (params.opts.offline === true) {
+    attributes.offline = true;
+  }
+  if (params.opts.expectedSha256?.trim()) {
+    attributes.expectedSha256Provided = true;
+  }
+  if (params.payload.feed) {
+    attributes.feedIdPresent = true;
+    attributes.feedSequence = params.payload.feed.sequence;
+  }
+  if (params.payload.metadata) {
+    attributes.httpStatus = params.payload.metadata.status;
+    if (params.payload.metadata.checksum) {
+      attributes.payloadChecksumPresent = true;
+    }
+    attributes.hasEtag = Boolean(params.payload.metadata.etag);
+    attributes.hasLastModified = Boolean(params.payload.metadata.lastModified);
+  }
+  if (params.payload.snapshot) {
+    attributes.snapshotUsed = true;
+  }
+  if (params.payload.trust) {
+    attributes.feedTrustVerified = true;
+    attributes.feedTrustMode = params.payload.trust.mode;
+    attributes.feedTrustSignatureCount = params.payload.trust.signatureCount;
+    attributes.feedTrustThreshold = params.payload.trust.threshold;
+  }
+  const fallbackCategory = classifyMarketplaceFeedFallback(params.payload.error);
+  if (fallbackCategory) {
+    attributes.fallbackCategory = fallbackCategory;
+  }
+  if (params.failedPinnedRefresh === true) {
+    attributes.pinnedRefreshFailed = true;
+  }
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "mark",
+      name: `plugins.marketplace.feed.${params.command}`,
+      phase: "plugin-marketplace",
+      attributes,
+    },
+    {
+      config: params.config,
+    },
+  );
+}
+
+function buildMarketplaceRefreshPayload(
+  result: Awaited<
+    ReturnType<
+      typeof import("../plugins/official-external-plugin-catalog.js").loadConfiguredHostedOfficialExternalPluginCatalogEntries
+    >
+  >,
+): MarketplaceRefreshPayload {
+  const payload: MarketplaceRefreshPayload = {
+    source: result.source,
+    entries: result.entries.length,
+    ...(result.metadata ? { metadata: result.metadata } : {}),
+  };
+  if (result.source === "hosted" || result.source === "hosted-snapshot") {
+    payload.feed = {
+      id: result.feed.id,
+      generatedAt: result.feed.generatedAt,
+      sequence: result.feed.sequence,
+    };
+    if (result.trust) {
+      payload.trust = {
+        mode: result.trust.mode,
+        signedBy: result.trust.signedBy,
+        signatureCount: result.trust.signatureCount,
+        threshold: result.trust.threshold,
+        verifiedAt: result.trust.verifiedAt,
+      };
+    }
+  }
+  if (result.source === "hosted-snapshot") {
+    payload.snapshot = { savedAt: result.snapshot.savedAt };
+    payload.error = result.error;
+  }
+  if (result.source === "bundled-fallback") {
+    payload.error = result.error;
+  }
+  return payload;
+}
+
+function redactMarketplaceFeedUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return value;
+  }
+}
+
+function replaceAllLiteral(value: string, search: string, replacement: string): string {
+  return search ? value.split(search).join(replacement) : value;
+}
+
+function redactMarketplaceOutputText(
+  value: string,
+  rawUrls: readonly (string | undefined)[],
+): string {
+  let redacted = value;
+  for (const rawUrl of rawUrls) {
+    if (!rawUrl) {
+      continue;
+    }
+    redacted = replaceAllLiteral(redacted, rawUrl, redactMarketplaceFeedUrl(rawUrl));
+  }
+  return redacted;
+}
+
+function sanitizeMarketplaceRefreshPayload(
+  payload: MarketplaceRefreshPayload,
+  params?: { feedUrl?: string },
+): MarketplaceRefreshPayload {
+  const rawMetadataUrl = payload.metadata?.url;
+  const sanitized: MarketplaceRefreshPayload = {
+    ...payload,
+    ...(payload.metadata
+      ? { metadata: { ...payload.metadata, url: redactMarketplaceFeedUrl(payload.metadata.url) } }
+      : {}),
+  };
+  if (payload.error) {
+    sanitized.error = redactMarketplaceOutputText(payload.error, [params?.feedUrl, rawMetadataUrl]);
+  }
+  return sanitized;
+}
+
+function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
+  if (entry.install?.defaultChoice === "npm") {
+    return entry.install.npmSpec ?? entry.install.clawhubSpec ?? entry.install.localPath;
+  }
+  return entry.install?.clawhubSpec ?? entry.install?.npmSpec ?? entry.install?.localPath;
+}
+
+function formatMarketplaceEntryLine(entry: MarketplaceEntryPayload): string {
+  const id = entry.id ?? entry.name ?? entry.label;
+  const install = formatMarketplaceEntryInstall(entry);
+  const suffix = install ? " " + theme.muted(install) : "";
+  const label = entry.label !== id ? " " + theme.muted(entry.label) : "";
+  return theme.command(id) + label + suffix;
+}
+
+function formatMarketplaceRefreshSource(source: MarketplaceRefreshPayload["source"]): string {
+  if (source === "hosted") {
+    return theme.success("hosted");
+  }
+  if (source === "hosted-snapshot") {
+    return theme.warn("hosted snapshot");
+  }
+  return theme.warn("bundled fallback");
+}
+
+function formatMarketplaceFeedTrust(trust: MarketplaceFeedTrustPayload): string {
+  return `${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
+}
+
+function shouldFailPinnedMarketplaceRefresh(params: {
+  expectedSha256?: string;
+  source: MarketplaceRefreshPayload["source"];
+}): boolean {
+  return Boolean(params.expectedSha256?.trim()) && params.source !== "hosted";
+}
+
+function normalizeMarketplaceExpectedSha256(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^[0-9a-f]{64}$/iu.test(trimmed)) {
+    return `sha256:${trimmed.toLowerCase()}`;
+  }
+  const prefixed = /^sha256:([0-9a-f]{64})$/iu.exec(trimmed);
+  if (prefixed?.[1]) {
+    return `sha256:${prefixed[1].toLowerCase()}`;
+  }
+  return trimmed;
+}
+
+function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayload): string {
+  return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
+}
+
+/** List entries from the configured OpenClaw marketplace feed. */
+export async function runPluginMarketplaceEntriesCommand(
+  opts: PluginMarketplaceEntriesOptions,
+): Promise<void> {
+  const catalog = await import("../plugins/official-external-plugin-catalog.js");
+  const cfg = getRuntimeConfig();
+  const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries({
+    ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
+    ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
+    ...(opts.offline ? { offline: true } : {}),
+  });
+  const summary = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
+    feedUrl: opts.feedUrl,
+  });
+  const entries: MarketplaceEntryPayload[] = result.entries.map((entry) => {
+    const id = catalog.resolveOfficialExternalPluginId(entry);
+    const install = catalog.resolveOfficialExternalPluginInstall(entry) ?? undefined;
+    const payload: MarketplaceEntryPayload = {
+      label: catalog.resolveOfficialExternalPluginLabel(entry),
+    };
+    if (id) {
+      payload.id = id;
+    }
+    if (entry.kind) {
+      payload.kind = entry.kind;
+    }
+    if (entry.name) {
+      payload.name = entry.name;
+    }
+    if (entry.version) {
+      payload.version = entry.version;
+    }
+    if (install) {
+      payload.install = install;
+    }
+    return payload;
+  });
+
+  emitMarketplaceFeedTelemetry({
+    command: "entries",
+    entryCount: entries.length,
+    opts,
+    config: cfg,
+    payload: summary,
+  });
+  if (opts.json) {
+    defaultRuntime.writeJson({ ...summary, entries, entryCount: entries.length });
+    return;
+  }
+
+  const lines = [
+    theme.muted("Source:") + " " + formatMarketplaceRefreshSource(summary.source),
+    theme.muted("Entries:") + " " + String(entries.length),
+  ];
+  if (summary.feed) {
+    lines.push(
+      theme.muted("Feed:") +
+        " " +
+        summary.feed.id +
+        " " +
+        theme.muted("sequence " + String(summary.feed.sequence)),
+    );
+  }
+  if (summary.metadata?.url) {
+    lines.push(theme.muted("URL:") + " " + summary.metadata.url);
+  }
+  if (summary.snapshot?.savedAt) {
+    lines.push(theme.muted("Snapshot:") + " " + summary.snapshot.savedAt);
+  }
+  if (summary.trust) {
+    lines.push(theme.muted("Trust:") + " " + formatMarketplaceFeedTrust(summary.trust));
+  }
+  if (summary.error) {
+    lines.push(theme.muted("Fallback reason:") + " " + summary.error);
+  }
+  if (entries.length > 0) {
+    lines.push("");
+    lines.push(...entries.map(formatMarketplaceEntryLine));
+  }
+  defaultRuntime.log(lines.join("\n"));
+}
+
+/** Refresh the configured OpenClaw marketplace feed snapshot. */
+export async function runPluginMarketplaceRefreshCommand(
+  opts: PluginMarketplaceRefreshOptions,
+): Promise<void> {
+  const { loadConfiguredHostedOfficialExternalPluginCatalogEntries } =
+    await import("../plugins/official-external-plugin-catalog.js");
+  const cfg = getRuntimeConfig();
+  const expectedSha256 = normalizeMarketplaceExpectedSha256(opts.expectedSha256);
+  const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries({
+    ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
+    ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
+    ...(expectedSha256 ? { expectedSha256 } : {}),
+    requireSnapshotWrite: true,
+  });
+  const { clearManagedPluginOfficialCatalogCache } =
+    await import("../plugins/management-service.js");
+  clearManagedPluginOfficialCatalogCache();
+  const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
+    feedUrl: opts.feedUrl,
+  });
+
+  const failedPinnedRefresh = shouldFailPinnedMarketplaceRefresh({
+    expectedSha256,
+    source: payload.source,
+  });
+  emitMarketplaceFeedTelemetry({
+    command: "refresh",
+    failedPinnedRefresh,
+    opts,
+    config: cfg,
+    payload,
+  });
+
+  if (opts.json) {
+    defaultRuntime.writeJson(payload);
+    if (failedPinnedRefresh) {
+      defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
+      return defaultRuntime.exit(1);
+    }
+    return;
+  }
+
+  const lines = [
+    `${theme.muted("Source:")} ${formatMarketplaceRefreshSource(payload.source)}`,
+    `${theme.muted("Entries:")} ${payload.entries}`,
+  ];
+  if (payload.feed) {
+    lines.push(
+      `${theme.muted("Feed:")} ${payload.feed.id} ${theme.muted(`sequence ${payload.feed.sequence}`)}`,
+    );
+  }
+  if (payload.metadata?.url) {
+    lines.push(`${theme.muted("URL:")} ${payload.metadata.url}`);
+  }
+  if (payload.metadata?.checksum) {
+    lines.push(`${theme.muted("SHA-256:")} ${payload.metadata.checksum}`);
+  }
+  if (payload.snapshot?.savedAt) {
+    lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
+  }
+  if (payload.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
+  }
+  if (payload.error) {
+    lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);
+  }
+  defaultRuntime.log(lines.join("\n"));
+  if (failedPinnedRefresh) {
+    defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
+    return defaultRuntime.exit(1);
+  }
+}
+
 /** List plugins from a configured marketplace manifest. */
 export async function runPluginMarketplaceListCommand(
   source: string,
@@ -483,3 +949,4 @@ export async function runPluginMarketplaceListCommand(
     defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

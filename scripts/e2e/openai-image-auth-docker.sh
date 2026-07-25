@@ -27,5 +27,5 @@ export OPENCLAW_SKIP_GMAIL_WATCHER=1
 export OPENCLAW_SKIP_CRON=1
 export OPENCLAW_SKIP_CANVAS_HOST=1
 
-tsx scripts/e2e/openai-image-auth-docker-client.ts
+tsx test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts
 '

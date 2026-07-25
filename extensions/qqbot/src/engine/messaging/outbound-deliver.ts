@@ -6,6 +6,11 @@
  * `DeliverDeps.mediaSender`.
  */
 
+import {
+  sendPayloadMediaSequence,
+  sendPayloadTextChunkSequence,
+} from "openclaw/plugin-sdk/reply-payload";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
@@ -17,6 +22,8 @@ import {
 } from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
+import { DEFAULT_MEDIA_SEND_ERROR, type OutboundMediaAccessContext } from "./outbound-types.js";
+import { raceWithTimeout } from "./race-with-timeout.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -28,7 +35,7 @@ import {
 // ---- Injected dependency interfaces ----
 
 /** Media target context — describes where to send media. */
-interface MediaTargetContext {
+interface MediaTargetContext extends OutboundMediaAccessContext {
   targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: GatewayAccount;
@@ -53,14 +60,16 @@ interface MediaSender {
   ): Promise<MediaSendResult>;
   sendVideoMsg(target: MediaTargetContext, videoPath: string): Promise<MediaSendResult>;
   sendDocument(target: MediaTargetContext, filePath: string): Promise<MediaSendResult>;
-  sendMedia(opts: {
-    to: string;
-    text: string;
-    mediaUrl: string;
-    accountId: string;
-    replyToId: string;
-    account: GatewayAccount;
-  }): Promise<MediaSendResult>;
+  sendMedia(
+    opts: {
+      to: string;
+      text: string;
+      mediaUrl: string;
+      accountId: string;
+      replyToId: string;
+      account: GatewayAccount;
+    } & OutboundMediaAccessContext,
+  ): Promise<MediaSendResult>;
 }
 
 /** Delivery dependencies — injected when calling parseAndSendMediaTags / sendPlainReply. */
@@ -85,7 +94,7 @@ interface DeliverEventContext {
   msgIdx?: string;
 }
 
-interface DeliverAccountContext {
+interface DeliverAccountContext extends OutboundMediaAccessContext {
   account: GatewayAccount;
   qualifiedTarget: string;
   log?: {
@@ -105,8 +114,9 @@ type ConsumeQuoteRefFn = () => string | undefined;
 
 function resolveMediaTargetContext(
   event: DeliverEventContext,
-  account: GatewayAccount,
+  actx: DeliverAccountContext,
 ): MediaTargetContext {
+  const { account } = actx;
   return {
     targetType:
       event.type === "c2c"
@@ -126,7 +136,28 @@ function resolveMediaTargetContext(
             : event.channelId!,
     account,
     replyToId: event.messageId,
+    ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+    ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+    ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
   };
+}
+
+function isHttpUrl(value: string): boolean {
+  return value.startsWith("http://") || value.startsWith("https://");
+}
+
+function isImageDataUrl(value: string): boolean {
+  return value.startsWith("data:image/");
+}
+
+function isBareRelativeMediaPath(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    Boolean(trimmed) &&
+    !trimmed.startsWith("#") &&
+    !trimmed.startsWith("//") &&
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+  );
 }
 
 async function autoMediaBatch(params: {
@@ -135,33 +166,44 @@ async function autoMediaBatch(params: {
   replyToId: string;
   mediaUrls: string[];
   mediaSender: MediaSender;
+  mediaAccess?: OutboundMediaAccessContext["mediaAccess"];
+  mediaLocalRoots?: OutboundMediaAccessContext["mediaLocalRoots"];
+  mediaReadFile?: OutboundMediaAccessContext["mediaReadFile"];
   log?: DeliverAccountContext["log"];
   onResultError: (mediaUrl: string, error: string) => string;
   onThrownError: (mediaUrl: string, error: string) => string;
   onSuccess?: (mediaUrl: string) => string | undefined;
-}): Promise<void> {
-  for (const mediaUrl of params.mediaUrls) {
-    try {
-      const result = await params.mediaSender.sendMedia({
-        to: params.qualifiedTarget,
-        text: "",
-        mediaUrl,
-        accountId: params.account.accountId,
-        replyToId: params.replyToId,
-        account: params.account,
-      });
-      if (result.error) {
-        params.log?.error(params.onResultError(mediaUrl, result.error));
-        continue;
+}): Promise<number> {
+  let sentCount = 0;
+  await sendPayloadMediaSequence({
+    text: "",
+    mediaUrls: params.mediaUrls,
+    send: async ({ mediaUrl }) =>
+      await sendWithResultLogging({
+        run: async () =>
+          await params.mediaSender.sendMedia({
+            to: params.qualifiedTarget,
+            text: "",
+            mediaUrl,
+            accountId: params.account.accountId,
+            replyToId: params.replyToId,
+            account: params.account,
+            ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
+            ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+            ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+          }),
+        log: params.log,
+        onSuccess: params.onSuccess ? () => params.onSuccess?.(mediaUrl) : undefined,
+        onError: (error) => params.onResultError(mediaUrl, error),
+        onThrownError: (error) => params.onThrownError(mediaUrl, error),
+      }),
+    onResult: (sent) => {
+      if (sent) {
+        sentCount++;
       }
-      const successMessage = params.onSuccess?.(mediaUrl);
-      if (successMessage) {
-        params.log?.info(successMessage);
-      }
-    } catch (err) {
-      params.log?.error(params.onThrownError(mediaUrl, formatErrorMessage(err)));
-    }
-  }
+    },
+  });
+  return sentCount;
 }
 
 // ---- Text chunk sending ----
@@ -208,7 +250,7 @@ async function sendTextChunks(
     allowDm: true,
     log,
     onSuccess: (chunk) =>
-      `Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
+      `Sent text chunk (${chunk.length}/${text.length} chars): ${truncateUtf16Safe(chunk, 50)}...`,
     onError: (err) => `Failed to send text chunk: ${formatErrorMessage(err)}`,
   });
 }
@@ -237,7 +279,7 @@ export async function sendTextOnlyReply(
     forcePlainText: true,
     log,
     onSuccess: (chunk) =>
-      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${chunk.slice(0, 50)}...`,
+      `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${truncateUtf16Safe(chunk, 50)}...`,
     onError: (err) => `Failed to send text-only chunk: ${formatErrorMessage(err)}`,
   });
 }
@@ -256,24 +298,27 @@ async function sendTextChunksWithRetry(params: {
 }): Promise<void> {
   const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, forcePlainText, log } =
     params;
-  for (const chunk of chunks) {
-    try {
-      await sendWithRetry((token) =>
-        sendTextChunkToTarget({
-          account,
-          event,
-          token,
-          text: chunk,
-          consumeQuoteRef,
-          allowDm,
-          forcePlainText,
-        }),
-      );
-      log?.info(params.onSuccess(chunk));
-    } catch (err) {
-      log?.error(params.onError(err));
-    }
-  }
+  await sendPayloadTextChunkSequence({
+    chunks,
+    send: async ({ text }) => {
+      try {
+        await sendWithRetry((token) =>
+          sendTextChunkToTarget({
+            account,
+            event,
+            token,
+            text,
+            consumeQuoteRef,
+            allowDm,
+            forcePlainText,
+          }),
+        );
+        log?.info(params.onSuccess(text));
+      } catch (err) {
+        log?.error(params.onError(err));
+      }
+    },
+  });
 }
 
 // ---- Result logging helpers ----
@@ -283,19 +328,23 @@ async function sendWithResultLogging(params: {
   log?: DeliverAccountContext["log"];
   onSuccess?: () => string | undefined;
   onError: (error: string) => string;
-}): Promise<void> {
+  onThrownError?: (error: string) => string;
+}): Promise<boolean> {
   try {
     const result = await params.run();
     if (result.error) {
       params.log?.error(params.onError(result.error));
-      return;
+      return false;
     }
     const successMessage = params.onSuccess?.();
     if (successMessage) {
       params.log?.info(successMessage);
     }
+    return true;
   } catch (err) {
-    params.log?.error(params.onError(formatErrorMessage(err)));
+    const error = formatErrorMessage(err);
+    params.log?.error((params.onThrownError ?? params.onError)(error));
+    return false;
   }
 }
 
@@ -306,8 +355,8 @@ async function sendPhotoWithLogging(params: {
   log?: DeliverAccountContext["log"];
   onSuccess?: (imageUrl: string) => string | undefined;
   onError: (error: string) => string;
-}): Promise<void> {
-  await sendWithResultLogging({
+}): Promise<boolean> {
+  return await sendWithResultLogging({
     run: async () => await params.mediaSender.sendPhoto(params.target, params.imageUrl),
     log: params.log,
     onSuccess: params.onSuccess ? () => params.onSuccess?.(params.imageUrl) : undefined,
@@ -322,37 +371,39 @@ async function sendVoiceWithTimeout(
   account: GatewayAccount,
   mediaSender: MediaSender,
   log: DeliverAccountContext["log"],
-): Promise<void> {
+): Promise<boolean> {
   const uploadFormats =
     account.config?.audioFormatPolicy?.uploadDirectFormats ??
     account.config?.voiceDirectUploadFormats;
   const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
   const voiceTimeout = 45_000;
-  const ac = new AbortController();
   try {
-    const result = await Promise.race([
-      mediaSender.sendVoice(target, voicePath, uploadFormats, transcodeEnabled).then((r) => {
-        if (ac.signal.aborted) {
-          log?.debug?.(`sendVoice completed after timeout, suppressing late delivery`);
-          return {
-            channel: "qqbot",
-            error: "Voice send completed after timeout (suppressed)",
-          } as typeof r;
-        }
-        return r;
+    const result = await raceWithTimeout(
+      (timeoutState) =>
+        mediaSender.sendVoice(target, voicePath, uploadFormats, transcodeEnabled).then((r) => {
+          if (timeoutState.timedOut) {
+            log?.debug?.(`sendVoice completed after timeout, suppressing late delivery`);
+            return {
+              channel: "qqbot",
+              error: "Voice send completed after timeout (suppressed)",
+            };
+          }
+          return r;
+        }),
+      voiceTimeout,
+      () => ({
+        channel: "qqbot",
+        error: "Voice send timed out and was skipped",
       }),
-      new Promise<{ channel: string; error: string }>((resolve) => {
-        setTimeout(() => {
-          ac.abort();
-          resolve({ channel: "qqbot", error: "Voice send timed out and was skipped" });
-        }, voiceTimeout);
-      }),
-    ]);
+    );
     if (result.error) {
       log?.error(`sendVoice error: ${result.error}`);
+      return false;
     }
+    return true;
   } catch (err) {
     log?.error(`sendVoice unexpected error: ${formatErrorMessage(err)}`);
+    return false;
   }
 }
 
@@ -443,35 +494,49 @@ export async function parseAndSendMediaTags(
 
   log?.debug?.(`Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-  const mediaTarget = resolveMediaTargetContext(event, account);
+  const mediaTarget = resolveMediaTargetContext(event, actx);
+  let deliveredVisibleOutput = false;
 
   for (const item of sendQueue) {
     if (item.type === "text") {
       await sendTextChunks(item.content, event, actx, sendWithRetry, consumeQuoteRef, deps);
+      if (item.content.trim()) {
+        deliveredVisibleOutput = true;
+      }
     } else if (item.type === "image") {
-      await sendPhotoWithLogging({
+      const sent = await sendPhotoWithLogging({
         target: mediaTarget,
         imageUrl: item.content,
         mediaSender: deps.mediaSender,
         log,
         onError: (error) => `sendPhoto error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "voice") {
-      await sendVoiceWithTimeout(mediaTarget, item.content, account, deps.mediaSender, log);
+      const sent = await sendVoiceWithTimeout(
+        mediaTarget,
+        item.content,
+        account,
+        deps.mediaSender,
+        log,
+      );
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "video") {
-      await sendWithResultLogging({
+      const sent = await sendWithResultLogging({
         run: async () => await deps.mediaSender.sendVideoMsg(mediaTarget, item.content),
         log,
         onError: (error) => `sendVideoMsg error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "file") {
-      await sendWithResultLogging({
+      const sent = await sendWithResultLogging({
         run: async () => await deps.mediaSender.sendDocument(mediaTarget, item.content),
         log,
         onError: (error) => `sendDocument error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     } else if (item.type === "media") {
-      await sendWithResultLogging({
+      const sent = await sendWithResultLogging({
         run: async () =>
           await deps.mediaSender.sendMedia({
             to: actx.qualifiedTarget,
@@ -480,11 +545,27 @@ export async function parseAndSendMediaTags(
             accountId: account.accountId,
             replyToId: event.messageId,
             account,
+            ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+            ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+            ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
           }),
         log,
         onError: (error) => `sendMedia(auto) error: ${error}`,
       });
+      deliveredVisibleOutput = deliveredVisibleOutput || sent;
     }
+  }
+
+  if (!deliveredVisibleOutput) {
+    await sendTextChunks(
+      DEFAULT_MEDIA_SEND_ERROR,
+      event,
+      actx,
+      sendWithRetry,
+      consumeQuoteRef,
+      deps,
+    );
+    return { handled: true, normalizedText: "" };
   }
 
   return { handled: true, normalizedText: text };
@@ -518,22 +599,25 @@ export async function sendPlainReply(
   const collectedImageUrls: string[] = [];
   const localMediaToSend: string[] = [];
 
-  const collectImageUrl = (url: string | undefined | null): boolean => {
+  const collectImageUrl = (
+    url: string | undefined | null,
+    allowBareRelativeMedia = false,
+  ): boolean => {
     if (!url) {
       return false;
     }
-    const isHttpUrl = url.startsWith("http://") || url.startsWith("https://");
-    const isDataUrl = url.startsWith("data:image/");
-    if (isHttpUrl || isDataUrl) {
+    const isRemoteHttpUrl = isHttpUrl(url);
+    const isDataUrl = isImageDataUrl(url);
+    if (isRemoteHttpUrl || isDataUrl) {
       if (!collectedImageUrls.includes(url)) {
         collectedImageUrls.push(url);
         log?.debug?.(
-          `Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : url.slice(0, 80) + "..."}`,
+          `Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : truncateUtf16Safe(url, 80) + "..."}`,
         );
       }
       return true;
     }
-    if (isLocalFilePath(url)) {
+    if (isLocalFilePath(url) || (allowBareRelativeMedia && isBareRelativeMediaPath(url))) {
       if (!localMediaToSend.includes(url)) {
         localMediaToSend.push(url);
         log?.debug?.(`Collected local media for auto-routing: ${url}`);
@@ -545,11 +629,11 @@ export async function sendPlainReply(
 
   if (payload.mediaUrls?.length) {
     for (const url of payload.mediaUrls) {
-      collectImageUrl(url);
+      collectImageUrl(url, true);
     }
   }
   if (payload.mediaUrl) {
-    collectImageUrl(payload.mediaUrl);
+    collectImageUrl(payload.mediaUrl, true);
   }
 
   // Extract markdown images.
@@ -558,9 +642,9 @@ export async function sendPlainReply(
   for (const m of mdMatches) {
     const url = m[2]?.trim();
     if (url && !collectedImageUrls.includes(url)) {
-      if (url.startsWith("http://") || url.startsWith("https://")) {
+      if (isHttpUrl(url)) {
         collectedImageUrls.push(url);
-        log?.debug?.(`Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
+        log?.debug?.(`Extracted HTTP image from markdown: ${truncateUtf16Safe(url, 80)}...`);
       } else if (isLocalFilePath(url)) {
         if (!localMediaToSend.includes(url)) {
           localMediaToSend.push(url);
@@ -578,7 +662,7 @@ export async function sendPlainReply(
     const url = m[1];
     if (url && !collectedImageUrls.includes(url)) {
       collectedImageUrls.push(url);
-      log?.debug?.(`Extracted bare image URL: ${url.slice(0, 80)}...`);
+      log?.debug?.(`Extracted bare image URL: ${truncateUtf16Safe(url, 80)}...`);
     }
   }
 
@@ -589,7 +673,7 @@ export async function sendPlainReply(
 
   for (const m of mdMatches) {
     const url = m[2]?.trim();
-    if (url && !url.startsWith("http://") && !url.startsWith("https://") && !isLocalFilePath(url)) {
+    if (url && !isHttpUrl(url) && !isLocalFilePath(url)) {
       textWithoutImages = textWithoutImages.replace(m[0], "").trim();
     }
   }
@@ -620,20 +704,40 @@ export async function sendPlainReply(
     );
   }
 
+  const hasVisibleTextOrInlineImage = Boolean(
+    textWithoutImages.trim() || collectedImageUrls.length > 0,
+  );
+  let sentMediaCount = 0;
+  let sentFailureFallback = false;
+
   // Send local media collected from payload.mediaUrl or markdown local paths.
   if (localMediaToSend.length > 0) {
     log?.debug?.(`Sending ${localMediaToSend.length} local media via sendMedia auto-routing`);
-    await autoMediaBatch({
+    sentMediaCount += await autoMediaBatch({
       qualifiedTarget,
       account,
       replyToId: event.messageId,
       mediaUrls: localMediaToSend,
       mediaSender: deps.mediaSender,
+      ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+      ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+      ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
       log,
       onSuccess: (mediaPath) => `Sent local media: ${mediaPath}`,
       onResultError: (mediaPath, error) => `sendMedia(auto) error for ${mediaPath}: ${error}`,
       onThrownError: (mediaPath, error) => `sendMedia(auto) failed for ${mediaPath}: ${error}`,
     });
+    if (!hasVisibleTextOrInlineImage && sentMediaCount === 0) {
+      await sendTextChunks(
+        DEFAULT_MEDIA_SEND_ERROR,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      );
+      sentFailureFallback = true;
+    }
   }
 
   // Forward media gathered during the tool phase.
@@ -641,17 +745,30 @@ export async function sendPlainReply(
     log?.debug?.(
       `Forwarding ${toolMediaUrls.length} tool-collected media URL(s) after block deliver`,
     );
-    await autoMediaBatch({
+    sentMediaCount += await autoMediaBatch({
       qualifiedTarget,
       account,
       replyToId: event.messageId,
       mediaUrls: toolMediaUrls,
       mediaSender: deps.mediaSender,
+      ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+      ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+      ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
       log,
-      onSuccess: (mediaUrl) => `Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
+      onSuccess: (mediaUrl) => `Forwarded tool media: ${truncateUtf16Safe(mediaUrl, 80)}...`,
       onResultError: (_mediaUrl, error) => `Tool media forward error: ${error}`,
       onThrownError: (_mediaUrl, error) => `Tool media forward failed: ${error}`,
     });
+    if (!hasVisibleTextOrInlineImage && sentMediaCount === 0 && !sentFailureFallback) {
+      await sendTextChunks(
+        DEFAULT_MEDIA_SEND_ERROR,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      );
+    }
     toolMediaUrls.length = 0;
   }
 }
@@ -674,9 +791,9 @@ async function sendMarkdownReply(
   const httpImageUrls: string[] = [];
   const base64ImageUrls: string[] = [];
   for (const url of imageUrls) {
-    if (url.startsWith("data:image/")) {
+    if (isImageDataUrl(url)) {
       base64ImageUrls.push(url);
-    } else if (url.startsWith("http://") || url.startsWith("https://")) {
+    } else if (isHttpUrl(url)) {
       httpImageUrls.push(url);
     }
   }
@@ -712,7 +829,7 @@ async function sendMarkdownReply(
   }
 
   // Handle public image URLs — format as markdown images with dimensions.
-  const existingMdUrls = new Set(mdMatches.map((m) => m[2]));
+  const existingMdUrls = new Set(mdMatches.flatMap((m) => (m[2] === undefined ? [] : [m[2]])));
   const imagesToAppend: string[] = [];
 
   for (const url of httpImageUrls) {
@@ -721,7 +838,7 @@ async function sendMarkdownReply(
         const size = await getImageSize(url);
         imagesToAppend.push(formatQQBotMarkdownImage(url, size));
         log?.debug?.(
-          `Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${url.slice(0, 60)}...`,
+          `Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${truncateUtf16Safe(url, 60)}...`,
         );
       } catch (err) {
         log?.debug?.(`Failed to get image size, using default: ${formatErrorMessage(err)}`);
@@ -735,13 +852,16 @@ async function sendMarkdownReply(
   for (const m of mdMatches) {
     const fullMatch = m[0];
     const imgUrl = m[2];
-    const isHttpUrl = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
-    if (isHttpUrl && !hasQQBotImageSize(fullMatch)) {
+    if (fullMatch === undefined || imgUrl === undefined) {
+      continue;
+    }
+    const isRemoteHttpUrl = isHttpUrl(imgUrl);
+    if (isRemoteHttpUrl && !hasQQBotImageSize(fullMatch)) {
       try {
         const size = await getImageSize(imgUrl);
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, size));
         log?.debug?.(
-          `Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${imgUrl.slice(0, 60)}...`,
+          `Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${truncateUtf16Safe(imgUrl, 60)}...`,
         );
       } catch (err) {
         log?.debug?.(
@@ -796,7 +916,7 @@ async function sendPlainTextReply(
 ): Promise<void> {
   const { account, log } = actx;
 
-  const imgMediaTarget = resolveMediaTargetContext(event, account);
+  const imgMediaTarget = resolveMediaTargetContext(event, actx);
 
   let result = textWithoutImages;
   for (const m of mdMatches) {
@@ -818,7 +938,8 @@ async function sendPlainTextReply(
         imageUrl,
         mediaSender: deps.mediaSender,
         log,
-        onSuccess: (nextImageUrl) => `Sent image via sendPhoto: ${nextImageUrl.slice(0, 80)}...`,
+        onSuccess: (nextImageUrl) =>
+          `Sent image via sendPhoto: ${truncateUtf16Safe(nextImageUrl, 80)}...`,
         onError: (error) => `Failed to send image: ${error}`,
       });
     }
@@ -842,3 +963,4 @@ async function sendPlainTextReply(
     log?.error(`Send failed: ${formatErrorMessage(err)}`);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

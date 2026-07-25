@@ -13,7 +13,7 @@ type TelegramBotApiOptions = {
 
 const DEFAULT_BASE_URL =
   process.env.OPENCLAW_TELEGRAM_USER_BOT_API_BASE_URL ?? "https://api.telegram.org";
-export type TelegramBotApiLimits = {
+type TelegramBotApiLimits = {
   bodyMaxBytes: number;
   timeoutMs: number;
 };

@@ -41,6 +41,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
+import { resolveListedDefaultAccountId } from "./account-helpers.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import {
   isSafeManifestChannelId,
@@ -153,7 +154,7 @@ type ReadOnlyChannelPluginResolution = {
   loadFailures: ReadOnlyChannelPluginLoadFailure[];
 };
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
-export type ReadOnlyChannelPluginLoadFailure = {
+type ReadOnlyChannelPluginLoadFailure = {
   channelId: string;
   pluginId: string;
   message: string;
@@ -372,6 +373,17 @@ function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): 
   return hasExplicitChannelConfig({ config: cfg, channelId }) ? [DEFAULT_ACCOUNT_ID] : [];
 }
 
+function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: string): string {
+  const channelConfig = getChannelConfigRecord(cfg, channelId);
+  const configuredDefaultAccountId = normalizeOptionalAccountId(
+    typeof channelConfig.defaultAccount === "string" ? channelConfig.defaultAccount : undefined,
+  );
+  return resolveListedDefaultAccountId({
+    accountIds: listManifestChannelAccountIds(cfg, channelId),
+    configuredDefaultAccountId,
+  });
+}
+
 function resolveManifestChannelAccountConfig(params: {
   cfg: OpenClawConfig;
   channelId: string;
@@ -461,7 +473,7 @@ function buildManifestChannelPlugin(params: {
       : {}),
     config: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
-      defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+      defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
       resolveAccount: (cfg, accountId) => ({
         accountId: normalizeAccountId(accountId),
         config: resolveManifestChannelAccountConfig({
@@ -1028,3 +1040,4 @@ export function resolveReadOnlyChannelPluginsForConfig(
   }
   return cloneReadOnlyChannelPluginResolution(resolution);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

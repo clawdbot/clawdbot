@@ -35,6 +35,10 @@ describe("fetchDeepSeekUsage", () => {
       provider: "deepseek",
       displayName: "DeepSeek",
       windows: [],
+      billing: [
+        { type: "balance", amount: 1.25, unit: "USD" },
+        { type: "balance", amount: 42.5, unit: "CNY" },
+      ],
       summary: "Balance $1.25 · Balance ¥42.50 · Granted ¥12.00 · Topped up ¥30.50",
     });
   });
@@ -54,6 +58,7 @@ describe("fetchDeepSeekUsage", () => {
     const result = await fetchDeepSeekUsage("deepseek-key", 5000, mockFetch);
 
     expect(result.summary).toBe("Balance 3.00 EUR");
+    expect(result.billing).toEqual([{ type: "balance", amount: 3, unit: "EUR" }]);
   });
 
   it("returns HTTP errors for failed balance requests", async () => {

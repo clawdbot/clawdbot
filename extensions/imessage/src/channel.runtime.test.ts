@@ -8,7 +8,7 @@ vi.mock("./monitor.js", async (importOriginal) => ({
   monitorIMessageProvider: monitorMock,
 }));
 
-const { startIMessageGatewayAccount } = await import("./channel.runtime.js");
+const { sendIMessageOutbound, startIMessageGatewayAccount } = await import("./channel.runtime.js");
 const { resolveIMessageAccount } = await import("./accounts.js");
 
 function makeCtx(params: {
@@ -105,5 +105,44 @@ describe("startIMessageGatewayAccount duplicate-source handling", () => {
 
     await startIMessageGatewayAccount(ctx);
     expect(monitorMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sendIMessageOutbound approval identity", () => {
+  it("promotes the exact tapback GUID and delivered text into channel-private metadata", async () => {
+    const send = vi.fn(async () => ({
+      messageId: "42",
+      guid: "p:0/stable-guid",
+      sentText: "delivered approval text",
+      receipt: {
+        primaryPlatformMessageId: "42",
+        platformMessageIds: ["42"],
+        parts: [{ platformMessageId: "42", kind: "text" as const, index: 0 }],
+        sentAt: 1_000,
+      },
+    }));
+
+    await expect(
+      sendIMessageOutbound({
+        cfg: {} as never,
+        to: "+15551230000",
+        text: "approval text",
+        conversationReadOrigin: "delegated",
+        deps: { imessage: send },
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        messageId: "42",
+        meta: {
+          imessageMessageGuid: "p:0/stable-guid",
+          imessageVisibleText: "delivered approval text",
+        },
+      }),
+    );
+    expect(send).toHaveBeenCalledWith(
+      "+15551230000",
+      "approval text",
+      expect.objectContaining({ conversationReadOrigin: "delegated" }),
+    );
   });
 });

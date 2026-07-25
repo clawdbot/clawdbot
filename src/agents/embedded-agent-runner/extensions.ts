@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
@@ -89,7 +90,14 @@ function buildAgentToolResultMiddlewareFactory(
         isError: event.isError,
         result: current,
       });
-      const isError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      const isAcceptedSessionSpawn =
+        event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
+      const isError =
+        !isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const clearsAcceptedSessionSpawnError =
+        isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -102,6 +110,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(isError ? { isError: true } : {}),
+        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
       };
     });
   };
@@ -184,11 +193,8 @@ export function buildEmbeddedExtensionFactories(params: {
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
-      maxHistoryShare: compactionCfg?.maxHistoryShare,
       contextWindowTokens: contextWindowInfo.tokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
-      identifierInstructions: compactionCfg?.identifierInstructions,
-      customInstructions: compactionCfg?.customInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,

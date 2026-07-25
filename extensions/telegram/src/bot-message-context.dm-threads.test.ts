@@ -3,16 +3,43 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
+import { resetTelegramTopicNameCacheForTest as resetTopicNameCacheForTest } from "./runtime.test-support.js";
+
+type ResolveTelegramInboundBody =
+  typeof import("./bot-message-context.body.js").resolveTelegramInboundBody;
+type TelegramInboundBodyResult = NonNullable<Awaited<ReturnType<ResolveTelegramInboundBody>>>;
 
 type SessionRuntimeModule = typeof import("./bot-message-context.session.runtime.js");
 type RecordInboundSessionFn = SessionRuntimeModule["recordInboundSession"];
 type ResolveStorePathFn = SessionRuntimeModule["resolveStorePath"];
 
-const { recordInboundSessionMock, resolveStorePathMock } = vi.hoisted(() => ({
-  recordInboundSessionMock: vi.fn<RecordInboundSessionFn>(async () => undefined),
-  resolveStorePathMock: vi.fn<ResolveStorePathFn>(() => "/tmp/openclaw-session-store.json"),
-}));
+const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi.hoisted(() => {
+  const createInboundBodyResult = (): TelegramInboundBodyResult => ({
+    bodyText: "hello",
+    rawBody: "hello",
+    historyKey: undefined,
+    commandAuthorized: false,
+    effectiveWasMentioned: true,
+    inboundEventKind: "user_request" as const,
+    mentionFacts: {
+      canDetectMention: false,
+      wasMentioned: true,
+      explicitlyMentionedBot: false,
+      effectiveWasMentioned: true,
+      requireMention: false,
+    },
+    canDetectMention: false,
+    shouldBypassMention: false,
+    hasControlCommand: false,
+    stickerCacheHit: false,
+    locationData: undefined,
+  });
+  return {
+    inboundBodyResult: { value: createInboundBodyResult(), reset: createInboundBodyResult },
+    recordInboundSessionMock: vi.fn<RecordInboundSessionFn>(async () => undefined),
+    resolveStorePathMock: vi.fn<ResolveStorePathFn>(() => "/tmp/openclaw-session-store.json"),
+  };
+});
 
 vi.mock("./bot-message-context.session.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
@@ -28,17 +55,7 @@ vi.mock("./bot-message-context.session.runtime.js", async () => {
 });
 
 vi.mock("./bot-message-context.body.js", () => ({
-  resolveTelegramInboundBody: async () => ({
-    bodyText: "hello",
-    rawBody: "hello",
-    historyKey: undefined,
-    commandAuthorized: false,
-    effectiveWasMentioned: true,
-    canDetectMention: false,
-    shouldBypassMention: false,
-    stickerCacheHit: false,
-    locationData: undefined,
-  }),
+  resolveTelegramInboundBody: async () => inboundBodyResult.value,
 }));
 
 const { buildTelegramMessageContextForTest } =
@@ -49,6 +66,7 @@ const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetTopicNameCacheForTest();
+  inboundBodyResult.value = inboundBodyResult.reset();
 });
 
 afterEach(() => {
@@ -186,6 +204,39 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     expect(ctx.ctxPayload.SessionKey).toBe("agent:main:telegram:group:-1001234567890");
     // MessageThreadId should be undefined (not a forum)
     expect(ctx.ctxPayload.MessageThreadId).toBeUndefined();
+  });
+
+  it("carries the body-layer inbound event kind instead of restamping from copied mention booleans", async () => {
+    inboundBodyResult.value = {
+      ...inboundBodyResult.reset(),
+      effectiveWasMentioned: false,
+      inboundEventKind: "user_request",
+      mentionFacts: {
+        canDetectMention: true,
+        wasMentioned: true,
+        explicitlyMentionedBot: true,
+        mentionSource: "explicit_bot",
+        effectiveWasMentioned: true,
+        requireMention: false,
+      },
+    };
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },
+      message: {
+        message_id: 7,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        date: 1700000000,
+        text: "@bot hello",
+        entities: [{ type: "mention", offset: 0, length: "@bot".length }],
+        from: { id: 42, first_name: "Alice" },
+      },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(ctx?.ctxPayload.ExplicitlyMentionedBot).toBe(true);
   });
 
   it("keeps same session for regular group with and without message_thread_id", async () => {

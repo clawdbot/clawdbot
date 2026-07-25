@@ -1,10 +1,10 @@
 // Secret input parsing shared by memory provider config and gateway-resolved snapshots.
 
 /** Supported secret reference backing stores. */
-export type SecretRefSource = "env" | "file" | "exec";
+type SecretRefSource = "env" | "file" | "exec";
 
 /** Canonical secret reference shape used after gateway resolution. */
-export type SecretRef = {
+type SecretRef = {
   source: SecretRefSource;
   provider: string;
   id: string;
@@ -118,7 +118,7 @@ function coerceSecretRef(value: unknown): SecretRef | null {
 }
 
 /** Return true when a secret input has either a literal value or resolvable reference shape. */
-export function hasConfiguredSecretInput(value: unknown): boolean {
+export function hasConfiguredMemorySecretInputValue(value: unknown): boolean {
   if (normalizeSecretInputString(value)) {
     return true;
   }
@@ -138,12 +138,12 @@ function createUnresolvedSecretInputError(params: { path: string; ref: SecretRef
 }
 
 /** Return a canonical SecretRef when the input is a supported reference shape. */
-export function resolveSecretInputRef(value: unknown): SecretRef | null {
+export function resolveMemorySecretInputRef(value: unknown): SecretRef | null {
   return coerceSecretRef(value);
 }
 
 /** Normalize literal secrets, or throw for refs that still require gateway resolution. */
-export function normalizeResolvedSecretInputString(params: {
+export function normalizeResolvedMemorySecretInputString(params: {
   value: unknown;
   path: string;
 }): string | undefined {
@@ -151,7 +151,7 @@ export function normalizeResolvedSecretInputString(params: {
   if (normalized) {
     return normalized;
   }
-  const ref = resolveSecretInputRef(params.value);
+  const ref = resolveMemorySecretInputRef(params.value);
   if (!ref) {
     return undefined;
   }

@@ -97,11 +97,7 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
     expect(execFileSyncMock).toHaveBeenCalledTimes(3);
     expect(execFileSyncMock.mock.calls[0]?.slice(0, 2)).toEqual([
       process.execPath,
-      [
-        "scripts/check-plugin-npm-runtime-builds.mjs",
-        "--package",
-        "extensions/demo-plugin",
-      ],
+      ["scripts/check-plugin-npm-runtime-builds.mjs", "--package", "extensions/demo-plugin"],
     ]);
     expect(callOptions(0)).toMatchObject({ cwd: repoDir, stdio: "inherit" });
 

@@ -114,13 +114,13 @@ describe("legacy x_search config migration", () => {
     ]);
   });
 
-  it("does nothing for knob-only x_search config without a legacy apiKey", () => {
+  it("repairs a retired knob-only x_search model without creating plugin config", () => {
     const config = {
       tools: {
         web: {
           x_search: {
             enabled: true,
-            model: "grok-4-1-fast",
+            model: "grok-4-1-fast-non-reasoning",
           },
         } as Record<string, unknown>,
       },
@@ -128,9 +128,36 @@ describe("legacy x_search config migration", () => {
 
     const res = migrateLegacyXSearchConfig(config);
 
-    expect(res.config).toEqual(config);
-    expect(res.changes).toStrictEqual([]);
+    expect((res.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4.3",
+    });
+    expect(res.changes).toEqual([
+      'Updated tools.web.x_search.model from "grok-4-1-fast-non-reasoning" to "grok-4.3".',
+    ]);
     expect(res.config.plugins?.entries?.xai).toBeUndefined();
+    expect(config.tools?.web).toEqual({
+      x_search: { enabled: true, model: "grok-4-1-fast-non-reasoning" },
+    });
   });
 
+  it("repairs retired Grok code aliases and preserves current aliases", () => {
+    const retired = migrateLegacyXSearchConfig({
+      tools: { web: { x_search: { model: "grok-code-fast-1" } } },
+    } as OpenClawConfig);
+    const current = migrateLegacyXSearchConfig({
+      tools: { web: { x_search: { model: "grok-latest" } } },
+    } as OpenClawConfig);
+
+    expect((retired.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      model: "grok-build-0.1",
+    });
+    expect(retired.changes).toEqual([
+      'Updated tools.web.x_search.model from "grok-code-fast-1" to "grok-build-0.1".',
+    ]);
+    expect(current).toEqual({
+      config: { tools: { web: { x_search: { model: "grok-latest" } } } },
+      changes: [],
+    });
+  });
 });

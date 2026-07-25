@@ -2,6 +2,7 @@
 export {
   hasConfiguredChannelsForReadOnlyScope,
   hasExplicitChannelConfig,
+  listAmbientOnlyConfiguredChannelIds,
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
@@ -16,6 +17,7 @@ export {
 export {
   collectConfiguredMemoryEmbeddingProviderIds,
   collectConfiguredMemoryEmbeddingStartupProviderOwners,
+  collectRegisteredEmbeddingProviderIds,
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   resolveChannelPluginIds,
   resolveChannelPluginIdsFromRegistry,

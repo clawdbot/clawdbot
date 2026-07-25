@@ -8,10 +8,10 @@ title: "DigitalOcean"
 
 Run a persistent OpenClaw Gateway on a DigitalOcean Droplet (~$6/month for the 1 GB Basic plan).
 
-DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free options:
+DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
-- [Hetzner](/install/hetzner) — €3.79/mo, more cores/RAM per dollar.
-- [Oracle Cloud](/install/oracle) — Always Free ARM (up to 4 OCPU, 24 GB RAM), but signup can be finicky and ARM-only.
+- [Hetzner](/install/hetzner) -- more cores/RAM per dollar.
+- [Oracle Cloud](/install/oracle) -- Always Free ARM tier (up to 4 OCPU, 24 GB RAM), but signup can be finicky and it is ARM-only.
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free option
     openclaw --version
     ```
 
-    Use the root shell only for system bootstrap. Run OpenClaw commands as the non-root `openclaw` user so state lives under `/home/openclaw/.openclaw/` and the Gateway installs as that user's systemd service.
+    Use the root shell only for system bootstrap. Run OpenClaw commands as the non-root `openclaw` user so state lives under `/home/openclaw/.openclaw/` and the Gateway installs as that user's systemd `--user` service.
 
   </Step>
 
@@ -69,7 +69,7 @@ DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free option
     openclaw onboard --install-daemon
     ```
 
-    The wizard walks you through model auth, channel setup, gateway token generation, and daemon installation (systemd).
+    The wizard walks you through model auth, channel setup, gateway token generation, and daemon installation (systemd user service).
 
   </Step>
 
@@ -114,7 +114,7 @@ DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free option
 
     Then open `https://<magicdns>/` from any device on your tailnet.
 
-    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the gateway host itself is trusted. HTTP API endpoints follow the gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
+    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the gateway host itself is trusted. HTTP API endpoints still follow the gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
 
     **Option C: Tailnet bind (no Serve)**
 
@@ -132,8 +132,8 @@ DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free option
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data.
-- `~/.openclaw/workspace/` — the agent workspace (SOUL.md, memory, artifacts).
+- `~/.openclaw/` -- `openclaw.json`, channel/provider credentials, per-agent `auth-profiles.json`, and session data.
+- `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
 These survive Droplet reboots. To take a portable snapshot:
 
@@ -141,14 +141,14 @@ These survive Droplet reboots. To take a portable snapshot:
 openclaw backup create
 ```
 
-DigitalOcean snapshots back the whole Droplet up; `openclaw backup create` is portable across hosts.
+DigitalOcean snapshots back up the whole Droplet; `openclaw backup create` is portable across hosts.
 
 ## 1 GB RAM tips
 
 The $6 Droplet only has 1 GB RAM. To keep things smooth:
 
 - Make sure the swap step above is in `/etc/fstab` so it survives reboots.
-- Prefer API-based models (Claude, GPT) over local ones — local LLM inference does not fit in 1 GB.
+- Prefer API-based models (Claude, GPT) over local ones -- local LLM inference does not fit in 1 GB.
 - Set `agents.defaults.model.primary` to a smaller model if you hit OOMs on large prompts.
 - Monitor with `free -h` and `htop`.
 
@@ -158,7 +158,7 @@ The $6 Droplet only has 1 GB RAM. To keep things smooth:
 
 **Port already in use** -- Run `lsof -i :18789` to find the process, then stop it.
 
-**Out of memory** -- Verify swap is active with `free -h`. If still hitting OOM, use API-based models (Claude, GPT) rather than local models, or upgrade to a 2 GB Droplet.
+**Out of memory** -- Verify swap is active with `free -h`. If still hitting OOM, switch to API-based models (Claude, GPT) rather than local models, or upgrade to a 2 GB Droplet.
 
 ## Next steps
 

@@ -26,7 +26,10 @@ const livePackageBackedLanes = new Set([
 ]);
 // These lanes intentionally build a focused source-checkout image instead of
 // consuming the shared package E2E images.
-const sourceCheckoutImageLanes = new Set(["plugin-binding-command-escape"]);
+const sourceCheckoutImageLanes = new Set([
+  "docker-selected-plugins",
+  "plugin-binding-command-escape",
+]);
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");

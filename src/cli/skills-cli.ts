@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -32,6 +33,13 @@ import {
   installSkillFromSource,
   isSkillSourceInstallSpec,
 } from "../skills/lifecycle/source-install.js";
+import {
+  getSkillCuratorStatus,
+  pinCuratedSkill,
+  restoreCuratedSkill,
+  type SkillCuratorStatus,
+  unpinCuratedSkill,
+} from "../skills/workshop/curator.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -86,6 +94,10 @@ function resolveSkillClawHubRiskOptions(
 
 function formatSkillWarning(message: string): string {
   return message.includes("╭─") ? message : theme.warn(message);
+}
+
+function formatClawHubSearchText(value: string): string {
+  return sanitizeForLog(value.replace(/\s+/gu, " ")).trim();
 }
 
 function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
@@ -285,6 +297,91 @@ function formatSkillProposalInspect(read: SkillProposalReadResult): string {
     .join("\n");
 }
 
+function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
+  const timestamp = (value: number | null) =>
+    value === null ? "never" : new Date(value).toISOString();
+  const lines = [
+    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
+    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
+    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
+  ];
+  if (status.lastError) {
+    lines.push(`Last error: ${status.lastError}`);
+  }
+  const keyCounts = new Map<string, number>();
+  for (const skill of status.skills) {
+    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
+  }
+  for (const skill of status.skills) {
+    const pinned = skill.pinned ? " pinned" : "";
+    const lastUsed =
+      skill.lastUsedAtMs === null ? "never" : new Date(skill.lastUsedAtMs).toISOString();
+    const label =
+      keyCounts.get(skill.skillKey) === 1
+        ? skill.skillKey
+        : `${skill.skillKey} (${skill.skillFile})`;
+    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
+  }
+  for (const overlap of status.overlaps) {
+    lines.push(
+      `Possible overlap: ${overlap.left} ~ ${overlap.right} — merge via /learn if desired`,
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function loadGatewaySkillCuratorStatus(
+  config: ReturnType<typeof getRuntimeConfig>,
+): Promise<SkillCuratorStatus | null> {
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<SkillCuratorStatus>({
+      config,
+      method: "skills.curator.status",
+      params: {},
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch (err) {
+    if (config.gateway?.mode === "remote") {
+      throw err;
+    }
+    return null;
+  }
+}
+
+async function loadSkillCuratorStatus(): Promise<SkillCuratorStatus> {
+  const config = getRuntimeConfig();
+  return (await loadGatewaySkillCuratorStatus(config)) ?? getSkillCuratorStatus();
+}
+
+async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skill: string) {
+  const config = getRuntimeConfig();
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<SkillCuratorStatus["skills"][number]>({
+      config,
+      method: `skills.curator.${method}`,
+      params: { skill },
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch (err) {
+    if (config.gateway?.mode === "remote") {
+      throw err;
+    }
+  }
+  if (method === "pin") {
+    return pinCuratedSkill(skill);
+  }
+  if (method === "unpin") {
+    return unpinCuratedSkill(skill);
+  }
+  return restoreCuratedSkill(skill);
+}
+
 async function readSkillProposalInput(options: {
   proposal?: string;
   proposalDir?: string;
@@ -338,9 +435,13 @@ export function registerSkillsCli(program: Command) {
           return;
         }
         for (const entry of results) {
-          const version = entry.version ? ` v${entry.version}` : "";
-          const summary = entry.summary ? `  ${entry.summary}` : "";
-          defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
+          const ownerHandle = normalizeOptionalString(entry.ownerHandle);
+          const slug = formatClawHubSearchText(entry.slug);
+          const skillRef = ownerHandle ? `@${formatClawHubSearchText(ownerHandle)}/${slug}` : slug;
+          const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
+          const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
+          const displayName = formatClawHubSearchText(entry.displayName);
+          defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}`);
         }
       } catch (err) {
         defaultRuntime.error(String(err));
@@ -616,6 +717,54 @@ export function registerSkillsCli(program: Command) {
         }
       },
     );
+
+  const curator = skills
+    .command("curator")
+    .description("Inspect and manage skill lifecycle curation")
+    .option("--json", "Output as JSON", false);
+
+  const showCuratorStatus = async () => {
+    try {
+      const status = await loadSkillCuratorStatus();
+      if (curator.opts<{ json?: boolean }>().json) {
+        defaultRuntime.writeJson(status);
+        return;
+      }
+      defaultRuntime.writeStdout(formatSkillCuratorStatus(status));
+    } catch (err) {
+      defaultRuntime.error(String(err));
+      defaultRuntime.exit(1);
+    }
+  };
+
+  curator
+    .command("status")
+    .description("Show curator run and lifecycle status")
+    .action(showCuratorStatus);
+
+  for (const action of ["pin", "unpin", "restore"] as const) {
+    curator
+      .command(action)
+      .description(`${action} a curated skill`)
+      .argument("<skill>", "Skill name or key")
+      .action(async (skill: string) => {
+        try {
+          const result = await runSkillCuratorMutation(action, skill);
+          if (curator.opts<{ json?: boolean }>().json) {
+            defaultRuntime.writeJson(result);
+            return;
+          }
+          defaultRuntime.writeStdout(
+            `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
+          );
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      });
+  }
+
+  curator.action(showCuratorStatus);
 
   const workshop = skills
     .command("workshop")
@@ -967,3 +1116,4 @@ export function registerSkillsCli(program: Command) {
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

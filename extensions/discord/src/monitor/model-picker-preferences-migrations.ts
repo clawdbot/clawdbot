@@ -7,6 +7,10 @@ import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+  DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+} from "../command-deploy-store.js";
+import {
   normalizePersistedBinding,
   THREAD_BINDINGS_MAX_ENTRIES,
   THREAD_BINDINGS_NAMESPACE,
@@ -125,10 +129,65 @@ function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: numbe
   );
 }
 
+function readFiniteNumberField(entry: Record<string, unknown>, key: string): number | undefined {
+  const value = entry[key];
+  return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+// Doctor-owned legacy-shape repair: pre-account-scoped stores carried a flat
+// `sessionKey` alias and an absolute `expiresAt`. Runtime normalization reads
+// canonical fields only, so the one-time JSON import maps them here.
+function upgradeLegacyThreadBindingShape(rawEntry: unknown): unknown {
+  if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+    return rawEntry;
+  }
+  const entry = { ...(rawEntry as Record<string, unknown>) };
+  if (entry.targetSessionKey === undefined && typeof entry.sessionKey === "string") {
+    entry.targetSessionKey = entry.sessionKey;
+  }
+  delete entry.sessionKey;
+  const expiresAt = readFiniteNumberField(entry, "expiresAt");
+  delete entry.expiresAt;
+  if (
+    entry.idleTimeoutMs === undefined &&
+    entry.maxAgeMs === undefined &&
+    expiresAt !== undefined
+  ) {
+    // Legacy expiresAt was an absolute timestamp; map it to max-age and disable idle timeout.
+    entry.idleTimeoutMs = 0;
+    if (expiresAt <= 0) {
+      entry.maxAgeMs = 0;
+    } else {
+      const boundAt = readFiniteNumberField(entry, "boundAt") ?? 0;
+      const lastActivityAt = readFiniteNumberField(entry, "lastActivityAt") ?? 0;
+      const base = boundAt > 0 ? boundAt : lastActivityAt;
+      entry.maxAgeMs = Math.max(1, expiresAt - Math.max(0, base));
+    }
+  }
+  return entry;
+}
+
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({
   stateDir,
 }) => {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
+  const commandDeployCacheSourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+  if (fileExists(commandDeployCacheSourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord command deployment cache",
+      sourcePath: commandDeployCacheSourcePath,
+      targetPath: `plugin state:${DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+      maxEntries: DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "remove",
+      cleanupWhenEmpty: true,
+      // Rebuildable cache: discard file-era hashes and reconcile once against Discord.
+      readEntries: () => [],
+    });
+  }
   const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
   if (fileExists(modelPickerSourcePath)) {
     plans.push({
@@ -193,7 +252,10 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         for (const [rawKey, rawEntry] of Object.entries(
           store.bindings as Record<string, unknown>,
         )) {
-          const normalized = normalizePersistedBinding(rawKey, rawEntry);
+          const normalized = normalizePersistedBinding(
+            rawKey,
+            upgradeLegacyThreadBindingShape(rawEntry),
+          );
           if (normalized) {
             out.push({
               key: toBindingRecordKey(normalized),

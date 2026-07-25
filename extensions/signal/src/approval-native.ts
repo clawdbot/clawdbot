@@ -314,8 +314,9 @@ export const signalApprovalCapability: ChannelApprovalCapability = createChannel
         cfg,
         accountId,
       }),
-    shouldHandle: ({ cfg, accountId, context, request }) =>
-      Boolean(context) && shouldHandleSignalApprovalRequest({ cfg, accountId, request }),
+    shouldHandle: ({ cfg, accountId, context, approvalKind, request }) =>
+      Boolean(context) &&
+      shouldHandleSignalApprovalRequest({ cfg, accountId, approvalKind, request }),
     load: async () =>
       (await import("./approval-handler.runtime.js"))
         .signalApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,

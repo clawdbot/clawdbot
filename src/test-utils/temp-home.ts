@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { captureEnv, setTestEnvValue } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
@@ -59,7 +60,7 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   if (process.platform === "win32") {
     const match = home.match(/^([A-Za-z]:)(.*)$/);
     if (match) {
-      setTestEnvValue("HOMEDRIVE", match[1]);
+      setTestEnvValue("HOMEDRIVE", expectDefined(match[1], "temp home regex capture 1"));
       setTestEnvValue("HOMEPATH", match[2] || "\\");
     }
   }

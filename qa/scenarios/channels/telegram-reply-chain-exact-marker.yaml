@@ -1,0 +1,55 @@
+title: Telegram reply-chain exact marker
+
+scenario:
+  id: telegram-reply-chain-exact-marker
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+  objective: Verify an exact-marker Telegram reply is delivered once without extra visible text.
+  successCriteria:
+    - The model returns the requested exact marker through the reply path.
+    - Exactly one outbound message contains the marker.
+  codeRefs:
+    - src/auto-reply/reply/reply-payload.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles: { "telegram:adapter": 13, "telegram:all": 12 }
+    kind: flow
+    channel: telegram
+    summary: Request one exact Telegram marker and verify single-message delivery.
+    config:
+      requiredProviderMode: mock-openai
+      marker: QA-TELEGRAM-REPLY-CHAIN-OK
+
+flow:
+  steps:
+    - name: exact marker is delivered once
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text:
+              expr: "`@openclaw Telegram reply-chain marker QA. Reply exactly: ${config.marker}`"
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: { ref: config.marker }
+            timeoutMs: 90000
+          saveAs: reply
+        - call: sleep
+          args: [1000]
+        - set: markerReplies
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).filter((message) => message.text.includes(config.marker))"
+        - assert:
+            expr: "markerReplies.length === 1 && reply.text.trim() === config.marker"
+            message:
+              expr: "`expected one exact marker reply; saw ${markerReplies.length}: ${markerReplies.map((message) => message.text).join(' | ')}`"
+      detailsExpr: reply.text

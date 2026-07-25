@@ -1,4 +1,5 @@
 // Snapshots script supports OpenClaw repository automation.
+import { expectDefined } from "@openclaw/normalization-core";
 import { die, run } from "./host-command.ts";
 import type { Mode } from "./types.ts";
 import type { SnapshotInfo } from "./types.ts";
@@ -88,7 +89,7 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
   return best;
 }
 
-export function stringSimilarity(a: string, b: string): number {
+function stringSimilarity(a: string, b: string): number {
   if (a === b) {
     return 1;
   }
@@ -96,20 +97,29 @@ export function stringSimilarity(a: string, b: string): number {
   const cols = b.length + 1;
   const matrix = Array.from({ length: rows }, () => Array<number>(cols).fill(0));
   for (let i = 0; i < rows; i++) {
-    matrix[i][0] = i;
+    expectDefined(matrix[i], `snapshot similarity matrix row ${i}`)[0] = i;
   }
+  const firstRow = expectDefined(matrix[0], "snapshot similarity first matrix row");
   for (let j = 0; j < cols; j++) {
-    matrix[0][j] = j;
+    firstRow[j] = j;
   }
   for (let i = 1; i < rows; i++) {
+    const row = expectDefined(matrix[i], `snapshot similarity matrix row ${i}`);
+    const previousRow = expectDefined(matrix[i - 1], `snapshot similarity matrix row ${i - 1}`);
     for (let j = 1; j < cols; j++) {
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      row[j] = Math.min(
+        expectDefined(previousRow[j], `snapshot similarity deletion cell ${i},${j}`) + 1,
+        expectDefined(row[j - 1], `snapshot similarity insertion cell ${i},${j - 1}`) + 1,
+        expectDefined(
+          previousRow[j - 1],
+          `snapshot similarity substitution cell ${i - 1},${j - 1}`,
+        ) + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1),
       );
     }
   }
-  const distance = matrix[a.length][b.length];
+  const distance = expectDefined(
+    expectDefined(matrix[a.length], "snapshot similarity final matrix row")[b.length],
+    "snapshot similarity final distance",
+  );
   return 1 - distance / Math.max(a.length, b.length, 1);
 }

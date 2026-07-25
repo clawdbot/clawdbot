@@ -115,6 +115,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     mediaReadFile,
     payload,
     deps,
+    onDeliveryResult,
   }) => {
     const msteamsData = asObjectRecord(payload.channelData?.msteams);
     const presentationCard = msteamsData?.presentationCard;
@@ -138,9 +139,12 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     );
     if (mediaUrls.length > 0) {
       const send = resolveMSTeamsMediaSend({ cfg, deps });
-      const result = await sendPayloadMediaSequence({
+      const result = await sendPayloadMediaSequence<MSTeamsSendResult>({
         text,
         mediaUrls,
+        onResult: async (deliveryResult) => {
+          await onDeliveryResult?.(attachChannelToResult("msteams", deliveryResult));
+        },
         send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
           await send(to, textLocal, { mediaUrl: mediaUrlLocal, mediaLocalRoots, mediaReadFile }),
       });
@@ -157,6 +161,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
       for (const chunk of chunks) {
         result = await send(to, chunk);
+        await onDeliveryResult?.(attachChannelToResult("msteams", result));
       }
       return attachChannelToResult("msteams", result!);
     }

@@ -1,22 +1,19 @@
-/** Tests vendored ACP SDK schema fixtures against valid and invalid protocol payloads. */
+/** Tests the ACP SDK's public JSON Schema against representative protocol payloads. */
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
-import {
-  zCloseSessionRequest,
-  zInitializeRequest,
-  zListSessionsRequest,
-  zLoadSessionRequest,
-  zNewSessionRequest,
-  zPromptRequest,
-  zResumeSessionRequest,
-  zSessionNotification,
-} from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
+import acpProtocolSchema from "@agentclientprotocol/sdk/schema/schema.json" with { type: "json" };
 import { describe, expect, it } from "vitest";
+import { type JsonSchemaValue, validateJsonSchemaValue } from "../plugins/schema-validator.js";
+
+function acpSchema(name: keyof typeof acpProtocolSchema.$defs): JsonSchemaValue {
+  return {
+    ...acpProtocolSchema.$defs[name],
+    $defs: acpProtocolSchema.$defs,
+  } as JsonSchemaValue;
+}
 
 type SchemaFixture = {
   name: string;
-  schema: {
-    safeParse: (input: unknown) => { success: boolean };
-  };
+  schema: JsonSchemaValue;
   valid: unknown;
   invalid: unknown;
 };
@@ -24,7 +21,7 @@ type SchemaFixture = {
 const fixtures: SchemaFixture[] = [
   {
     name: "initialize",
-    schema: zInitializeRequest,
+    schema: acpSchema("InitializeRequest"),
     valid: {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {
@@ -39,7 +36,7 @@ const fixtures: SchemaFixture[] = [
   },
   {
     name: "session/new",
-    schema: zNewSessionRequest,
+    schema: acpSchema("NewSessionRequest"),
     valid: {
       cwd: "/tmp/openclaw",
       mcpServers: [],
@@ -51,7 +48,7 @@ const fixtures: SchemaFixture[] = [
   },
   {
     name: "session/prompt",
-    schema: zPromptRequest,
+    schema: acpSchema("PromptRequest"),
     valid: {
       sessionId: "session-1",
       prompt: [{ type: "text", text: "hello" }],
@@ -63,7 +60,7 @@ const fixtures: SchemaFixture[] = [
   },
   {
     name: "session/update",
-    schema: zSessionNotification,
+    schema: acpSchema("SessionNotification"),
     valid: {
       sessionId: "session-1",
       update: {
@@ -80,7 +77,7 @@ const fixtures: SchemaFixture[] = [
   },
   {
     name: "session/list",
-    schema: zListSessionsRequest,
+    schema: acpSchema("ListSessionsRequest"),
     valid: {
       cwd: "/tmp/openclaw",
       cursor: null,
@@ -92,7 +89,7 @@ const fixtures: SchemaFixture[] = [
   },
   {
     name: "session/load",
-    schema: zLoadSessionRequest,
+    schema: acpSchema("LoadSessionRequest"),
     valid: {
       sessionId: "agent:main:work",
       cwd: "/tmp/openclaw",
@@ -105,7 +102,7 @@ const fixtures: SchemaFixture[] = [
   },
   {
     name: "session/resume",
-    schema: zResumeSessionRequest,
+    schema: acpSchema("ResumeSessionRequest"),
     valid: {
       sessionId: "agent:main:work",
       cwd: "/tmp/openclaw",
@@ -119,7 +116,7 @@ const fixtures: SchemaFixture[] = [
   },
   {
     name: "session/close",
-    schema: zCloseSessionRequest,
+    schema: acpSchema("CloseSessionRequest"),
     valid: {
       sessionId: "agent:main:work",
     },
@@ -130,8 +127,23 @@ const fixtures: SchemaFixture[] = [
 ];
 
 describe("ACP SDK protocol schema fixtures", () => {
-  it.each(fixtures)("$name validates representative payloads", ({ schema, valid, invalid }) => {
-    expect(schema.safeParse(valid).success).toBe(true);
-    expect(schema.safeParse(invalid).success).toBe(false);
-  });
+  it.each(fixtures)(
+    "$name validates representative payloads",
+    ({ name, schema, valid, invalid }) => {
+      expect(
+        validateJsonSchemaValue({
+          schema,
+          cacheKey: `acp:${name}`,
+          value: valid,
+        }).ok,
+      ).toBe(true);
+      expect(
+        validateJsonSchemaValue({
+          schema,
+          cacheKey: `acp:${name}`,
+          value: invalid,
+        }).ok,
+      ).toBe(false);
+    },
+  );
 });

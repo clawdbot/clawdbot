@@ -28,7 +28,7 @@ import {
 
 export type { ChatMessage } from "../commands-subagents-text.js";
 
-export const COMMAND = "/subagents";
+const COMMAND = "/subagents";
 const COMMAND_FOCUS = "/focus";
 const COMMAND_UNFOCUS = "/unfocus";
 const COMMAND_AGENTS = "/agents";

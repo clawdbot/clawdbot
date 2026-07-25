@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: {
   evaluate: ReturnType<typeof vi.fn>;
+  keyboard: { press: ReturnType<typeof vi.fn> };
+  mouse: { click: ReturnType<typeof vi.fn> };
   url: ReturnType<typeof vi.fn>;
 } | null = null;
+let locator: Record<string, ReturnType<typeof vi.fn>> | null = null;
 
 const getPageForTargetId = vi.fn(async () => {
   if (!page) {
@@ -18,9 +21,22 @@ const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
 const isBrowserObservedDialogBlockedError = vi.fn(() => false);
 const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const refLocator = vi.fn(() => {
-  throw new Error("test: refLocator should not be called");
+  if (!locator) {
+    throw new Error("test: locator not set");
+  }
+  return locator;
 });
 const restoreRoleRefsForTarget = vi.fn(() => {});
+const wasBrowserNavigationSourcePreservedAfterPolicyDenial = vi.fn(() => false);
+const withPageNavigationRequestGuard = vi.fn(
+  async ({
+    action,
+    page: actionPage,
+  }: {
+    action: (url: string) => Promise<unknown>;
+    page: { url: () => string };
+  }) => await action(actionPage.url()),
+);
 
 const closePageViaPlaywright = vi.fn(async () => {});
 const resizeViewportViaPlaywright = vi.fn(async () => {});
@@ -34,6 +50,8 @@ vi.mock("./pw-session.js", () => ({
   markObservedDialogsHandledRemotelyForPage,
   refLocator,
   restoreRoleRefsForTarget,
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial,
+  withPageNavigationRequestGuard,
 }));
 
 vi.mock("./pw-tools-core.snapshot.js", () => ({
@@ -57,9 +75,25 @@ function firstEvaluateCall(): [unknown, { fnSource?: string; timeoutMs?: number 
 describe("batchViaPlaywright", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    let currentUrl = "https://example.com";
+    const navigate = vi.fn(async () => {
+      currentUrl = "https://93.184.216.34/target";
+    });
     page = {
-      evaluate: vi.fn(async () => "ok"),
-      url: vi.fn(() => "about:blank"),
+      evaluate: navigate,
+      keyboard: { press: navigate },
+      mouse: { click: navigate },
+      url: vi.fn(() => currentUrl),
+    };
+    locator = {
+      click: navigate,
+      dragTo: navigate,
+      fill: navigate,
+      hover: navigate,
+      press: navigate,
+      scrollIntoViewIfNeeded: navigate,
+      selectOption: navigate,
+      setChecked: navigate,
     };
   });
 
@@ -95,6 +129,111 @@ describe("batchViaPlaywright", () => {
     expect(closePageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
+    });
+  });
+
+  it.each([
+    { name: "hover", action: { kind: "hover", ref: "1" } as const },
+    { name: "scrollIntoView", action: { kind: "scrollIntoView", ref: "1" } as const },
+    {
+      name: "drag",
+      action: { kind: "drag", startRef: "1", endRef: "2" } as const,
+    },
+  ])("forwards navigation policy to batched $name actions", async ({ action }) => {
+    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
+
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [action],
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+    });
+
+    expect(result).toEqual({ results: [{ ok: true }] });
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
+      action: expect.any(Function),
+      onPolicyCheckStarted: expect.any(Function),
+      onPolicyDenied: expect.any(Function),
+      page,
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+    });
+  });
+
+  it.each([
+    { name: "click", action: { kind: "click", ref: "1" } as const },
+    { name: "clickCoords", action: { kind: "clickCoords", x: 10, y: 20 } as const },
+    { name: "type", action: { kind: "type", ref: "1", text: "value" } as const },
+    { name: "press", action: { kind: "press", key: "Enter" } as const },
+    {
+      name: "select",
+      action: { kind: "select" as const, ref: "1", values: ["one"] },
+    },
+    {
+      name: "fill",
+      action: {
+        kind: "fill" as const,
+        fields: [{ ref: "1", type: "text", value: "value" }],
+      },
+    },
+    { name: "evaluate", action: { kind: "evaluate", fn: "() => true" } as const },
+  ])("guards batched $name document requests with the proxy policy", async ({ action }) => {
+    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
+
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [action],
+      evaluateEnabled: true,
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+    });
+
+    expect(result).toEqual({ results: [{ ok: true }] });
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
+      action: expect.any(Function),
+      onPolicyCheckStarted: expect.any(Function),
+      onPolicyDenied: expect.any(Function),
+      page,
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+    });
+    expect(assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
+      cdpUrl: "http://127.0.0.1:9222",
+      page,
+      response: null,
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+      targetId: "tab-1",
+    });
+  });
+
+  it("preserves proxy policy through nested batches", async () => {
+    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
+
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [
+        {
+          kind: "batch",
+          actions: [{ kind: "click", ref: "1" }],
+        },
+      ],
+      evaluateEnabled: true,
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
+    });
+
+    expect(result).toEqual({ results: [{ ok: true }] });
+    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
+      action: expect.any(Function),
+      onPolicyCheckStarted: expect.any(Function),
+      onPolicyDenied: expect.any(Function),
+      page,
+      ssrfPolicy,
+      browserProxyMode: "explicit-browser-proxy",
     });
   });
 });

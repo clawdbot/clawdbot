@@ -14,7 +14,7 @@ import {
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
-import { normalizeElevenLabsBaseUrl } from "./shared.js";
+import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
 
 type ElevenLabsRealtimeTranscriptionProviderConfig = {
   apiKey?: string;
@@ -128,12 +128,6 @@ function normalizeProviderConfig(
       2_000,
     ),
   };
-}
-
-function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
-  const url = new URL(normalizeElevenLabsBaseUrl(value));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  return url.toString().replace(/\/+$/, "");
 }
 
 function toElevenLabsRealtimeWsUrl(config: ElevenLabsRealtimeTranscriptionSessionConfig): string {
@@ -253,6 +247,16 @@ function createElevenLabsRealtimeTranscriptionSession(
   });
 }
 
+function resolveElevenLabsRealtimeApiKey(
+  config: ElevenLabsRealtimeTranscriptionProviderConfig,
+): string | null | undefined {
+  return (
+    config.apiKey ??
+    resolveElevenLabsApiKeyWithProfileFallback() ??
+    normalizeOptionalString(process.env.XI_API_KEY)
+  );
+}
+
 export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
   return {
     id: "elevenlabs",
@@ -262,22 +266,17 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(
-        normalizeProviderConfig(providerConfig).apiKey ||
-        resolveElevenLabsApiKeyWithProfileFallback() ||
-        process.env.XI_API_KEY,
-      ),
+      Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+      const apiKey = resolveElevenLabsRealtimeApiKey(config);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
       return createElevenLabsRealtimeTranscriptionSession({
         ...req,
         apiKey,
-        baseUrl: normalizeElevenLabsBaseUrl(config.baseUrl),
+        baseUrl: normalizeElevenLabsRealtimeBaseUrl(config.baseUrl),
         modelId: config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL,
         audioFormat: config.audioFormat ?? ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT,
         sampleRate: config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE,
@@ -291,9 +290,3 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     },
   };
 }
-
-export const testing = {
-  normalizeProviderConfig,
-  toElevenLabsRealtimeWsUrl,
-};
-export { testing as __testing };

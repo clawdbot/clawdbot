@@ -54,8 +54,6 @@ function buildPackageBoundaryDtsPaths(params: {
 }
 
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
-  "openclaw/extension-api": ["../src/extensionAPI.ts"],
-  "openclaw/plugin-sdk": ["../dist/plugin-sdk/index.d.ts"],
   "openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"],
   ...privateLocalOnlyPluginSdkPackageDtsPaths,
   "openclaw/plugin-sdk/account-id": ["../dist/plugin-sdk/account-id.d.ts"],
@@ -67,24 +65,30 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
   ],
   "openclaw/plugin-sdk/channel-secret-runtime": ["../dist/plugin-sdk/channel-secret-runtime.d.ts"],
-  "openclaw/plugin-sdk/channel-secret-tts-runtime": [
-    "../dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
-  ],
   "openclaw/plugin-sdk/channel-streaming": ["../dist/plugin-sdk/channel-streaming.d.ts"],
   "openclaw/plugin-sdk/error-runtime": ["../dist/plugin-sdk/error-runtime.d.ts"],
-  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
-    "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-catalog-shared": [
-    "../dist/plugin-sdk/provider-catalog-shared.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-entry": ["../dist/plugin-sdk/provider-entry.d.ts"],
   "openclaw/plugin-sdk/secret-ref-runtime": ["../dist/plugin-sdk/secret-ref-runtime.d.ts"],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/ssrf-runtime.d.ts"],
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
+  "@openclaw/matrix/test-api.js": ["../dist/plugin-sdk/extensions/matrix/test-api.d.ts"],
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
   "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/ai": ["../dist/plugin-sdk/packages/ai/src/index.d.ts"],
+  "@openclaw/ai/diagnostics": ["../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"],
+  "@openclaw/ai/event-stream": ["../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"],
+  "@openclaw/ai/providers": ["../dist/plugin-sdk/packages/ai/src/providers.d.ts"],
+  "@openclaw/ai/transports": ["../dist/plugin-sdk/packages/ai/src/transports.d.ts"],
+  "@openclaw/ai/types": ["../dist/plugin-sdk/packages/ai/src/types.d.ts"],
+  "@openclaw/ai/validation": ["../dist/plugin-sdk/packages/ai/src/validation.d.ts"],
+  "@openclaw/ai/internal/anthropic": ["../dist/plugin-sdk/packages/ai/src/internal/anthropic.d.ts"],
+  "@openclaw/ai/internal/openai": ["../dist/plugin-sdk/packages/ai/src/internal/openai.d.ts"],
+  "@openclaw/ai/internal/retry-after": [
+    "../dist/plugin-sdk/packages/ai/src/internal/retry-after.d.ts",
+  ],
+  "@openclaw/ai/internal/runtime": ["../dist/plugin-sdk/packages/ai/src/internal/runtime.d.ts"],
+  "@openclaw/ai/internal/shared": ["../dist/plugin-sdk/packages/ai/src/internal/shared.d.ts"],
   "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
   "@openclaw/llm-core/diagnostics": [
     "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
@@ -172,9 +176,6 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/media-core/read-byte-stream-with-limit": [
     "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
   ],
-  "@openclaw/media-core/read-response-with-limit": [
-    "../dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
-  ],
   "@openclaw/media-core/*": ["../dist/plugin-sdk/packages/media-core/src/*.d.ts"],
   "@openclaw/normalization-core/record-coerce": [
     "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts",
@@ -183,6 +184,8 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts",
   ],
   "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
+  "@openclaw/retry": ["../dist/plugin-sdk/packages/retry/src/index.d.ts"],
+  "@openclaw/workboard-contract": ["../packages/workboard-contract/src/index.ts"],
   ...buildPackageBoundaryDtsPaths({
     packageName: "@openclaw/acp-core",
     packageDir: "acp-core",
@@ -249,16 +252,25 @@ function prefixExtensionPackageBoundaryPaths(
   );
 }
 
+function omitExtensionPackageBoundaryPaths(
+  paths: Record<string, readonly string[]>,
+  omittedKeys: readonly string[],
+): Record<string, readonly string[]> {
+  const omitted = new Set(omittedKeys);
+  return Object.fromEntries(Object.entries(paths).filter(([key]) => !omitted.has(key)));
+}
+
 export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ...prefixExtensionPackageBoundaryPaths(
-    (({
-      "openclaw/plugin-sdk/channel-secret-basic-runtime": _omitBasic,
-      "openclaw/plugin-sdk/channel-secret-tts-runtime": _omitTts,
-      "@openclaw/discord/api.js": _omitDiscord,
-      "@openclaw/slack/api.js": _omitSlack,
-      "@openclaw/whatsapp/api.js": _omitWhatsApp,
-      ...rest
-    }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),
+    omitExtensionPackageBoundaryPaths(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS, [
+      "openclaw/plugin-sdk/channel-secret-basic-runtime",
+      "openclaw/plugin-sdk/channel-secret-tts-runtime",
+      "@openclaw/matrix/test-api.js",
+      "@openclaw/discord/api.js",
+      "@openclaw/slack/api.js",
+      "@openclaw/telegram/api.js",
+      "@openclaw/whatsapp/api.js",
+    ]),
     "../",
   ),
   "openclaw/plugin-sdk/channel-entry-contract": [
@@ -266,18 +278,6 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ],
   "openclaw/plugin-sdk/browser-maintenance": [
     "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
-  ],
-  "openclaw/plugin-sdk/cli-runtime": ["../../dist/plugin-sdk/cli-runtime.d.ts"],
-  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
-    "../../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-catalog-shared": [
-    "../../dist/plugin-sdk/provider-catalog-shared.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-env-vars": ["../../dist/plugin-sdk/provider-env-vars.d.ts"],
-  "openclaw/plugin-sdk/provider-entry": ["../../dist/plugin-sdk/provider-entry.d.ts"],
-  "openclaw/plugin-sdk/provider-web-search-contract": [
-    "../../dist/plugin-sdk/provider-web-search-contract.d.ts",
   ],
   "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],

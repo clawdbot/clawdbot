@@ -1,0 +1,119 @@
+.option-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.option-card__chip {
+  justify-self: start;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.option-card__question {
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.option-card__choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.option-card__choice {
+  display: flex;
+  min-height: 88px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.option-card__choice:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  transform: translateY(-1px);
+}
+
+.option-card__choice:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.option-card__choice--recommended,
+.option-card__choice--selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.option-card__choice-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.option-card__choice strong {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.option-card__description {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.option-card__recommended {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.option-card__skip {
+  justify-self: start;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.option-card__skip:hover:not(:disabled) {
+  color: var(--text);
+}
+
+@media (max-width: 700px) {
+  .option-card__choices {
+    grid-template-columns: 1fr;
+  }
+}

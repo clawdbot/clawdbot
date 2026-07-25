@@ -1,0 +1,331 @@
+.custodian {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  width: min(860px, 100%);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 18px clamp(16px, 4vw, 36px) 22px;
+}
+
+.custodian__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.custodian__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custodian__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.custodian__identity h1,
+.custodian__identity p {
+  margin: 0;
+}
+
+.custodian__identity h1 {
+  color: var(--text-strong);
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.custodian__identity p {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.custodian__mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 14px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.custodian__messages {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 24px 2px;
+}
+
+.custodian__nudge {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  max-width: min(680px, 96%);
+  padding: 4px 5px 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
+  color: var(--text);
+}
+
+.custodian__nudge-action,
+.custodian__nudge-dismiss {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.custodian__nudge-action {
+  padding: 5px 2px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.custodian__nudge-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.custodian__nudge-dismiss {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.custodian__nudge-action:focus-visible,
+.custodian__nudge-dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.custodian__nudge-dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.custodian__option-card {
+  /* Left offset = avatar column (36px) + group gap (10px) so cards align with
+     the message text column, not the avatar gutter. */
+  margin: -12px 16px 14px 46px;
+}
+
+.custodian__thinking {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  padding: 10px 0;
+}
+
+.custodian__thinking > span:not(.sr-only) {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: custodian-thinking 900ms ease-in-out infinite alternate;
+}
+
+.custodian__thinking > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.custodian__thinking > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+.custodian__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-lg);
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.custodian__history {
+  display: flex;
+  max-height: min(46vh, 440px);
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.custodian__history-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.custodian__history-heading strong {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.custodian__history-heading span,
+.custodian__history-state {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.custodian__change-list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.custodian__change-card {
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.custodian__change-card.is-invalid {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+  background: color-mix(in srgb, var(--warn) 7%, var(--bg));
+}
+
+.custodian__change-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.custodian__change-source {
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.custodian__change-summary {
+  margin-top: 7px;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.custodian__change-warning,
+.custodian__change-note {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.custodian__change-warning {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.custodian__change-paths {
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.custodian__change-paths summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.custodian__change-paths ul {
+  margin: 7px 0 0;
+  padding-left: 20px;
+}
+
+.custodian__change-paths code {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.custodian__history-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.custodian__history-more {
+  align-self: center;
+}
+
+@keyframes custodian-thinking {
+  to {
+    opacity: 0.35;
+    transform: translateY(-2px);
+  }
+}
+
+@media (max-width: 600px) {
+  .custodian {
+    padding-inline: 12px;
+  }
+
+  .custodian__header {
+    align-items: flex-start;
+  }
+
+  .custodian__header-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .custodian__history-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .custodian__identity p {
+    display: none;
+  }
+}
+
+@media (max-width: 400px) {
+  .custodian__option-card {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custodian__thinking > span:not(.sr-only) {
+    animation: none;
+  }
+}

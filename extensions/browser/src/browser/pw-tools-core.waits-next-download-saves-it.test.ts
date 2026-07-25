@@ -173,10 +173,16 @@ describe("pw-tools-core", () => {
       const harness = createDownloadEventHarness();
       const targetPath = path.join(tempDir, "file.bin");
 
-      const saveAs = vi.fn(async (outPath: string) => {
+      type DownloadFixture = {
+        url: () => string;
+        suggestedFilename: () => string;
+        saveAs: (outPath: string) => Promise<void>;
+      };
+      const saveAs = vi.fn(async function (this: DownloadFixture, outPath: string) {
+        expect(this).toBe(download);
         await fs.writeFile(outPath, "file-content", "utf8");
       });
-      const download = {
+      const download: DownloadFixture = {
         url: () => "https://example.com/file.bin",
         suggestedFilename: () => "file.bin",
         saveAs,
@@ -309,6 +315,41 @@ describe("pw-tools-core", () => {
     expect(state.downloadWaiterDepth).toBe(0);
     expect(harness.activeHandlerCount()).toBe(0);
   });
+
+  it("lets only the latest overlapping explicit waiter save the download", async () => {
+    const harness = createDownloadEventHarness();
+    const state = sessionMocks.ensurePageState();
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "latest-content", "utf8");
+    });
+
+    const first = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+    void first.catch(() => {});
+    const latest = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    expect(state.downloadWaiterDepth).toBe(2);
+    harness.trigger({
+      url: () => "https://example.com/latest.bin",
+      suggestedFilename: () => "latest.bin",
+      saveAs,
+    });
+
+    await expect(first).rejects.toThrow("superseded by another waiter");
+    await expect(latest).resolves.toMatchObject({ suggestedFilename: "latest.bin" });
+    expect(saveAs).toHaveBeenCalledOnce();
+    expect(state.downloadWaiterDepth).toBe(0);
+    expect(harness.activeHandlerCount()).toBe(0);
+  });
+
   it("clicks a ref and atomically finalizes explicit download paths", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();
@@ -462,11 +503,12 @@ describe("pw-tools-core", () => {
     const off = vi.fn();
     setPwToolsCoreCurrentPage({ on, off });
 
+    const bodyBytes = Buffer.from('{"ok":true,"value":123}');
     const resp = {
       url: () => "https://example.com/api/data",
       status: () => 200,
       headers: () => ({ "content-type": "application/json" }),
-      text: async () => '{"ok":true,"value":123}',
+      body: async () => bodyBytes,
     };
 
     const p = mod.responseBodyViaPlaywright({
@@ -488,5 +530,72 @@ describe("pw-tools-core", () => {
     expect(res.status).toBe(200);
     expect(res.body).toBe('{"ok":true');
     expect(res.truncated).toBe(true);
+  });
+
+  it("does not split a surrogate pair when truncating response body text", async () => {
+    let responseHandler: ((resp: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
+      if (event === "response") {
+        responseHandler = handler;
+      }
+    });
+    const off = vi.fn();
+    setPwToolsCoreCurrentPage({ on, off });
+
+    const p = mod.responseBodyViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      url: "**/emoji",
+      timeoutMs: 1000,
+      maxChars: 1,
+    });
+
+    await Promise.resolve();
+    if (!responseHandler) {
+      throw new Error("expected Playwright response handler");
+    }
+    responseHandler({
+      url: () => "https://example.com/emoji",
+      status: () => 200,
+      headers: () => ({ "content-type": "text/plain" }),
+      body: async () => Buffer.from("🙂B"),
+    });
+
+    await expect(p).resolves.toMatchObject({ body: "", truncated: true });
+  });
+
+  it("preserves the prefix while bounding decode for a large response", async () => {
+    let responseHandler: ((resp: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
+      if (event === "response") {
+        responseHandler = handler;
+      }
+    });
+    const off = vi.fn();
+    setPwToolsCoreCurrentPage({ on, off });
+
+    const bodyBytes = Buffer.from("x".repeat(500_000));
+    const subarray = vi.spyOn(bodyBytes, "subarray");
+    const p = mod.responseBodyViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      url: "**/large",
+      timeoutMs: 1000,
+      maxChars: 10,
+    });
+
+    await Promise.resolve();
+    if (!responseHandler) {
+      throw new Error("expected Playwright response handler");
+    }
+    responseHandler({
+      url: () => "https://example.com/large",
+      status: () => 200,
+      headers: () => ({ "content-type": "text/plain", "content-length": "500000" }),
+      body: async () => bodyBytes,
+    });
+
+    await expect(p).resolves.toMatchObject({ body: "x".repeat(10), truncated: true });
+    expect(subarray).toHaveBeenCalledWith(0, 40);
   });
 });

@@ -1,14 +1,10 @@
 // Audits code paths for deep safety risks that require manual review.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
-let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | undefined;
-
 /** Lazily load deep audit code paths so normal audits avoid plugin/skill scans. */
-async function loadAuditDeepModule() {
-  auditDeepModulePromise ??= import("./audit.deep.runtime.js");
-  return await auditDeepModulePromise;
-}
+const loadAuditDeepModule = createLazyRuntimeModule(() => import("./audit.deep.runtime.js"));
 
 /** Collect plugin and installed-skill code safety findings when deep audit is enabled. */
 export async function collectDeepCodeSafetyFindings(params: {

@@ -5,8 +5,9 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { KeyedAsyncQueue } from "../../../plugin-sdk/keyed-async-queue.js";
 
-const fileMutationQueues = new Map<string, Promise<void>>();
+const fileMutationQueue = new KeyedAsyncQueue();
 
 function getMutationQueueKey(filePath: string): string {
   const resolvedPath = resolve(filePath);
@@ -23,22 +24,5 @@ function getMutationQueueKey(filePath: string): string {
  */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   const key = getMutationQueueKey(filePath);
-  const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve();
-
-  let releaseNext!: () => void;
-  const nextQueue = new Promise<void>((resolveQueue) => {
-    releaseNext = resolveQueue;
-  });
-  const chainedQueue = currentQueue.then(() => nextQueue);
-  fileMutationQueues.set(key, chainedQueue);
-
-  await currentQueue;
-  try {
-    return await fn();
-  } finally {
-    releaseNext();
-    if (fileMutationQueues.get(key) === chainedQueue) {
-      fileMutationQueues.delete(key);
-    }
-  }
+  return await fileMutationQueue.enqueue(key, fn);
 }

@@ -1,4 +1,5 @@
 // Provider/account summary helpers for `openclaw agents list`.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -7,6 +8,8 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { AgentBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listExplicitConfiguredChannelIdsForConfig } from "../plugins/channel-plugin-ids.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type ProviderAccountStatus = {
@@ -24,17 +27,33 @@ type ProviderSummaryMetadata = {
   label: string;
   defaultAccountId: string;
   visibleInConfiguredLists: boolean;
+  repairHint?: string;
 };
 
 function providerAccountKey(provider: ChannelId, accountId?: string) {
   return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
 }
 
+function resolveProviderChannelId(params: {
+  rawChannelId: string | null | undefined;
+  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
+}): ChannelId | null {
+  const resolved = normalizeChannelId(params.rawChannelId);
+  if (resolved) {
+    return resolved;
+  }
+  const fallback = normalizeOptionalLowercaseString(params.rawChannelId);
+  if (!fallback) {
+    return null;
+  }
+  return params.metadataByProvider.has(fallback as ChannelId) ? (fallback as ChannelId) : null;
+}
+
 /** Build stable provider labels/default accounts without resolving live account state. */
 export function buildProviderSummaryMetadataIndex(
   cfg: OpenClawConfig,
 ): Map<ChannelId, ProviderSummaryMetadata> {
-  return new Map(
+  const metadata = new Map<ChannelId, ProviderSummaryMetadata>(
     listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
     }).map((plugin) => [
@@ -50,6 +69,25 @@ export function buildProviderSummaryMetadataIndex(
       },
     ]),
   );
+  for (const channelId of listExplicitConfiguredChannelIdsForConfig(cfg)) {
+    if (metadata.has(channelId)) {
+      continue;
+    }
+    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+      config: cfg,
+      channelId,
+    });
+    if (!hint) {
+      continue;
+    }
+    metadata.set(channelId as ChannelId, {
+      label: hint.label,
+      defaultAccountId: DEFAULT_ACCOUNT_ID,
+      visibleInConfiguredLists: true,
+      repairHint: hint.repairHint,
+    });
+  }
+  return metadata;
 }
 
 function isUnresolvedSecretRefResolutionError(error: unknown): boolean {
@@ -195,6 +233,22 @@ function formatProviderEntry(entry: ProviderAccountStatus): string {
   return `${label}: ${formatProviderState(entry)}`;
 }
 
+function formatMissingProviderEntry(params: {
+  provider: ChannelId;
+  accountId: string;
+  metadata?: ProviderSummaryMetadata;
+}): string {
+  const label = formatChannelAccountLabel({
+    provider: params.provider,
+    providerLabel: params.metadata?.label,
+    accountId: params.accountId,
+  });
+  if (params.metadata?.repairHint) {
+    return `${label}: missing plugin - ${params.metadata.repairHint}`;
+  }
+  return `${label}: unknown`;
+}
+
 /** Render the provider/account routes implied by an agent's route bindings. */
 export function summarizeBindings(
   cfg: OpenClawConfig,
@@ -206,7 +260,10 @@ export function summarizeBindings(
   }
   const seen = new Map<string, string>();
   for (const binding of bindings) {
-    const channel = normalizeChannelId(binding.match.channel);
+    const channel = resolveProviderChannelId({
+      rawChannelId: binding.match.channel,
+      metadataByProvider,
+    });
     if (!channel) {
       continue;
     }
@@ -240,7 +297,10 @@ export function listProvidersForAgent(params: {
   if (params.bindings.length > 0) {
     const seen = new Set<string>();
     for (const binding of params.bindings) {
-      const channel = normalizeChannelId(binding.match.channel);
+      const channel = resolveProviderChannelId({
+        rawChannelId: binding.match.channel,
+        metadataByProvider,
+      });
       if (!channel) {
         continue;
       }
@@ -256,11 +316,11 @@ export function listProvidersForAgent(params: {
         providerLines.push(formatProviderEntry(status));
       } else {
         providerLines.push(
-          `${formatChannelAccountLabel({
+          formatMissingProviderEntry({
             provider: channel,
-            providerLabel: metadataByProvider.get(channel)?.label,
             accountId,
-          })}: unknown`,
+            metadata: metadataByProvider.get(channel),
+          }),
         );
       }
     }
@@ -268,10 +328,24 @@ export function listProvidersForAgent(params: {
   }
 
   if (params.summaryIsDefault) {
+    const seenProviders = new Set<ChannelId>();
     for (const entry of allProviderEntries) {
       if (shouldShowProviderEntry({ entry, cfg: params.cfg, metadataByProvider })) {
         providerLines.push(formatProviderEntry(entry));
+        seenProviders.add(entry.provider);
       }
+    }
+    for (const [provider, metadata] of metadataByProvider.entries()) {
+      if (!metadata.repairHint || seenProviders.has(provider)) {
+        continue;
+      }
+      providerLines.push(
+        formatMissingProviderEntry({
+          provider,
+          accountId: metadata.defaultAccountId,
+          metadata,
+        }),
+      );
     }
   }
 

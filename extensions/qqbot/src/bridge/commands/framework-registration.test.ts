@@ -19,11 +19,11 @@ function createConfig(): OpenClawConfig {
       qqbot: {
         appId: "app",
         allowFrom: ["TRUSTED_OPENID"],
-        streaming: false,
+        streaming: { mode: "off" },
         accounts: {
           default: {
             allowFrom: ["TRUSTED_OPENID"],
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -129,7 +129,7 @@ describe("registerQQBotFrameworkCommands", () => {
       text: "✅ 流式消息已开启\n\nAI 的回复将以流式形式逐步显示（仅私聊生效）。",
     });
     expect(writes).toHaveLength(1);
-    expect(qqbot?.streaming).toBe(true);
-    expect(qqbot?.accounts?.default?.streaming).toBe(true);
+    expect(qqbot?.streaming).toEqual({ mode: "partial", nativeTransport: true });
+    expect(qqbot?.accounts?.default?.streaming).toEqual({ mode: "partial", nativeTransport: true });
   });
 });

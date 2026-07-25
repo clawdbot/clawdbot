@@ -1,3 +1,0 @@
-Maintenance update for the current OpenClaw beta release.
-
-- Improved notification cleanup, Watch app compatibility, and native file input handling.

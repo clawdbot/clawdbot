@@ -1,10 +1,11 @@
-// Matrix plugin module implements verification manager behavior.
 import {
   VerificationPhase,
   VerificationRequestEvent,
   VerifierEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+// Matrix plugin module implements verification manager behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -59,7 +60,7 @@ export type MatrixVerificationSummary = {
 type MatrixVerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 type MatrixVerificationOwnerTrustCallback = (deviceId: string) => Promise<void>;
 
-export type MatrixShowSasCallbacks = {
+type MatrixShowSasCallbacks = {
   sas: {
     decimal?: [number, number, number];
     emoji?: Array<[string, string]>;
@@ -69,12 +70,12 @@ export type MatrixShowSasCallbacks = {
   cancel: () => void;
 };
 
-export type MatrixShowQrCodeCallbacks = {
+type MatrixShowQrCodeCallbacks = {
   confirm: () => void;
   cancel: () => void;
 };
 
-export type MatrixVerifierLike = {
+type MatrixVerifierLike = {
   verify: () => Promise<void>;
   cancel: (e: Error) => void;
   getShowSasCallbacks: () => MatrixShowSasCallbacks | null;
@@ -341,7 +342,7 @@ export class MatrixVerificationManager {
       return txId === id;
     });
     if (transactionMatches.length === 1) {
-      return transactionMatches[0];
+      return expectDefined(transactionMatches[0], "single Matrix verification session");
     }
     if (transactionMatches.length > 1) {
       throw new Error(
@@ -798,3 +799,4 @@ export class MatrixVerificationManager {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

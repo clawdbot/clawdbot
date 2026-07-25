@@ -31,7 +31,7 @@ export function tryHandleRootVersionFastPath(
         "[openclaw] Failed to resolve version:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );
-      process.exitCode = 1;
+      exit(1);
     });
   const resolveVersion =
     deps.resolveVersion ??

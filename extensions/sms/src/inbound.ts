@@ -16,7 +16,7 @@ type SmsLog = {
 
 export type SmsChannelRuntime = Pick<
   PluginRuntime["channel"],
-  "inbound" | "pairing" | "reply" | "routing" | "session"
+  "commands" | "inbound" | "pairing" | "reply" | "routing" | "session"
 >;
 
 async function authorizeSmsSender(params: {
@@ -24,7 +24,12 @@ async function authorizeSmsSender(params: {
   account: ResolvedSmsAccount;
   channelRuntime: SmsChannelRuntime;
   from: string;
+  rawBody: string;
 }) {
+  const commandRequested = params.channelRuntime.commands.shouldComputeCommandAuthorized(
+    params.rawBody,
+    params.cfg,
+  );
   return await resolveStableChannelMessageIngress({
     channelId: CHANNEL_ID,
     accountId: params.account.accountId,
@@ -46,6 +51,12 @@ async function authorizeSmsSender(params: {
     event: { mayPair: true },
     dmPolicy: params.account.dmPolicy,
     allowFrom: params.account.allowFrom,
+    command: commandRequested
+      ? {
+          cfg: params.cfg,
+          modeWhenAccessGroupsOff: "configured",
+        }
+      : undefined,
   });
 }
 
@@ -57,6 +68,7 @@ async function issueSmsPairingChallenge(params: {
 }) {
   const issueChallenge = createChannelPairingChallengeIssuer({
     channel: CHANNEL_ID,
+    accountId: params.account.accountId,
     upsertPairingRequest: async (input) =>
       await params.channelRuntime.pairing.upsertPairingRequest({
         channel: CHANNEL_ID,
@@ -88,6 +100,10 @@ export async function dispatchSmsInboundEvent(params: {
   account: ResolvedSmsAccount;
   msg: SmsInboundMessage;
   channelRuntime: SmsChannelRuntime;
+  receivedAt: number;
+  turnAdoptionLifecycle?: NonNullable<
+    Parameters<SmsChannelRuntime["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
+  >;
   log?: SmsLog;
 }): Promise<void> {
   const from = normalizeSmsPhoneNumber(params.msg.from);
@@ -96,6 +112,7 @@ export async function dispatchSmsInboundEvent(params: {
     account: params.account,
     channelRuntime: params.channelRuntime,
     from,
+    rawBody: params.msg.body,
   });
   if (!auth.senderAccess.allowed) {
     if (auth.senderAccess.decision === "pairing") {
@@ -121,15 +138,24 @@ export async function dispatchSmsInboundEvent(params: {
     },
   });
   const sessionKey = route.sessionKey;
+  const commandRequested = auth.commandAccess.requested;
+  const commandAuthorized = auth.commandAccess.authorized;
+  const isTextCommand = params.channelRuntime.commands.isControlCommandMessage(
+    params.msg.body,
+    params.cfg,
+  );
 
   await params.channelRuntime.inbound.run({
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
     adapter: {
       ingest: (msg) => ({
         id: msg.messageSid,
-        timestamp: Date.now(),
+        timestamp: params.receivedAt,
         rawText: msg.body,
         textForAgent: msg.body,
         textForCommands: msg.body,
@@ -164,28 +190,32 @@ export async function dispatchSmsInboundEvent(params: {
             commandBody: input.textForCommands,
             bodyForAgent: input.textForAgent,
           },
+          access: commandRequested
+            ? {
+                commands: {
+                  authorized: commandAuthorized,
+                },
+              }
+            : undefined,
+          command: isTextCommand
+            ? {
+                kind: "text-slash",
+                body: input.textForCommands,
+                authorized: commandAuthorized,
+              }
+            : undefined,
           extra: {
             MessageSid: params.msg.messageSid,
+            SenderE164: from,
             To: params.msg.to,
           },
         });
-        const storePath = params.channelRuntime.session.resolveStorePath(
-          params.cfg.session?.store,
-          {
-            agentId: route.agentId,
-          },
-        );
         return {
           cfg: params.cfg,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
-          agentId: route.agentId,
-          routeSessionKey: sessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey },
           ctxPayload,
-          recordInboundSession: params.channelRuntime.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            params.channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
             durable: () => ({
               to: from,

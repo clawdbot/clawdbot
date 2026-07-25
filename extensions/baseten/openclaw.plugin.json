@@ -1,0 +1,230 @@
+{
+  "id": "baseten",
+  "name": "Baseten",
+  "description": "OpenClaw Baseten provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["baseten"],
+  "providerRequest": {
+    "providers": {
+      "baseten": {
+        "family": "baseten",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "baseten": {
+        "baseUrl": "https://inference.baseten.co/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-ai/DeepSeek-V4-Pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262000,
+            "maxTokens": 262000,
+            "cost": {
+              "input": 1.74,
+              "output": 3.48,
+              "cacheRead": 0.145,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/GLM-4.7",
+            "name": "GLM 4.7",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 200000,
+            "maxTokens": 200000,
+            "cost": {
+              "input": 0.6,
+              "output": 2.2,
+              "cacheRead": 0.12,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/GLM-5",
+            "name": "GLM 5",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202000,
+            "maxTokens": 202000,
+            "cost": {
+              "input": 0.95,
+              "output": 3.15,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/GLM-5.1",
+            "name": "GLM 5.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202000,
+            "maxTokens": 202000,
+            "cost": {
+              "input": 1.3,
+              "output": 4.3,
+              "cacheRead": 0.26,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/GLM-5.2",
+            "name": "GLM 5.2",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202000,
+            "maxTokens": 202000,
+            "cost": {
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.26,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "thinkingmachines/inkling",
+            "name": "Inkling",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048000,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 1,
+              "output": 4.05,
+              "cacheRead": 0.17,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "moonshotai/Kimi-K2.5",
+            "name": "Kimi K2.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262000,
+            "maxTokens": 262000,
+            "cost": {
+              "input": 0.6,
+              "output": 3,
+              "cacheRead": 0.12,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "moonshotai/Kimi-K2.6",
+            "name": "Kimi K2.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262000,
+            "maxTokens": 262000,
+            "cost": {
+              "input": 0.95,
+              "output": 4,
+              "cacheRead": 0.16,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "moonshotai/Kimi-K2.7-Code",
+            "name": "Kimi K2.7 Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262000,
+            "maxTokens": 262000,
+            "cost": {
+              "input": 0.95,
+              "output": 4,
+              "cacheRead": 0.16,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "nvidia/Nemotron-120B-A12B",
+            "name": "Nemotron Super",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202000,
+            "maxTokens": 202000,
+            "cost": {
+              "input": 0.3,
+              "output": 0.75,
+              "cacheRead": 0.06,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+            "name": "Nemotron Ultra",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202000,
+            "maxTokens": 202000,
+            "cost": {
+              "input": 0.6,
+              "output": 2.4,
+              "cacheRead": 0.12,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "openai/gpt-oss-120b",
+            "name": "GPT OSS 120B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.1,
+              "output": 0.5,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "baseten": "refreshable"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "baseten",
+        "envVars": ["BASETEN_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "baseten",
+      "method": "api-key",
+      "choiceId": "baseten-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Baseten API key",
+      "groupId": "baseten",
+      "groupLabel": "Baseten",
+      "groupHint": "Hosted Model APIs, including Inkling",
+      "optionKey": "basetenApiKey",
+      "cliFlag": "--baseten-api-key",
+      "cliOption": "--baseten-api-key <key>",
+      "cliDescription": "Baseten API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

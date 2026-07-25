@@ -1,10 +1,11 @@
 // Verifies owner display secrets stay redacted in config IO paths.
 import { describe, expect, it } from "vitest";
-import {
-  type OwnerDisplaySecretRuntimeState,
-  retainGeneratedOwnerDisplaySecret,
-} from "./io.owner-display-secret.js";
+import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+type OwnerDisplaySecretRuntimeState = Parameters<
+  typeof retainGeneratedOwnerDisplaySecret
+>[0]["state"];
 
 function createState(): OwnerDisplaySecretRuntimeState {
   return {

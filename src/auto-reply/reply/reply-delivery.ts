@@ -49,7 +49,7 @@ export function normalizeReplyPayloadDirectives(params: {
   }
 
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
-  const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
+  const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrls?.[0] ?? mediaUrls?.[0];
 
   const channelData = mergeReactionDirectiveChannelData(
     params.payload.channelData,
@@ -96,12 +96,22 @@ export function createBlockReplyDeliveryHandler(params: {
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   typingSignals: TypingSignaler;
+  reasoningPayloadsEnabled?: boolean;
+  commentaryPayloadsEnabled?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
   directlySentBlockPayloads: Array<ReplyPayload | undefined>;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
+    // Suppressed display lanes must not enter delivery bookkeeping: callers use
+    // that evidence to decide whether an otherwise empty turn needs a fallback.
+    if (
+      (payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) ||
+      (payload.isCommentary === true && params.commentaryPayloadsEnabled !== true)
+    ) {
+      return;
+    }
     const { text, skip } = params.normalizeStreamingText(payload);
     if (skip && !hasOutboundReplyContent({ ...payload, text: undefined })) {
       return;
@@ -180,7 +190,13 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
-    } else if (blockHasNonTextContent) {
+    } else if (
+      blockHasNonTextContent ||
+      blockPayload.isReasoning === true ||
+      blockPayload.isCommentary === true
+    ) {
+      // Enabled display lanes never merge into final text, so deliver them directly
+      // even when block streaming is off.
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,

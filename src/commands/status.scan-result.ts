@@ -24,6 +24,7 @@ export type StatusScanResult = {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   update: UpdateCheckResult;
   gatewayConnection: GatewayProbeSnapshot["gatewayConnection"];
   remoteUrlMissing: boolean;
@@ -54,6 +55,7 @@ export function buildStatusScanResult(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   update: UpdateCheckResult;
   gatewaySnapshot: Pick<
     GatewayProbeSnapshot,
@@ -82,6 +84,9 @@ export function buildStatusScanResult(params: {
     tailscaleMode: params.tailscaleMode,
     tailscaleDns: params.tailscaleDns,
     tailscaleHttpsUrl: params.tailscaleHttpsUrl,
+    ...(params.advertisedControlUiLinks
+      ? { advertisedControlUiLinks: params.advertisedControlUiLinks }
+      : {}),
     update: params.update,
     gatewayConnection: params.gatewaySnapshot.gatewayConnection,
     remoteUrlMissing: params.gatewaySnapshot.remoteUrlMissing,

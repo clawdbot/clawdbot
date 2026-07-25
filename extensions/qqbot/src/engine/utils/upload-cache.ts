@@ -8,6 +8,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChatScope } from "../types.js";
 import { debugLog } from "./log.js";
 
@@ -55,7 +56,9 @@ export function getCachedFileInfo(
     return null;
   }
 
-  debugLog(`[upload-cache] Cache HIT: key=${key.slice(0, 40)}..., fileUuid=${entry.fileUuid}`);
+  debugLog(
+    `[upload-cache] Cache HIT: key=${truncateUtf16Safe(key, 40)}..., fileUuid=${entry.fileUuid}`,
+  );
   return entry.fileInfo;
 }
 
@@ -78,8 +81,8 @@ export function setCachedFileInfo(
     }
     if (cache.size >= MAX_CACHE_SIZE) {
       const keys = Array.from(cache.keys());
-      for (let i = 0; i < keys.length / 2; i++) {
-        cache.delete(keys[i]);
+      for (const key of keys.slice(0, Math.ceil(keys.length / 2))) {
+        cache.delete(key);
       }
     }
   }
@@ -100,6 +103,6 @@ export function setCachedFileInfo(
   });
 
   debugLog(
-    `[upload-cache] Cache SET: key=${key.slice(0, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
+    `[upload-cache] Cache SET: key=${truncateUtf16Safe(key, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
   );
 }

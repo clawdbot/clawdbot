@@ -4,7 +4,15 @@ import {
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 // Covers embedded runner extension factories and tool-result middleware bridge.
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  AuthStorage,
+  createEventBus,
+  createExtensionRuntime,
+  ExtensionRunner,
+  loadExtensionFromFactory,
+  ModelRegistry,
+  SessionManager,
+} from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -15,6 +23,7 @@ import {
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
 import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
+import { jsonResult } from "./tools/common.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const tempDirs: string[] = [];
@@ -495,6 +504,168 @@ describe("buildEmbeddedExtensionFactories", () => {
       details: { status: "timeout", tool: "exec", error: "Timed out" },
       isError: true,
     });
+  });
+
+  it("keeps an accepted sessions_spawn launch successful even when the event is flagged as an error", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const factory = factories[0];
+    expect(factory).toBeDefined();
+    if (!factory) {
+      throw new Error("Expected embedded tool-result extension factory");
+    }
+    const runtime = createExtensionRuntime();
+    const extension = await loadExtensionFromFactory(
+      factory,
+      "/tmp",
+      createEventBus(),
+      runtime,
+      "<embedded-test>",
+    );
+    const runner = new ExtensionRunner(
+      [extension],
+      runtime,
+      "/tmp",
+      SessionManager.inMemory(),
+      ModelRegistry.inMemory(AuthStorage.inMemory()),
+    );
+    const acceptedResult = jsonResult({
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+      mode: "run",
+    });
+
+    const result = await runner.emitToolResult({
+      type: "tool_result",
+      toolName: "sessions_spawn",
+      toolCallId: "call-spawn",
+      input: {},
+      content: acceptedResult.content,
+      details: acceptedResult.details,
+      isError: true,
+    });
+
+    expect(result).toEqual({ ...acceptedResult, isError: false });
+  });
+
+  it("still marks a forbidden sessions_spawn as a model-visible failure", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "spawn denied" }];
+    const details = { status: "forbidden", reason: "subagents disabled" };
+
+    const result = await handler?.(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn-forbidden",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
+  });
+
+  it("still flags an accepted-status sessions_spawn that is missing spawn identity", async () => {
+    // Only the full accepted contract (runId + childSessionKey) is a launch; an
+    // accepted status alone must not clear an error flag.
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "partial" }];
+    const details = { status: "accepted" };
+
+    const result = await handler?.(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn-partial",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
+  });
+
+  it("does not clear the error flag for a non-spawn tool with accepted-shaped details", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "boom" }];
+    const details = jsonResult({
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+    }).details;
+
+    const result = await handler?.(
+      {
+        toolName: "exec",
+        toolCallId: "call-exec-accepted-shape",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
   });
 
   it("does not mark results as errors when status is absent or non-error", async () => {

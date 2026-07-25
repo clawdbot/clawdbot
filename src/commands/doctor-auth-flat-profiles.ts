@@ -16,6 +16,7 @@ import {
   coercePersistedAuthProfileStore,
   loadLegacyAuthProfileStore,
   loadPersistedAuthProfileStore,
+  parseLegacyCredentialEntry,
 } from "../agents/auth-profiles/persisted.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
 import {
@@ -188,7 +189,13 @@ function inferLegacyCredentialType(
   if (readNonEmptyString(record.key) ?? readNonEmptyString(record.apiKey)) {
     return "api_key";
   }
+  if (coerceSecretRef(record.keyRef)) {
+    return "api_key";
+  }
   if (readNonEmptyString(record.token)) {
+    return "token";
+  }
+  if (coerceSecretRef(record.tokenRef)) {
     return "token";
   }
   if (
@@ -208,50 +215,16 @@ function coerceLegacyFlatCredential(
   if (!isRecord(raw)) {
     return null;
   }
-  const provider = readNonEmptyString(raw.provider) ?? providerId;
   const type = inferLegacyCredentialType(raw);
-  const email = readNonEmptyString(raw.email);
-  if (type === "api_key") {
-    const key = readNonEmptyString(raw.key) ?? readNonEmptyString(raw.apiKey);
-    return key ? { type, provider, key, ...(email ? { email } : {}) } : null;
+  if (!type) {
+    return null;
   }
-  if (type === "token") {
-    const token = readNonEmptyString(raw.token);
-    return token
-      ? {
-          type,
-          provider,
-          token,
-          ...(typeof raw.expires === "number" ? { expires: raw.expires } : {}),
-          ...(email ? { email } : {}),
-        }
-      : null;
+  const provider = readNonEmptyString(raw.provider) ?? providerId;
+  const credential = parseLegacyCredentialEntry({ ...raw, type, provider }, providerId);
+  if (!credential || !hasUsableAuthProfileCredential(credential)) {
+    return null;
   }
-  if (type === "oauth") {
-    const access = readNonEmptyString(raw.access);
-    const refresh = readNonEmptyString(raw.refresh);
-    if (!access || !refresh || typeof raw.expires !== "number") {
-      return null;
-    }
-    return {
-      type,
-      provider,
-      access,
-      refresh,
-      expires: raw.expires,
-      ...(readNonEmptyString(raw.enterpriseUrl)
-        ? { enterpriseUrl: readNonEmptyString(raw.enterpriseUrl) }
-        : {}),
-      ...(readNonEmptyString(raw.projectId)
-        ? { projectId: readNonEmptyString(raw.projectId) }
-        : {}),
-      ...(readNonEmptyString(raw.accountId)
-        ? { accountId: readNonEmptyString(raw.accountId) }
-        : {}),
-      ...(email ? { email } : {}),
-    };
-  }
-  return null;
+  return credential;
 }
 
 function coerceLegacyFlatAuthProfileStore(raw: unknown): AuthProfileStore | null {
@@ -1198,8 +1171,29 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
 
   for (const entry of legacyStores) {
     try {
+      const existing = loadPersistedAuthProfileStore(entry.agentDir) ?? {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+      };
+      const importedProfileIds = new Set(Object.keys(entry.store.profiles));
+      const merged = mergeImportedAuthProfiles({
+        store: { ...existing, version: Math.max(existing.version, entry.store.version) },
+        profiles: entry.store.profiles,
+        existingProfileIds: new Set(Object.keys(existing.profiles)),
+      });
       const backupPath = backupAuthProfileStore(entry.authPath, now);
-      saveAuthProfileStore(entry.store, entry.agentDir, { syncExternalCli: false });
+      saveAuthProfileStore(merged, entry.agentDir, { syncExternalCli: false });
+      const verificationFailure = formatMissingAuthProfileSqliteVerification({
+        expected: merged,
+        importedProfileIds,
+        loaded: loadPersistedAuthProfileStore(entry.agentDir),
+      });
+      if (verificationFailure) {
+        result.warnings.push(
+          `Left auth profile JSON in place for ${shortenHomePath(entry.authPath)} because SQLite verification did not find ${verificationFailure}.`,
+        );
+        continue;
+      }
       fs.unlinkSync(entry.authPath);
       result.changes.push(
         `Migrated ${shortenHomePath(entry.authPath)} to the SQLite auth profile store (backup: ${shortenHomePath(backupPath)}).`,
@@ -1759,3 +1753,4 @@ export async function maybeRepairOpenAICodexAuthProfileStores(params: {
   clearRuntimeAuthProfileStoreSnapshots();
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

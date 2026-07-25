@@ -10,21 +10,23 @@ All tokens are defined in `ui/src/styles/base.css` under `:root` (dark mode defa
 
 | Token           | Dark Value | Light Value | Use                           | Don't                          |
 | --------------- | ---------- | ----------- | ----------------------------- | ------------------------------ |
-| `--bg`          | `#0e1015`  | `#f8f9fa`   | Page root, deepest layer      | Never use on elevated surfaces |
-| `--bg-accent`   | `#13151b`  | `#f1f3f5`   | Sidebar, secondary panels     | Not for interactive card hover |
+| `--bg`          | `#0e1015`  | `#faf9f7`   | Page root, deepest layer      | Never use on elevated surfaces |
+| `--bg-accent`   | `#13151b`  | `#f4f1ec`   | Sidebar, secondary panels     | Not for interactive card hover |
 | `--bg-elevated` | `#191c24`  | `#ffffff`   | Raised panels, modals         | Not for inline elements        |
-| `--bg-hover`    | `#1f2330`  | `#eceef0`   | List item hover state         | Not for default state          |
-| `--bg-muted`    | `#1f2330`  | `#eceef0`   | Subtle fills, disabled states | Not for focus states           |
+| `--bg-hover`    | `#1f2330`  | `#efebe4`   | List item hover state         | Not for default state          |
+| `--bg-muted`    | `#1f2330`  | `#efebe4`   | Subtle fills, disabled states | Not for focus states           |
+
+Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8e4dc`), and a terracotta accent (`#bd4531`, ≈4.9:1 on `--bg`). Dark mode keeps the signature coral red.
 
 ## Surface / Card
 
-| Token                  | Dark Value               | Light Value        | Use                           | Don't           |
-| ---------------------- | ------------------------ | ------------------ | ----------------------------- | --------------- |
-| `--card`               | `#161920`                | `#ffffff`          | Card backgrounds, composer    | Avoid as border |
-| `--card-foreground`    | `#f0f0f2`                | `#1a1a1e`          | Text on cards                 | —               |
-| `--card-highlight`     | `rgba(255,255,255,0.04)` | `rgba(0,0,0,0.02)` | Inner highlight on hover      | Not for text    |
-| `--popover`            | `#191c24`                | `#ffffff`          | Dropdown, tooltip backgrounds | —               |
-| `--popover-foreground` | `#f0f0f2`                | `#1a1a1e`          | Text inside popovers          | —               |
+| Token                  | Dark Value               | Light Value           | Use                           | Don't           |
+| ---------------------- | ------------------------ | --------------------- | ----------------------------- | --------------- |
+| `--card`               | `#161920`                | `#ffffff`             | Card backgrounds, composer    | Avoid as border |
+| `--card-foreground`    | `#f0f0f2`                | `#211e1a`             | Text on cards                 | —               |
+| `--card-highlight`     | `rgba(255,255,255,0.04)` | `rgba(60,42,24,0.03)` | Inner highlight on hover      | Not for text    |
+| `--popover`            | `#191c24`                | `#ffffff`             | Dropdown, tooltip backgrounds | —               |
+| `--popover-foreground` | `#f0f0f2`                | `#211e1a`             | Text inside popovers          | —               |
 
 ## Text
 

@@ -8,12 +8,8 @@ import {
   type RequirementsMetadata,
 } from "./requirements.js";
 
-type EntryMetadataRequirementsParams = Parameters<
-  typeof evaluateEntryMetadataRequirements
->[0];
-
 /** Resolves entry presentation metadata and requirement eligibility in one shared shape. */
-export function evaluateEntryMetadataRequirements(params: {
+function evaluateEntryMetadataRequirements(params: {
   always: boolean;
   metadata?: (RequirementsMetadata & { emoji?: string; homepage?: string }) | null;
   frontmatter?: {
@@ -58,16 +54,6 @@ export function evaluateEntryMetadataRequirements(params: {
   };
 }
 
-/** Evaluates entry metadata requirements against the current Node platform. */
-export function evaluateEntryMetadataRequirementsForCurrentPlatform(
-  params: Omit<EntryMetadataRequirementsParams, "localPlatform">,
-): ReturnType<typeof evaluateEntryMetadataRequirements> {
-  return evaluateEntryMetadataRequirements({
-    ...params,
-    localPlatform: process.platform,
-  });
-}
-
 /** Evaluates an entry object's metadata/frontmatter requirements on the current platform. */
 export function evaluateEntryRequirementsForCurrentPlatform(params: {
   always: boolean;
@@ -85,11 +71,12 @@ export function evaluateEntryRequirementsForCurrentPlatform(params: {
   isEnvSatisfied: (envName: string) => boolean;
   isConfigSatisfied: (pathStr: string) => boolean;
 }): ReturnType<typeof evaluateEntryMetadataRequirements> {
-  return evaluateEntryMetadataRequirementsForCurrentPlatform({
+  return evaluateEntryMetadataRequirements({
     always: params.always,
     metadata: params.entry.metadata,
     frontmatter: params.entry.frontmatter,
     hasLocalBin: params.hasLocalBin,
+    localPlatform: process.platform,
     remote: params.remote,
     isEnvSatisfied: params.isEnvSatisfied,
     isConfigSatisfied: params.isConfigSatisfied,

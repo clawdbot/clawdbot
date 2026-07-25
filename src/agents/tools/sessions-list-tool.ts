@@ -3,27 +3,20 @@
  *
  * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
  */
-import path from "node:path";
 import {
-  normalizeFastMode,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveStorePath,
-} from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeFastModeAutoOnSeconds, normalizeFastModeSource } from "../../shared/fast-mode.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -50,6 +43,7 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
+  type GatewaySessionListRow,
   type SessionListRow,
   type SessionRunStatus,
 } from "./sessions-helpers.js";
@@ -62,9 +56,69 @@ const SessionsListToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
+  archived: Type.Optional(Type.Boolean()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
+
+const SessionListRowOutputSchema = Type.Object(
+  {
+    key: Type.String(),
+    agentId: Type.String(),
+    kind: Type.Union([
+      Type.Literal("main"),
+      Type.Literal("group"),
+      Type.Literal("cron"),
+      Type.Literal("hook"),
+      Type.Literal("node"),
+      Type.Literal("other"),
+    ]),
+    channel: Type.String(),
+    archived: Type.Boolean(),
+    pinned: Type.Boolean(),
+    label: Type.Optional(Type.String()),
+    displayName: Type.Optional(Type.String()),
+    derivedTitle: Type.Optional(Type.String()),
+    lastMessagePreview: Type.Optional(Type.String()),
+    parentSessionKey: Type.Optional(Type.String()),
+    updatedAt: Type.Optional(Type.Number()),
+    stateVersion: Type.Optional(Type.Number()),
+    model: Type.Optional(Type.String()),
+    contextTokens: Type.Optional(Type.Number()),
+    totalTokens: Type.Optional(Type.Number()),
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal("running"),
+        Type.Literal("done"),
+        Type.Literal("failed"),
+        Type.Literal("killed"),
+        Type.Literal("timeout"),
+      ]),
+    ),
+    abortedLastRun: Type.Optional(Type.Boolean()),
+    childSessions: Type.Optional(Type.Array(Type.String())),
+    messages: Type.Optional(Type.Array(Type.Unknown())),
+  },
+  { additionalProperties: false },
+);
+
+const SessionsListOutputSchema = Type.Object(
+  {
+    count: Type.Number(),
+    sessions: Type.Array(SessionListRowOutputSchema),
+    visibility: Type.Optional(
+      Type.Object(
+        {
+          mode: Type.Union([Type.Literal("self"), Type.Literal("tree"), Type.Literal("agent")]),
+          restricted: Type.Literal(true),
+          warning: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 type GatewayCaller = typeof callGateway;
 
@@ -93,6 +147,7 @@ export function createSessionsListTool(opts?: {
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsListTool(),
     parameters: SessionsListToolSchema,
+    outputSchema: SessionsListOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? getRuntimeConfig();
@@ -123,13 +178,14 @@ export function createSessionsListTool(opts?: {
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
       const search = readStringParam(params, "search");
+      const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
-      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await gatewayCall<{ sessions: Array<GatewaySessionListRow>; path: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -137,6 +193,7 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          archived,
           includeDerivedTitles: false,
           includeLastMessage: false,
           includeGlobal: !restrictToSpawned,
@@ -145,7 +202,26 @@ export function createSessionsListTool(opts?: {
         },
       });
 
-      const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      // Cross-session tool output is copied into durable transcripts, so exposing
+      // incognito rows here would defeat their process-only lifetime.
+      const sessions = (Array.isArray(list?.sessions) ? list.sessions : []).filter(
+        (entry) => !entry || typeof entry !== "object" || !isIncognitoSessionKey(entry.key),
+      );
+      const stateVersions = getSessionStateVersions(
+        sessions.flatMap((entry) =>
+          entry && typeof entry === "object" && typeof entry.key === "string"
+            ? [
+                {
+                  sessionKey: entry.key,
+                  agentId:
+                    typeof entry.agentId === "string" && entry.agentId
+                      ? entry.agentId
+                      : resolveAgentIdFromSessionKey(entry.key),
+                },
+              ]
+            : [],
+        ),
+      );
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
@@ -208,25 +284,13 @@ export function createSessionsListTool(opts?: {
           mainKey,
         });
 
-        const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
-        const entryOrigin =
-          entry.origin && typeof entry.origin === "object"
-            ? (entry.origin as Record<string, unknown>)
-            : undefined;
+        const entryChannel = readStringValue(entry.channel);
+        const entryOrigin = entry.origin as Record<string, unknown> | undefined;
         const originChannel =
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext = deliveryContextFromSession(entry);
+        const deliveryContext = entry.deliveryContext;
         const deliveryChannel = readStringValue(deliveryContext?.channel);
-        const deliveryTo = readStringValue(deliveryContext?.to);
-        const deliveryAccountId = readStringValue(deliveryContext?.accountId);
-        const deliveryThreadId =
-          typeof deliveryContext?.threadId === "string" ||
-          (typeof deliveryContext?.threadId === "number" &&
-            Number.isFinite(deliveryContext.threadId))
-            ? deliveryContext.threadId
-            : undefined;
         const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
-        const lastAccountId = deliveryAccountId ?? readStringValue(entry.lastAccountId);
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -238,118 +302,72 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
         const resolvedAgentId = resolveAgentIdFromSessionKey(key);
-        let transcriptPath: string | undefined;
-        if (sessionId) {
-          try {
-            const trimmedStorePath = storePath?.trim();
-            let effectiveStorePath: string | undefined;
-            if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
-              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
-                effectiveStorePath = resolveStorePath(trimmedStorePath, {
-                  agentId: resolvedAgentId,
-                });
-              } else if (path.isAbsolute(trimmedStorePath)) {
-                effectiveStorePath = trimmedStorePath;
-              }
-            }
-            const filePathOpts = resolveSessionFilePathOptions({
-              agentId: resolvedAgentId,
-              storePath: effectiveStorePath,
-            });
-            transcriptPath = resolveSessionFilePath(
-              sessionId,
-              sessionFile ? { sessionFile } : undefined,
-              filePathOpts,
-            );
-          } catch {
-            transcriptPath = undefined;
-          }
-        }
-
-        const effectiveFastMode = normalizeFastMode(entry.effectiveFastMode);
-        const effectiveFastModeSource = normalizeFastModeSource(entry.effectiveFastModeSource);
-        const fastAutoOnSeconds = normalizeFastModeAutoOnSeconds(entry.fastAutoOnSeconds);
+        // Version lookup keys on the store-owning agent (gateway row agentId), not the
+        // key-derived agent: bare "global" keys parse to the default agent id.
+        const stateVersionAgentId =
+          typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
+        const stateVersion = stateVersions[stateVersionAgentId]?.[key];
+        const rowLabel = readStringValue(entry.label);
+        const displayName = readStringValue(entry.displayName);
+        const derivedTitle = readStringValue(entry.derivedTitle);
+        const lastMessagePreview = readStringValue(entry.lastMessagePreview);
+        const parentSessionKeyRaw =
+          typeof entry.parentSessionKey === "string"
+            ? entry.parentSessionKey
+            : typeof entry.spawnedBy === "string"
+              ? entry.spawnedBy
+              : undefined;
+        const parentSessionKey = parentSessionKeyRaw
+          ? isIncognitoSessionKey(parentSessionKeyRaw)
+            ? undefined
+            : resolveDisplaySessionKey({
+                key: parentSessionKeyRaw,
+                alias,
+                mainKey,
+              })
+          : undefined;
+        const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : undefined;
+        const model = readStringValue(entry.model);
+        const contextTokens =
+          typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
+        const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
+        const status = readSessionRunStatus(entry.status);
+        const abortedLastRun =
+          typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined;
+        const childSessions = Array.isArray(entry.childSessions)
+          ? entry.childSessions
+              .filter(
+                (value): value is string =>
+                  typeof value === "string" && !isIncognitoSessionKey(value),
+              )
+              .map((value) =>
+                resolveDisplaySessionKey({
+                  key: value,
+                  alias,
+                  mainKey,
+                }),
+              )
+          : undefined;
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,
-          origin:
-            originChannel ||
-            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
-              ? {
-                  provider: originChannel,
-                  accountId: readStringValue(entryOrigin?.accountId),
-                }
-              : undefined,
-          spawnedBy:
-            typeof entry.spawnedBy === "string"
-              ? resolveDisplaySessionKey({
-                  key: entry.spawnedBy,
-                  alias,
-                  mainKey,
-                })
-              : undefined,
-          label: readStringValue(entry.label),
-          displayName: readStringValue(entry.displayName),
-          derivedTitle: readStringValue(entry.derivedTitle),
-          lastMessagePreview: readStringValue(entry.lastMessagePreview),
-          parentSessionKey:
-            typeof entry.parentSessionKey === "string"
-              ? resolveDisplaySessionKey({
-                  key: entry.parentSessionKey,
-                  alias,
-                  mainKey,
-                })
-              : undefined,
-          deliveryContext:
-            deliveryChannel || deliveryTo || deliveryAccountId || deliveryThreadId
-              ? {
-                  channel: deliveryChannel,
-                  to: deliveryTo,
-                  accountId: deliveryAccountId,
-                  threadId: deliveryThreadId,
-                }
-              : undefined,
-          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
-          sessionId,
-          model: readStringValue(entry.model),
-          contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
-          totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
-          estimatedCostUsd:
-            typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
-          status: readSessionRunStatus(entry.status),
-          startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
-          endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
-          runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,
-          childSessions: Array.isArray(entry.childSessions)
-            ? entry.childSessions
-                .filter((value): value is string => typeof value === "string")
-                .map((value) =>
-                  resolveDisplaySessionKey({
-                    key: value,
-                    alias,
-                    mainKey,
-                  }),
-                )
-            : undefined,
-          thinkingLevel: readStringValue(entry.thinkingLevel),
-          fastMode: normalizeFastMode(entry.fastMode),
-          ...(effectiveFastMode !== undefined ? { effectiveFastMode } : {}),
-          ...(effectiveFastModeSource !== undefined ? { effectiveFastModeSource } : {}),
-          ...(fastAutoOnSeconds !== undefined ? { fastAutoOnSeconds } : {}),
-          verboseLevel: readStringValue(entry.verboseLevel),
-          reasoningLevel: readStringValue(entry.reasoningLevel),
-          elevatedLevel: readStringValue(entry.elevatedLevel),
-          responseUsage: readStringValue(entry.responseUsage),
-          systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
-          abortedLastRun:
-            typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
-          sendPolicy: readStringValue(entry.sendPolicy),
-          lastChannel,
-          lastTo: deliveryTo ?? readStringValue(entry.lastTo),
-          lastAccountId,
-          transcriptPath,
+          archived: entry.archived === true,
+          pinned: entry.pinned === true,
+          ...(rowLabel ? { label: rowLabel } : {}),
+          ...(displayName ? { displayName } : {}),
+          ...(derivedTitle ? { derivedTitle } : {}),
+          ...(lastMessagePreview ? { lastMessagePreview } : {}),
+          ...(parentSessionKey ? { parentSessionKey } : {}),
+          ...(updatedAt !== undefined ? { updatedAt } : {}),
+          ...(stateVersion ? { stateVersion } : {}),
+          ...(model ? { model } : {}),
+          ...(contextTokens !== undefined ? { contextTokens } : {}),
+          ...(totalTokens !== undefined ? { totalTokens } : {}),
+          ...(status ? { status } : {}),
+          ...(abortedLastRun !== undefined ? { abortedLastRun } : {}),
+          ...(childSessions ? { childSessions } : {}),
         };
         if (
           sessionId &&
@@ -390,16 +408,9 @@ export function createSessionsListTool(opts?: {
       }
 
       if (titleTargets.length > 0) {
-        const maxConcurrent = Math.min(4, titleTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= titleTargets.length) {
-              return;
-            }
-            const target = titleTargets[next];
+        await pMap(
+          titleTargets,
+          async (target) => {
             const fields = await readSessionTitleFieldsFromTranscriptAsync({
               agentId: target.agentId,
               sessionEntry: target.sessionEntry,
@@ -416,22 +427,15 @@ export function createSessionsListTool(opts?: {
             if (includeLastMessage && fields.lastMessagePreview) {
               target.row.lastMessagePreview = fields.lastMessagePreview;
             }
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {
-        const maxConcurrent = Math.min(4, historyTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= historyTargets.length) {
-              return;
-            }
-            const target = historyTargets[next];
+        await pMap(
+          historyTargets,
+          async (target) => {
             const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
@@ -440,9 +444,9 @@ export function createSessionsListTool(opts?: {
             const filtered = stripToolMessages(rawMessages);
             target.row.messages =
               filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       const visibilityMetadata =

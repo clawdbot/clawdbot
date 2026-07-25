@@ -5,14 +5,18 @@ read_when:
 title: "Agent runtime"
 ---
 
-OpenClaw runs a **single embedded agent runtime** - one agent process per
-Gateway, with its own workspace, bootstrap files, and session store. This page
-covers that runtime contract: what the workspace must contain, which files get
-injected, and how sessions bootstrap against it.
+OpenClaw ships one **embedded agent runtime**: a built-in agent loop, tool
+wiring, and prompt assembly, distinct from delegating turns to an external
+harness process. Each configured agent (see [Multi-agent routing](/concepts/multi-agent)
+for running several) has its own workspace, bootstrap files, and session
+store. This page covers that runtime contract: what the workspace must
+contain, which files get injected, and how sessions bootstrap against it.
 
 ## Workspace (required)
 
-OpenClaw uses a single agent workspace directory (`agents.defaults.workspace`) as the agent's **only** working directory (`cwd`) for tools and context.
+Each agent uses a single workspace directory (`agents.defaults.workspace`, or
+`agents.entries.*.workspace` per agent) as its **only** working directory (`cwd`)
+for tools and context.
 
 Recommended: use `openclaw setup` to create `~/.openclaw/openclaw.json` if missing and initialize the workspace files.
 
@@ -24,24 +28,35 @@ per-session workspaces under `agents.defaults.sandbox.workspaceRoot` (see
 
 ## Bootstrap files (injected)
 
-Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
+Inside the workspace, OpenClaw expects these user-editable files:
 
-- `AGENTS.md` - operating instructions + "memory"
-- `SOUL.md` - persona, boundaries, tone
-- `TOOLS.md` - user-maintained tool notes (e.g. `imsg`, `sag`, conventions)
-- `BOOTSTRAP.md` - one-time first-run ritual (deleted after completion)
-- `IDENTITY.md` - agent name/vibe/emoji
-- `USER.md` - user profile + preferred address
+| File           | Purpose                                              |
+| -------------- | ---------------------------------------------------- |
+| `AGENTS.md`    | Operating instructions + "memory"                    |
+| `SOUL.md`      | Persona, boundaries, tone                            |
+| `TOOLS.md`     | User-maintained tool notes and conventions           |
+| `IDENTITY.md`  | Agent name/vibe/emoji                                |
+| `USER.md`      | User profile + preferred address                     |
+| `HEARTBEAT.md` | Heartbeat-specific instructions                      |
+| `BOOTSTRAP.md` | One-time first-run ritual (deleted after completion) |
+| `MEMORY.md`    | Root long-term memory file, if present               |
 
-On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context.
+On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context. `MEMORY.md` is only injected when it exists at the workspace root.
 
-Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
+Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content). A missing file (other than `MEMORY.md`) injects a single "missing file" marker line instead; `openclaw setup` creates a safe default template for it.
 
-If a file is missing, OpenClaw injects a single "missing file" marker line (and `openclaw setup` will create a safe default template).
+`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it is not recreated on later restarts.
 
-`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it should not be recreated on later restarts.
+After a workspace has been observed, OpenClaw stores its setup state and
+attestation in the shared SQLite database at
+`~/.openclaw/state/openclaw.sqlite`. If a recently attested workspace
+disappears or is wiped, startup refuses to silently reseed `BOOTSTRAP.md`;
+restore the workspace or use a full onboard reset so the workspace and its
+database state are cleared together.
 
-After a workspace has been observed, OpenClaw also keeps a state-dir attestation marker for the workspace path. If a recently attested workspace disappears or is wiped, startup refuses to silently re-seed `BOOTSTRAP.md`; restore the workspace or use a full onboard reset so the workspace and marker are cleared together.
+Older releases used workspace JSON and `.attested` sidecar files. Runtime does
+not read those files. Run `openclaw doctor --fix` to validate them, import their
+state into SQLite, and remove each source after the imported rows are verified.
 
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
@@ -52,8 +67,8 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 ## Built-in tools
 
 Core tools (read/exec/edit/write and related system tools) are always available,
-subject to tool policy. `apply_patch` is optional and gated by
-`tools.exec.applyPatch`. `TOOLS.md` does **not** control which tools exist; it's
+subject to tool policy. `apply_patch` is on by default for OpenAI models and gated by
+`tools.exec.applyPatch` (`enabled`, `workspaceOnly`, `allowModels`). `TOOLS.md` does **not** control which tools exist; it's
 guidance for how _you_ want them used.
 
 ## Skills
@@ -81,12 +96,15 @@ runtime surface.
 
 ## Sessions
 
-Session transcripts are stored as JSONL at:
+Session rows are stored in the per-agent SQLite database:
 
-- `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
-The session ID is stable and chosen by OpenClaw.
-Legacy session folders from other tools are not read.
+Transcript JSONL files can still live under
+`~/.openclaw/agents/<agentId>/sessions/` as legacy migration inputs, deleted or
+reset archives, imports, exports, and support artifacts. Active agent history is
+stored in SQLite with the session rows. The session ID is stable and chosen by
+OpenClaw. OpenClaw does not read session folders from other tools.
 
 ## Steering while streaming
 
@@ -102,12 +120,13 @@ and [Steering queue](/concepts/queue-steering) for queue and boundary behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; it is
 **off by default** (`agents.defaults.blockStreamingDefault: "off"`).
-Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).
+Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to `text_end`).
 Control soft block chunking with `agents.defaults.blockStreamingChunk` (defaults to
 800-1200 chars; prefers paragraph breaks, then newlines; sentences last).
 Coalesce streamed chunks with `agents.defaults.blockStreamingCoalesce` to reduce
 single-line spam (idle-based merging before send). Non-Telegram channels require
-explicit `*.blockStreaming: true` to enable block replies.
+explicit `*.streaming.block.enabled: true` to enable block replies (QQ Bot
+instead streams block replies unless `channels.qqbot.streaming.mode` is `"off"`).
 Verbose tool summaries are emitted at tool start (no debounce); Control UI
 streams tool output via agent events when available.
 More details: [Streaming + chunking](/concepts/streaming).
@@ -131,12 +150,9 @@ At minimum, set:
 - `agents.defaults.workspace`
 - `channels.whatsapp.allowFrom` (strongly recommended)
 
----
-
-_Next: [Group Chats](/channels/group-messages)_ 🦞
-
 ## Related
 
 - [Agent workspace](/concepts/agent-workspace)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Session management](/concepts/session)
+- [Group chats](/channels/group-messages)

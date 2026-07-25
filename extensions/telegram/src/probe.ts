@@ -2,6 +2,8 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import {
@@ -38,10 +40,14 @@ export type TelegramProbeOptions = {
   accountId?: string;
   apiRoot?: string;
   includeWebhookInfo?: boolean;
+  abortSignal?: AbortSignal;
 };
 
 const probeTransportCache = new Map<string, TelegramTransport>();
 const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
+// Generous cap: Telegram Bot API responses for getMe/getWebhookInfo are always < 1 KiB.
+// 4 MiB guards against a misbehaving or hostile API endpoint streaming an oversized payload.
+const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export function resetTelegramProbeFetcherCacheForTests(): void {
   probeTransportCache.clear();
@@ -83,7 +89,9 @@ function setCachedProbeTransport(
   if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
     const oldestKey = probeTransportCache.keys().next().value;
     if (oldestKey !== undefined) {
+      const oldestTransport = probeTransportCache.get(oldestKey);
       probeTransportCache.delete(oldestKey);
+      void oldestTransport?.close();
     }
   }
   return transport;
@@ -115,6 +123,17 @@ function normalizeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+async function readTelegramDiagnosticBody(response: Response, timeoutMs: number): Promise<Buffer> {
+  return await readResponseWithLimit(response, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
+    timeoutMs,
+    chunkTimeoutMs: timeoutMs / 2,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Telegram diagnostic response body stalled for ${chunkTimeoutMs}ms`),
+    onTimeout: ({ timeoutMs: resolvedTimeoutMs }) =>
+      new Error(`Telegram diagnostic response body timed out after ${resolvedTimeoutMs}ms`),
+  });
+}
+
 export async function probeTelegram(
   token: string,
   timeoutMs: number,
@@ -124,6 +143,7 @@ export async function probeTelegram(
   const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
   const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
+  const abortSignal = options?.abortSignal;
   const includeWebhookInfo = options?.includeWebhookInfo !== false;
   const transport = resolveProbeTransport(token, options);
   const fetcher = transport.fetch;
@@ -146,19 +166,22 @@ export async function probeTelegram(
     // Retry loop for initial connection (handles network/DNS startup races)
     for (let i = 0; i < 3; i++) {
       const remainingBudgetMs = resolveRemainingBudgetMs();
-      if (remainingBudgetMs <= 0) {
+      if (remainingBudgetMs <= 0 || abortSignal?.aborted) {
         break;
       }
       try {
         meRes = await fetchWithTimeout(
           `${base}/getMe`,
-          {},
+          { signal: abortSignal },
           Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
           fetcher,
         );
         break;
       } catch (err) {
         fetchError = err;
+        if (abortSignal?.aborted) {
+          throw err;
+        }
         // On timeout or network error, promote the transport to its IPv4
         // fallback dispatcher so the next retry (and all future probes
         // sharing this cached transport) skip the stalled IPv6 path.
@@ -171,9 +194,7 @@ export async function probeTelegram(
           }
           const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
           if (delayMs > 0) {
-            await new Promise((resolve) => {
-              setTimeout(resolve, delayMs);
-            });
+            await sleepWithAbort(delayMs, abortSignal);
           }
         }
       }
@@ -186,7 +207,14 @@ export async function probeTelegram(
       );
     }
 
-    const meJson = (await meRes.json()) as {
+    const meJson = JSON.parse(
+      (
+        await readTelegramDiagnosticBody(
+          meRes,
+          Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+        )
+      ).toString("utf8"),
+    ) as {
       ok?: boolean;
       description?: string;
       result?: unknown;
@@ -225,11 +253,18 @@ export async function probeTelegram(
         if (webhookRemainingBudgetMs > 0) {
           const webhookRes = await fetchWithTimeout(
             `${base}/getWebhookInfo`,
-            {},
+            { signal: abortSignal },
             Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
             fetcher,
           );
-          const webhookJson = (await webhookRes.json()) as {
+          const webhookJson = JSON.parse(
+            (
+              await readTelegramDiagnosticBody(
+                webhookRes,
+                Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+              )
+            ).toString("utf8"),
+          ) as {
             ok?: boolean;
             result?: { url?: string; has_custom_certificate?: boolean };
           };
@@ -240,7 +275,10 @@ export async function probeTelegram(
             };
           }
         }
-      } catch {
+      } catch (err) {
+        if (abortSignal?.aborted) {
+          throw err;
+        }
         // ignore webhook errors for probe
       }
     }

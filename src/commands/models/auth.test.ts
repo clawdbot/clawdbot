@@ -1,4 +1,6 @@
 // Model auth tests cover provider auth status, expiry, and display helpers.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -62,6 +64,7 @@ const mocks = vi.hoisted(() => ({
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
+  callGateway: vi.fn(),
   resolvePluginSetupProvider: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
 }));
@@ -164,6 +167,10 @@ vi.mock("../onboard-helpers.js", () => ({
 
 vi.mock("../../infra/remote-env.js", () => ({
   isRemoteEnvironment: mocks.isRemoteEnvironment,
+}));
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../../plugins/provider-oauth-flow.js", () => ({
@@ -419,6 +426,8 @@ describe("modelsAuthLoginCommand", () => {
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.listProfilesForProvider.mockReturnValue([]);
     mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -477,7 +486,10 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/main",
     });
     expect(mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0]).toBeLessThan(
-      runProviderAuth.mock.invocationCallOrder[0],
+      expectDefined(
+        runProviderAuth.mock.invocationCallOrder[0],
+        "runProviderAuth.mock.invocationCallOrder[0] test invariant",
+      ),
     );
     expect(runProviderAuth).toHaveBeenCalledOnce();
     const upsertCall = readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall;
@@ -498,8 +510,30 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai:user@example.com (openai/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai/gpt-5.5 (use --set-default to apply)",
+      "Default model available: openai/gpt-5.5 (current default unchanged; run openclaw models set openai/gpt-5.5 to apply)",
     );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Tip: Codex-capable models can use native Codex web search. Configure the `web_search` tool with `openclaw configure --section web`. Docs: https://docs.openclaw.ai/tools/web",
+    );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  });
+
+  it("keeps login successful when the running gateway cannot refresh auth state", async () => {
+    const runtime = createRuntime();
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    await expect(modelsAuthLoginCommand({ provider: "openai" }, runtime)).resolves.toBeUndefined();
+
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
   });
 
   it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
@@ -1008,7 +1042,12 @@ describe("modelsAuthLoginCommand", () => {
     });
     expect(
       mocks.clearAuthProfileCooldown.mock.invocationCallOrder.every(
-        (order) => order < runClaudeCliMigration.mock.invocationCallOrder[0],
+        (order) =>
+          order <
+          expectDefined(
+            runClaudeCliMigration.mock.invocationCallOrder[0],
+            "runClaudeCliMigration.mock.invocationCallOrder[0] test invariant",
+          ),
       ),
     ).toBe(true);
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
@@ -1114,7 +1153,7 @@ describe("modelsAuthLoginCommand", () => {
     });
     expect(lastUpdatedConfig?.auth).toBeUndefined();
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai/gpt-5.5 (use --set-default to apply)",
+      "Default model available: openai/gpt-5.5 (current default unchanged; run openclaw models set openai/gpt-5.5 to apply)",
     );
   });
 
@@ -1316,6 +1355,11 @@ describe("modelsAuthLoginCommand", () => {
         credential: expect.objectContaining({ type: "token", token: "openai-token" }),
       }),
     );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
   });
 
   it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
@@ -1432,6 +1476,21 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized piped auth input before buffering it", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    const oversized = "x".repeat(1024 * 1024 + 1);
+    restoreStdin = withPipedStdin(oversized);
+
+    await expect(modelsAuthPasteApiKeyCommand({ provider: "openai" }, runtime)).rejects.toThrow(
+      "Piped auth input exceeds 1048576 bytes.",
+    );
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("writes pasted API keys to the requested agent store", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
@@ -1454,6 +1513,11 @@ describe("modelsAuthLoginCommand", () => {
       mode: "api_key",
     });
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
   });
 
   it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
@@ -1692,3 +1756,4 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

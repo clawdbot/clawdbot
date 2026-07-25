@@ -101,23 +101,26 @@ function consumeShortOptionClusterToken(params: {
   cluster: string;
   flags: string[];
   allowedValueFlags: ReadonlySet<string>;
+  allowedBooleanFlags: ReadonlySet<string>;
   deniedFlags: ReadonlySet<string>;
 }): number {
-  for (let j = 0; j < params.flags.length; j += 1) {
-    const flag = params.flags[j];
+  for (const [j, flag] of params.flags.entries()) {
     if (params.deniedFlags.has(flag)) {
       return -1;
     }
-    if (!params.allowedValueFlags.has(flag)) {
+    if (params.allowedValueFlags.has(flag)) {
+      const inlineValue = params.cluster.slice(j + 1);
+      if (inlineValue) {
+        return isSafeLiteralToken(inlineValue) ? params.index + 1 : -1;
+      }
+      return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
+    }
+    if (params.allowedBooleanFlags.has(flag)) {
       continue;
     }
-    const inlineValue = params.cluster.slice(j + 1);
-    if (inlineValue) {
-      return isSafeLiteralToken(inlineValue) ? params.index + 1 : -1;
-    }
-    return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
+    return -1;
   }
-  return -1;
+  return params.index + 1;
 }
 
 function consumePositionalToken(token: string, positional: string[]): boolean {
@@ -141,9 +144,11 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
 
 function collectPositionalTokens(args: string[], profile: SafeBinProfile): string[] | null {
   const allowedValueFlags = profile.allowedValueFlags ?? NO_FLAGS;
+  const allowedBooleanFlags = profile.allowedBooleanFlags ?? NO_FLAGS;
   const deniedFlags = profile.deniedFlags ?? NO_FLAGS;
   const knownLongFlags =
-    profile.knownLongFlags ?? collectKnownLongFlags(allowedValueFlags, deniedFlags);
+    profile.knownLongFlags ??
+    collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
   const knownLongFlagsSet = profile.knownLongFlagsSet ?? new Set(knownLongFlags);
   const longFlagPrefixMap = profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
 
@@ -203,6 +208,7 @@ function collectPositionalTokens(args: string[], profile: SafeBinProfile): strin
       cluster: token.cluster,
       flags: token.flags,
       allowedValueFlags,
+      allowedBooleanFlags,
       deniedFlags,
     });
     if (nextIndex < 0) {

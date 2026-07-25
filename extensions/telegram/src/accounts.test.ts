@@ -1,6 +1,6 @@
 // Telegram tests cover accounts plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +18,8 @@ import {
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 function warningLines(): string[] {
   return warnMock.mock.calls.map(([line]) => String(line));
@@ -37,12 +39,12 @@ function resolveAccountWithEnv(
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(runtimeEnvModule, "createSubsystemLogger").mockImplementation(() => {
+  vi.mocked(createSubsystemLogger).mockImplementation(() => {
     const logger = {
       warn: warnMock,
       child: () => logger,
     };
-    return logger as unknown as ReturnType<typeof runtimeEnvModule.createSubsystemLogger>;
+    return logger as unknown as ReturnType<typeof createSubsystemLogger>;
   });
 });
 
@@ -172,6 +174,49 @@ describe("resolveTelegramAccount", () => {
     expect(accounts.map((account) => account.accountId)).toEqual(["default"]);
     expect(accounts[0]?.token).toBe("tok-default");
     expect(accounts[0]?.tokenSource).toBe("config");
+  });
+
+  it("routes omitted-account resolution through the configured defaultAccount (#61012)", () => {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "tok-env" },
+      {
+        channels: {
+          telegram: {
+            botToken: "tok-top-level",
+            defaultAccount: "secondary",
+            accounts: {
+              primary: { botToken: "tok-primary" },
+              secondary: { botToken: "tok-secondary" },
+            },
+          },
+        },
+      },
+    );
+    expect(account.accountId).toBe("secondary");
+    expect(account.token).toBe("tok-secondary");
+    expect(account.tokenSource).toBe("config");
+  });
+
+  it("keeps explicit accountId ahead of the configured defaultAccount (#61012)", () => {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "tok-env" },
+      {
+        channels: {
+          telegram: {
+            botToken: "tok-top-level",
+            defaultAccount: "secondary",
+            accounts: {
+              primary: { botToken: "tok-primary" },
+              secondary: { botToken: "tok-secondary" },
+            },
+          },
+        },
+      },
+      "primary",
+    );
+    expect(account.accountId).toBe("primary");
+    expect(account.token).toBe("tok-primary");
+    expect(account.tokenSource).toBe("config");
   });
 });
 

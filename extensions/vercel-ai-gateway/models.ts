@@ -1,4 +1,5 @@
 // Vercel Ai Gateway plugin module implements models behavior.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   getCachedLiveProviderModelRows,
@@ -6,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
@@ -223,6 +225,7 @@ export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionCo
       timeoutMs: VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS,
       ttlMs: VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS,
       auditContext: "vercel-ai-gateway.models",
+      fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
     });
     const discovered = data
       .map(asVercelGatewayModelShape)

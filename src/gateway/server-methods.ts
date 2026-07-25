@@ -1,18 +1,30 @@
-// Gateway method registry aggregator wires core and plugin RPC descriptors to
-// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
-import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
+import {
+  consumeControlPlaneWriteBudget,
+  CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
+  CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
+} from "./control-plane-rate-limit.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -24,43 +36,18 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
+import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { SKILLS_GATEWAY_METHOD_NAMES } from "./server-methods/skills-method-names.js";
 import type {
   GatewayRequestHandler,
-  GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-
-function lazyHandlerModule<T>(
-  loadModule: () => Promise<T>,
-  selectHandlers: (module: T) => GatewayRequestHandlers,
-): () => Promise<GatewayRequestHandlers> {
-  let handlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  // Gateway starts advertise the method table before most handler modules are needed; cache the
-  // first import promise so concurrent calls to the same method family share one load.
-  return () => (handlersPromise ??= loadModule().then(selectHandlers));
-}
-
-function createLazyCoreHandlers(params: {
-  methods: readonly string[];
-  loadHandlers: () => Promise<GatewayRequestHandlers>;
-}): GatewayRequestHandlers {
-  return Object.fromEntries(
-    params.methods.map((method) => [
-      method,
-      async (opts: GatewayRequestHandlerOptions) => {
-        const handlers = await params.loadHandlers();
-        const handler = handlers[method];
-        if (!handler) {
-          // Descriptor drift should fail loudly: advertised core methods must exist in the
-          // loaded family module once the lazy boundary resolves.
-          throw new Error(`lazy gateway handler not found: ${method}`);
-        }
-        await handler(opts);
-      },
-    ]),
-  );
-}
+import {
+  resolveSessionMutationAuthorization,
+  SessionMutationAuthorizationChangedError,
+} from "./session-sharing.js";
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
@@ -70,13 +57,37 @@ const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
 );
+const loadAgentsWorkspaceHandlers = lazyHandlerModule(
+  () => import("./server-methods/agents-workspace.js"),
+  (module) => module.agentsWorkspaceHandlers,
+);
 const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadBoardHandlers = lazyHandlerModule(
+  () => import("./server-methods/board.js"),
+  (module) => module.boardHandlers,
+);
+const loadAuditHandlers = lazyHandlerModule(
+  () => import("./server-methods/audit.js"),
+  (module) => module.auditHandlers,
+);
+const loadUsersHandlers = lazyHandlerModule(
+  () => import("./server-methods/users.js"),
+  (module) => module.usersHandlers,
+);
+const loadAttachHandlers = lazyHandlerModule(
+  () => import("./server-methods/attach.js"),
+  (module) => module.attachHandlers,
+);
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
+);
+const loadChannelPairingHandlers = lazyHandlerModule(
+  () => import("./server-methods/channel-pairing.js"),
+  (module) => module.channelPairingHandlers,
 );
 const loadChatHandlers = lazyHandlerModule(
   () => import("./server-methods/chat.js"),
@@ -90,9 +101,17 @@ const loadConfigHandlers = lazyHandlerModule(
   () => import("./server-methods/config.js"),
   (module) => module.configHandlers,
 );
+const loadConversationHandlers = lazyHandlerModule(
+  () => import("./server-methods/conversations.js"),
+  (module) => module.conversationHandlers,
+);
 const loadConnectHandlers = lazyHandlerModule(
   () => import("./server-methods/connect.js"),
   (module) => module.connectHandlers,
+);
+const loadControlUiHandlers = lazyHandlerModule(
+  () => import("./server-methods/control-ui.js"),
+  (module) => module.controlUiHandlers,
 );
 const loadCronHandlers = lazyHandlerModule(
   () => import("./server-methods/cron.js"),
@@ -101,6 +120,10 @@ const loadCronHandlers = lazyHandlerModule(
 const loadDeviceHandlers = lazyHandlerModule(
   () => import("./server-methods/devices.js"),
   (module) => module.deviceHandlers,
+);
+const loadDevicePairSetupHandlers = lazyHandlerModule(
+  () => import("./server-methods/device-pair-setup.js"),
+  (module) => module.devicePairSetupHandlers,
 );
 const loadDiagnosticsHandlers = lazyHandlerModule(
   () => import("./server-methods/diagnostics.js"),
@@ -114,9 +137,17 @@ const loadEnvironmentsHandlers = lazyHandlerModule(
   () => import("./server-methods/environments.js"),
   (module) => module.environmentsHandlers,
 );
+const loadWorktreesHandlers = lazyHandlerModule(
+  () => import("./server-methods/worktrees.js"),
+  (module) => module.worktreesHandlers,
+);
 const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
   (module) => module.execApprovalsHandlers,
+);
+const loadFsHandlers = lazyHandlerModule(
+  () => import("./server-methods/fs.js"),
+  (module) => module.fsHandlers,
 );
 const loadHealthHandlers = lazyHandlerModule(
   () => import("./server-methods/health.js"),
@@ -126,6 +157,14 @@ const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
 );
+const loadTerminalHandlers = lazyHandlerModule(
+  () => import("./server-methods/terminal.js"),
+  (module) => module.terminalHandlers,
+);
+const loadUiCommandHandlers = lazyHandlerModule(
+  () => import("./server-methods/ui-command.js"),
+  (module) => module.uiCommandHandlers,
+);
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
   (module) => module.modelsAuthStatusHandlers,
@@ -133,6 +172,10 @@ const loadModelsAuthStatusHandlers = lazyHandlerModule(
 const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
+);
+const loadModelsProbeHandlers = lazyHandlerModule(
+  () => import("./server-methods/models-probe.js"),
+  (module) => module.modelsProbeHandlers,
 );
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
@@ -150,6 +193,14 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
   () => import("./server-methods/plugin-host-hooks.js"),
   (module) => module.pluginHostHookHandlers,
 );
+const loadPluginsHandlers = lazyHandlerModule(
+  () => import("./server-methods/plugins.js"),
+  (module) => module.pluginsHandlers,
+);
+const loadMigrationsHandlers = lazyHandlerModule(
+  () => import("./server-methods/migrations.js"),
+  (module) => module.migrationsHandlers,
+);
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
   (module) => module.pushHandlers,
@@ -157,6 +208,10 @@ const loadPushHandlers = lazyHandlerModule(
 const loadRestartHandlers = lazyHandlerModule(
   () => import("./server-methods/restart.js"),
   (module) => module.restartHandlers,
+);
+const loadSuspendHandlers = lazyHandlerModule(
+  () => import("./server-methods/suspend.js"),
+  (module) => module.suspendHandlers,
 );
 const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
@@ -166,9 +221,25 @@ const loadSessionsFilesHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions-files.js"),
   (module) => module.sessionsFilesHandlers,
 );
+const loadSessionsDiffHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-diff.js"),
+  (module) => module.sessionsDiffHandlers,
+);
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
+);
+const loadSessionCatalogHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-catalog.js"),
+  (module) => module.sessionCatalogHandlers,
+);
+const loadSessionDiscussionHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-discussion.js"),
+  (module) => module.sessionDiscussionHandlers,
+);
+const loadSessionObserverHandlers = lazyHandlerModule(
+  () => import("./session-observer-rpc.js"),
+  (module) => module.sessionObserverHandlers,
 );
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
@@ -186,6 +257,10 @@ const loadTasksHandlers = lazyHandlerModule(
   () => import("./server-methods/tasks.js"),
   (module) => module.tasksHandlers,
 );
+const loadTaskSuggestionsHandlers = lazyHandlerModule(
+  () => import("./server-methods/task-suggestions.js"),
+  (module) => module.taskSuggestionsHandlers,
+);
 const loadToolsCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-catalog.js"),
   (module) => module.toolsCatalogHandlers,
@@ -197,6 +272,10 @@ const loadToolsEffectiveHandlers = lazyHandlerModule(
 const loadToolsInvokeHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-invoke.js"),
   (module) => module.toolsInvokeHandlers,
+);
+const loadMcpAppHandlers = lazyHandlerModule(
+  () => import("./server-methods/mcp-app.js"),
+  (module) => module.mcpAppHandlers,
 );
 const loadTtsHandlers = lazyHandlerModule(
   () => import("./server-methods/tts.js"),
@@ -221,6 +300,14 @@ const loadVoicewakeHandlers = lazyHandlerModule(
 const loadWebHandlers = lazyHandlerModule(
   () => import("./server-methods/web.js"),
   (module) => module.webHandlers,
+);
+const loadSystemAgentHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-agent.js"),
+  (module) => module.systemAgentHandlers,
+);
+const loadSystemChangesHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-changes.js"),
+  (module) => module.systemChangesHandlers,
 );
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
@@ -261,9 +348,26 @@ function authorizeGatewayMethod(
     ? authorizeOperatorScopesForRequiredScope(registeredScope, scopes)
     : authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
+    const resolvedRequiredScopes = isOperatorScope(registeredScope)
+      ? [registeredScope]
+      : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+    return missingScopeErrorShape({
+      missingScope: scopeAuth.missingScope,
+      requiredScopes:
+        resolvedRequiredScopes.length > 0 ? resolvedRequiredScopes : [scopeAuth.missingScope],
+    });
   }
   return null;
+}
+
+const SUSPEND_CONTROL_METHODS = new Set([
+  "gateway.suspend.prepare",
+  "gateway.suspend.status",
+  "gateway.suspend.resume",
+]);
+
+function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
+  return SUSPEND_CONTROL_METHODS.has(method);
 }
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {
@@ -272,8 +376,47 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadConnectHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["attach.grant", "attach.revoke"],
+    loadHandlers: loadAttachHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["logs.tail"],
     loadHandlers: loadLogsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["openclaw.changes.list"],
+    loadHandlers: loadSystemChangesHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "terminal.open",
+      "terminal.input",
+      "terminal.resize",
+      "terminal.close",
+      "terminal.attach",
+      "terminal.list",
+      "terminal.text",
+      "terminal.upload",
+    ],
+    loadHandlers: loadTerminalHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["ui.command"],
+    loadHandlers: loadUiCommandHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "board.get",
+      "board.update",
+      "board.widget.put",
+      "board.widget.grant",
+      "board.widget.appView",
+      "board.event",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+    ],
+    loadHandlers: loadBoardHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
@@ -292,11 +435,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadChannelsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["channels.pairing.list", "channels.pairing.approve", "channels.pairing.dismiss"],
+    loadHandlers: loadChannelPairingHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "chat.history",
       "chat.startup",
       "chat.metadata",
       "chat.message.get",
+      "chat.toolTitles",
       "chat.abort",
       "chat.send",
       "chat.inject",
@@ -313,6 +461,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "cron.list",
       "cron.status",
       "cron.get",
+      "cron.scratch.get",
+      "cron.scratch.set",
       "cron.add",
       "cron.update",
       "cron.remove",
@@ -327,14 +477,23 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.pair.approve",
       "device.pair.reject",
       "device.pair.remove",
+      "device.pair.rename",
       "device.token.rotate",
       "device.token.revoke",
     ],
     loadHandlers: loadDeviceHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["device.pair.setupCode"],
+    loadHandlers: loadDevicePairSetupHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["diagnostics.stability"],
     loadHandlers: loadDiagnosticsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
+    loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -350,8 +509,24 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDoctorHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["environments.list", "environments.status"],
+    methods: [
+      "environments.list",
+      "environments.status",
+      "environments.create",
+      "environments.destroy",
+    ],
     loadHandlers: loadEnvironmentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "worktrees.list",
+      "worktrees.branches",
+      "worktrees.create",
+      "worktrees.remove",
+      "worktrees.restore",
+      "worktrees.gc",
+    ],
+    loadHandlers: loadWorktreesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -363,12 +538,20 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadExecApprovalsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["fs.listDir"],
+    loadHandlers: loadFsHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["web.login.start", "web.login.wait"],
     loadHandlers: loadWebHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["models.list"],
     loadHandlers: loadModelsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["models.probe"],
+    loadHandlers: loadModelsProbeHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["models.authLogout", "models.authStatus"],
@@ -381,6 +564,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
     loadHandlers: loadPluginHostHookHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "plugins.list",
+      "plugins.search",
+      "plugins.install",
+      "plugins.setEnabled",
+      "plugins.uninstall",
+      "plugins.refresh",
+    ],
+    loadHandlers: loadPluginsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -400,6 +594,19 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "openclaw.chat",
+      "openclaw.chat.history",
+      "openclaw.approval.list",
+      "openclaw.setup.detect",
+      "openclaw.setup.verify",
+      "openclaw.setup.activate",
+      "openclaw.setup.auth.start",
+      "openclaw.setup.prepare.start",
+    ],
+    loadHandlers: loadSystemAgentHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "talk.session.create",
       "talk.session.join",
       "talk.session.appendAudio",
@@ -407,10 +614,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.endTurn",
       "talk.session.cancelTurn",
       "talk.session.cancelOutput",
+      "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",
       "talk.session.steer",
       "talk.session.close",
       "talk.client.create",
+      "talk.client.transcript",
+      "talk.client.close",
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.catalog",
@@ -421,8 +631,31 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTalkHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["audit.list", "audit.activity.list"],
+    loadHandlers: loadAuditHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "users.list",
+      "users.self",
+      "users.linkEmail",
+      "users.setDisplayName",
+      "users.setAvatar",
+    ],
+    loadHandlers: loadUsersHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],
     loadHandlers: loadTasksHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "taskSuggestions.list",
+      "taskSuggestions.create",
+      "taskSuggestions.accept",
+      "taskSuggestions.dismiss",
+    ],
+    loadHandlers: loadTaskSuggestionsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tools.catalog"],
@@ -438,10 +671,23 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "mcp.app.view",
+      "mcp.app.callTool",
+      "mcp.app.listTools",
+      "mcp.app.listResources",
+      "mcp.app.listResourceTemplates",
+      "mcp.app.readResource",
+      "mcp.app.updateModelContext",
+    ],
+    loadHandlers: loadMcpAppHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "tts.status",
       "tts.enable",
       "tts.disable",
       "tts.convert",
+      "tts.speak",
       "tts.setProvider",
       "tts.personas",
       "tts.setPersona",
@@ -450,33 +696,30 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTtsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: [
-      "skills.upload.begin",
-      "skills.upload.chunk",
-      "skills.upload.commit",
-      "skills.status",
-      "skills.bins",
-      "skills.search",
-      "skills.detail",
-      "skills.securityVerdicts",
-      "skills.skillCard",
-      "skills.install",
-      "skills.update",
-      "skills.proposals.list",
-      "skills.proposals.inspect",
-      "skills.proposals.create",
-      "skills.proposals.update",
-      "skills.proposals.revise",
-      "skills.proposals.requestRevision",
-      "skills.proposals.apply",
-      "skills.proposals.reject",
-      "skills.proposals.quarantine",
-    ],
+    methods: SKILLS_GATEWAY_METHOD_NAMES,
     loadHandlers: loadSkillsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "sessions.catalog.list",
+      "sessions.catalog.read",
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+    ],
+    loadHandlers: loadSessionCatalogHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["session.discussion.info", "session.discussion.open"],
+    loadHandlers: loadSessionDiscussionHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.observer.ask", "sessions.observer.visibility"],
+    loadHandlers: loadSessionObserverHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "sessions.list",
+      "sessions.search",
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
@@ -490,6 +733,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.create",
       "sessions.compaction.branch",
       "sessions.compaction.restore",
+      "sessions.branches.list",
+      "sessions.branches.switch",
+      "sessions.rewind",
+      "sessions.fork",
       "sessions.send",
       "sessions.steer",
       "sessions.abort",
@@ -499,6 +746,20 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.delete",
       "sessions.get",
       "sessions.compact",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.groups.delete",
+      "sessions.dispatch",
+      "sessions.reclaim",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -508,6 +769,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "last-heartbeat",
       "set-heartbeats",
       "system-presence",
+      "system.info",
       "system-event",
     ],
     loadHandlers: loadSystemHandlers,
@@ -518,19 +780,19 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.request",
-      "node.pair.list",
-      "node.pair.approve",
-      "node.pair.reject",
+      ...NODE_PAIR_GATEWAY_METHODS,
       "node.pair.remove",
-      "node.pair.verify",
       "node.rename",
       "node.list",
       "node.describe",
+      "plugin.surface.refresh",
       "node.pluginSurface.refresh",
+      "node.pluginTools.update",
+      "node.skills.update",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
+      "node.invoke.progress",
       "node.invoke.result",
       "node.event",
     ],
@@ -555,8 +817,21 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadRestartHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
+    loadHandlers: loadSuspendHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["message.action", "send", "poll"],
     loadHandlers: loadSendHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "conversations.list",
+      "conversations.send",
+      "conversations.turn",
+      "conversations.turn.cancel",
+    ],
+    loadHandlers: loadConversationHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -585,12 +860,29 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadAgentsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["agents.workspace.list", "agents.workspace.get"],
+    loadHandlers: loadAgentsWorkspaceHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get"],
+    methods: [
+      "sessions.files.list",
+      "sessions.files.get",
+      "sessions.files.set",
+      "sessions.files.reveal",
+    ],
     loadHandlers: loadSessionsFilesHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.diff"],
+    loadHandlers: loadSessionsDiffHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["migrations.memory.plan", "migrations.memory.apply"],
+    loadHandlers: loadMigrationsHandlers,
   }),
 };
 
@@ -652,6 +944,30 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+  const sessionMutation = resolveSessionMutationAuthorization({
+    client: client ?? null,
+    method: req.method,
+    requestParams: req.params,
+    context,
+  });
+  if (sessionMutation.error) {
+    respond(false, undefined, sessionMutation.error);
+    return;
+  }
+  if (
+    client?.connect.role === "node" &&
+    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    );
+    return;
+  }
   if (context.unavailableGatewayMethods?.has(req.method)) {
     // During startup, methods can be listed before their runtime is ready. Return the protocol
     // retry shape so clients can back off without treating startup as a permanent unknown method.
@@ -666,33 +982,40 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  if (methodRegistry.isControlPlaneWrite(req.method)) {
-    const budget = consumeControlPlaneWriteBudget({ client });
-    if (!budget.allowed) {
-      // Control-plane writes mutate gateway-wide state; rate limit before handler lookup so
-      // plugin and aux write methods share the same protection.
-      const actor = resolveControlPlaneActor(client);
-      context.logGateway.warn(
-        `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
-      );
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
-          {
-            retryable: true,
-            retryAfterMs: budget.retryAfterMs,
-            details: {
-              method: req.method,
-              limit: "3 per 60s",
-            },
-          },
-        ),
-      );
-      return;
+  const rejectRateLimitedControlPlaneWrite = (): boolean => {
+    if (!methodRegistry.isControlPlaneWrite(req.method)) {
+      return false;
     }
+    const budget = consumeControlPlaneWriteBudget({ client, method: req.method });
+    if (budget.allowed) {
+      return false;
+    }
+    const actor = resolveControlPlaneActor(client);
+    context.logGateway.warn(
+      `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
+    );
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+        {
+          retryable: true,
+          retryAfterMs: budget.retryAfterMs,
+          details: {
+            method: req.method,
+            limit: `${CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS} per ${CONTROL_PLANE_RATE_LIMIT_WINDOW_MS / 1000}s`,
+          },
+        },
+      ),
+    );
+    return true;
+  };
+  const isSuspendPrepare = req.method === "gateway.suspend.prepare";
+  if (isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
+    // Preparation must stay protected even before it owns the root admission that it closes.
+    return;
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
   if (!handler) {
@@ -703,6 +1026,50 @@ export async function handleGatewayRequest(
     );
     return;
   }
+  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
+  if (
+    req.method === "gateway.suspend.prepare" &&
+    rootWorkAdmission &&
+    !rootWorkAdmission.ownsRoot
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { method: req.method, reason: "nested-gateway-request" },
+      }),
+    );
+    return;
+  }
+  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(req.method)) {
+    const restartDraining = isGatewayRestartDraining();
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${req.method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
+        {
+          retryable: true,
+          retryAfterMs: 1_000,
+          details: {
+            method: req.method,
+            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            phase: getGatewaySuspendAdmissionPhase(),
+          },
+        },
+      ),
+    );
+    return;
+  }
+  if (!isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
+    // A closed admission must reject first so refused writes do not exhaust the controller's
+    // budget and strand it behind rate limiting after suspension resumes.
+    rootWorkAdmission?.release();
+    return;
+  }
   const invokeHandler = () =>
     handler({
       req,
@@ -711,10 +1078,36 @@ export async function handleGatewayRequest(
       isWebchatConnect,
       respond,
       context,
+      ...(sessionMutation.authorization
+        ? { sessionMutationAuthorization: sessionMutation.authorization }
+        : {}),
     });
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
-  await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
+  const invokeWithRequestScope = async () => {
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        { context, client, isWebchatConnect },
+        invokeHandler,
+      );
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      throw error;
+    }
+  };
+  if (!rootWorkAdmission) {
+    await invokeWithRequestScope();
+    return;
+  }
+  try {
+    await rootWorkAdmission.run(invokeWithRequestScope);
+  } finally {
+    rootWorkAdmission.release();
+  }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

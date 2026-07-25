@@ -1,14 +1,10 @@
 // Matrix API module exposes the plugin public contract.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
-type MatrixSubagentHooksModule = typeof import("./src/matrix/subagent-hooks.js");
-
-let matrixSubagentHooksPromise: Promise<MatrixSubagentHooksModule> | null = null;
-
-function loadMatrixSubagentHooksModule() {
-  matrixSubagentHooksPromise ??= import("./src/matrix/subagent-hooks.js");
-  return matrixSubagentHooksPromise;
-}
+const loadMatrixSubagentHooksModule = createLazyRuntimeModule(
+  () => import("./src/matrix/subagent-hooks.js"),
+);
 
 export function registerMatrixSubagentHooks(api: OpenClawPluginApi): void {
   api.on("subagent_ended", async (event) => {

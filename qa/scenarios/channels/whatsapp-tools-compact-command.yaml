@@ -1,0 +1,53 @@
+title: WhatsApp compact tools command reply
+
+scenario:
+  id: whatsapp-tools-compact-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify WhatsApp renders the compact model-tool inventory.
+  successCriteria:
+    - The compact tools command reaches native command dispatch.
+    - The joined reply includes exec and the verbose-mode hint.
+  codeRefs:
+    - src/auto-reply/reply/commands-tools.ts
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+  execution:
+    profiles: { "whatsapp:mock-default": 34 }
+    kind: flow
+    channel: whatsapp
+    config:
+      requiredProviderMode: mock-openai
+      expectedAny: [exec, Use /tools verbose for descriptions]
+    summary: Request compact tools through WhatsApp and verify inventory text.
+
+flow:
+  steps:
+    - name: compact tools renders inventory
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /tools compact
+        - waitForOutbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            sinceIndex: { ref: startIndex }
+            textIncludes: exec
+            timeoutMs: 60000
+        - call: sleep
+          args: [1000]
+        - set: joinedReply
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).map((message) => message.text).join('\\n')"
+        - assert:
+            expr: "config.expectedAny.every((needle) => joinedReply.includes(needle))"
+            message:
+              expr: "`tools reply missing expected text: ${joinedReply}`"
+      detailsExpr: joinedReply

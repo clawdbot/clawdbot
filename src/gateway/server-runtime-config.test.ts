@@ -1,7 +1,7 @@
 // Runtime config tests cover gateway bind/auth resolution, trusted proxy rules,
 // container defaults, and invalid config rejection before server startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetContainerCacheForTest } from "./net.js";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -175,6 +175,12 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedMessage: "gateway bind=loopback resolved to non-loopback host",
       },
       {
+        name: "tailnet binding that falls through to wildcard",
+        cfg: { gateway: { bind: "tailnet" as const, auth: TOKEN_AUTH } },
+        host: "0.0.0.0",
+        expectedMessage: "gateway bind=tailnet could not resolve a Tailscale or loopback address",
+      },
+      {
         name: "custom bind without customBindHost",
         cfg: { gateway: { bind: "custom" as const, auth: TOKEN_AUTH } },
         expectedMessage: "gateway.bind=custom requires gateway.customBindHost",
@@ -259,7 +265,7 @@ describe("resolveGatewayRuntimeConfig", () => {
 
   describe("container-aware bind default", () => {
     afterEach(() => {
-      __resetContainerCacheForTest();
+      resetContainerEnvironmentCacheForTest();
       vi.restoreAllMocks();
     });
 

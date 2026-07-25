@@ -7,32 +7,30 @@ read_when:
 title: "Markdown formatting"
 ---
 
-OpenClaw formats outbound Markdown by converting it into a shared intermediate
-representation (IR) before rendering channel-specific output. The IR keeps the
-source text intact while carrying style/link spans so chunking and rendering can
-stay consistent across channels.
-
-## Goals
-
-- **Consistency:** one parse step, multiple renderers.
-- **Safe chunking:** split text before rendering so inline formatting never
-  breaks across chunks.
-- **Channel fit:** map the same IR to Slack mrkdwn, Telegram HTML, and Signal
-  style ranges without re-parsing Markdown.
+OpenClaw converts outbound Markdown into a shared intermediate representation
+(IR) before rendering channel-specific output. The IR keeps plain text plus
+style/link spans, so one parse step feeds every channel and chunking never
+splits formatting mid-span.
 
 ## Pipeline
 
-1. **Parse Markdown -> IR**
-   - IR is plain text plus style spans (bold/italic/strike/code/spoiler) and link spans.
-   - Offsets are UTF-16 code units so Signal style ranges align with its API.
-   - Tables are parsed only when a channel opts into table conversion.
-2. **Chunk IR (format-first)**
-   - Chunking happens on the IR text before rendering.
-   - Inline formatting does not split across chunks; spans are sliced per chunk.
-3. **Render per channel**
-   - **Slack:** mrkdwn tokens (bold/italic/strike/code), links as `<url|label>`.
-   - **Telegram:** HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`).
-   - **Signal:** plain text + `text-style` ranges; links become `label (url)` when label differs.
+1. **Parse Markdown into IR** (`markdownToIR`) - plain text plus style spans
+   (bold, italic, strikethrough, code, code block, spoiler, blockquote,
+   heading 1-6) and link spans. Offsets are UTF-16 code units so Signal style
+   ranges align with its API directly. Tables parse only when the channel
+   opts into a table mode.
+2. **Chunk the IR** (`chunkMarkdownIR` / `renderMarkdownIRChunksWithinLimit`)
+   - splitting happens on IR text before rendering, so inline styles and
+     links are sliced per chunk instead of breaking across a boundary.
+3. **Render per channel** (`renderMarkdownWithMarkers`) - a style-marker map
+   turns spans into the channel's native markup.
+
+| Channel                                                          | Renderer                                                                             | Notes                                                                                    |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Slack                                                            | mrkdwn tokens (`*bold*`, `_italic_`, `` `code` ``, code fences)                      | Links become `<url\|label>`; autolink disabled during parse to avoid double-linking      |
+| Telegram                                                         | HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`, `<tg-spoiler>`) | Also supports rich-message tables and headings (`<h1>`-`<h6>`) when `richMessages` is on |
+| Signal                                                           | plain text + `text-style` ranges                                                     | Links render as `label (url)` when the label differs from the URL                        |
+| Discord, WhatsApp, iMessage, Microsoft Teams, and other channels | plain text                                                                           | No IR-based styling; Markdown table conversion still runs via `convertMarkdownTables`    |
 
 ## IR example
 
@@ -52,23 +50,22 @@ IR (schematic):
 }
 ```
 
-## Where it is used
-
-- Slack, Telegram, and Signal outbound adapters render from the IR.
-- Other channels (WhatsApp, iMessage, Microsoft Teams, Discord) still use plain text or
-  their own formatting rules, with Markdown table conversion applied before
-  chunking when enabled.
-
 ## Table handling
 
-Markdown tables are not consistently supported across chat clients. Use
-`markdown.tables` to control conversion per channel (and per account).
+`markdown.tables` controls how a channel converts Markdown tables, per
+channel and optionally per account:
 
-- `code`: render tables as code blocks (default for most channels).
-- `bullets`: convert each row into bullet points (default for Matrix, Signal, and WhatsApp).
-- `off`: disable table parsing and conversion; raw table text passes through.
+| Mode      | Behavior                                                                             |
+| --------- | ------------------------------------------------------------------------------------ |
+| `code`    | Render as an aligned ASCII table inside a code block (fallback default)              |
+| `bullets` | Convert each row into `label: value` bullet points                                   |
+| `block`   | Keep native tables where the transport supports them; falls back to `code` otherwise |
+| `off`     | Disable table parsing; raw table text passes through unchanged                       |
 
-Config keys:
+Per-channel plugin defaults: Signal, WhatsApp, and Matrix default to
+`bullets`; Mattermost defaults to `off`; Telegram defaults to `block` (which
+resolves to `code` unless the account has `richMessages` enabled). Any
+channel without an explicit plugin default falls back to `code`.
 
 ```yaml
 channels:
@@ -83,49 +80,52 @@ channels:
 
 ## Chunking rules
 
-- Chunk limits come from channel adapters/config and are applied to the IR text.
-- Code fences are preserved as a single block with a trailing newline so channels
-  render them correctly.
-- List prefixes and blockquote prefixes are part of the IR text, so chunking
-  does not split mid-prefix.
-- Inline styles (bold/italic/strike/inline-code/spoiler) are never split across
-  chunks; the renderer reopens styles inside each chunk.
+- Chunk limits come from channel adapters/config and apply to IR text, not
+  rendered output.
+- Fenced code blocks are kept as one block with a trailing newline so
+  channels render the closing fence correctly.
+- List and blockquote prefixes are part of the IR text, so chunking never
+  splits mid-prefix.
+- Inline styles never split across chunks; the renderer reopens an open
+  style at the start of the next chunk.
 
-If you need more on chunking behavior across channels, see
-[Streaming + chunking](/concepts/streaming).
+See [Streaming and chunking](/concepts/streaming) for chunk-boundary and
+delivery behavior across channels.
 
 ## Link policy
 
-- **Slack:** `[label](url)` -> `<url|label>`; bare URLs remain bare. Autolink
-  is disabled during parse to avoid double-linking.
+- **Slack:** `[label](url)` -> `<url|label>`; bare URLs stay bare.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
-- **Signal:** `[label](url)` -> `label (url)` unless label matches the URL.
+- **Signal:** `[label](url)` -> `label (url)` unless the label already
+  matches the URL.
 
 ## Spoilers
 
-Spoiler markers (`||spoiler||`) are parsed only for Signal, where they map to
-SPOILER style ranges. Other channels treat them as plain text.
+Spoiler markers (`||spoiler||`) are parsed for Signal (mapped to `SPOILER`
+style ranges) and Telegram (mapped to `<tg-spoiler>`). Other channels treat
+`||...||` as plain text.
 
-## How to add or update a channel formatter
+## Adding or updating a channel formatter
 
-1. **Parse once:** use the shared `markdownToIR(...)` helper with channel-appropriate
-   options (autolink, heading style, blockquote prefix).
-2. **Render:** implement a renderer with `renderMarkdownWithMarkers(...)` and a
-   style marker map (or Signal style ranges).
-3. **Chunk:** call `chunkMarkdownIR(...)` before rendering; render each chunk.
-4. **Wire adapter:** update the channel outbound adapter to use the new chunker
-   and renderer.
-5. **Test:** add or update format tests and an outbound delivery test if the
-   channel uses chunking.
+1. **Parse once** with `markdownToIR(...)`, passing channel-appropriate
+   options (`autolink`, `headingStyle`, `blockquotePrefix`, `tableMode`).
+2. **Render** with `renderMarkdownWithMarkers(...)` and a style-marker map (or
+   custom style-range logic for transports like Signal).
+3. **Chunk** with `chunkMarkdownIR(...)` or
+   `renderMarkdownIRChunksWithinLimit(...)` before rendering each chunk.
+4. **Wire the adapter** to call the new chunker and renderer from the
+   outbound send path.
+5. **Test** with format tests plus an outbound delivery test if the channel
+   chunks.
 
 ## Common gotchas
 
-- Slack angle-bracket tokens (`<@U123>`, `<#C123>`, `<https://...>`) must be
-  preserved; escape raw HTML safely.
+- Slack angle-bracket tokens (`<@U123>`, `<#C123>`, `<https://...>`) must
+  survive escaping; raw HTML still needs to be escaped safely.
 - Telegram HTML requires escaping text outside tags to avoid broken markup.
-- Signal style ranges depend on UTF-16 offsets; do not use code point offsets.
-- Preserve trailing newlines for fenced code blocks so closing markers land on
-  their own line.
+- Signal style ranges use UTF-16 offsets, not code-point offsets.
+- Preserve trailing newlines on fenced code blocks so the closing marker
+  lands on its own line.
 
 ## Related
 

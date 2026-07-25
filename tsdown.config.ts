@@ -1,7 +1,7 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type UserConfig } from "tsdown";
+import type { UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
@@ -9,8 +9,12 @@ import {
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
-  publicPluginSdkEntrypoints,
+  productionPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "./scripts/lib/tsdown-config-groups.mjs";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -40,6 +44,7 @@ const env = {
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
+const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -136,20 +141,23 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
 function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
+    dts: TSDOWN_DECLARATIONS,
     env,
+    outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
-    platform: "node",
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: buildInputOptions,
   };
 }
 
-function nodeWorkspacePackageBuildConfig(config: UserConfig): UserConfig {
+function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig = {}): UserConfig {
   return {
     ...config,
+    dts: TSDOWN_DECLARATIONS,
+    entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
     env,
-    format: "esm",
-    platform: "node",
+    name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
+    outDir: config.outDir ?? tsdownPackageOutputRoot(packageDir),
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: buildInputOptions,
   };
@@ -157,9 +165,9 @@ function nodeWorkspacePackageBuildConfig(config: UserConfig): UserConfig {
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
+const selectedPluginSdkEntrypoints = shouldBuildPrivateQaEntries
   ? pluginSdkEntrypoints
-  : publicPluginSdkEntrypoints;
+  : productionPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -198,6 +206,7 @@ const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@openclaw/ai",
   "@vitest/expect",
   "jimp",
   "matrix-js-sdk",
@@ -216,13 +225,15 @@ function shouldNeverBundleDependency(id: string): boolean {
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
+    id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
+    id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
-    id === "@openclaw/acp-core" ||
+    ["@openclaw/acp-core", "@openclaw/workboard-contract"].includes(id) ||
     id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
@@ -263,10 +274,17 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
+    "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-transcript-reconcile.worker":
+      "src/config/sessions/session-transcript-reconcile.worker.ts",
+    "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
+    "system-agent/setup-inference-detection.worker":
+      "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
@@ -285,7 +303,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
-    extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
@@ -303,22 +320,26 @@ function buildCoreDistEntries(): Record<string, string> {
 
 function buildDockerE2eHarnessEntries(): Record<string, string> {
   return {
-    // Mounted Docker harnesses run against the npm tarball image, so any
-    // internal module they assert must have a stable package dist entry.
+    // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
     "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",
     "agents/embedded-agent-runner/run/runtime-context-prompt":
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
-    "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
+    "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
     "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
-    "crestodian/crestodian": "src/crestodian/crestodian.ts",
-    "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
+    "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
+    "system-agent/audit": "src/system-agent/audit.ts",
+    "system-agent/system-agent": "src/system-agent/system-agent.ts",
+    "system-agent/rescue-message": "src/system-agent/rescue-message.ts",
+    "system-agent/setup-inference": "src/system-agent/setup-inference.ts",
     "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
@@ -334,126 +355,17 @@ function buildAgentCoreDistEntries(): Record<string, string> {
     agent: "packages/agent-core/src/agent.ts",
     "agent-loop": "packages/agent-core/src/agent-loop.ts",
     llm: "packages/agent-core/src/llm.ts",
-    node: "packages/agent-core/src/node.ts",
     "runtime-deps": "packages/agent-core/src/runtime-deps.ts",
     types: "packages/agent-core/src/types.ts",
     validation: "packages/agent-core/src/validation.ts",
-    "harness/agent-harness": "packages/agent-core/src/harness/agent-harness.ts",
-    "harness/types": "packages/agent-core/src/harness/types.ts",
     "harness/messages": "packages/agent-core/src/harness/messages.ts",
     "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
-    "harness/session": "packages/agent-core/src/harness/session/session.ts",
-    "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
-    "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
-    "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
     "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
     "harness/branch-summarization":
       "packages/agent-core/src/harness/compaction/branch-summarization.ts",
     "harness/prompt-template-arguments":
       "packages/agent-core/src/harness/prompt-template-arguments.ts",
-    "harness/skills": "packages/agent-core/src/harness/skills.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
-  };
-}
-
-function buildGatewayProtocolDistEntries(): Record<string, string> {
-  return {
-    // Package exports resolve from packages/gateway-protocol/dist, while the
-    // root build still emits dist/gateway/protocol/index for Docker harnesses.
-    index: "packages/gateway-protocol/src/index.ts",
-    "client-info": "packages/gateway-protocol/src/client-info.ts",
-    "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
-    schema: "packages/gateway-protocol/src/schema.ts",
-    "startup-unavailable": "packages/gateway-protocol/src/startup-unavailable.ts",
-    version: "packages/gateway-protocol/src/version.ts",
-  };
-}
-
-function buildGatewayClientDistEntries(): Record<string, string> {
-  return {
-    // Keep package entrypoints explicit so package.json exports and root build
-    // config cannot drift when client internals are split again.
-    index: "packages/gateway-client/src/index.ts",
-    readiness: "packages/gateway-client/src/readiness.ts",
-    timeouts: "packages/gateway-client/src/timeouts.ts",
-  };
-}
-
-function buildNetPolicyDistEntries(): Record<string, string> {
-  return {
-    // These subpaths are imported by root runtime code and exported by the
-    // package. Keep the build list adjacent to package.json exports.
-    index: "packages/net-policy/src/index.ts",
-    ip: "packages/net-policy/src/ip.ts",
-    ipv4: "packages/net-policy/src/ipv4.ts",
-    "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
-    "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
-  };
-}
-
-function buildMediaGenerationCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/media-generation-core/src/index.ts",
-    "capability-model-ref": "packages/media-generation-core/src/capability-model-ref.ts",
-    catalog: "packages/media-generation-core/src/catalog.ts",
-    "model-ref": "packages/media-generation-core/src/model-ref.ts",
-    normalization: "packages/media-generation-core/src/normalization.ts",
-  };
-}
-
-function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/media-understanding-common/src/index.ts",
-    "active-model": "packages/media-understanding-common/src/active-model.ts",
-    defaults: "packages/media-understanding-common/src/defaults.ts",
-    errors: "packages/media-understanding-common/src/errors.ts",
-    format: "packages/media-understanding-common/src/format.ts",
-    "openai-compatible-video": "packages/media-understanding-common/src/openai-compatible-video.ts",
-    "output-extract": "packages/media-understanding-common/src/output-extract.ts",
-    "provider-id": "packages/media-understanding-common/src/provider-id.ts",
-    "provider-supports": "packages/media-understanding-common/src/provider-supports.ts",
-    types: "packages/media-understanding-common/src/types.ts",
-    video: "packages/media-understanding-common/src/video.ts",
-  };
-}
-
-function buildMarkdownCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/markdown-core/src/index.ts",
-    "code-spans": "packages/markdown-core/src/code-spans.ts",
-    fences: "packages/markdown-core/src/fences.ts",
-    frontmatter: "packages/markdown-core/src/frontmatter.ts",
-    ir: "packages/markdown-core/src/ir.ts",
-    render: "packages/markdown-core/src/render.ts",
-    "render-aware-chunking": "packages/markdown-core/src/render-aware-chunking.ts",
-    tables: "packages/markdown-core/src/tables.ts",
-    types: "packages/markdown-core/src/types.ts",
-  };
-}
-
-function buildNormalizationCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/normalization-core/src/index.ts",
-    "number-coercion": "packages/normalization-core/src/number-coercion.ts",
-    "record-coerce": "packages/normalization-core/src/record-coerce.ts",
-    "string-coerce": "packages/normalization-core/src/string-coerce.ts",
-    "string-normalization": "packages/normalization-core/src/string-normalization.ts",
-  };
-}
-
-function buildMediaCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/media-core/src/index.ts",
-    base64: "packages/media-core/src/base64.ts",
-    constants: "packages/media-core/src/constants.ts",
-    "content-length": "packages/media-core/src/content-length.ts",
-    "file-name": "packages/media-core/src/file-name.ts",
-    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
-    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
-    "media-source-url": "packages/media-core/src/media-source-url.ts",
-    mime: "packages/media-core/src/mime.ts",
-    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
   };
 }
 
@@ -484,43 +396,8 @@ function buildPackageDistEntriesFromExports(packageDir: string): Record<string, 
   return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
-function buildAcpCoreDistEntries(): Record<string, string> {
-  return buildPackageDistEntriesFromExports("acp-core");
-}
-
-function buildTerminalCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/terminal-core/src/index.ts",
-    ansi: "packages/terminal-core/src/ansi.ts",
-    "decorative-emoji": "packages/terminal-core/src/decorative-emoji.ts",
-    "health-style": "packages/terminal-core/src/health-style.ts",
-    links: "packages/terminal-core/src/links.ts",
-    note: "packages/terminal-core/src/note.ts",
-    "osc-progress": "packages/terminal-core/src/osc-progress.ts",
-    palette: "packages/terminal-core/src/palette.ts",
-    "progress-line": "packages/terminal-core/src/progress-line.ts",
-    "prompt-select-styled": "packages/terminal-core/src/prompt-select-styled.ts",
-    "prompt-select-styled-params": "packages/terminal-core/src/prompt-select-styled-params.ts",
-    "prompt-style": "packages/terminal-core/src/prompt-style.ts",
-    restore: "packages/terminal-core/src/restore.ts",
-    "safe-text": "packages/terminal-core/src/safe-text.ts",
-    "stream-writer": "packages/terminal-core/src/stream-writer.ts",
-    table: "packages/terminal-core/src/table.ts",
-    "terminal-link": "packages/terminal-core/src/terminal-link.ts",
-    theme: "packages/terminal-core/src/theme.ts",
-  };
-}
-
-function buildWebContentCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/web-content-core/src/index.ts",
-    "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
-  };
-}
-
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
-    api: "packages/speech-core/api.ts",
     "runtime-api": "packages/speech-core/runtime-api.ts",
     speaker: "packages/speech-core/speaker.ts",
     "voice-models": "packages/speech-core/voice-models.ts",
@@ -537,30 +414,10 @@ function buildLlmCoreDistEntries(): Record<string, string> {
   };
 }
 
-function buildModelCatalogCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/model-catalog-core/src/index.ts",
-    "configured-model-refs": "packages/model-catalog-core/src/configured-model-refs.ts",
-    "model-catalog-normalize": "packages/model-catalog-core/src/model-catalog-normalize.ts",
-    "model-catalog-refs": "packages/model-catalog-core/src/model-catalog-refs.ts",
-    "model-catalog-types": "packages/model-catalog-core/src/model-catalog-types.ts",
-    "provider-id": "packages/model-catalog-core/src/provider-id.ts",
-    "provider-model-id-normalization":
-      "packages/model-catalog-core/src/provider-model-id-normalization.ts",
-    "provider-model-id-normalize": "packages/model-catalog-core/src/provider-model-id-normalize.ts",
-  };
-}
-
-function buildLlmRuntimeDistEntries(): Record<string, string> {
-  return {
-    index: "packages/llm-runtime/src/index.ts",
-    "api-registry": "packages/llm-runtime/src/api-registry.ts",
-    stream: "packages/llm-runtime/src/stream.ts",
-  };
-}
-
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/ai" ||
+    id.startsWith("@openclaw/ai/") ||
     id === "@openclaw/llm-core" ||
     id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
@@ -578,11 +435,8 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return (
-    id === "ws" ||
-    id.startsWith("ws/") ||
-    id === "@openclaw/gateway-protocol" ||
-    id.startsWith("@openclaw/gateway-protocol/")
+  return ["ws", "@openclaw/gateway-protocol"].some(
+    (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
 
@@ -596,10 +450,6 @@ function shouldExternalizeSpeechCoreDependency(id: string): boolean {
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
   return id === "typebox" || id.startsWith("typebox/");
-}
-
-function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
-  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
@@ -623,35 +473,38 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
     ...Object.fromEntries(
-      Object.entries(buildNormalizationCoreDistEntries()).map(([entry, source]) => [
-        `normalization-core/${entry}`,
+      Object.entries(buildPackageDistEntriesFromExports("normalization-core")).map(
+        ([entry, source]) => [`normalization-core/${entry}`, source],
+      ),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildPackageDistEntriesFromExports("retry")).map(([entry, source]) => [
+        `retry/${entry}`,
         source,
       ]),
     ),
     ...Object.fromEntries(
-      Object.entries(buildMediaCoreDistEntries()).map(([entry, source]) => [
+      Object.entries(buildPackageDistEntriesFromExports("media-core")).map(([entry, source]) => [
         `media-core/${entry}`,
         source,
       ]),
     ),
     ...Object.fromEntries(
-      Object.entries(buildAcpCoreDistEntries()).map(([entry, source]) => [
+      Object.entries(buildPackageDistEntriesFromExports("acp-core")).map(([entry, source]) => [
         `acp-core/${entry}`,
         source,
       ]),
     ),
     ...Object.fromEntries(
-      Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
+      Object.entries(buildPackageDistEntriesFromExports("terminal-core")).map(([entry, source]) => [
         `terminal-core/${entry}`,
         source,
       ]),
     ),
-    // Internal compat artifact for the root-alias.cjs lazy loader.
-    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
+      Object.entries(buildPluginSdkEntrySources(selectedPluginSdkEntrypoints)).map(
         ([entry, source]) => [`plugin-sdk/${entry}`, source],
       ),
     ),
@@ -668,139 +521,74 @@ function buildUnifiedDistEntries(): Record<string, string> {
   };
 }
 
-export default defineConfig([
+const configs = [
   nodeBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    name: TSDOWN_PACKAGE_CONFIG_GROUP,
     entry: buildAgentCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("agent-core"),
     deps: {
       neverBundle: shouldExternalizeAgentCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildGatewayProtocolDistEntries(),
-    outDir: tsdownPackageOutputRoot("gateway-protocol"),
+  nodeWorkspacePackageBuildConfig("gateway-protocol", {
     deps: {
       neverBundle: shouldExternalizeGatewayProtocolDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildGatewayClientDistEntries(),
-    outDir: tsdownPackageOutputRoot("gateway-client"),
+  nodeWorkspacePackageBuildConfig("gateway-client", {
     deps: {
       neverBundle: shouldExternalizeGatewayClientDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildNetPolicyDistEntries(),
-    outDir: tsdownPackageOutputRoot("net-policy"),
+  nodeWorkspacePackageBuildConfig("net-policy", {
     deps: {
       neverBundle: shouldExternalizeNetPolicyDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildMediaGenerationCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("media-generation-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildMediaUnderstandingCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("media-understanding-common"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildMarkdownCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("markdown-core"),
+  nodeWorkspacePackageBuildConfig("media-generation-core"),
+  nodeWorkspacePackageBuildConfig("media-understanding-common"),
+  nodeWorkspacePackageBuildConfig("markdown-core", {
     deps: {
       neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildNormalizationCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("normalization-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildMediaCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("media-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildAcpCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("acp-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildTerminalCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("terminal-core"),
+  nodeWorkspacePackageBuildConfig("normalization-core"),
+  nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("media-core"),
+  nodeWorkspacePackageBuildConfig("acp-core"),
+  nodeWorkspacePackageBuildConfig("terminal-core", {
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildWebContentCoreDistEntries(),
+  nodeWorkspacePackageBuildConfig("web-content-core", {
     outDir: "packages/web-content-core/dist",
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+  nodeWorkspacePackageBuildConfig("speech-core", {
     entry: buildSpeechCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("speech-core"),
     deps: {
       neverBundle: shouldExternalizeSpeechCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+  nodeWorkspacePackageBuildConfig("llm-core", {
     entry: buildLlmCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("llm-core"),
     deps: {
       neverBundle: shouldExternalizeLlmCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildModelCatalogCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("model-catalog-core"),
-  }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildLlmRuntimeDistEntries(),
-    outDir: tsdownPackageOutputRoot("llm-runtime"),
-    deps: {
-      neverBundle: shouldExternalizeLlmRuntimeDependency,
-    },
-  }),
+  nodeWorkspacePackageBuildConfig("model-catalog-core"),
   nodeBuildConfig({
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
+      // Keep dts generation from inlining externalized package types.
+      dts: { neverBundle: shouldNeverBundleDependency },
     },
   }),
-]);
+] satisfies UserConfig[];
+
+export default configs;

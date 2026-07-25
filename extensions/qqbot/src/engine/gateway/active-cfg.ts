@@ -13,13 +13,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
-export type GatewayCfgLoader = () => OpenClawConfig;
+type GatewayCfgLoader = () => OpenClawConfig;
 
-export interface ActiveCfgProvider {
+interface ActiveCfgProvider {
   getActiveCfg(): OpenClawConfig;
 }
 
-export interface ActiveCfgProviderOptions {
+interface ActiveCfgProviderOptions {
   fallback: OpenClawConfig;
   load?: GatewayCfgLoader;
 }
@@ -34,10 +34,7 @@ export function createActiveCfgProvider(options: ActiveCfgProviderOptions): Acti
   };
 }
 
-export function resolveActiveCfg(
-  loader: GatewayCfgLoader,
-  fallback: OpenClawConfig,
-): OpenClawConfig {
+function resolveActiveCfg(loader: GatewayCfgLoader, fallback: OpenClawConfig): OpenClawConfig {
   try {
     return loader();
   } catch {

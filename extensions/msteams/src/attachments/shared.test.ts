@@ -4,15 +4,12 @@ import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
   extractInlineImageCandidates,
-  isGraphSharedLinkUrl,
-  isPrivateOrReservedIP,
+  isDownloadableAttachment,
+  isLikelyImageAttachment,
   isUrlAllowed,
-  resolveAndValidateIP,
+  normalizeContentType,
   resolveAttachmentFetchPolicy,
-  resolveAllowedHosts,
-  resolveAuthAllowedHosts,
   resolveMediaSsrfPolicy,
-  safeFetch,
   safeFetchWithPolicy,
   tryBuildGraphSharesUrlForSharedLink,
 } from "./shared.js";
@@ -22,6 +19,30 @@ const privateResolve = (ip: string) => async () => ({ address: ip });
 const failingResolve = async () => {
   throw new Error("DNS failure");
 };
+
+const resolveAllowedHosts = (input?: string[]) =>
+  resolveAttachmentFetchPolicy({ allowHosts: input }).allowHosts;
+const resolveAuthAllowedHosts = (input?: string[]) =>
+  resolveAttachmentFetchPolicy({ authAllowHosts: input }).authAllowHosts;
+const isGraphSharedLinkUrl = (url: string) =>
+  tryBuildGraphSharesUrlForSharedLink(url) !== undefined;
+
+type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy"> & {
+  allowHosts: string[];
+  authorizationAllowHosts?: string[];
+};
+
+async function safeFetch(params: SafeFetchParams) {
+  const { allowHosts, authorizationAllowHosts, ...request } = params;
+  return await safeFetchWithPolicy({
+    ...request,
+    policy: {
+      allowHosts,
+      authAllowHosts: authorizationAllowHosts ?? [],
+    },
+    resolveFn: request.resolveFn ?? publicResolve,
+  });
+}
 
 function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = "ok") {
   return vi.fn(async (url: string, init?: RequestInit) => {
@@ -108,56 +129,6 @@ describe("msteams attachment allowlists", () => {
       hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
     });
     expect(resolveMediaSsrfPolicy(["*"])).toBeUndefined();
-  });
-
-  it.each([
-    ["999.999.999.999", true],
-    ["256.0.0.1", true],
-    ["10.0.0.256", true],
-    ["-1.0.0.1", false],
-    ["1.2.3.4.5", false],
-    ["0:0:0:0:0:0:0:1", true],
-  ] as const)("malformed/expanded %s → %s (SDK fails closed)", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
-  });
-});
-
-// ─── resolveAndValidateIP ────────────────────────────────────────────────────
-
-describe("resolveAndValidateIP", () => {
-  it("accepts a hostname resolving to a public IP", async () => {
-    const ip = await resolveAndValidateIP("teams.sharepoint.com", publicResolve);
-    expect(ip).toBe("13.107.136.10");
-  });
-
-  it("rejects a hostname resolving to 10.x.x.x", async () => {
-    await expect(resolveAndValidateIP("evil.test", privateResolve("10.0.0.1"))).rejects.toThrow(
-      "private/reserved IP",
-    );
-  });
-
-  it("rejects a hostname resolving to 169.254.169.254", async () => {
-    await expect(
-      resolveAndValidateIP("evil.test", privateResolve("169.254.169.254")),
-    ).rejects.toThrow("private/reserved IP");
-  });
-
-  it("rejects a hostname resolving to loopback", async () => {
-    await expect(resolveAndValidateIP("evil.test", privateResolve("127.0.0.1"))).rejects.toThrow(
-      "private/reserved IP",
-    );
-  });
-
-  it("rejects a hostname resolving to IPv6 loopback", async () => {
-    await expect(resolveAndValidateIP("evil.test", privateResolve("::1"))).rejects.toThrow(
-      "private/reserved IP",
-    );
-  });
-
-  it("throws on DNS resolution failure", async () => {
-    await expect(resolveAndValidateIP("nonexistent.test", failingResolve)).rejects.toThrow(
-      "DNS resolution failed",
-    );
   });
 });
 
@@ -629,7 +600,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("accepts inline data images within limit", () => {
@@ -656,7 +627,7 @@ describe("msteams inline image limits", () => {
       },
     ];
     const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
-    expect(out).toStrictEqual([]);
+    expect(out).toStrictEqual([{ kind: "unavailable" }]);
   });
 
   it("enforces cumulative inline size limit across attachments", () => {
@@ -674,7 +645,67 @@ describe("msteams inline image limits", () => {
       maxInlineBytes: 10,
       maxInlineTotalBytes: 6,
     });
-    expect(out.length).toBe(1);
+    expect(out.length).toBe(2);
     expect(out[0]?.kind).toBe("data");
+    expect(out[1]).toStrictEqual({ kind: "unavailable" });
+  });
+});
+
+describe("normalizeContentType case-insensitivity", () => {
+  // MIME types are case-insensitive (RFC 2045); relay payloads routinely emit
+  // mixed-case values. normalizeContentType must lowercase so the downstream
+  // startsWith/=== comparisons (which assume lowercase) match.
+  it("lowercases mixed-case content types", () => {
+    expect(normalizeContentType("Image/PNG")).toBe("image/png");
+    expect(normalizeContentType("TEXT/HTML")).toBe("text/html");
+    expect(normalizeContentType("Application/Vnd.Microsoft.Teams.File.Download.Info")).toBe(
+      "application/vnd.microsoft.teams.file.download.info",
+    );
+  });
+
+  it("trims surrounding whitespace before lowercasing", () => {
+    expect(normalizeContentType("  Image/PNG  ")).toBe("image/png");
+  });
+
+  it("preserves case-sensitive parameter values", () => {
+    expect(normalizeContentType('  Text/HTML ; charset="X-Custom"  ')).toBe(
+      'text/html; charset="X-Custom"',
+    );
+  });
+
+  it("returns undefined for non-string, empty, or whitespace input", () => {
+    expect(normalizeContentType(undefined)).toBeUndefined();
+    expect(normalizeContentType(123 as unknown as string)).toBeUndefined();
+    expect(normalizeContentType("   ")).toBeUndefined();
+    expect(normalizeContentType("")).toBeUndefined();
+  });
+});
+
+describe("isLikelyImageAttachment mixed-case content type", () => {
+  it("recognizes an image with a mixed-case content type and no filename hint", () => {
+    expect(isLikelyImageAttachment({ contentType: "Image/PNG", name: "download" })).toBe(true);
+    expect(isLikelyImageAttachment({ contentType: "image/png", name: "download" })).toBe(true);
+  });
+
+  it("still rejects non-image types (regression)", () => {
+    expect(isLikelyImageAttachment({ contentType: "Application/PDF", name: "doc" })).toBe(false);
+  });
+});
+
+describe("isDownloadableAttachment mixed-case download-info type", () => {
+  it("recognizes the Teams download-info attachment type regardless of casing", () => {
+    const content = { downloadUrl: "https://example.com/file" };
+    expect(
+      isDownloadableAttachment({
+        contentType: "Application/Vnd.Microsoft.Teams.File.Download.Info",
+        content,
+      }),
+    ).toBe(true);
+    expect(
+      isDownloadableAttachment({
+        contentType: "application/vnd.microsoft.teams.file.download.info",
+        content,
+      }),
+    ).toBe(true);
   });
 });

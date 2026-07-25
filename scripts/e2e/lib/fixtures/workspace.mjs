@@ -43,10 +43,10 @@ function writeAgentsDeleteConfig() {
   fs.mkdirSync(sharedWorkspace, { recursive: true });
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: {
-      list: [
-        { id: "main", workspace: sharedWorkspace },
-        { id: "ops", workspace: sharedWorkspace },
-      ],
+      entries: {
+        main: { workspace: sharedWorkspace },
+        ops: { workspace: sharedWorkspace },
+      },
     },
     ...(gatewayToken ? { gateway: { auth: { mode: "token", token: gatewayToken } } } : {}),
   });
@@ -72,12 +72,14 @@ function assertAgentsDeleteResult([outputPath]) {
     const message = error instanceof Error ? error.message.split("\n").at(0) : String(error);
     throw new Error(`agents delete --json parse failed: ${message}`, { cause: error });
   }
-  for (const [actual, expected, label] of [
+  /** @type {Array<[unknown, unknown, string]>} */
+  const comparisons = [
     [parsed.agentId, "ops", "agentId"],
     [parsed.workspace, process.env.SHARED_WORKSPACE, "workspace"],
     [parsed.workspaceRetained, true, "workspaceRetained"],
     [parsed.workspaceRetainedReason, "shared", "workspaceRetainedReason"],
-  ]) {
+  ];
+  for (const [actual, expected, label] of comparisons) {
     assert(actual === expected, `${label} mismatch: ${JSON.stringify(actual)}`);
   }
   assert(

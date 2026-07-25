@@ -1,4 +1,4 @@
-import type { SkillEligibilityContext } from "../../skills/types.js";
+import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
 /**
  * Sandbox runtime configuration and context types.
  *
@@ -45,7 +45,7 @@ export type SandboxBrowserConfig = {
   vncPort: number;
   noVncPort: number;
   headless: boolean;
-  enableNoVnc: boolean;
+  noVncEnabled: boolean;
   allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;
@@ -100,6 +100,7 @@ export type SandboxContext = {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
   workspaceAccess: SandboxWorkspaceAccess;
   runtimeId: string;
   runtimeLabel: string;
@@ -118,5 +119,6 @@ export type SandboxWorkspaceInfo = {
   containerWorkdir?: string;
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
   workspaceAccess?: SandboxWorkspaceAccess;
 };

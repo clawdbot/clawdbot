@@ -4,23 +4,31 @@
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
+import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
+import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
-import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
+import {
+  findActiveUserMessageIndex,
+  hasNonBlankUserText,
+  projectPersistedSenderContext,
+  readFirstUserText,
+  resolveUserTranscriptMessages,
+  splitLeadingTimestampEnvelope,
+  type CurrentUserTimestampMatch,
+  type UserTranscriptContext,
+} from "./attempt.user-message-boundary.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
   timezone?: string;
   includeTimestamp?: boolean;
-  currentUserTimestampOverride?: {
-    timestamp: number;
-    text: string;
-    alternateText?: string;
-    runtimeTimestamp?: number;
-  };
+  projectPersistedSenderContext?: boolean;
+  userTranscriptContexts?: readonly UserTranscriptContext[];
+  currentUserTimestampOverride?: CurrentUserTimestampMatch;
 };
 
 /**
@@ -32,13 +40,6 @@ type LlmBoundaryOptions = {
 const BOUNDARY_TIMESTAMP_ENVELOPE_RE = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
 const BOUNDARY_CRON_TIME_MARKER = "Current time: ";
 
-/**
- * Captures a full leading `[DOW YYYY-MM-DD HH:MM ...] ` envelope (channel
- * plugin envelope or a previously-applied stamp), including the trailing
- * space(s). Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts.
- */
-const BOUNDARY_LEADING_ENVELOPE_CAPTURE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
-
 export function normalizeMessagesForLlmBoundary(
   messages: AgentMessage[],
   options?: LlmBoundaryOptions,
@@ -46,11 +47,20 @@ export function normalizeMessagesForLlmBoundary(
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
   );
+  const userTranscriptMessages = resolveUserTranscriptMessages(
+    normalized,
+    options?.userTranscriptContexts,
+    options?.currentUserTimestampOverride,
+  );
   const withoutHistoricalInboundMetadata = stripHistoricalInboundMetadataFromUserMessages(
     normalized,
     options,
   );
-  return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
+  const withPersistedSenderContext =
+    options?.projectPersistedSenderContext === false
+      ? withoutHistoricalInboundMetadata
+      : projectPersistedSenderContext(withoutHistoricalInboundMetadata, userTranscriptMessages);
+  return stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
 }
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */
@@ -70,6 +80,7 @@ export function normalizeCurrentPromptTextForLlmBoundary(params: {
   timezone?: string;
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
+  currentUserTranscriptMessage?: AgentMessage;
 }): string {
   const { message, options } = buildCurrentPromptBoundaryInput(params);
   const [normalized] = normalizeMessagesForLlmBoundary([message], options);
@@ -82,22 +93,28 @@ function buildCurrentPromptBoundaryInput(params: {
   timezone?: string;
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
+  currentUserTranscriptMessage?: AgentMessage;
 }): { message: AgentMessage; options?: LlmBoundaryOptions } {
-  const options =
-    params.timezone || params.includeTimestamp === false
+  const message = {
+    role: "user",
+    content: [{ type: "text", text: params.prompt }],
+    timestamp: params.currentUserTimestamp ?? Date.now(),
+  } as AgentMessage;
+  const options: LlmBoundaryOptions = {
+    ...(params.timezone ? { timezone: params.timezone } : {}),
+    ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
+    ...(params.currentUserTranscriptMessage
       ? {
-          ...(params.timezone ? { timezone: params.timezone } : {}),
-          ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
+          userTranscriptContexts: [
+            {
+              runtimeMessage: message,
+              transcriptMessage: params.currentUserTranscriptMessage,
+            },
+          ],
         }
-      : undefined;
-  return {
-    message: {
-      role: "user",
-      content: [{ type: "text", text: params.prompt }],
-      timestamp: params.currentUserTimestamp ?? Date.now(),
-    },
-    options,
+      : {}),
   };
+  return { message, options };
 }
 
 /**
@@ -169,7 +186,7 @@ function appendRuntimeContextMessageForPrompt(params: {
  * can rehydrate a transcript ending in tool-call messages, so the active prompt
  * is found by walking backward through tool-call assistants.
  */
-export function insertRuntimeContextMessageForPrompt(params: {
+function insertRuntimeContextMessageForPrompt(params: {
   message: RuntimeContextCustomMessage;
   messages: AgentMessage[];
 }): AgentMessage[] {
@@ -423,20 +440,8 @@ function messageContentMatchesCurrentUserText(
 ): boolean {
   const matchesText = (text: string): boolean =>
     text === override.text || text === override.alternateText;
-  if (typeof content === "string") {
-    return matchesText(content);
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  const firstTextBlock = content.find((block): block is { text: string; type?: unknown } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    return typedBlock.type === "text" && typeof typedBlock.text === "string";
-  });
-  return firstTextBlock ? matchesText(firstTextBlock.text) : false;
+  const text = readFirstUserText(content);
+  return text !== undefined && matchesText(text);
 }
 
 function messageRuntimeTimestampMatchesCurrentUserOverride(
@@ -463,6 +468,9 @@ function stripHistoricalInboundMetadataFromUserMessages(
       return message;
     }
     const content = (message as { content?: unknown }).content;
+    const injectMediaText = hasPersistedMedia(message) && !hasNonBlankUserText(content);
+    // #111204: restore marked path lines here, never in UI-visible transcript storage.
+    const mediaOnlyText = buildLateMediaAttachedProjection(message).text ?? MEDIA_ONLY_USER_TEXT;
     const isActive = index === activeUserMessageIndex;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
@@ -477,8 +485,8 @@ function stripHistoricalInboundMetadataFromUserMessages(
 
     // Historical turns strip inbound metadata blocks (Conversation info, Sender
     // info, etc.); the active turn keeps its metadata for the current request.
-    // BOTH then get form-canonicalized and stamped from their own timestamp, so
-    // the SAME message serializes identically whether current or historical.
+    // BOTH then get media-only text if needed, form-canonicalize, and stamp from
+    // their own timestamp, so current and historical bytes stay identical.
     //
     // Channel-envelope preservation: a message that already carries its OWN
     // leading `[DOW YYYY-MM-DD HH:MM ...] ` envelope (Discord/Telegram, or a
@@ -487,17 +495,16 @@ function stripHistoricalInboundMetadataFromUserMessages(
     // keeps such messages byte-stable across current↔historical (the envelope is
     // present in both forms) and avoids double-stamping.
     const transformText = (raw: string): string => {
-      const envelopeMatch = raw.match(BOUNDARY_LEADING_ENVELOPE_CAPTURE);
-      if (envelopeMatch || raw.includes(BOUNDARY_CRON_TIME_MARKER)) {
+      const sourceText = injectMediaText && !raw.trim() ? mediaOnlyText : raw;
+      const { body, envelope } = splitLeadingTimestampEnvelope(sourceText);
+      if (envelope || sourceText.includes(BOUNDARY_CRON_TIME_MARKER)) {
         if (isActive) {
-          return raw;
+          return sourceText;
         }
-        const envelope = envelopeMatch ? envelopeMatch[0] : "";
-        const body = envelope ? raw.slice(envelope.length) : raw;
         // Strip metadata from the body but re-attach the original envelope.
         return `${envelope}${stripInboundMetadata(body)}`;
       }
-      const stripped = isActive ? raw : stripInboundMetadata(raw);
+      const stripped = isActive ? sourceText : stripInboundMetadata(sourceText);
       return stampUserTextWithMessageTimestamp(
         stripped,
         messageTimestamp,
@@ -558,6 +565,10 @@ function stripHistoricalInboundMetadataFromUserMessages(
       contentChanged = true;
       return Object.assign({}, block, { text: nextText });
     });
+    if (!processedFirstText && injectMediaText) {
+      nextContent.unshift({ type: "text", text: transformText("") });
+      contentChanged = true;
+    }
     if (!contentChanged) {
       return message;
     }
@@ -598,40 +609,4 @@ function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[]
     } as unknown as AgentMessage;
   });
   return changed ? nextMessages : messages;
-}
-
-function findActiveUserMessageIndex(messages: AgentMessage[]): number {
-  // A prompt turn may be followed by assistant tool-call scaffolding during
-  // retry reconstruction. A normal assistant reply means the latest user turn is
-  // historical, not the active prompt boundary.
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message) {
-      continue;
-    }
-    if (message.role === "user") {
-      return index;
-    }
-    if (message.role === "assistant" && !isToolCallAssistantMessage(message)) {
-      return -1;
-    }
-  }
-  return -1;
-}
-
-function isToolCallAssistantMessage(message: AgentMessage): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const type = (block as { type?: unknown }).type;
-    return isRunnerToolCallBlockType(type);
-  });
 }

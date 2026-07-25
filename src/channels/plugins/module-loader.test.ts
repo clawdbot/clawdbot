@@ -3,10 +3,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
-import type { PluginModuleLoaderFactory } from "../../plugins/plugin-module-loader-cache.js";
 import { resolveExistingPluginModulePath } from "./module-loader.js";
 
 const tempDirs: string[] = [];
@@ -19,6 +19,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.doUnmock("../../plugins/plugin-module-loader-cache.js");
 });
 
 function createTempDir(): string {
@@ -27,14 +28,11 @@ function createTempDir(): string {
   return tempDir;
 }
 
-function requireCreateJitiCall(
-  createJiti: ReturnType<typeof vi.fn>,
-): [string, { tryNative?: boolean }] {
-  const call = createJiti.mock.calls[0];
-  if (!call) {
-    throw new Error("expected createJiti call");
+function normalizeModuleLoaderTarget(target: string): string {
+  if (target.startsWith("file:")) {
+    return fileURLToPath(target);
   }
-  return call as [string, { tryNative?: boolean }];
+  return target;
 }
 
 describe("channel plugin module loader helpers", () => {
@@ -79,11 +77,13 @@ describe("channel plugin module loader helpers", () => {
   it("loads TypeScript channel plugin modules through Jiti when native loading is unavailable", async () => {
     const loadWithJiti = vi.fn((target: string) => ({
       loadedBy: "jiti",
-      target,
+      target: normalizeModuleLoaderTarget(target),
     }));
-    const createJiti = vi.fn(
-      (_filename: string, _options: { tryNative?: boolean }) => loadWithJiti,
-    );
+    const getCachedPluginModuleLoader = vi.fn(() => loadWithJiti);
+    vi.doMock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../plugins/plugin-module-loader-cache.js")>()),
+      getCachedPluginModuleLoader,
+    }));
     const sourceExtensions = [".ts", ".tsx", ".mts", ".cts"] as const;
     const sourceHooks = new Map<string, NodeJS.RequireExtensions[string] | undefined>();
     for (const extension of sourceExtensions) {
@@ -93,9 +93,6 @@ describe("channel plugin module loader helpers", () => {
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
       import.meta.url,
       "./module-loader.js?scope=source-ts-jiti-fallback",
-    );
-    loaderModule.setChannelPluginModuleLoaderFactoryForTest(
-      createJiti as unknown as PluginModuleLoaderFactory,
     );
     const rootDir = createTempDir();
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
@@ -112,11 +109,17 @@ describe("channel plugin module loader helpers", () => {
         loadedBy: "jiti",
         target: fs.realpathSync.native(modulePath),
       });
-      expect(createJiti).toHaveBeenCalledOnce();
-      const [loaderFilename, loaderOptions] = requireCreateJitiCall(createJiti);
-      expect(loaderFilename).toContain("module-loader.ts");
-      expect(loaderOptions.tryNative).toBe(false);
-      expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
+      expect(getCachedPluginModuleLoader).toHaveBeenCalledOnce();
+      expect(getCachedPluginModuleLoader).toHaveBeenCalledWith(
+        expect.objectContaining({
+          modulePath: fs.realpathSync.native(modulePath),
+          tryNative: false,
+          cacheScopeKey: "channel-plugin-module-loader",
+        }),
+      );
+      expect(normalizeModuleLoaderTarget(loadWithJiti.mock.calls[0]?.[0] ?? "")).toBe(
+        fs.realpathSync.native(modulePath),
+      );
     } finally {
       for (const [extension, hook] of sourceHooks) {
         if (hook) {

@@ -4,6 +4,22 @@ import OpenClawProtocol
 
 struct AnyCodableTests {
     @Test
+    func roundTripsEpochMillisecondsBeyondInt32() throws {
+        let epochMilliseconds: Int64 = 1_800_000_000_000
+        let original = AnyCodable(epochMilliseconds)
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        let decodedMilliseconds = (decoded.value as? Int64)
+            ?? (decoded.value as? Int).map(Int64.init)
+
+        #expect(String(decoding: data, as: UTF8.self) == "1800000000000")
+        #expect(decodedMilliseconds == epochMilliseconds)
+        #expect(decoded == original)
+        #expect(Set([decoded, original]).count == 1)
+    }
+
+    @Test
     func encodesNSNumberBooleansAsJSONBooleans() throws {
         let trueData = try JSONEncoder().encode(AnyCodable(NSNumber(value: true)))
         let falseData = try JSONEncoder().encode(AnyCodable(NSNumber(value: false)))

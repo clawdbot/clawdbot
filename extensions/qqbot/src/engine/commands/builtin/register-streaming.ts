@@ -8,23 +8,14 @@ import {
 } from "./state.js";
 
 function isStreamingConfigEnabled(streaming: unknown): boolean {
-  if (streaming === true) {
-    return true;
-  }
-  if (streaming === false || streaming === undefined || streaming === null) {
+  if (!streaming || typeof streaming !== "object") {
     return false;
   }
-  if (typeof streaming === "object") {
-    const o = streaming as Record<string, unknown>;
-    if (o.c2cStreamApi === true) {
-      return true;
-    }
-    if (o.mode === "off") {
-      return false;
-    }
+  const o = streaming as Record<string, unknown>;
+  if (o.nativeTransport === true) {
     return true;
   }
-  return false;
+  return o.mode !== "off";
 }
 
 export function registerStreamingCommands(registry: SlashCommandRegistry): void {
@@ -83,7 +74,7 @@ export function registerStreamingCommands(registry: SlashCommandRegistry): void 
           ``,
           `\`\`\`shell`,
           `# 1. 开启流式消息`,
-          `openclaw config set channels.qqbot.streaming true`,
+          `openclaw config set channels.qqbot.streaming.nativeTransport true`,
           ``,
           `# 2. 重启网关使配置生效`,
           `openclaw gateway restart`,
@@ -103,7 +94,11 @@ export function registerStreamingCommands(registry: SlashCommandRegistry): void 
         }
 
         const accountId = ctx.accountId;
-        const newVal: unknown = wantOn;
+        // Nested-only spelling: "on" is the retired `streaming: true` shape
+        // (block streaming + official C2C stream), "off" disables both.
+        const newVal: unknown = wantOn
+          ? { mode: "partial", nativeTransport: true }
+          : { mode: "off" };
 
         if (accountId !== "default") {
           const prevAccounts =

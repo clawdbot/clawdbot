@@ -1,0 +1,31 @@
+title: Docker update channel switch
+
+scenario:
+  id: docker-update-channel-switch
+  surface: cli
+  category: cli.updates-and-upgrades
+  coverage:
+    primary:
+      - cli.install-kind-switching
+      - cli.update-status-and-rpc
+    secondary:
+      - cli.update-channels
+  objective: Verify package-to-git and git-to-package update switching plus machine-readable update status in Docker.
+  successCriteria:
+    - The package install updates to a package-derived git dev fixture.
+    - The git install updates back to the package tarball.
+    - "`openclaw update status --json` reports the expected git and package status after each switch."
+  docsRefs:
+    - docs/cli/update.md
+    - docs/install/updating.md
+    - docs/help/testing-updates-plugins.md
+  codeRefs:
+    - scripts/e2e/update-channel-switch-docker.sh
+    - scripts/e2e/lib/update-channel-switch/assertions.mjs
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing update-channel-switch Docker E2E lane and records QA Lab evidence for install-kind switching and update status coverage.
+    args:
+      - --lane
+      - update-channel-switch

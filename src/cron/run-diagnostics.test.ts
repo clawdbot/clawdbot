@@ -2,12 +2,16 @@
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
+  createCronRunDiagnosticsFromMissingWebSearchProvider,
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "./run-diagnostics.js";
+
+const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
 
 describe("cron run diagnostics", () => {
   it("normalizes and bounds diagnostic entries", () => {
@@ -27,6 +31,29 @@ describe("cron run diagnostics", () => {
     expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
     expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
     expect(diagnostics?.summary).toHaveLength(2_000);
+  });
+
+  it("keeps bounded diagnostic text valid at UTF-16 boundaries", () => {
+    const diagnostics = normalizeCronRunDiagnostics({
+      summary: `${"s".repeat(1_998)}😀tail`,
+      entries: [
+        {
+          ts: 1,
+          source: "exec",
+          severity: "error",
+          message: `${"m".repeat(998)}😀tail`,
+        },
+      ],
+    });
+
+    expect(diagnostics?.summary).toBe(`${"s".repeat(1_998)}…`);
+    expect(diagnostics?.entries[0]).toEqual({
+      ts: 1,
+      source: "exec",
+      severity: "error",
+      message: `${"m".repeat(998)}…`,
+      truncated: true,
+    });
   });
 
   it("preserves later terminal diagnostics when capping entries", () => {
@@ -80,6 +107,42 @@ describe("cron run diagnostics", () => {
     expect(summarizeCronRunDiagnostics(merged)).toBe("delivery failed");
   });
 
+  it("warns when cron toolsAllow requests web_search without a provider", () => {
+    const diagnostics = createCronRunDiagnosticsFromMissingWebSearchProvider({
+      toolsAllow: ["web_*"],
+      hasWebSearchProvider: false,
+      nowMs: () => 900,
+    });
+
+    expect(diagnostics).toEqual({
+      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      entries: [
+        {
+          ts: 900,
+          source: "cron-preflight",
+          severity: "warn",
+          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+          toolName: "web_search",
+        },
+      ],
+    });
+  });
+
+  it("does not warn for wildcard toolsAllow or configured web_search providers", () => {
+    expect(
+      createCronRunDiagnosticsFromMissingWebSearchProvider({
+        toolsAllow: ["*"],
+        hasWebSearchProvider: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      createCronRunDiagnosticsFromMissingWebSearchProvider({
+        toolsAllow: ["web_search"],
+        hasWebSearchProvider: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("keeps a later delivery error summary ahead of an earlier warning", () => {
     const warning = normalizeCronRunDiagnostics({
       summary: "agent warning",
@@ -129,6 +192,27 @@ describe("cron run diagnostics", () => {
       toolName: "exec",
       exitCode: 2,
     });
+  });
+
+  it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            details: {
+              status: "completed",
+              exitCode: 2,
+              aggregated: `x😀${"y".repeat(1_999)}`,
+            },
+          },
+        ],
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics?.summary).toBe("y".repeat(1_999));
+    expect(diagnostics?.entries[0]?.message).toBe(`${"y".repeat(999)}…`);
   });
 
   it("does not capture harmless successful exec output", () => {

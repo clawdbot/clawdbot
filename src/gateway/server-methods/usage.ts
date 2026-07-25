@@ -1,6 +1,7 @@
 // Usage gateway methods aggregate provider and session cost/token metrics from
 // caches, logs, session stores, and discovered transcript files.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -15,6 +16,11 @@ import {
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createTimeZoneDayKeyFormatter,
+  resolveTimezone,
+  resolveTimeZoneDayStartMs,
+} from "../../infra/format-time/format-datetime.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import {
   addCostUsageTotals,
@@ -31,12 +37,12 @@ import type {
 import {
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
-  loadSessionCostSummaryFromCache,
   loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
   resolveExistingUsageSessionFile,
   type DiscoveredSession,
+  type UsageDailyBucket,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -51,27 +57,55 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import {
-  listAgentsForGateway,
-  loadCombinedSessionStoreForGateway,
-  loadSessionEntry,
-} from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
-const SESSIONS_USAGE_CACHE_READ_CONCURRENCY = 12;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 
-type DateRange = { startMs: number; endMs: number };
+async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
+  const result = await runTasksWithConcurrency({
+    tasks,
+    limit: USAGE_AGENT_LOAD_CONCURRENCY,
+    errorMode: "stop",
+  });
+  // These fan-outs historically rejected as one unit. Never return partial
+  // per-agent usage; successful results retain their input order.
+  if (result.hasError) {
+    throw result.firstError;
+  }
+  return result.results;
+}
+
+type DateRange = { startMs: number; endMs: number; includeUntimestamped?: boolean };
+// Keep validation and parsed timestamps in one result so handlers cannot forward
+// an invalid or backwards window to the usage loaders.
+type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
+// 100 years: callers requesting unbounded history should use `range: "all"`.
+// Larger explicit day counts would overflow ECMAScript Date arithmetic and
+// surface as a misleading "calendar day does not exist" error from the resolver.
+const MAX_USAGE_DAYS = 366 * 100;
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
-  | { mode: "specific"; utcOffsetMinutes: number };
+  | { mode: "utc-offset"; utcOffsetMinutes: number }
+  | { mode: "time-zone"; timeZone: string; formatDayKey: (date: Date) => string };
+type DateInterpretationResolution =
+  | { ok: true; value: DateInterpretation }
+  | { ok: false; error: string };
+type DateParts = { year: number; monthIndex: number; day: number };
+
+const MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS = 1;
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -114,7 +148,7 @@ function resolveSessionUsageFileOrRespond(
   sessionId: string;
   sessionFile: string;
 } | null {
-  const { entry, storePath } = loadSessionEntry(key);
+  const { entry, storePath } = loadSessionEntryReadOnly(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);
@@ -137,9 +171,7 @@ function resolveSessionUsageFileOrRespond(
   return { config, entry, agentId, sessionId, sessionFile };
 }
 
-const parseDateParts = (
-  raw: unknown,
-): { year: number; monthIndex: number; day: number } | undefined => {
+const parseDateParts = (raw: unknown): DateParts | undefined => {
   if (typeof raw !== "string" || !raw.trim()) {
     return undefined;
   }
@@ -168,11 +200,57 @@ const parseDateParts = (
   return { year, monthIndex, day };
 };
 
+const shiftDateParts = (parts: DateParts, days: number): DateParts => {
+  const shifted = new Date(Date.UTC(parts.year, parts.monthIndex, parts.day + days));
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+};
+
+const datePartsToStartMs = (
+  parts: DateParts,
+  interpretation: DateInterpretation,
+): number | undefined => {
+  const { year, monthIndex, day } = parts;
+  if (interpretation.mode === "gateway") {
+    return new Date(year, monthIndex, day).getTime();
+  }
+  if (interpretation.mode === "time-zone") {
+    return resolveTimeZoneDayStartMs(
+      formatDateParts(year, monthIndex, day),
+      interpretation.timeZone,
+    );
+  }
+  if (interpretation.mode === "utc-offset") {
+    return Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
+  }
+  return Date.UTC(year, monthIndex, day);
+};
+
+const datePartsToEndMs = (
+  parts: DateParts,
+  interpretation: DateInterpretation,
+): number | undefined => {
+  const lookaheadDays =
+    interpretation.mode === "time-zone" ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS : 1;
+  // A 24-hour date-line transition can remove one civil date entirely. Range
+  // resolution separately verifies the requested day; this only finds its end.
+  for (let daysAhead = 1; daysAhead <= lookaheadDays; daysAhead += 1) {
+    const nextDayStartMs = datePartsToStartMs(shiftDateParts(parts, daysAhead), interpretation);
+    if (nextDayStartMs !== undefined) {
+      return nextDayStartMs - 1;
+    }
+  }
+  return undefined;
+};
+
 // usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
 // undefined for both absent and invalid input, so an explicitly supplied but unparseable
 // date (bad format or impossible calendar date like 2026-02-30) would otherwise silently
 // fall through to the default range and return a successful response for an unrelated range.
-// Return the offending field so handlers can reject it instead of querying the wrong window.
+// Return the offending field so range resolution can reject it instead of querying the wrong window.
 const findInvalidExplicitDate = (params: {
   startDate?: unknown;
   endDate?: unknown;
@@ -220,18 +298,78 @@ const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
 const resolveDateInterpretation = (params: {
   mode?: unknown;
   utcOffset?: unknown;
-}): DateInterpretation => {
+  timeZone?: unknown;
+}): DateInterpretationResolution => {
   if (params.mode === "gateway") {
-    return { mode: "gateway" };
+    return { ok: true, value: { mode: "gateway" } };
   }
   if (params.mode === "specific") {
     const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
+    if (params.timeZone !== undefined && params.timeZone !== null) {
+      const requestedTimeZone = normalizeOptionalString(params.timeZone);
+      const timeZone = requestedTimeZone ? resolveTimezone(requestedTimeZone) : undefined;
+      if (!timeZone) {
+        // Browser tzdata can lead Gateway ICU. Preserve legacy fixed-offset
+        // reporting when the concurrently supplied offset is still usable.
+        if (utcOffsetMinutes !== undefined) {
+          return { ok: true, value: { mode: "utc-offset", utcOffsetMinutes } };
+        }
+        return { ok: false, error: "invalid timeZone: expected a valid IANA time zone" };
+      }
+      return {
+        ok: true,
+        value: {
+          mode: "time-zone",
+          timeZone,
+          formatDayKey: createTimeZoneDayKeyFormatter(timeZone),
+        },
+      };
+    }
     if (utcOffsetMinutes !== undefined) {
-      return { mode: "specific", utcOffsetMinutes };
+      return { ok: true, value: { mode: "utc-offset", utcOffsetMinutes } };
     }
   }
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
-  return { mode: "utc" };
+  return { ok: true, value: { mode: "utc" } };
+};
+
+const resolveDayBucket = (interpretation: DateInterpretation): UsageDailyBucket | undefined => {
+  if (interpretation.mode === "gateway") {
+    return undefined;
+  }
+  if (interpretation.mode === "time-zone") {
+    return { mode: "time-zone", timeZone: interpretation.timeZone };
+  }
+  return {
+    mode: "utc-offset",
+    utcOffsetMinutes: interpretation.mode === "utc-offset" ? interpretation.utcOffsetMinutes : 0,
+  };
+};
+
+const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts => {
+  if (interpretation.mode === "gateway") {
+    return { year: date.getFullYear(), monthIndex: date.getMonth(), day: date.getDate() };
+  }
+  if (interpretation.mode === "time-zone") {
+    const parts = parseDateParts(interpretation.formatDayKey(date));
+    if (!parts) {
+      throw new Error("timezone formatter returned an invalid calendar day");
+    }
+    return parts;
+  }
+  if (interpretation.mode === "utc-offset") {
+    const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
+    return {
+      year: shifted.getUTCFullYear(),
+      monthIndex: shifted.getUTCMonth(),
+      day: shifted.getUTCDate(),
+    };
+  }
+  return {
+    year: date.getUTCFullYear(),
+    monthIndex: date.getUTCMonth(),
+    day: date.getUTCDate(),
+  };
 };
 
 /**
@@ -246,42 +384,29 @@ const parseDateToMs = (
   if (!parts) {
     return undefined;
   }
-  const { year, monthIndex, day } = parts;
-  if (interpretation.mode === "gateway") {
-    const ms = new Date(year, monthIndex, day).getTime();
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  if (interpretation.mode === "specific") {
-    const ms = Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  const ms = Date.UTC(year, monthIndex, day);
-  return Number.isNaN(ms) ? undefined : ms;
+  return datePartsToStartMs(parts, interpretation);
 };
 
-const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
-  if (interpretation.mode === "gateway") {
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  }
-  if (interpretation.mode === "specific") {
-    const shifted = new Date(now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
-    return (
-      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
-      interpretation.utcOffsetMinutes * 60 * 1000
-    );
-  }
-  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
+  const parts = getDateParts(new Date(ms), interpretation);
+  return formatDateParts(parts.year, parts.monthIndex, parts.day);
 };
+
+const formatDateParts = (year: number, monthIndex: number, day: number): string =>
+  `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
 const parseDays = (raw: unknown): number | undefined => {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.floor(raw);
+  const fromFinite = (n: number): number | undefined => {
+    if (!Number.isFinite(n)) {
+      return undefined;
+    }
+    return Math.min(Math.floor(n), MAX_USAGE_DAYS);
+  };
+  if (typeof raw === "number") {
+    return fromFinite(raw);
   }
   if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) {
-      return Math.floor(parsed);
-    }
+    return fromFinite(Number(raw));
   }
   return undefined;
 };
@@ -305,50 +430,92 @@ const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
   return undefined;
 };
 
+const resolveTrailingDays = (
+  endDateParts: DateParts,
+  days: number,
+  interpretation: DateInterpretation,
+): DateRangeResolution => {
+  const startMs = datePartsToStartMs(shiftDateParts(endDateParts, -(days - 1)), interpretation);
+  const endMs = datePartsToEndMs(endDateParts, interpretation);
+  if (startMs === undefined || endMs === undefined) {
+    return { ok: false, error: "calendar day does not exist in requested time zone" };
+  }
+  return { ok: true, value: { startMs, endMs } };
+};
+
 /**
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
  */
-const parseDateRange = (params: {
-  startDate?: unknown;
-  endDate?: unknown;
-  days?: unknown;
-  range?: unknown;
-  mode?: unknown;
-  utcOffset?: unknown;
-}): DateRange => {
+const resolveDateRange = (
+  params: {
+    startDate?: unknown;
+    endDate?: unknown;
+    days?: unknown;
+    range?: unknown;
+    mode?: unknown;
+    utcOffset?: unknown;
+    timeZone?: unknown;
+  },
+  resolvedInterpretation?: DateInterpretation,
+): DateRangeResolution => {
+  const invalidDate = findInvalidExplicitDate(params);
+  if (invalidDate) {
+    return {
+      ok: false,
+      error: `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+    };
+  }
+
   const now = new Date();
-  const interpretation = resolveDateInterpretation(params);
-  const todayStartMs = getTodayStartMs(now, interpretation);
-  const todayEndMs = todayStartMs + DAY_MS - 1;
+  const interpretationResolution = resolvedInterpretation
+    ? { ok: true as const, value: resolvedInterpretation }
+    : resolveDateInterpretation(params);
+  if (!interpretationResolution.ok) {
+    return interpretationResolution;
+  }
+  const interpretation = interpretationResolution.value;
+  const todayDateParts = getDateParts(now, interpretation);
+  const todayEndMs = datePartsToEndMs(todayDateParts, interpretation);
+  if (todayEndMs === undefined) {
+    return { ok: false, error: "calendar day does not exist in requested time zone" };
+  }
 
-  const startMs = parseDateToMs(params.startDate, interpretation);
-  const endMs = parseDateToMs(params.endDate, interpretation);
+  const startDateParts = parseDateParts(params.startDate);
+  const endDateParts = parseDateParts(params.endDate);
 
-  if (startMs !== undefined && endMs !== undefined) {
-    // endMs should be end of day
-    return { startMs, endMs: endMs + DAY_MS - 1 };
+  if (startDateParts && endDateParts) {
+    const startMs = datePartsToStartMs(startDateParts, interpretation);
+    const endStartMs = datePartsToStartMs(endDateParts, interpretation);
+    const endMs = datePartsToEndMs(endDateParts, interpretation);
+    if (startMs === undefined || endStartMs === undefined || endMs === undefined) {
+      return { ok: false, error: "calendar day does not exist in requested time zone" };
+    }
+    if (startMs > endStartMs) {
+      return { ok: false, error: "startDate must not be after endDate" };
+    }
+    return { ok: true, value: { startMs, endMs } };
   }
 
   const rangeDays = resolveRangeDays(params.range);
   if (rangeDays === "all") {
-    return { startMs: 0, endMs: todayEndMs };
+    return {
+      ok: true,
+      value: { startMs: 0, endMs: todayEndMs, includeUntimestamped: true },
+    };
   }
   if (rangeDays !== undefined) {
-    const start = todayStartMs - (rangeDays - 1) * DAY_MS;
-    return { startMs: start, endMs: todayEndMs };
+    return resolveTrailingDays(todayDateParts, rangeDays, interpretation);
   }
 
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
-    const start = todayStartMs - (clampedDays - 1) * DAY_MS;
-    return { startMs: start, endMs: todayEndMs };
+    return resolveTrailingDays(todayDateParts, clampedDays, interpretation);
   }
 
   // Default to last 30 days
-  const defaultStartMs = todayStartMs - 29 * DAY_MS;
-  return { startMs: defaultStartMs, endMs: todayEndMs };
+  return resolveTrailingDays(todayDateParts, 30, interpretation);
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
@@ -425,9 +592,9 @@ async function discoverAllSessionsForUsage(params: {
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const agents = requestedAgentId
     ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : listAgentsForGateway(params.config).agents;
-  const discovered = await Promise.all(
-    agents.map(async (agent) => {
+    : listGatewayAgentsBasic(params.config).agents;
+  const discovered = await runUsageAgentTasks(
+    agents.map((agent) => async () => {
       const agentId = normalizeAgentId(agent.id);
       const sessions = await discoverAllSessions({
         agentId,
@@ -729,19 +896,20 @@ function mergeDailyModelRows(
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
+  dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}`;
+  const dayBucketKey = params.dayBucket
+    ? params.dayBucket.mode === "time-zone"
+      ? `time-zone:${params.dayBucket.timeZone}`
+      : `utc-offset:${params.dayBucket.utcOffsetMinutes}`
+    : "gateway";
+  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
-  if (
-    cached?.summary &&
-    cached.updatedAt &&
-    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS &&
-    cached.summary.cacheStatus?.status !== "refreshing"
-  ) {
+  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
     return cached.summary;
   }
 
@@ -758,11 +926,13 @@ async function loadCostUsageSummaryCached(params: {
       ? loadAllAgentCostUsageSummary({
           startMs: params.startMs,
           endMs: params.endMs,
+          dayBucket: params.dayBucket,
           config: params.config,
         })
       : loadCostUsageSummaryFromCache({
           startMs: params.startMs,
           endMs: params.endMs,
+          dayBucket: params.dayBucket,
           config: params.config,
           agentId: params.agentId,
           requestRefresh: true,
@@ -770,9 +940,11 @@ async function loadCostUsageSummaryCached(params: {
         })
   )
     .then((summary) => {
+      // Refresh work is independent; retaining freshness prevents fleet rescans while it runs.
+      // The short TTL still picks up a completed refresh promptly.
       setCostUsageCache(cacheKey, {
         summary,
-        updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
+        updatedAt: Date.now(),
       });
       return summary;
     })
@@ -803,21 +975,24 @@ async function loadCostUsageSummaryCached(params: {
 async function loadAllAgentCostUsageSummary(params: {
   startMs: number;
   endMs: number;
+  dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
+  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
-  const summaries = await Promise.all(
-    agentIds.map((agentId) =>
-      loadCostUsageSummaryFromCache({
-        startMs: params.startMs,
-        endMs: params.endMs,
-        config: params.config,
-        agentId,
-        requestRefresh: true,
-        refreshMode: "background",
-      }),
+  const summaries = await runUsageAgentTasks(
+    agentIds.map(
+      (agentId) => () =>
+        loadCostUsageSummaryFromCache({
+          startMs: params.startMs,
+          endMs: params.endMs,
+          dayBucket: params.dayBucket,
+          config: params.config,
+          agentId,
+          requestRefresh: true,
+          refreshMode: "background",
+        }),
     ),
   );
   const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
@@ -875,13 +1050,11 @@ function mergeUsageCacheStatus(
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
   parseDateParts,
-  findInvalidExplicitDate,
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
   parseDateToMs,
-  getTodayStartMs,
   parseDays,
-  parseDateRange,
+  resolveDateRange,
   discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
@@ -896,35 +1069,44 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
-    const invalidDate = findInvalidExplicitDate({
-      startDate: params?.startDate,
-      endDate: params?.endDate,
+    const dateInterpretationResolution = resolveDateInterpretation({
+      mode: params?.mode,
+      utcOffset: params?.utcOffset,
+      timeZone: params?.timeZone,
     });
-    if (invalidDate) {
+    if (!dateInterpretationResolution.ok) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, dateInterpretationResolution.error),
       );
       return;
     }
+    const dateInterpretation = dateInterpretationResolution.value;
+    const dateRange = resolveDateRange(
+      {
+        startDate: params?.startDate,
+        endDate: params?.endDate,
+        days: params?.days,
+        range: params?.range,
+        mode: params?.mode,
+        utcOffset: params?.utcOffset,
+        timeZone: params?.timeZone,
+      },
+      dateInterpretation,
+    );
+    if (!dateRange.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
+      return;
+    }
     const config = context.getRuntimeConfig();
-    const { startMs, endMs } = parseDateRange({
-      startDate: params?.startDate,
-      endDate: params?.endDate,
-      days: params?.days,
-      range: params?.range,
-      mode: params?.mode,
-      utcOffset: params?.utcOffset,
-    });
+    const { startMs, endMs } = dateRange.value;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
+      dayBucket: resolveDayBucket(dateInterpretation),
       config,
       agentId,
       agentScope,
@@ -945,26 +1127,38 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
-    const invalidDate = findInvalidExplicitDate({ startDate: p.startDate, endDate: p.endDate });
-    if (invalidDate) {
+    const dateInterpretationResolution = resolveDateInterpretation({
+      mode: p.mode,
+      utcOffset: p.utcOffset,
+      timeZone: p.timeZone,
+    });
+    if (!dateInterpretationResolution.ok) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, dateInterpretationResolution.error),
       );
       return;
     }
+    const dateInterpretation = dateInterpretationResolution.value;
+    const dateRange = resolveDateRange(
+      {
+        startDate: p.startDate,
+        endDate: p.endDate,
+        range: p.range,
+        mode: p.mode,
+        utcOffset: p.utcOffset,
+        timeZone: p.timeZone,
+      },
+      dateInterpretation,
+    );
+    if (!dateRange.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
+      return;
+    }
     const config = context.getRuntimeConfig();
-    const { startMs, endMs } = parseDateRange({
-      startDate: p.startDate,
-      endDate: p.endDate,
-      range: p.range,
-      mode: p.mode,
-      utcOffset: p.utcOffset,
-    });
+    const { startMs, endMs, includeUntimestamped } = dateRange.value;
+    const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -1147,8 +1341,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    const limitedEntries = mergedEntries.slice(0, limit);
-
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
     const aggregateTotals = createEmptyCostUsageTotals();
@@ -1194,125 +1386,93 @@ export const usageHandlers: GatewayRequestHandlers = {
       { length: mergedEntries.length },
       () => null,
     );
-    const usageLoadTasks: Array<
-      () => Promise<{
-        entryIndex: number;
-        cacheStatus: UsageCacheStatus;
-        summary: SessionCostSummary | null;
-      }>
-    > = [];
 
-    for (const [entryIndex, merged] of limitedEntries.entries()) {
-      const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
-      for (const includedSessionId of includedSessionIds) {
-        const isCurrentSession = includedSessionId === merged.sessionId;
-        const includedSessionFile = isCurrentSession
-          ? merged.sessionFile
-          : resolveExistingUsageSessionFile({
-              sessionId: includedSessionId,
-              agentId: merged.agentId,
-            });
-        if (!includedSessionFile) {
-          continue;
-        }
-        usageLoadTasks.push(async () => {
-          const cachedUsage = await loadSessionCostSummaryFromCache({
-            sessionId: includedSessionId,
-            sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
-            sessionFile: includedSessionFile,
-            config,
-            agentId: merged.agentId,
-            startMs,
-            endMs,
-            refreshMode: "background",
-          });
-          return {
-            entryIndex,
-            cacheStatus: cachedUsage.cacheStatus,
-            summary: cachedUsage.summary,
-          };
-        });
-      }
-    }
-
-    const usageLoadResult = await runTasksWithConcurrency({
-      tasks: usageLoadTasks,
-      limit: SESSIONS_USAGE_CACHE_READ_CONCURRENCY,
-      errorMode: "stop",
-    });
-    if (usageLoadResult.hasError) {
-      throw usageLoadResult.firstError;
-    }
-    for (const loaded of usageLoadResult.results) {
-      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
-      if (!loaded.summary) {
-        continue;
-      }
-      const merged = mergedEntries[loaded.entryIndex];
-      const usage = usageByEntryIndex[loaded.entryIndex] ?? createEmptySessionCostSummary();
-      usage.sessionId = merged.sessionId;
-      usage.sessionFile = merged.sessionFile;
-      mergeSessionUsageInto(usage, loaded.summary);
-      usageByEntryIndex[loaded.entryIndex] = usage;
-    }
-
-    const hiddenSessionsByAgent = new Map<
+    // Group every included session (visible + hidden) by agent so the usage-cost
+    // cache is read and parsed at most once per agent. Loading each session
+    // individually re-reads and re-parses the whole cache file, so RSS spikes
+    // in proportion to `limit` on every dashboard connect (issue #100041).
+    const sessionsByAgent = new Map<
       string | undefined,
       Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
     >();
     for (const [entryIndex, merged] of mergedEntries.entries()) {
-      if (entryIndex < limitedEntries.length) {
-        continue;
-      }
-      const hiddenSessions = hiddenSessionsByAgent.get(merged.agentId) ?? [];
       for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
-        const sessionFile =
+        const includedSessionFile =
           includedSessionId === merged.sessionId
             ? merged.sessionFile
             : resolveExistingUsageSessionFile({
                 sessionId: includedSessionId,
                 agentId: merged.agentId,
               });
-        if (sessionFile) {
-          hiddenSessions.push({ entryIndex, sessionId: includedSessionId, sessionFile });
+        if (!includedSessionFile) {
+          continue;
         }
+        const agentSessions = sessionsByAgent.get(merged.agentId) ?? [];
+        agentSessions.push({
+          entryIndex,
+          sessionId: includedSessionId,
+          sessionFile: includedSessionFile,
+        });
+        sessionsByAgent.set(merged.agentId, agentSessions);
       }
-      hiddenSessionsByAgent.set(merged.agentId, hiddenSessions);
     }
-    for (const [agentId, hiddenSessions] of hiddenSessionsByAgent) {
-      const hiddenUsage = await loadSessionCostSummariesFromCache({
-        sessions: hiddenSessions,
-        config,
-        agentId,
-        startMs,
-        endMs,
-      });
-      cacheStatus = mergeUsageCacheStatus(cacheStatus, hiddenUsage.cacheStatus);
-      for (const [hiddenIndex, summary] of hiddenUsage.summaries.entries()) {
+
+    const agentLoads = await runUsageAgentTasks(
+      Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => ({
+        agentSessions,
+        loaded: await loadSessionCostSummariesFromCache({
+          sessions: agentSessions,
+          config,
+          agentId,
+          startMs,
+          endMs,
+          includeUntimestamped,
+          dayBucket,
+        }),
+      })),
+    );
+    for (const { agentSessions, loaded } of agentLoads) {
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
+      for (const [index, summary] of loaded.summaries.entries()) {
         if (!summary) {
           continue;
         }
-        const hiddenSession = hiddenSessions[hiddenIndex];
-        const merged = mergedEntries[hiddenSession.entryIndex];
-        const usage =
-          usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
+        const session = expectDefined(agentSessions[index], "agent sessions entry at index");
+        const merged = expectDefined(
+          mergedEntries[session.entryIndex],
+          "merged entries entry at session.entry index",
+        );
+        const usage = usageByEntryIndex[session.entryIndex] ?? createEmptySessionCostSummary();
         usage.sessionId = merged.sessionId;
         usage.sessionFile = merged.sessionFile;
         mergeSessionUsageInto(usage, summary);
-        usageByEntryIndex[hiddenSession.entryIndex] = usage;
+        usageByEntryIndex[session.entryIndex] = usage;
       }
     }
 
+    // Track session-level aggregates across every matched session, so profile
+    // stats stay correct when the row list is truncated by `limit`.
+    let longestSessionDurationMs = 0;
+    let activeSessionCount = 0;
+
     for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
-      const usage = usageByEntryIndex[entryIndex];
+      // A cold or stale cache intentionally yields null until its background refresh completes.
+      const usage = usageByEntryIndex[entryIndex] ?? null;
 
       if (usage) {
         addCostUsageTotals(aggregateTotals, usage);
+        longestSessionDurationMs = Math.max(longestSessionDurationMs, usage.durationMs ?? 0);
+        // Discovery admits transcripts modified after endMs (they can still hold
+        // in-range activity), so count only sessions whose filtered usage does.
+        if (usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0) {
+          activeSessionCount += 1;
+        }
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      const channel = sessionDeliveryChannel(merged.storeEntry);
+      const chatType =
+        merged.storeEntry?.chatType ?? sessionDeliveryOrigin(merged.storeEntry)?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
@@ -1443,7 +1603,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           channel,
           chatType,
-          origin: merged.storeEntry?.origin,
+          origin: sessionDeliveryOrigin(merged.storeEntry),
           modelOverride: merged.storeEntry?.modelOverride,
           providerOverride: merged.storeEntry?.providerOverride,
           modelProvider: merged.storeEntry?.modelProvider,
@@ -1456,12 +1616,6 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
     }
 
-    // Format dates back to YYYY-MM-DD strings
-    const formatDateStr = (ms: number) => {
-      const d = new Date(ms);
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-    };
-
     const tail = buildUsageAggregateTail({
       byChannelMap,
       latencyTotals,
@@ -1471,6 +1625,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
 
     const aggregates: SessionsUsageAggregates = {
+      sessionCount: activeSessionCount,
+      ...(longestSessionDurationMs > 0 ? { longestSessionDurationMs } : {}),
       messages: aggregateMessages,
       tools: {
         totalCalls: Array.from(toolAggregateMap.values()).reduce((sum, count) => sum + count, 0),
@@ -1501,8 +1657,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     const result: SessionsUsageResult = {
       updatedAt: now,
-      startDate: formatDateStr(startMs),
-      endDate: formatDateStr(endMs),
+      startDate: formatDateLabel(startMs, dateInterpretation),
+      endDate: formatDateLabel(endMs, dateInterpretation),
       sessions,
       totals: aggregateTotals,
       aggregates,
@@ -1578,3 +1734,4 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, { logs: logs ?? [] }, undefined);
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

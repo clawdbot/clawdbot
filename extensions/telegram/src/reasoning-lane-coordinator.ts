@@ -5,8 +5,23 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 
-const REASONING_MESSAGE_RE = /^Thinking\.{0,3}\s*_/u;
+// A durable reasoning message already marked channel-side: 🧠 + italic body
+// (see markReasoningMessage). Detect it so a re-split passes it through
+// unchanged instead of re-marking.
+const REASONING_MESSAGE_RE = /^🧠\s+_/u;
+// Core's formatReasoningMessage prefixes the italic body with a literal
+// "Thinking" header. Telegram renders durable thoughts with the 🧠 marker
+// (Discord parity), so this header must be rewritten channel-side.
+const CORE_THINKING_HEADER_RE = /^Thinking\.{0,3}\s*\n+/u;
 const LEGACY_REASONING_MESSAGE_PREFIX = "Reasoning:\n";
+
+// Rewrite core's "Thinking\n\n_body_" into "🧠 _body_": strip the header word
+// and prefix the first italic line with 🧠. Keeps the italic body intact so
+// Telegram HTML renders it as before.
+function markReasoningMessage(formatted: string): string {
+  const withoutHeader = formatted.replace(CORE_THINKING_HEADER_RE, "");
+  return withoutHeader.replace(/^_/u, "🧠 _");
+}
 const REASONING_TAG_PREFIXES = [
   "<think",
   "<thinking",
@@ -73,12 +88,21 @@ export function splitTelegramReasoningText(
     return {};
   }
 
+  if (isReasoning !== true) {
+    return { answerText: text };
+  }
+
   const trimmed = text.trim();
   if (isPartialReasoningTagPrefix(trimmed)) {
     return {};
   }
   if (REASONING_MESSAGE_RE.test(trimmed)) {
     return { reasoningText: trimmed };
+  }
+  // Durable reasoning payloads arrive pre-formatted by core with the "Thinking"
+  // header; rewrite that to the 🧠 marker rather than passing it through.
+  if (CORE_THINKING_HEADER_RE.test(trimmed)) {
+    return { reasoningText: markReasoningMessage(trimmed) };
   }
   if (
     trimmed.startsWith(LEGACY_REASONING_MESSAGE_PREFIX) &&
@@ -90,17 +114,11 @@ export function splitTelegramReasoningText(
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
-  if (isReasoning === true) {
-    return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
-  }
-
-  if (!taggedReasoning && strippedAnswer === text) {
-    return { answerText: text };
-  }
-
-  const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
-  const answerText = strippedAnswer || undefined;
-  return { reasoningText, answerText };
+  return {
+    reasoningText: markReasoningMessage(
+      formatReasoningMessage(taggedReasoning || strippedAnswer || text),
+    ),
+  };
 }
 
 type BufferedFinalAnswer = {

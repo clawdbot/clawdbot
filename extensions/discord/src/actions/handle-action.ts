@@ -9,18 +9,26 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
-  normalizeInteractiveReply,
+  adaptMessagePresentationForChannel,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import {
+  DISCORD_PRESENTATION_CAPABILITIES,
+  isDiscordComponentSpecWithinMessageLimit,
+} from "../outbound-components.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 const providerId = "discord";
 
@@ -42,6 +50,7 @@ export async function handleDiscordMessageAction(
     | "params"
     | "cfg"
     | "accountId"
+    | "requesterAccountId"
     | "requesterSenderId"
     | "senderIsOwner"
     | "toolContext"
@@ -50,14 +59,35 @@ export async function handleDiscordMessageAction(
     | "mediaReadFile"
     | "sessionKey"
     | "inboundEventKind"
+    | "conversationReadOrigin"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
+  const readContext =
+    ctx.requesterAccountId &&
+    ctx.toolContext?.currentChannelProvider &&
+    ctx.toolContext.currentChannelId
+      ? {
+          requesterAccountId: ctx.requesterAccountId,
+          currentChannelProvider: ctx.toolContext.currentChannelProvider,
+          currentChannelId: ctx.toolContext.currentChannelId,
+        }
+      : undefined;
+  const readPolicyOptions: DiscordMessagingActionOptions | undefined =
+    ctx.conversationReadOrigin || readContext
+      ? {
+          ...(ctx.conversationReadOrigin
+            ? { conversationReadOrigin: ctx.conversationReadOrigin }
+            : {}),
+          ...(readContext ? { readContext } : {}),
+        }
+      : undefined;
   const actionOptions = {
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
     notifyDiscordInboundEventOutboundSuccess({
@@ -92,23 +122,53 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
-    const rawComponents =
-      params.components ??
-      buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
-      buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
-    const hasComponents =
-      Boolean(rawComponents) &&
-      (typeof rawComponents === "function" || typeof rawComponents === "object");
-    const components = hasComponents ? rawComponents : undefined;
     // Support media, path, and filePath for media URL
     const mediaUrl =
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
+    const requestedContent = readStringParam(params, "message", { allowEmpty: true });
+    const presentation =
+      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+    const adaptedPresentation = presentation
+      ? adaptMessagePresentationForChannel({
+          presentation,
+          capabilities: DISCORD_PRESENTATION_CAPABILITIES,
+        })
+      : undefined;
+    const generatedPresentationComponents = buildDiscordPresentationComponents(adaptedPresentation);
+    const presentationComponents =
+      generatedPresentationComponents &&
+      isDiscordComponentSpecWithinMessageLimit({
+        spec: generatedPresentationComponents,
+        fallbackText: requestedContent,
+        includesMedia: Boolean(mediaUrl),
+      })
+        ? generatedPresentationComponents
+        : undefined;
+    const presentationFellBack = Boolean(
+      generatedPresentationComponents && !presentationComponents,
+    );
+    const rawComponents = presentationFellBack
+      ? undefined
+      : (params.components ??
+        presentationComponents ??
+        buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
+    const hasComponents =
+      Boolean(rawComponents) &&
+      (typeof rawComponents === "function" || typeof rawComponents === "object");
+    const components = hasComponents ? rawComponents : undefined;
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl,
+      required: !asVoice && !hasComponents && !mediaUrl && !presentationFellBack,
       allowEmpty: true,
     });
+    const deliveryContent =
+      presentationFellBack && adaptedPresentation
+        ? renderMessagePresentationFallbackText({
+            text: content,
+            presentation: adaptedPresentation,
+          })
+        : content;
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const rawEmbeds = params.embeds;
@@ -123,7 +183,7 @@ export async function handleDiscordMessageAction(
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
-        content: content ?? "",
+        content: deliveryContent ?? "",
         ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
@@ -326,7 +386,7 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
-    const autoArchiveMinutes = readPositiveIntegerParam(params, "autoArchiveMin");
+    const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
       {
@@ -387,6 +447,7 @@ export async function handleDiscordMessageAction(
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
+    readPolicyOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {

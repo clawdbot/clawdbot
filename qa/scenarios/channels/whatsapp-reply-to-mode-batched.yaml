@@ -1,0 +1,19 @@
+title: WhatsApp batched reply-to mode quotes the queued message
+scenario:
+  id: whatsapp-reply-to-mode-batched
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.outbound-text-sends
+  execution:
+    profiles: { "whatsapp:mock-default": 9 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-reply-to-mode-batched }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppReplyToModeBatchedScenario
+  args: [{ expr: whatsappScenarioContext }]

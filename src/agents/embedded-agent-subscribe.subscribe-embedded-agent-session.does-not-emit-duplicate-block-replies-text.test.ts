@@ -41,6 +41,21 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
+  it("keeps the completed assistant independent from transcript mutation", () => {
+    const { session, emit } = createStubSessionHarness();
+    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run" });
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Current run reply" }],
+    } as AssistantMessage;
+
+    emit({ type: "message_end", message: assistantMessage });
+    assistantMessage.content = [{ type: "text", text: "Rewritten transcript reply" }];
+
+    expect(subscription.getCurrentAttemptAssistant()?.content).toEqual([
+      { type: "text", text: "Current run reply" },
+    ]);
+  });
   it("does not duplicate assistantTexts when message_end repeats with trailing whitespace changes", () => {
     const { session, emit } = createStubSessionHarness();
 

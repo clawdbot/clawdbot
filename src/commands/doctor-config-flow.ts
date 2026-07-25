@@ -9,10 +9,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
+  noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
@@ -20,10 +21,8 @@ import {
   applyUnknownConfigKeyStep,
 } from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
-import {
-  collectMissingDefaultAccountBindingWarnings,
-  collectMissingExplicitDefaultAccountWarnings,
-} from "./doctor/shared/default-account-warnings.js";
+import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
@@ -145,6 +144,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const preflight = await runDoctorConfigPreflight({
     repairPrefixedConfig: shouldRepair,
     recoverCorruptTargetStore: shouldRepair,
+    doctorOnlyStateMigrations: shouldRepair,
   });
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
@@ -152,6 +152,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
   let fixHints: string[] = [];
+  let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
   const sourceLastTouchedVersion =
@@ -168,6 +169,35 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   pendingChanges = pendingChanges || legacyStep.state.pendingChanges;
   fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
+  const { collectBlockedLegacyOpenAICodexProviderPlan } =
+    await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
+  const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(candidate);
+  const blockedCodexModelIdentities = new Set(blockedCodexProviderPlan.blockedModelIdentities);
+  if (preflight.cronCodexRuntimePolicyTargets?.length) {
+    const { repairCronCodexRuntimePolicies } =
+      await import("./doctor/cron/runtime-policy-migration.js");
+    const cronRuntimeRepair = repairCronCodexRuntimePolicies({
+      cfg: candidate,
+      targets: preflight.cronCodexRuntimePolicyTargets,
+      blockedModelIdentities: blockedCodexModelIdentities,
+    });
+    emitDoctorChangesPanel(cronRuntimeRepair.changes, shouldRepair);
+    if (cronRuntimeRepair.warnings.length > 0) {
+      emitDoctorNotes({ note, warningNotes: cronRuntimeRepair.warnings });
+    }
+    const blockedTargets = new Set(
+      cronRuntimeRepair.blockedTargets.map(cronCodexRuntimePolicyTargetKey),
+    );
+    shouldRepairCronCodexModelRefsAfterConfigWrite = preflight.cronCodexRuntimePolicyTargets.some(
+      (target) => !blockedTargets.has(cronCodexRuntimePolicyTargetKey(target)),
+    );
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: cronRuntimeRepair,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to preserve migrated cron runtime policy.`,
+    }));
+  }
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
@@ -220,7 +250,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
   }
 
-  const normalized = normalizeCompatibilityConfigValues(candidate);
+  const normalized = normalizeCompatibilityConfigValues(candidate, {
+    blockedModelIdentities: blockedCodexModelIdentities,
+  });
   if (normalized.changes.length > 0) {
     emitDoctorChangesPanel(normalized.changes, shouldRepair);
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
@@ -243,6 +275,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
     }));
   }
+
+  const { repairStaleAgentModelRefs } =
+    await import("./doctor/shared/stale-agent-model-ref-repair.js");
+  const staleAgentModelRepair = repairStaleAgentModelRefs(candidate, { env: process.env });
+  emitDoctorChangesPanel(staleAgentModelRepair.changes, shouldRepair, { sanitize: true });
+  if (staleAgentModelRepair.warnings.length > 0) {
+    emitDoctorNotes({ note, warningNotes: staleAgentModelRepair.warnings });
+  }
+  ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    mutation: staleAgentModelRepair,
+    shouldRepair,
+    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+  }));
 
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
@@ -289,16 +335,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   }
 
-  const missingDefaultAccountBindingWarnings =
-    collectMissingDefaultAccountBindingWarnings(candidate);
-  if (missingDefaultAccountBindingWarnings.length > 0) {
-    note(missingDefaultAccountBindingWarnings.join("\n"), "Doctor warnings");
-  }
-  const missingExplicitDefaultWarnings = collectMissingExplicitDefaultAccountWarnings(candidate);
-  if (missingExplicitDefaultWarnings.length > 0) {
-    note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
-  }
-
   const { repairHooksTokenReuseGatewayAuth } =
     await import("./doctor/shared/hooks-token-reuse-repair.js");
   const hooksTokenReuseRepair = await repairHooksTokenReuseGatewayAuth(candidate, process.env);
@@ -316,6 +352,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       state: { cfg, candidate, pendingChanges, fixHints },
       doctorFixCommand,
       env: process.env,
+      blockedCodexProviderPlan,
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
     if (repairSequence.authProfilesRepaired) {
@@ -334,6 +371,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       doctorFixCommand,
       env: process.env,
       allowExec: params.options.allowExec === true,
+      blockedCodexProviderPlan,
     });
     emitDoctorNotes({
       note,
@@ -379,17 +417,31 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
   });
   cfg = finalized.cfg;
+  const singleTopLevelIncludeWrite =
+    finalized.shouldWriteConfig &&
+    isSingleTopLevelIncludeMigration({
+      parsed: snapshot.parsed,
+      sourceConfig: snapshot.sourceConfig,
+      candidate: cfg,
+    });
 
   noteOpencodeProviderOverrides(cfg);
   noteImplicitFallbackClobberWarnings(cfg);
+  noteSandboxOriginProxyWarning(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
-    preservedLegacyRootKeys: ["defaultModel"],
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
+    ...(shouldRepairCronCodexModelRefsAfterConfigWrite
+      ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
+      : {}),
+    ...(blockedCodexProviderPlan.blockedModelIdentities.length > 0
+      ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
+      : {}),
   };
 }

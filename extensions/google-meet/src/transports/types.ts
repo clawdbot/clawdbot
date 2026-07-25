@@ -1,7 +1,15 @@
 // Google Meet type declarations define plugin contracts.
+import type {
+  MeetingBrowserHealth,
+  MeetingBrowserTab,
+  MeetingSessionRecord,
+  MeetingTranscriptSnapshot,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import type { GoogleMeetMode, GoogleMeetModeInput, GoogleMeetTransport } from "../config.js";
 
-type GoogleMeetSessionState = "active" | "ended";
+export const GOOGLE_MEET_TRANSCRIPT_MAX_LINES = 2_000;
+
+export type GoogleMeetTranscriptSnapshot = MeetingTranscriptSnapshot;
 
 export type GoogleMeetJoinRequest = {
   url: string;
@@ -9,6 +17,8 @@ export type GoogleMeetJoinRequest = {
   mode?: GoogleMeetModeInput;
   message?: string;
   requesterSessionKey?: string;
+  /** Agent selected by the calling tool context. */
+  agentId?: string;
   timeoutMs?: number;
   dialInNumber?: string;
   pin?: string;
@@ -20,6 +30,8 @@ type GoogleMeetManualActionReason =
   | "meet-admission-required"
   | "meet-permission-required"
   | "meet-audio-choice-required"
+  | "meet-locale-required"
+  | "meet-session-conflict"
   | "browser-control-unavailable";
 
 type GoogleMeetSpeechBlockedReason =
@@ -29,7 +41,10 @@ type GoogleMeetSpeechBlockedReason =
   | "audio-bridge-unavailable"
   | "meet-microphone-muted";
 
-export type GoogleMeetChromeHealth = {
+export type GoogleMeetChromeHealth = MeetingBrowserHealth<
+  GoogleMeetManualActionReason,
+  GoogleMeetSpeechBlockedReason
+> & {
   inCall?: boolean;
   micMuted?: boolean;
   lobbyWaiting?: boolean;
@@ -103,28 +118,28 @@ export type GoogleMeetChromeHealth = {
   notes?: string[];
 };
 
-export type GoogleMeetSession = {
-  id: string;
-  url: string;
-  transport: GoogleMeetTransport;
-  mode: GoogleMeetMode;
-  state: GoogleMeetSessionState;
-  createdAt: string;
-  updatedAt: string;
-  participantIdentity: string;
-  realtime: {
+export type GoogleMeetBrowserTab = MeetingBrowserTab;
+
+export type GoogleMeetSession = MeetingSessionRecord<
+  GoogleMeetTransport,
+  GoogleMeetMode,
+  {
     enabled: boolean;
     strategy?: string;
     provider?: string;
     model?: string;
     transcriptionProvider?: string;
     toolPolicy: string;
-  };
+  }
+> & {
+  /** Canonical agent owner and shared fields retain their byte-compatible wire names. */
   chrome?: {
     audioBackend: "blackhole-2ch";
     launched: boolean;
     nodeId?: string;
     browserProfile?: string;
+    /** Exact joined tab and whether OpenClaw may close it on leave. */
+    browserTab?: GoogleMeetBrowserTab;
     audioBridge?: {
       type: "command-pair" | "node-command-pair" | "external-command";
       provider?: string;
@@ -139,7 +154,6 @@ export type GoogleMeetSession = {
     dtmfSent?: boolean;
     introSent?: boolean;
   };
-  notes: string[];
 };
 
 export type GoogleMeetJoinResult = {

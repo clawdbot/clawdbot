@@ -1,6 +1,7 @@
 // Optional model-catalog loading gives session/tool methods metadata when fast
 // while never blocking their primary response path on catalog discovery.
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /**
@@ -11,13 +12,14 @@ const DEFAULT_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 const loggedSlowCatalogKeys = new Set<string>();
 
-export type OptionalServerMethodModelCatalogLoad = {
-  promise: Promise<ModelCatalogEntry[] | undefined>;
+type OptionalServerMethodModelCatalogLoad<T> = {
+  promise: Promise<T | undefined>;
 };
 
-type LoadOptionalServerMethodModelCatalogOptions = {
+type LoadOptionalServerMethodModelCatalogOptions<T> = {
+  loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0];
   logOnceKey?: string;
-  startedLoad?: OptionalServerMethodModelCatalogLoad;
+  startedLoad?: OptionalServerMethodModelCatalogLoad<T>;
   timeoutMs?: number;
 };
 
@@ -25,39 +27,65 @@ function normalizeOptionalModelCatalog(value: unknown): ModelCatalogEntry[] | un
   return Array.isArray(value) ? value : undefined;
 }
 
-export function startOptionalServerMethodModelCatalogLoad(
-  context: GatewayRequestContext,
-): OptionalServerMethodModelCatalogLoad {
+function normalizeOptionalModelCatalogSnapshot(
+  value: unknown,
+): GatewayModelCatalogSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const snapshot = value as Partial<GatewayModelCatalogSnapshot>;
+  return typeof snapshot.agentDir === "string" &&
+    snapshot.config &&
+    Array.isArray(snapshot.entries) &&
+    Array.isArray(snapshot.routeVariants)
+    ? (snapshot as GatewayModelCatalogSnapshot)
+    : undefined;
+}
+
+function startOptionalServerMethodModelCatalogValueLoad<T>(params: {
+  load: () => Promise<unknown>;
+  normalize: (value: unknown) => T | undefined;
+}): OptionalServerMethodModelCatalogLoad<T> {
   let catalogPromise: Promise<unknown>;
   try {
-    catalogPromise = context.loadGatewayModelCatalog();
+    catalogPromise = params.load();
   } catch {
     catalogPromise = Promise.resolve(undefined);
   }
-  const promise = catalogPromise.then(
-    (value) => {
-      const catalog = normalizeOptionalModelCatalog(value);
-      return catalog;
-    },
-    () => {
-      return undefined;
-    },
-  );
   return {
-    promise,
+    promise: catalogPromise.then(params.normalize, () => undefined),
   };
 }
 
-/** Loads the gateway model catalog with a short timeout and one-time slow logs. */
-export async function loadOptionalServerMethodModelCatalog(
+function startOptionalServerMethodModelCatalogLoad(
+  context: GatewayRequestContext,
+): OptionalServerMethodModelCatalogLoad<ModelCatalogEntry[]> {
+  return startOptionalServerMethodModelCatalogValueLoad({
+    load: () => context.loadGatewayModelCatalog(),
+    normalize: normalizeOptionalModelCatalog,
+  });
+}
+
+export function startOptionalServerMethodModelCatalogSnapshotLoad(
+  context: GatewayRequestContext,
+  loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
+): OptionalServerMethodModelCatalogLoad<GatewayModelCatalogSnapshot> {
+  return startOptionalServerMethodModelCatalogValueLoad({
+    load: () => context.loadGatewayModelCatalogSnapshot(loadParams),
+    normalize: normalizeOptionalModelCatalogSnapshot,
+  });
+}
+
+async function loadOptionalServerMethodModelCatalogValue<T>(
   context: GatewayRequestContext,
   surface: string,
-  options?: LoadOptionalServerMethodModelCatalogOptions,
-): Promise<ModelCatalogEntry[] | undefined> {
+  options: LoadOptionalServerMethodModelCatalogOptions<T> | undefined,
+  startLoad: () => OptionalServerMethodModelCatalogLoad<T>,
+): Promise<T | undefined> {
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = Symbol("server-method-model-catalog-timeout");
   const timeoutMs = options?.timeoutMs ?? DEFAULT_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS;
-  const catalogLoad = options?.startedLoad ?? startOptionalServerMethodModelCatalogLoad(context);
+  const catalogLoad = options?.startedLoad ?? startLoad();
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
     timeout = setTimeout(() => resolve(timedOut), timeoutMs);
     timeout.unref?.();
@@ -74,10 +102,32 @@ export async function loadOptionalServerMethodModelCatalog(
       }
       return undefined;
     }
-    return normalizeOptionalModelCatalog(result);
+    return result;
   } finally {
     if (timeout) {
       clearTimeout(timeout);
     }
   }
+}
+
+/** Loads the gateway model catalog with a short timeout and one-time slow logs. */
+export async function loadOptionalServerMethodModelCatalog(
+  context: GatewayRequestContext,
+  surface: string,
+  options?: LoadOptionalServerMethodModelCatalogOptions<ModelCatalogEntry[]>,
+): Promise<ModelCatalogEntry[] | undefined> {
+  return await loadOptionalServerMethodModelCatalogValue(context, surface, options, () =>
+    startOptionalServerMethodModelCatalogLoad(context),
+  );
+}
+
+/** Loads the full gateway model catalog snapshot without blocking the primary response path. */
+export async function loadOptionalServerMethodModelCatalogSnapshot(
+  context: GatewayRequestContext,
+  surface: string,
+  options?: LoadOptionalServerMethodModelCatalogOptions<GatewayModelCatalogSnapshot>,
+): Promise<GatewayModelCatalogSnapshot | undefined> {
+  return await loadOptionalServerMethodModelCatalogValue(context, surface, options, () =>
+    startOptionalServerMethodModelCatalogSnapshotLoad(context, options?.loadParams),
+  );
 }

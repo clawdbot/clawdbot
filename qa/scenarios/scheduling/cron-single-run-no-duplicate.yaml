@@ -5,10 +5,11 @@ scenario:
   surface: cron
   coverage:
     primary:
-      - scheduling.cron
+      - automation.manual-cron-runs
+      - automation.run-history-cron
     secondary:
-      - channels.qa-channel
-      - scheduling.dedup
+      - channels.qa-channel-final-reply
+      - automation.run-history-dedup
   objective: Verify one forced cron run produces exactly one qa-channel delivery for its marker.
   successCriteria:
     - A single forced cron run completes successfully.
@@ -25,8 +26,8 @@ scenario:
   execution:
     kind: flow
     summary: Force one cron run and assert qa-channel does not receive a duplicate delivery for the same marker.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       channelId: qa-room
       channelTitle: QA Room
       duplicateWindowMs: 8000

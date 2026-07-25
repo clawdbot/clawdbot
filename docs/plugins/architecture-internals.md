@@ -8,9 +8,9 @@ title: "Plugin architecture internals"
 ---
 
 For the public capability model, plugin shapes, and ownership/execution
-contracts, see [Plugin architecture](/plugins/architecture). This page is the
-reference for the internal mechanics: load pipeline, registry, runtime hooks,
-Gateway HTTP routes, import paths, and schema tables.
+contracts, see [Plugin architecture](/plugins/architecture). This page covers
+the internal mechanics: load pipeline, registry, runtime hooks, Gateway HTTP
+routes, import paths, and schema tables.
 
 ## Load pipeline
 
@@ -27,18 +27,22 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
-<Note>
-`activate` is a legacy alias for `register` — the loader resolves whichever is present (`def.register ?? def.activate`) and calls it at the same point. All bundled plugins use `register`; prefer `register` for new plugins.
-</Note>
+Safety gates run **before** runtime execution. Discovery blocks a candidate
+when:
 
-The safety gates happen **before** runtime execution. Candidates are blocked
-when the entry escapes the plugin root, the path is world-writable, or path
-ownership looks suspicious for non-bundled plugins.
+- its resolved entry escapes the plugin root
+- its path (or its root directory) is world-writable
+- for non-bundled plugins, path ownership does not match the current uid (or root)
 
-Blocked candidates remain tied to their plugin id for diagnostics. If config
-still references that id, validation reports the plugin as present but blocked
-and points back to the path-safety warning instead of treating the config entry
-as stale.
+World-writable bundled directories get an in-place `chmod` repair attempt
+first (npm/global installs can ship package dirs at `0777`) before the gate
+re-checks; ownership checks are skipped for bundled origin entirely.
+
+Blocked candidates still carry their plugin id in the emitted diagnostic when
+one is known (including ids resolved from a manifest inside an
+otherwise-rejected directory), so config referencing that id sees a blocked
+plugin tied to a path-safety warning instead of an unrelated "unknown plugin"
+error.
 
 ### Manifest-first behavior
 
@@ -57,8 +61,8 @@ actual behavior such as hooks, tools, commands, or provider flows.
 Optional manifest `activation` and `setup` blocks stay on the control plane.
 They are metadata-only descriptors for activation planning and setup discovery;
 they do not replace runtime registration, `register(...)`, or `setupEntry`.
-The first live activation consumers now use manifest command, channel, and provider hints
-to narrow plugin loading before broader registry materialization:
+Live activation consumers use manifest command, channel, and provider hints to
+narrow plugin loading before broader registry materialization:
 
 - CLI loading narrows to plugins that own the requested primary command
 - channel setup/plugin resolution narrows to plugins that own the requested
@@ -66,45 +70,56 @@ to narrow plugin loading before broader registry materialization:
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
 - Gateway startup planning uses `activation.onStartup` for explicit startup
-  imports and startup opt-outs; plugins without startup metadata load only
-  through narrower activation triggers
-
-Request-time runtime preloads that ask for the broad `all` scope still derive an
-explicit effective plugin id set from config, startup planning, configured
-channels, slots, and auto-enable rules. If that derived set is empty, OpenClaw
-loads an empty runtime registry instead of widening to every discoverable
-plugin.
+  imports; plugins without startup metadata load only through narrower
+  activation triggers
 
 The activation planner exposes both an ids-only API for existing callers and a
-plan API for new diagnostics. Plan entries report why a plugin was selected,
-separating explicit `activation.*` planner hints from manifest ownership
-fallback such as `providers`, `channels`, `commandAliases`, `setup.providers`,
-`contracts.tools`, and hooks. That reason split is the compatibility boundary:
-existing plugin metadata keeps working, while new code can detect broad hints
-or fallback behavior without changing runtime loading semantics.
+plan API for diagnostics. Plan entries report why a plugin was selected,
+separating explicit `activation.*` hints from manifest-ownership fallback:
 
-Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
-`setup.cliBackends` to narrow candidate plugins before it falls back to
+| Reason (from `activation.*` hints)   | Reason (from manifest ownership)                                                             |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `activation-agent-harness-hint`      | —                                                                                            |
+| `activation-capability-hint`         | —                                                                                            |
+| `activation-channel-hint`            | `manifest-channel-owner` (`channels`)                                                        |
+| `activation-command-hint`            | `manifest-command-alias` (`commandAliases`)                                                  |
+| `activation-provider-hint`           | `manifest-provider-owner` (`providers`), `manifest-setup-provider-owner` (`setup.providers`) |
+| `activation-route-hint`              | —                                                                                            |
+| — (hook trigger has no hint variant) | `manifest-hook-owner` (`hooks`), `manifest-tool-contract` (`contracts.tools`)                |
+
+That reason split is the compatibility boundary: existing plugin metadata
+keeps working, while new code can detect broad hints or fallback behavior
+without changing runtime loading semantics.
+
+Request-time runtime preloads that ask for the broad `all` scope still derive
+an explicit effective plugin id set from config, startup planning, configured
+channels, slots, and auto-enable rules
+(`resolveEffectivePluginIds` in `src/plugins/effective-plugin-ids.ts`). If that
+derived set is empty, OpenClaw keeps the scope empty instead of widening to
+every discoverable plugin.
+
+Setup discovery prefers descriptor-owned ids such as `setup.providers` and
+`setup.cliBackends` to narrow candidate plugins before falling back to
 `setup-api` for plugins that still need setup-time runtime hooks. Provider
 setup lists use manifest `providerAuthChoices`, descriptor-derived setup
 choices, and install-catalog metadata without loading provider runtime. Explicit
 `setup.requiresRuntime: false` is a descriptor-only cutoff; omitted
-`requiresRuntime` keeps the legacy setup-api fallback for compatibility. If more
-than one discovered plugin claims the same normalized setup provider or CLI
-backend id, setup lookup refuses the ambiguous owner instead of relying on
+`requiresRuntime` keeps the legacy setup-api fallback for compatibility. If
+more than one discovered plugin claims the same normalized setup provider or
+CLI backend id, setup lookup refuses the ambiguous owner instead of relying on
 discovery order. When setup runtime does execute, registry diagnostics report
 drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
-backends registered by setup-api without blocking legacy plugins.
+backends actually registered by setup-api, without blocking legacy plugins.
 
 ### Plugin cache boundary
 
 OpenClaw does not cache plugin discovery results or direct manifest registry
 data behind wall-clock windows. Installs, manifest edits, and load-path changes
 must become visible on the next explicit metadata read or snapshot rebuild.
-The manifest file parser may keep a bounded file-signature cache keyed by the
-opened manifest path, inode, size, and timestamps; that cache only avoids
-re-parsing unchanged bytes and must not cache discovery, registry, owner, or
-policy answers.
+The manifest file parser keeps a bounded file-signature cache keyed by the
+opened manifest path plus device/inode, size, and mtime/ctime; that cache only
+avoids re-parsing unchanged bytes and must not cache discovery, registry,
+owner, or policy answers.
 
 The safe metadata fast path is explicit object ownership, not a hidden cache.
 Gateway startup hot paths should pass the current `PluginMetadataSnapshot`, the
@@ -112,14 +127,13 @@ derived `PluginLookUpTable`, or an explicit manifest registry through the call
 chain. Config validation, startup auto-enable, plugin bootstrap, and provider
 selection can reuse those objects while they represent the current config and
 plugin inventory. Setup lookup still reconstructs manifest metadata on demand
-unless the specific setup path receives an explicit manifest registry; keep that
-as a cold-path fallback rather than adding hidden lookup caches. When the input
-changes, rebuild and replace the snapshot instead of mutating it or keeping
-historical copies.
-Views over the active plugin registry and bundled channel bootstrap helpers
-should be recomputed from the current registry/root. Short-lived maps are fine
-inside one call to dedupe work or guard reentry; they must not become process
-metadata caches.
+unless the specific setup path receives an explicit manifest registry; keep
+that as a cold-path fallback rather than adding hidden lookup caches. When the
+input changes, rebuild and replace the snapshot instead of mutating it or
+keeping historical copies. Views over the active plugin registry and bundled
+channel bootstrap helpers should be recomputed from the current
+registry/root. Short-lived maps are fine inside one call to dedupe work or
+guard reentry; they must not become process metadata caches.
 
 For plugin loading, the persistent cache layer is runtime loading. It may reuse
 loader state when code or installed artifacts are actually loaded, such as:
@@ -151,30 +165,23 @@ source-plane state; it is not a hidden in-process metadata cache.
 ## Registry model
 
 Loaded plugins do not directly mutate random core globals. They register into a
-central plugin registry.
+central plugin registry (`PluginRegistry` in `src/plugins/registry-types.ts`),
+which tracks plugin records (identity, source, origin, status, diagnostics)
+plus arrays for every capability: tools, legacy hooks and typed hooks,
+channels, providers, gateway RPC handlers, HTTP routes, CLI registrars,
+background services, plugin-owned commands, and dozens more typed provider
+families (speech, embeddings, image/video/music generation, web
+fetch/search, agent harnesses, session actions, and so on).
 
-The registry tracks:
-
-- plugin records (identity, source, origin, status, diagnostics)
-- tools
-- legacy hooks and typed hooks
-- channels
-- providers
-- gateway RPC handlers
-- HTTP routes
-- CLI registrars
-- background services
-- plugin-owned commands
-
-Core features then read from that registry instead of talking to plugin modules
-directly. This keeps loading one-way:
+Core features then read from that registry instead of talking to plugin
+modules directly. This keeps loading one-way:
 
 - plugin module -> registry registration
 - core runtime -> registry consumption
 
 That separation matters for maintainability. It means most core surfaces only
-need one integration point: "read the registry", not "special-case every plugin
-module".
+need one integration point: "read the registry", not "special-case every
+plugin module".
 
 ## Conversation binding callbacks
 
@@ -217,13 +224,12 @@ conversation, and it runs after core approval handling finishes.
 Provider plugins have three layers:
 
 - **Manifest metadata** for cheap pre-runtime lookup:
-  `setup.providers[].envVars`, deprecated compatibility `providerAuthEnvVars`,
-  `providerAuthAliases`, `providerAuthChoices`, and `channelEnvVars`.
-- **Config-time hooks**: `catalog` (legacy `discovery`) plus
-  `applyConfigDefaults`.
+  `setup.providers[].envVars`, `providerAuthAliases`, `providerAuthChoices`,
+  and `channelConfigs`.
+- **Config-time hooks**: `catalog` plus `applyConfigDefaults`.
 - **Runtime hooks**: 40+ optional hooks covering auth, model resolution,
   stream wrapping, thinking levels, replay policy, and usage endpoints. See
-  the full list under [Hook order and usage](#hook-order-and-usage).
+  [Hook order and usage](#hook-order-and-usage).
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific
@@ -231,9 +237,7 @@ behavior without needing a whole custom inference transport.
 
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
-loading plugin runtime. Deprecated `providerAuthEnvVars` is still read by the
-compatibility adapter during the deprecation window, and non-bundled plugins
-that use it receive a manifest diagnostic. Use manifest `providerAuthAliases`
+loading plugin runtime. Use manifest `providerAuthAliases`
 when one provider id should reuse another provider id's env vars, auth profiles,
 config-backed auth, and API-key onboarding choice. Use manifest
 `providerAuthChoices` when onboarding/auth-choice CLI surfaces should know the
@@ -242,9 +246,8 @@ loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
 
-Use manifest `channelEnvVars` when a channel has env-driven auth or setup that
-generic shell-env fallback, config/status checks, or setup prompts should see
-without loading channel runtime.
+Describe env-driven channel setup and auth through the owning
+`channelConfigs.<id>.schema` and setup descriptors.
 
 ### Hook order and usage
 
@@ -254,51 +257,51 @@ Compatibility-only provider fields that OpenClaw no longer calls, such as
 `ProviderPlugin.capabilities` and `suppressBuiltInModel`, are intentionally not
 listed here.
 
-| #   | Hook                              | What it does                                                                                                   | When to use                                                                                                                                   |
-| --- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `catalog`                         | Publish provider config into `models.providers` during `models.json` generation                                | Provider owns a catalog or base URL defaults                                                                                                  |
-| 2   | `applyConfigDefaults`             | Apply provider-owned global config defaults during config materialization                                      | Defaults depend on auth mode, env, or provider model-family semantics                                                                         |
-| --  | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
-| 3   | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
-| 4   | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
-| 5   | `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries   |
-| 6   | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
-| 7   | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Providers expose their own env-marker API-key resolution hooks                                                                                |
-| 8   | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                                 |
-| 9   | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
-| 10  | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
-| 11  | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
-| 12  | `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
-| 13  | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
-| 14  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
-| 15  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
-| 16  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
-| 17  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
-| 18  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
-| 20  | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
-| 21  | `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
-| 22  | `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
-| 23  | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
-| 24  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared OpenClaw refreshers                                                                                          |
-| 25  | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
-| 26  | `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                                                 | Provider has raw overflow errors generic heuristics would miss                                                                                |
-| 27  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
-| 28  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
-| 29  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
-| 30  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
-| 31  | `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
-| 32  | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |
-| 33  | `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                             |
-| 34  | `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                      |
-| 35  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                             |
-| 36  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                             |
-| 37  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                               |
-| 38  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
-| 39  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
-| 40  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                               |
-| 41  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
-| 42  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
-| 43  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
+| Hook                              | What it does                                                                                                   | When to use                                                                                                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog`                         | Publish provider config into `models.providers` during `models.json` generation                                | Provider owns a catalog or base URL defaults                                                                                                  |
+| `applyConfigDefaults`             | Apply provider-owned global config defaults during config materialization                                      | Defaults depend on auth mode, env, or provider model-family semantics                                                                         |
+| _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
+| `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
+| `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
+| `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries   |
+| `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
+| `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Providers expose their own env-marker API-key resolution hooks                                                                                |
+| `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                                 |
+| `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
+| `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
+| `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
+| `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
+| `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
+| `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
+| `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
+| `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
+| `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
+| `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
+| `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
+| `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
+| `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
+| `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
+| `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared OpenClaw refreshers                                                                                          |
+| `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
+| `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                                                 | Provider has raw overflow errors generic heuristics would miss                                                                                |
+| `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
+| `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
+| `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
+| `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery (deprecated, see below)                                  | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
+| `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
+| `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |
+| `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                             |
+| `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                      |
+| `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                             |
+| `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                             |
+| `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                               |
+| `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
+| `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
+| `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                               |
+| `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
+| `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
+| `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
 `normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
 matched provider plugin, then fall through other hook-capable provider plugins
@@ -314,10 +317,16 @@ that still runs on OpenClaw's normal inference loop.
 
 `resolveUsageAuth` decides whether OpenClaw should call `fetchUsageSnapshot` or
 fall back to generic credential resolution for usage/status surfaces. Return
-`{ token, accountId? }` when the provider has a usage credential, return
+`{ token, accountId?, subscriptionType?, rateLimitTier? }` when the provider
+has a usage credential (the optional plan metadata flows into
+`fetchUsageSnapshot`), return
 `{ handled: true }` when provider-owned usage auth has handled the request and
 must suppress generic API-key/OAuth fallback, and return `null` or `undefined`
 when the provider did not handle usage auth.
+
+Declare organization or billing credentials in manifest
+`providerUsageAuthEnvVars`. This lets generic discovery and secret-scrubbing
+surfaces recognize them without making them inference auth candidates.
 
 ### Provider example
 
@@ -435,9 +444,10 @@ const voices = await api.runtime.tts.listVoices({
 Notes:
 
 - `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
-- Uses core `messages.tts` configuration and provider selection.
+- Uses core `tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
+- Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.
 - Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
 - OpenAI and ElevenLabs support telephony today. Microsoft does not.
 
@@ -508,7 +518,7 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
 
 const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
   provider: "codex",
-  model: "gpt-5.5",
+  model: "gpt-5.6-sol",
   input: [
     {
       type: "image",
@@ -549,12 +559,10 @@ Notes:
   image/audio/video understanding.
 - `extractStructuredWithModel(...)` is the plugin-facing seam for bounded
   provider-owned image-first extraction. Include at least one image input;
-  text inputs are supplemental context.
-  product plugins own their routes and schemas while OpenClaw owns the
-  provider/runtime boundary.
+  text inputs are supplemental context. Product plugins own their routes and
+  schemas while OpenClaw owns the provider/runtime boundary.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
-- `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
 Plugins can also launch background subagent runs through `api.runtime.subagent`:
 
@@ -562,6 +570,7 @@ Plugins can also launch background subagent runs through `api.runtime.subagent`:
 const result = await api.runtime.subagent.run({
   sessionKey: "agent:main:subagent:search-helper",
   message: "Expand this query into focused follow-up searches.",
+  toolsAlsoAllow: ["my_plugin_progress"],
   provider: "openai",
   model: "gpt-4.1-mini",
   deliver: false,
@@ -571,6 +580,7 @@ const result = await api.runtime.subagent.run({
 Notes:
 
 - `provider` and `model` are optional per-run overrides, not persistent session changes.
+- `toolsAlsoAllow` accepts exact, uniquely owned tool names registered by the calling plugin. Core and ambiguous names are rejected. It is additive to the normal profile, but operator allowlists and denies remain authoritative.
 - OpenClaw only honors those override fields for trusted callers.
 - For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
 - Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
@@ -639,8 +649,9 @@ api.registerHttpRoute({
 Route fields:
 
 - `path`: route path under the gateway HTTP server.
-- `auth`: required. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
+- `auth`: required, `"gateway"` or `"plugin"`. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
 - `match`: optional. `"exact"` (default) or `"prefix"`.
+- `handleUpgrade`: optional handler for WebSocket upgrade requests on the same route.
 - `replaceExisting`: optional. Allows the same plugin to replace its own existing route registration.
 - `handler`: return `true` when the route handled the request.
 
@@ -651,23 +662,26 @@ Notes:
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 - `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
-- `auth: "gateway"` routes run inside a Gateway request runtime scope, but that scope is intentionally conservative:
-  - shared-secret bearer auth (`gateway.auth.mode = "token"` / `"password"`) keeps plugin-route runtime scopes pinned to `operator.write`, even if the caller sends `x-openclaw-scopes`
-  - trusted identity-bearing HTTP modes (for example `trusted-proxy` or `gateway.auth.mode = "none"` on a private ingress) honor `x-openclaw-scopes` only when the header is explicitly present
-  - if `x-openclaw-scopes` is absent on those identity-bearing plugin-route requests, runtime scope falls back to `operator.write`
-- Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, require an identity-bearing auth mode and document the explicit `x-openclaw-scopes` header contract.
+- `auth: "gateway"` routes run inside a Gateway request runtime scope. The default surface (`gatewayRuntimeScopeSurface: "write-default"`) is intentionally conservative:
+  - shared-secret bearer auth (`gateway.auth.mode = "token"` / `"password"`) and any non-trusted-proxy auth method get a single `operator.write` scope, even if the caller sends `x-openclaw-scopes`
+  - `trusted-proxy` callers without an explicit `x-openclaw-scopes` header also keep the legacy `operator.write`-only surface
+  - `trusted-proxy` callers that do send `x-openclaw-scopes` get the declared scopes instead
+  - a route can opt into `gatewayRuntimeScopeSurface: "trusted-operator"` to always honor `x-openclaw-scopes` for identity-bearing auth modes (falling back to the full CLI default scope set when the header is absent)
+- Sandboxed external Control UI tabs backed by `auth: "gateway"` routes use a short-lived signed cookie grant minted only by authenticated bootstrap; plugin-auth tabs keep their direct iframe path. Before mounting, the parent runs a route-owned probe inside the same opaque sandbox and fails closed when browser privacy policy blocks the cookie. The grant is bound to the owning plugin, matched route root, and current auth generation; its process-random cookie name prevents trusted same-host Gateways from overwriting one another, but cookies never isolate TCP ports. The Gateway hostname is therefore one credential boundary: do not cohost mutually untrusted services on that hostname, including other ports. Route dispatch rejects reuse against a nested route owned by another plugin. Because sandbox descendants are cross-site for cookie purposes, the grant accepts only `GET` and `HEAD` with `operator.read`; mutations and WebSocket upgrades stay on explicit Gateway-authenticated surfaces. The cookie intentionally cannot use CHIPS: current browsers include a cross-site-ancestor bit in the partition key, so nested opaque sandbox frames would lose access to same-route assets. The cookie requires a secure context and browser permission for cross-site cookies, so gateway-auth external tabs are unavailable on plain-HTTP LAN origins or under full third-party-cookie blocking; use HTTPS/Tailscale Serve or browser-trusted loopback with a compatible cookie policy.
+- The grant prevents Gateway bearer-token disclosure and accidental route/scope reuse; it does not create a security boundary between native plugins. Native plugin code and the UI content it serves remain part of the same trusted in-process plugin boundary.
+- Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, opt into `trusted-operator` scope surface, require an identity-bearing auth mode, and document the explicit `x-openclaw-scopes` header contract.
+- After route matching and authentication, ordinary handlers participate in Gateway root-work admission. A prepared or restarting Gateway returns `503` before invoking the handler. The narrow exception is a manifest-entitled `auth: "gateway"` route that also opts into the route-specific `trusted-operator` surface; it remains reachable so suspension control dispatch cannot be stranded, while ordinary sibling routes from the same plugin remain behind the admission boundary. WebSocket `handleUpgrade` ownership uses the same atomic admission boundary; once the handler accepts a socket, the socket's later lifetime is plugin-owned and is not tracked by this boundary.
 
 ## Plugin SDK import paths
 
 Use narrow SDK subpaths instead of the monolithic `openclaw/plugin-sdk` root
 barrel when authoring new plugins. Core subpaths:
 
-| Subpath                             | Purpose                                            |
-| ----------------------------------- | -------------------------------------------------- |
-| `openclaw/plugin-sdk/plugin-entry`  | Plugin registration primitives                     |
-| `openclaw/plugin-sdk/channel-core`  | Channel entry/build helpers                        |
-| `openclaw/plugin-sdk/core`          | Generic shared helpers and umbrella contract       |
-| `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
+| Subpath                            | Purpose                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `openclaw/plugin-sdk/plugin-entry` | Plugin registration primitives               |
+| `openclaw/plugin-sdk/channel-core` | Channel entry/build helpers                  |
+| `openclaw/plugin-sdk/core`         | Generic shared helpers and umbrella contract |
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
@@ -685,11 +699,10 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
-small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
-`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
-and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
-older plugins. New code should import narrower generic primitives instead.
+`openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
+`openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
+are deprecated compatibility shims for older plugins. New code should import
+narrower generic primitives instead.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
@@ -720,7 +733,8 @@ fallback rules, provider mapping, and plugin author checklist.
 
 Send-capable plugins declare what they can render through message capabilities:
 
-- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `buttons`, `select`)
+- `presentation` for semantic presentation blocks (`text`, `context`,
+  `divider`, `chart`, `table`, `buttons`, `select`)
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.
@@ -808,16 +822,18 @@ built-in provider entry with the same provider id.
 Plugins can also publish read-only model rows through
 `api.registerModelCatalogProvider({ provider, kinds, staticCatalog, liveCatalog
 })`. This is the forward path for list/help/picker surfaces and supports
-`text`, `image_generation`, `video_generation`, and `music_generation` rows.
-Provider plugins still own live endpoint calls, token exchange, and vendor
-response mapping; core owns the common row shape, source labels, and media tool
-help formatting. Media-generation provider registrations synthesize static
-catalog rows automatically from `defaultModel`, `models`, and `capabilities`.
+`text`, `voice`, `image_generation`, `video_generation`, and `music_generation`
+rows. Provider plugins still own live endpoint calls, token exchange, and
+vendor response mapping; core owns the common row shape, source labels, and
+media tool help formatting. Media-generation provider registrations synthesize
+static catalog rows automatically from `defaultModel`, `models`, and
+`capabilities`.
 
 Compatibility:
 
 - `discovery` still works as a legacy alias, but emits a deprecation warning
 - if both `catalog` and `discovery` are registered, OpenClaw uses `catalog`
+  and emits a warning
 - `augmentModelCatalog` is deprecated; bundled providers should publish
   supplemental rows through `registerModelCatalogProvider`
 
@@ -867,8 +883,9 @@ A plugin directory may include a `package.json` with `openclaw.extensions`:
 }
 ```
 
-Each entry becomes a plugin. If the pack lists multiple extensions, the plugin id
-becomes `name/<fileBase>`.
+Each entry becomes a plugin. If the pack lists multiple extensions, the plugin
+id becomes `<manifestOrPackageName>/<fileBase>` (manifest id wins when
+present; otherwise the unscoped `package.json` name).
 
 If your plugin imports npm deps, install them in that directory so
 `node_modules` is available (`npm install` / `pnpm install`).
@@ -986,7 +1003,6 @@ Useful `openclaw.channel` fields beyond the minimal example:
 - `exposure.configured`: hide the channel from configured-channel listing surfaces when set to `false`
 - `exposure.setup`: hide the channel from interactive setup/configure pickers when set to `false`
 - `exposure.docs`: mark the channel as internal/private for docs navigation surfaces
-- `showConfigured` / `showInSetup`: legacy aliases still accepted for compatibility; prefer `exposure`
 - `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
 - `forceAccountBinding`: require explicit account binding even when only one account exists
 - `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets
@@ -1025,7 +1041,7 @@ plugin index entry with `source: "path"` and a workspace-relative
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. The persisted `installed_plugin_index` SQLite row is the install
+surface. The persisted `installed_plugin_index` SQLite table is the install
 source of truth and can be refreshed without loading plugin runtime modules.
 Its `installRecords` map is durable even when a plugin manifest is missing or
 invalid; its `plugins` payload is a rebuildable manifest view.
@@ -1049,13 +1065,14 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentSessionKey: sessionKey,
         }),
       };
     },
@@ -1068,6 +1085,12 @@ export default function (api) {
 
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
+
+The host completes registered async memory prompt preparation before calling a
+non-legacy engine's `assemble()`. `buildMemorySystemPromptAddition(...)` stays
+synchronous and reads that immutable run snapshot while `assemble()` is active.
+Pass the supplied tool and citation context through unchanged so the snapshot
+cannot cross run boundaries.
 
 `assemble()` may return `contextProjection` when the active harness has a
 persistent backend thread. Omit it for legacy per-turn projection. Return
@@ -1098,13 +1121,14 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentSessionKey: sessionKey,
         }),
       };
     },
@@ -1122,19 +1146,19 @@ the plugin system with a private reach-in. Add the missing capability.
 
 Recommended sequence:
 
-1. define the core contract
-   Decide what shared behavior core should own: policy, fallback, config merge,
-   lifecycle, channel-facing semantics, and runtime helper shape.
-2. add typed plugin registration/runtime surfaces
-   Extend `OpenClawPluginApi` and/or `api.runtime` with the smallest useful
-   typed capability surface.
-3. wire core + channel/feature consumers
-   Channels and feature plugins should consume the new capability through core,
-   not by importing a vendor implementation directly.
-4. register vendor implementations
-   Vendor plugins then register their backends against the capability.
-5. add contract coverage
-   Add tests so ownership and registration shape stay explicit over time.
+1. **Define the core contract.** Decide what shared behavior core should own:
+   policy, fallback, config merge, lifecycle, channel-facing semantics, and
+   runtime helper shape.
+2. **Add typed plugin registration/runtime surfaces.** Extend
+   `OpenClawPluginApi` and/or `api.runtime` with the smallest useful typed
+   capability surface.
+3. **Wire core + channel/feature consumers.** Channels and feature plugins
+   should consume the new capability through core, not by importing a vendor
+   implementation directly.
+4. **Register vendor implementations.** Vendor plugins then register their
+   backends against the capability.
+5. **Add contract coverage.** Add tests so ownership and registration shape
+   stay explicit over time.
 
 This is how OpenClaw stays opinionated without becoming hardcoded to one
 provider's worldview. See the [Capability Cookbook](/tools/capability-cookbook)
@@ -1186,10 +1210,12 @@ const clip = await api.runtime.videoGeneration.generate({
 });
 ```
 
-Contract test pattern:
+Contract test pattern (`src/plugins/contracts/registry.ts` exposes ownership
+lookups such as `providerContractPluginIds`; tests assert a plugin's
+`contracts.videoGenerationProviders` list matches what it actually registers):
 
 ```ts
-expect(findVideoGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
+expect(pluginManifest.contracts?.videoGenerationProviders).toEqual(["openai"]);
 ```
 
 That keeps the rule simple:

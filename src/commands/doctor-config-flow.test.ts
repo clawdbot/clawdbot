@@ -1,8 +1,11 @@
 // Doctor config-flow tests cover config repair, migration, stripping, and validation orchestration.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -14,6 +17,7 @@ type TerminalNote = (message: string, title?: string) => void;
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
@@ -361,7 +365,7 @@ vi.mock("../config/legacy.js", () => {
         addIssue(
           issues,
           ["memorySearch"],
-          'memorySearch is legacy; use agents.defaults.memorySearch. Run "openclaw doctor --fix".',
+          'memorySearch is legacy; use memory.search. Run "openclaw doctor --fix".',
         );
       }
       const gateway = asRecord(root.gateway);
@@ -559,73 +563,118 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
     "name",
     "token",
     "tokenFile",
+    "botId",
+    "secret",
     "botToken",
-    "appToken",
-    "account",
-    "signalNumber",
-    "authDir",
-    "cliPath",
-    "dbPath",
-    "httpUrl",
-    "httpHost",
-    "httpPort",
     "webhookPath",
     "webhookUrl",
-    "webhookSecret",
-    "service",
-    "region",
-    "homeserver",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceName",
-    "url",
-    "code",
     "dmPolicy",
     "allowFrom",
     "groupPolicy",
     "groupAllowFrom",
     "defaultTo",
   ]);
-  const fallbackSingleAccountKeys: Record<string, readonly string[]> = {
-    telegram: ["streaming"],
+  const legacyCommonSingleAccountKeys = new Set([
+    "accessToken",
+    "appToken",
+    "httpUrl",
+    "password",
+    "userId",
+    "webhookSecret",
+  ]);
+  const declaredSingleAccountKeys: Record<string, readonly string[]> = {
+    discord: [],
+    imessage: ["cliPath", "dbPath", "service", "region"],
+    irc: ["password"],
+    matrix: [
+      "homeserver",
+      "userId",
+      "accessToken",
+      "password",
+      "deviceId",
+      "deviceName",
+      "avatarUrl",
+      "initialSyncLimit",
+      "encryption",
+    ],
+    mattermost: [],
+    "nextcloud-talk": ["rooms"],
+    signal: ["signalNumber", "account", "cliPath", "httpUrl", "httpHost", "httpPort"],
+    slack: ["appToken"],
+    telegram: ["streaming", "webhookSecret"],
+    tlon: ["url", "code"],
+    twitch: ["accessToken"],
+    whatsapp: ["authDir"],
+    zalo: ["webhookSecret", "tokenFile"],
   };
   const namedAccountPromotionKeys: Record<string, readonly string[]> = {
+    matrix: [
+      "name",
+      "homeserver",
+      "userId",
+      "accessToken",
+      "password",
+      "deviceId",
+      "deviceName",
+      "avatarUrl",
+      "initialSyncLimit",
+      "encryption",
+    ],
     telegram: ["botToken", "tokenFile"],
   };
 
+  const resolveKeys = ({
+    channelKey,
+    channel,
+  }: {
+    channelKey: string;
+    channel: Record<string, unknown>;
+  }) => {
+    const accounts =
+      channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
+        ? (channel.accounts as Record<string, unknown>)
+        : {};
+    const hasNamedAccounts = Object.keys(accounts).some(Boolean);
+    const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
+    const hasDeclarations = Object.hasOwn(declaredSingleAccountKeys, channelKey);
+    const declaredKeys = declaredSingleAccountKeys[channelKey];
+    return Object.entries(channel)
+      .filter(([key, value]) => {
+        if (key === "accounts" || key === "enabled" || value === undefined) {
+          return false;
+        }
+        const isKnownKey =
+          commonSingleAccountKeys.has(key) ||
+          (hasDeclarations
+            ? (declaredKeys?.includes(key) ?? false)
+            : legacyCommonSingleAccountKeys.has(key));
+        if (!isKnownKey) {
+          return false;
+        }
+        if (hasNamedAccounts && allowedNamedKeys && !allowedNamedKeys.includes(key)) {
+          return false;
+        }
+        return true;
+      })
+      .map(([key]) => key);
+  };
+
   return {
-    resolveSingleAccountKeysToMove: ({
-      channelKey,
-      channel,
-    }: {
+    resolveSingleAccountKeysToMove: resolveKeys,
+    resolveSingleAccountPromotion: (params: {
       channelKey: string;
       channel: Record<string, unknown>;
-    }) => {
-      const accounts =
-        channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
-          ? (channel.accounts as Record<string, unknown>)
-          : {};
-      const hasNamedAccounts = Object.keys(accounts).some(Boolean);
-      const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
-      return Object.entries(channel)
-        .filter(([key, value]) => {
-          if (key === "accounts" || key === "enabled" || value === undefined) {
-            return false;
-          }
-          const isKnownKey =
-            commonSingleAccountKeys.has(key) ||
-            (fallbackSingleAccountKeys[channelKey]?.includes(key) ?? false);
-          if (!isKnownKey) {
-            return false;
-          }
-          if (hasNamedAccounts && allowedNamedKeys && !allowedNamedKeys.includes(key)) {
-            return false;
-          }
-          return true;
-        })
-        .map(([key]) => key);
-    },
+    }) => ({
+      keysToMove: resolveKeys(params),
+      shouldDeferPromotion:
+        !Object.hasOwn(declaredSingleAccountKeys, params.channelKey) &&
+        Object.keys(params.channel).some(
+          (key) =>
+            !commonSingleAccountKeys.has(key) &&
+            !legacyCommonSingleAccountKeys.has(key) &&
+            !["accounts", "defaultAccount", "enabled"].includes(key),
+        ),
+    }),
   };
 });
 
@@ -1301,7 +1350,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
   }
 
   return {
-    runDoctorConfigPreflight: vi.fn(async () => {
+    runDoctorConfigPreflight: vi.fn(async (options: unknown) => {
+      runDoctorConfigPreflightOptionsMock(options);
       const injected = getDoctorConfigInputForTest();
       const configPath = injected?.path ?? resolveConfigPath();
       let parsed: Record<string, unknown> = injected?.config
@@ -1422,6 +1472,7 @@ vi.mock("./doctor-config-analysis.js", () => {
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
+    noteSandboxOriginProxyWarning: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
       const next = structuredClone(config);
@@ -1501,7 +1552,24 @@ describe("doctor config flow", () => {
       import("./doctor/shared/legacy-config-issues.js"),
       import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
       import("./doctor/shared/preview-warnings.js"),
+      import("./doctor/shared/hooks-token-reuse-repair.js"),
     ]);
+    await collectDoctorWarnings({
+      channels: {
+        slack: {
+          dangerouslyAllowNameMatching: true,
+          accounts: { work: { allowFrom: ["alice"] } },
+        },
+      },
+    });
+    await collectDoctorWarnings({
+      channels: {
+        googlechat: {
+          groupPolicy: "allowlist",
+          accounts: { work: { groupPolicy: "allowlist" } },
+        },
+      },
+    });
   });
 
   beforeEach(() => {
@@ -1513,6 +1581,7 @@ describe("doctor config flow", () => {
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
+    runDoctorConfigPreflightOptionsMock.mockClear();
   });
 
   it("preserves invalid config for doctor repairs", async () => {
@@ -1527,6 +1596,25 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("enables Doctor-only state migrations only for explicit repair", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: false }),
+    );
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: true }),
+    );
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
@@ -1582,6 +1670,37 @@ describe("doctor config flow", () => {
       params: { refresh: true },
       timeoutMs: 3000,
     });
+  });
+
+  it("does not refresh gateway before writing a config-only auth repair", async () => {
+    runDoctorRepairSequenceMock.mockImplementation(
+      async (params: {
+        state: { cfg: Record<string, unknown>; candidate: Record<string, unknown> };
+      }) => {
+        const repaired = { ...params.state.candidate, auth: { order: {} } };
+        return {
+          state: {
+            ...params.state,
+            cfg: repaired,
+            candidate: repaired,
+            pendingChanges: true,
+          },
+          changeNotes: ["Removed a stale configured auth order."],
+          warningNotes: [],
+          authProfilesRepaired: false,
+        };
+      },
+    );
+
+    const result = await runDoctorConfigWithInput({
+      config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.auth?.order).toEqual({});
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("keeps doctor repair silent when gateway secrets reload fails", async () => {
@@ -1699,8 +1818,14 @@ describe("doctor config flow", () => {
     });
 
     expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledTimes(1);
-    const [[warningParams]] = noteImplicitFallbackClobberWarningsMock.mock
-      .calls as unknown as Array<[{ agents?: unknown }]>;
+    const [warningParams] = expectDefined(
+      (
+        noteImplicitFallbackClobberWarningsMock.mock.calls as unknown as Array<
+          [{ agents?: unknown }]
+        >
+      )[0],
+      "(noteImplicitFallbackClobberWarningsMock.mock.calls as unknown as Array<\n        [{ agents?: unknown }]\n      >)[0] test invariant",
+    );
     expect(warningParams.agents).toStrictEqual(config.agents);
     const doctorWarnings = terminalNoteMock.mock.calls
       .filter(([, title]) => title === "Doctor warnings")
@@ -1987,15 +2112,16 @@ describe("doctor config flow", () => {
     });
     const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
     expect(browser.relayBindHost).toBeUndefined();
+    // driver "extension" is the live Chrome extension relay driver; repair keeps it.
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
-    ).toBe("existing-session");
+    ).toBe("extension");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
-  it("preserves commitments config on repair", async () => {
+  it("removes retired commitments config on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
@@ -2007,10 +2133,7 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expect(result.cfg.commitments).toEqual({
-      enabled: true,
-      maxPerDay: 2,
-    });
+    expect(result.cfg).not.toHaveProperty("commitments");
   }, 300_000);
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -2491,23 +2614,52 @@ describe("doctor config flow", () => {
         expect(cfg.channels.discord.dm.allowFrom).toEqual(["456"]);
         expect(cfg.channels.discord.dm.groupChannels).toEqual(["789"]);
         expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
-        expect(cfg.channels.discord.guilds["100"].users).toEqual(["111"]);
-        expect(cfg.channels.discord.guilds["100"].roles).toEqual(["222"]);
-        expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
-        expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.guilds["100"],
+            'cfg.channels.discord.guilds["100"] test invariant',
+          ).users,
+        ).toEqual(["111"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.guilds["100"],
+            'cfg.channels.discord.guilds["100"] test invariant',
+          ).roles,
+        ).toEqual(["222"]);
+        const defaultGuild = expectDefined(
+          cfg.channels.discord.guilds["100"],
+          "default Discord guild",
+        );
+        const generalChannel = expectDefined(
+          defaultGuild.channels.general,
+          "general Discord channel",
+        );
+        expect(generalChannel.users).toEqual(["333"]);
+        expect(generalChannel.roles).toEqual(["444"]);
         expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
         expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
         expect(cfg.channels.discord.accounts.work.dm.allowFrom).toEqual(["666"]);
         expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual(["777"]);
         expect(cfg.channels.discord.accounts.work.execApprovals.approvers).toEqual(["888"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].users).toEqual(["999"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].roles).toEqual(["1010"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.users).toEqual([
-          "1111",
-        ]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.roles).toEqual([
-          "1212",
-        ]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.accounts.work.guilds["200"],
+            'cfg.channels.discord.accounts.work.guilds["200"] test invariant',
+          ).users,
+        ).toEqual(["999"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.accounts.work.guilds["200"],
+            'cfg.channels.discord.accounts.work.guilds["200"] test invariant',
+          ).roles,
+        ).toEqual(["1010"]);
+        const workGuild = expectDefined(
+          cfg.channels.discord.accounts.work.guilds["200"],
+          "work Discord guild",
+        );
+        const helpChannel = expectDefined(workGuild.channels.help, "help Discord channel");
+        expect(helpChannel.users).toEqual(["1111"]);
+        expect(helpChannel.roles).toEqual(["1212"]);
       },
       { skipSessionCleanup: true },
     );
@@ -2539,7 +2691,83 @@ describe("doctor config flow", () => {
     };
 
     expect(cfg.channels.discord.allowFrom).toBeUndefined();
-    expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
+    expect(
+      expectDefined(
+        cfg.channels.discord.accounts.default,
+        "cfg.channels.discord.accounts.default test invariant",
+      ).allowFrom,
+    ).toEqual(["123"]);
+  });
+
+  it("defers absent-plugin promotion instead of creating a partial default account", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          "uninstalled-demo": {
+            dmPolicy: "allowlist",
+            appToken: "covered-legacy-key",
+            customAuth: "plugin-owned",
+            accounts: {
+              work: { enabled: true },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const channel = (
+      result.cfg as unknown as {
+        channels: Record<
+          string,
+          {
+            dmPolicy?: string;
+            appToken?: string;
+            customAuth?: string;
+            accounts?: Record<string, unknown>;
+          }
+        >;
+      }
+    ).channels["uninstalled-demo"];
+    expect(channel?.dmPolicy).toBe("allowlist");
+    expect(channel?.appToken).toBe("covered-legacy-key");
+    expect(channel?.customAuth).toBe("plugin-owned");
+    expect(channel?.accounts).toEqual({ work: { enabled: true } });
+  });
+
+  it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          "legacy-demo": {
+            dmPolicy: "allowlist",
+            appToken: "legacy-app-token",
+            accounts: {
+              work: { enabled: true },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const channel = (
+      result.cfg as unknown as {
+        channels: Record<
+          string,
+          { dmPolicy?: string; appToken?: string; accounts?: Record<string, unknown> }
+        >;
+      }
+    ).channels["legacy-demo"];
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.appToken).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      appToken: "legacy-app-token",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
@@ -2592,8 +2820,7 @@ describe("doctor config flow", () => {
     const result = await withTempHome(
       async (home) => {
         const configDir = path.join(home, ".openclaw");
-        const credentialsDir = path.join(configDir, "credentials");
-        await fs.mkdir(credentialsDir, { recursive: true });
+        await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(
           path.join(configDir, "openclaw.json"),
           JSON.stringify(
@@ -2610,11 +2837,11 @@ describe("doctor config flow", () => {
           ),
           "utf-8",
         );
-        await fs.writeFile(
-          path.join(credentialsDir, "telegram-allowFrom.json"),
-          JSON.stringify({ version: 1, allowFrom: ["12345"] }, null, 2),
-          "utf-8",
-        );
+        writeChannelPairingStateSnapshot("telegram", {
+          version: 1,
+          requests: [],
+          allowFrom: { default: ["12345"] },
+        });
         return await loadAndMaybeMigrateDoctorConfig({
           options: { nonInteractive: true, repair: true },
           confirm: async () => false,
@@ -2622,6 +2849,7 @@ describe("doctor config flow", () => {
       },
       { skipSessionCleanup: true },
     );
+    closeOpenClawStateDatabaseForTest();
 
     const cfg = result.cfg as {
       channels: {
@@ -2855,7 +3083,7 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("agents.defaults.heartbeat");
       expect(legacyMessages).toContain("channels.defaults.heartbeat");
       expect(legacyMessages).toContain("memorySearch:");
-      expect(legacyMessages).toContain("agents.defaults.memorySearch");
+      expect(legacyMessages).toContain("use memory.search");
       expect(legacyMessages).toContain("gateway.bind:");
       expect(legacyMessages).toContain("gateway.bind host aliases");
       expect(legacyMessages).toContain("channels.telegram.groupMentionsOnly:");
@@ -2990,7 +3218,7 @@ describe("doctor config flow", () => {
                     },
                   },
                   model: "gpt-realtime",
-                  voice: "cedar",
+                  speakerVoice: "cedar",
                   mode: "realtime",
                   transport: "gateway-relay",
                   brain: "agent-consult",
@@ -3047,3 +3275,4 @@ describe("doctor config flow", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,4 @@
 // CLI for showing and applying exec policy presets across config and approvals.
-import crypto from "node:crypto";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -10,17 +9,25 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-command-display.js";
 import {
   collectExecPolicyScopeSnapshots,
+  SESSION_EXEC_OVERRIDES_NOTE,
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
+  maxAsk,
+  minSecurity,
   normalizeExecAsk,
+  normalizeExecMode,
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
-  restoreExecApprovalsSnapshot,
-  saveExecApprovals,
+  resolveExecModeFromPolicy,
+  resolveExecModePolicy,
+  resolveExecApprovalsFromFile,
+  restoreExecApprovalsSnapshotLocked,
+  updateExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
+  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
@@ -128,12 +135,6 @@ function sanitizeExecPolicyMessage(value: unknown): string {
   return sanitizeTerminalText(String(value));
 }
 
-function hashExecApprovalsFile(file: ExecApprovalsFile): string {
-  // Match the persisted formatting hash so restore/set operations can detect drift.
-  const raw = `${JSON.stringify(file, null, 2)}\n`;
-  return crypto.createHash("sha256").update(raw).digest("hex");
-}
-
 function resolveExecPolicyInput(params: {
   host?: string;
   security?: string;
@@ -177,6 +178,7 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
     tools?: {
       exec?: {
         host?: ExecTarget;
+        mode?: ExecMode;
         security?: ExecSecurity;
         ask?: ExecAsk;
       };
@@ -187,11 +189,23 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
   if (policy.host !== undefined) {
     root.tools.exec.host = policy.host;
   }
-  if (policy.security !== undefined) {
-    root.tools.exec.security = policy.security;
-  }
-  if (policy.ask !== undefined) {
-    root.tools.exec.ask = policy.ask;
+  if (policy.security !== undefined || policy.ask !== undefined) {
+    const currentPolicy = resolveExecModePolicy({
+      mode: normalizeExecMode(root.tools.exec.mode),
+      security: root.tools.exec.security ?? "full",
+      ask: root.tools.exec.ask ?? "off",
+    });
+    const security = policy.security ?? currentPolicy.security;
+    const ask = policy.ask ?? currentPolicy.ask;
+    if (ask === "always" || (security === "full" && ask === "on-miss")) {
+      delete root.tools.exec.mode;
+      root.tools.exec.security = security;
+      root.tools.exec.ask = ask;
+    } else {
+      root.tools.exec.mode = resolveExecModeFromPolicy({ security, ask });
+      delete root.tools.exec.security;
+      delete root.tools.exec.ask;
+    }
   }
 }
 
@@ -214,6 +228,43 @@ function applyApprovalsDefaults(
   return next;
 }
 
+function buildExecPolicyApprovalsRollback(params: {
+  current: ExecApprovalsFile;
+  original: ExecApprovalsFile;
+  written: ExecApprovalsFile;
+  policy: ExecPolicyResolved;
+}): ExecApprovalsFile | null {
+  // Whole-file restore can lose to an unrelated concurrent edit. Revert only
+  // matching fields, and never loosen ambiguous same-value concurrent writes.
+  const fields = [
+    ["security", params.policy.security],
+    ["ask", params.policy.ask],
+    ["askFallback", params.policy.askFallback],
+  ] as const;
+  const originalDefaults = resolveExecApprovalsFromFile({ file: params.original }).defaults;
+  const currentDefaults = resolveExecApprovalsFromFile({ file: params.current }).defaults;
+  const next = structuredClone(params.current);
+  let changed = false;
+  for (const [field, appliedValue] of fields) {
+    const currentValue = params.current.defaults?.[field];
+    const originalValue = params.original.defaults?.[field];
+    const rollbackDoesNotLoosen =
+      field === "ask"
+        ? maxAsk(originalDefaults.ask, currentDefaults.ask) === originalDefaults.ask
+        : minSecurity(originalDefaults[field], currentDefaults[field]) === originalDefaults[field];
+    if (
+      appliedValue !== undefined &&
+      currentValue === params.written.defaults?.[field] &&
+      currentValue !== originalValue &&
+      rollbackDoesNotLoosen
+    ) {
+      next.defaults = { ...next.defaults, [field]: originalValue };
+      changed = true;
+    }
+  }
+  return changed ? next : null;
+}
+
 function buildNextExecPolicyConfig(
   config: OpenClawConfig,
   policy: ExecPolicyResolved,
@@ -234,14 +285,15 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   const hasNodeRuntimeScope = scopes.some(
     (scope) => scope.runtimeApprovalsSource === "node-runtime",
   );
+  const baseNote = hasNodeRuntimeScope
+    ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
+    : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.";
   return {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
     approvalsExists: approvalsSnapshot.exists,
     effectivePolicy: {
-      note: hasNodeRuntimeScope
-        ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
-        : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      note: `${baseNote} ${SESSION_EXEC_OVERRIDES_NOTE}`,
       scopes,
     },
   };
@@ -346,19 +398,37 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   }
   const approvalsSnapshot = readExecApprovalsSnapshot();
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
-  const writtenApprovalsHash = hashExecApprovalsFile(nextApprovals);
-  saveExecApprovals(nextApprovals);
+  const writtenApprovals = await updateExecApprovals({
+    baseHash: approvalsSnapshot.hash,
+    update: () => nextApprovals,
+  });
+  if (!writtenApprovals) {
+    throw new Error("Exec approvals changed; reload and retry.");
+  }
   try {
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
       nextConfig,
     });
   } catch (err) {
-    const currentApprovalsSnapshot = readExecApprovalsSnapshot();
-    if (currentApprovalsSnapshot.hash !== writtenApprovalsHash) {
-      throw err;
+    try {
+      if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
+        await updateExecApprovals({
+          update: (current) =>
+            buildExecPolicyApprovalsRollback({
+              current,
+              original: approvalsSnapshot.file,
+              written: writtenApprovals.file,
+              policy,
+            }),
+        });
+      }
+    } catch (rollbackError) {
+      throw new Error(
+        `Config update failed: ${formatExecPolicyError(err)}; exec approvals rollback failed: ${formatExecPolicyError(rollbackError)}`,
+        { cause: rollbackError },
+      );
     }
-    restoreExecApprovalsSnapshot(approvalsSnapshot);
     throw err;
   }
   return await buildLocalExecPolicyShowPayload();

@@ -32,7 +32,7 @@ export type GhConfigDiscoveryInput = {
   candidateOperatorHomes?: readonly string[];
 };
 
-export type GhConfigDirMismatch = {
+type GhConfigDirMismatch = {
   // The directory `gh` would actually consult given the current process env.
   effectiveConfigDir: string;
   // The directory that contains the operator's real `hosts.yml`.

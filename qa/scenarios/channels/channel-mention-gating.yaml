@@ -1,0 +1,82 @@
+title: Channel mention gating
+
+scenario:
+  id: channel-mention-gating
+  surface: channels
+  coverage:
+    primary:
+      - channels.mention-gating
+    secondary:
+      - channels.automatic-final-reply
+  objective: Verify required-mention group traffic stays quiet until the bot is explicitly mentioned.
+  successCriteria:
+    - Unmentioned group traffic produces no outbound reply.
+    - A subsequent mentioned turn receives exactly one marker reply.
+  docsRefs:
+    - docs/channels/group-messages.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/qa-transport.ts
+  execution:
+    profiles:
+      {
+        "matrix:adapter": 3,
+        "matrix:all": 35,
+        "matrix:fast": 7,
+        "matrix:transport": 34,
+        "slack:adapter": 2,
+        "telegram:adapter": 2,
+        "telegram:all": 1,
+        "telegram:mock-release": 1,
+        "telegram:release": 1,
+        "whatsapp:adapter": 3,
+      }
+    kind: flow
+    summary: Prove the shared mention gate with a quiet turn followed by a mentioned turn.
+    transportPolicy:
+      requireGroupMention: true
+    config:
+      conversationId: qa-routing-mention
+      expectedMarker: QA-MENTION-GATING-OK
+
+flow:
+  steps:
+    - name: blocks unmentioned traffic and accepts a mention
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`reply exactly: ${config.expectedMarker}`"
+        - waitForNoOutbound:
+            quietMs: 1500
+            sinceIndex: { ref: outboundStartIndex }
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            textIncludes: { ref: config.expectedMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: outbound
+      detailsExpr: outbound.text

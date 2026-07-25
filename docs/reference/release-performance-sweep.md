@@ -58,56 +58,19 @@ and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.28`.
   <Card title="Latest stable install" icon="hard-drive">
     **361.7MiB fresh install**
 
-    `v2026.5.28` cuts the nested OpenClaw dependency tree sharply, but a
-    smaller 259.7MiB nested tree still remains in the local install audit.
+    Cuts the nested OpenClaw dependency tree sharply from the `2026.5.22`
+    shrinkwrap-introduction peak, though a smaller 259.7MiB nested tree still
+    remains in the local install audit.
 
   </Card>
   <Card title="Dependency graph" icon="boxes">
     **300 installed packages**
 
-    Latest stable release, measured as unique package name/version roots in a
-    fresh install with scripts disabled.
+    Measured as unique package name/version roots in a fresh install with
+    scripts disabled; 71 fewer roots than the prior stable release.
 
   </Card>
 </CardGroup>
-
-## Install Footprint Timeline
-
-<CardGroup cols={2}>
-  <Card title="Monthly high" icon="triangle-alert">
-    **645 dependencies**
-
-    `2026.2.26` was the monthly dependency-count high in this sample.
-
-  </Card>
-  <Card title="Shrinkwrap introduced" icon="lock">
-    **1,020.6MB install**
-
-    `2026.5.22` added root shrinkwrap and exposed a package-shape problem:
-    911.8MB landed under nested `openclaw/node_modules`.
-
-  </Card>
-  <Card title="Latest stable" icon="tag">
-    **361.7MiB install**
-
-    `2026.5.28` cuts fresh install size by 52.8% from `2026.5.27`, but still
-    installs a 259.7MiB nested OpenClaw tree.
-
-  </Card>
-  <Card title="Dependency graph" icon="scissors">
-    **300 package roots**
-
-    `2026.5.28` installs 71 fewer unique package name/version roots than
-    `2026.5.27`.
-
-  </Card>
-</CardGroup>
-
-<Tip>
-Shrinkwrap was not the problem by itself. The bad package shape was.
-`v2026.5.28` still ships shrinkwrap, but the nested dependency tree is much
-smaller and the all-platform canvas fanout is gone in the local audit.
-</Tip>
 
 ## What Changed In 5.28
 
@@ -133,25 +96,30 @@ graph instead of removing the capabilities themselves.
   </Card>
 </CardGroup>
 
+<Tip>
+Shrinkwrap was not the problem by itself. The bad package shape was.
+`v2026.5.28` still ships shrinkwrap, but the nested dependency tree is much
+smaller and the all-platform canvas fanout is gone in the local audit.
+</Tip>
+
 ## Headline Numbers
 
 Do not use the late-April broken rows as public performance baselines.
 `v2026.4.23` and `v2026.4.29` are useful regression evidence, but the large
 `14x`-style deltas mostly describe the recovery from a bad release line.
 
-For the blog narrative, use the earlier April published baseline as scale:
+For the blog narrative, use the earlier April published baseline as scale.
+The baseline is `v2026.4.14` from the published `clawgrit-reports`
+mock-provider run (repeat 3; that run failed only because the diagnostic
+timeline was not emitted, so the cold, warm, and RSS medians are still useful
+as rough scale). Treat this as narrative context, not a release-gate
+statistic.
 
 | Metric          | Earlier April baseline | `v2026.5.28` |                    Delta |
 | --------------- | ---------------------: | -----------: | -----------------------: |
 | Cold agent turn |                9,819ms |      1,908ms | 80.6% lower, 5.1x faster |
 | Warm agent turn |                7,458ms |      1,870ms | 74.9% lower, 4.0x faster |
 | Agent peak RSS  |                686.2MB |      581.0MB |              15.3% lower |
-
-The earlier April baseline is `v2026.4.14` from the published
-`clawgrit-reports` mock-provider run. That run used repeat 3 and failed only
-because the diagnostic timeline was not emitted; the cold, warm, and RSS
-medians are still useful as rough scale. Treat this as narrative context, not a
-release-gate statistic.
 
 Within the May sweep, the latest release-branch row moved materially from
 `v2026.5.2`:
@@ -280,24 +248,11 @@ Dependency samples use one stable release per month, plus the
 
 ### Shrinkwrap boundary
 
-<CardGroup cols={2}>
-  <Card title="Before shrinkwrap" icon="unlock">
-    `2026.5.20` has no root shrinkwrap and no large nested OpenClaw dependency
-    tree.
-  </Card>
-  <Card title="Introduced" icon="lock">
-    `2026.5.22` adds root shrinkwrap and installs 911.8MB under nested
-    `openclaw/node_modules`.
-  </Card>
-  <Card title="Latest stable" icon="tag">
-    `2026.5.28` keeps shrinkwrap and still installs 259.7MiB under nested
-    `openclaw/node_modules`.
-  </Card>
-  <Card title="Canvas fanout fixed" icon="check">
-    `2026.5.28` no longer installs any `@napi-rs/canvas` packages in the local
-    fresh install audit.
-  </Card>
-</CardGroup>
+`2026.5.20` shipped with no root shrinkwrap and no large nested OpenClaw
+dependency tree. `2026.5.22` introduced root shrinkwrap and installed 911.8MB
+under nested `openclaw/node_modules`. `2026.5.28` keeps shrinkwrap and still
+installs 259.7MiB under nested `openclaw/node_modules`, but no longer installs
+any `@napi-rs/canvas` packages in the local fresh-install audit.
 
 Published tarball inspection verifies the boundary:
 

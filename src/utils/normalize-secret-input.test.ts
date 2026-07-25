@@ -14,6 +14,11 @@ describe("normalizeSecretInput", () => {
     expect(normalizeSecretInput("  sk-\r\nabc\n123  ")).toBe("sk-abc123");
   });
 
+  it("strips embedded control characters while preserving ordinary spaces", () => {
+    expect(normalizeSecretInput("  sk-\u0000ab\tc\u007f\u0085  ")).toBe("sk-abc");
+    expect(normalizeSecretInput("  Bearer token value  ")).toBe("Bearer token value");
+  });
+
   it("drops non-Latin1 code points that can break HTTP ByteString headers", () => {
     // U+0417 (Cyrillic З) and U+2502 (box drawing │) are > 255.
     expect(normalizeSecretInput("key-\u0417\u2502-token")).toBe("key--token");

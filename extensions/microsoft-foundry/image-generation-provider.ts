@@ -1,6 +1,7 @@
-// Microsoft Foundry image provider routes MAI image deployments to the MAI API.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
+// Microsoft Foundry image provider routes MAI image deployments to the MAI API.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
   ImageGenerationProvider,
   ImageGenerationRequest,
@@ -58,7 +59,7 @@ function resolveConfiguredModelName(
   providerConfig: ModelProviderConfig | undefined,
   model: string,
 ): { modelName: string; hasMetadata: boolean } {
-  const configuredName = providerConfig?.models.find((candidate) => candidate.id === model)?.name;
+  const configuredName = providerConfig?.models?.find((candidate) => candidate.id === model)?.name;
   const hasDistinctModelMetadata =
     normalizeOptionalLowercaseString(configuredName) !== normalizeOptionalLowercaseString(model);
   return configuredName
@@ -351,7 +352,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
               })(),
               body: buildEditFormData({
                 req,
-                image: inputImages[0],
+                image: expectDefined(inputImages[0], "Microsoft Foundry edit source image"),
                 model,
               }),
               timeoutMs,

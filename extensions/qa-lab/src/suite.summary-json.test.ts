@@ -15,8 +15,8 @@ describe("buildQaSuiteSummaryJson", () => {
     startedAt: new Date("2026-04-11T00:00:00.000Z"),
     finishedAt: new Date("2026-04-11T00:05:00.000Z"),
     providerMode: "mock-openai" as const,
-    primaryModel: "openai/gpt-5.5",
-    alternateModel: "openai/gpt-5.5-alt",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-alt",
     fastMode: true,
     concurrency: 2,
   };
@@ -26,12 +26,12 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.startedAt).toBe("2026-04-11T00:00:00.000Z");
     expect(json.run.finishedAt).toBe("2026-04-11T00:05:00.000Z");
     expect(json.run.providerMode).toBe("mock-openai");
-    expect(json.run.primaryModel).toBe("openai/gpt-5.5");
+    expect(json.run.primaryModel).toBe("openai/gpt-5.6-luna");
     expect(json.run.primaryProvider).toBe("openai");
-    expect(json.run.primaryModelName).toBe("gpt-5.5");
-    expect(json.run.alternateModel).toBe("openai/gpt-5.5-alt");
+    expect(json.run.primaryModelName).toBe("gpt-5.6-luna");
+    expect(json.run.alternateModel).toBe("openai/gpt-5.6-luna-alt");
     expect(json.run.alternateProvider).toBe("openai");
-    expect(json.run.alternateModelName).toBe("gpt-5.5-alt");
+    expect(json.run.alternateModelName).toBe("gpt-5.6-luna-alt");
     expect(json.run.fastMode).toBe(true);
     expect(json.run.concurrency).toBe(2);
     expect(json.run.channelDriver).toBeNull();
@@ -153,7 +153,7 @@ describe("buildQaSuiteSummaryJson", () => {
       ],
       channelId: "qa-channel",
       generatedAt: "2026-04-11T00:05:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
@@ -175,6 +175,10 @@ describe("buildQaSuiteSummaryJson", () => {
           steps: [],
           runtimeParity: {
             scenarioId: "scenario-a",
+            runtimeParityUsage: {
+              expectation: "not-applicable" as const,
+              reason: "Local fixture only; no assistant turn runs.",
+            },
             drift: "none" as const,
             cells: {
               openclaw: {
@@ -204,6 +208,10 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.scenarios[0]).toMatchObject({
       runtimeParity: {
         scenarioId: "scenario-a",
+        runtimeParityUsage: {
+          expectation: "not-applicable",
+          reason: "Local fixture only; no assistant turn runs.",
+        },
         drift: "none",
       },
     });

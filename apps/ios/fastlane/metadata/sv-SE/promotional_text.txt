@@ -1,0 +1,1 @@
+Parkoppla din iPhone med OpenClaw Gateway för chatt, röst i realtid, godkännanden, enhetsfunktioner och privat automatisering.

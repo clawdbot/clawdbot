@@ -1,4 +1,5 @@
 // Applies plugin auto-enable decisions to normalized config objects.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
@@ -18,6 +19,7 @@ type PluginAutoEnableCacheEntry = {
   discoveryFingerprint: string;
   envFingerprint: string;
   registryFingerprint: string;
+  ambientEnvTriggers: AmbientEnvTriggerPolicy;
   result: PluginAutoEnableResult;
 };
 type PluginAutoEnableDiscoveryCache = WeakMap<object, PluginAutoEnableCacheEntry>;
@@ -69,18 +71,30 @@ function stableFingerprintValue(value: unknown): string {
     .join(",")}}`;
 }
 
+/** Fingerprints mutable config inputs used by plugin auto-enable detection. */
+export function fingerprintPluginAutoEnableConfig(config: OpenClawConfig): string {
+  return hashRuntimeConfigValue(config);
+}
+
+/** Fingerprints mutable environment inputs used by plugin auto-enable detection. */
+export function fingerprintPluginAutoEnableEnv(env: NodeJS.ProcessEnv): string {
+  return stableFingerprintValue(env);
+}
+
 function createPluginAutoEnableCacheEntry(params: {
   config: OpenClawConfig;
   discovery: PluginDiscoveryResult;
   env: NodeJS.ProcessEnv;
   manifestRegistry: PluginManifestRegistry;
   result: PluginAutoEnableResult;
+  ambientEnvTriggers: AmbientEnvTriggerPolicy;
 }): PluginAutoEnableCacheEntry {
   return {
-    configFingerprint: hashRuntimeConfigValue(params.config),
+    configFingerprint: fingerprintPluginAutoEnableConfig(params.config),
     discoveryFingerprint: stableFingerprintValue(params.discovery.candidates),
-    envFingerprint: stableFingerprintValue(params.env),
+    envFingerprint: fingerprintPluginAutoEnableEnv(params.env),
     registryFingerprint: stableFingerprintValue(params.manifestRegistry.plugins),
+    ambientEnvTriggers: params.ambientEnvTriggers,
     result: params.result,
   };
 }
@@ -91,12 +105,14 @@ function isPluginAutoEnableCacheEntryFresh(params: {
   discovery: PluginDiscoveryResult;
   env: NodeJS.ProcessEnv;
   manifestRegistry: PluginManifestRegistry;
+  ambientEnvTriggers: AmbientEnvTriggerPolicy;
 }): boolean {
   return (
-    params.entry.configFingerprint === hashRuntimeConfigValue(params.config) &&
+    params.entry.configFingerprint === fingerprintPluginAutoEnableConfig(params.config) &&
     params.entry.discoveryFingerprint === stableFingerprintValue(params.discovery.candidates) &&
-    params.entry.envFingerprint === stableFingerprintValue(params.env) &&
-    params.entry.registryFingerprint === stableFingerprintValue(params.manifestRegistry.plugins)
+    params.entry.envFingerprint === fingerprintPluginAutoEnableEnv(params.env) &&
+    params.entry.registryFingerprint === stableFingerprintValue(params.manifestRegistry.plugins) &&
+    params.entry.ambientEnvTriggers === params.ambientEnvTriggers
   );
 }
 
@@ -136,10 +152,12 @@ export function applyPluginAutoEnable(params: {
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): PluginAutoEnableResult {
   const config = params.config;
   if (config && typeof config === "object" && params.manifestRegistry && params.discovery) {
     const env = params.env ?? process.env;
+    const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
     const envCache = getOrCreateWeakMap(
       (sameTurnApplyCache ??= new WeakMap()),
       config,
@@ -164,6 +182,7 @@ export function applyPluginAutoEnable(params: {
         discovery: params.discovery,
         env,
         manifestRegistry: params.manifestRegistry,
+        ambientEnvTriggers,
       })
     ) {
       return cached.result;
@@ -183,6 +202,7 @@ export function applyPluginAutoEnable(params: {
         env,
         manifestRegistry: params.manifestRegistry,
         result,
+        ambientEnvTriggers,
       }),
     );
     scheduleSameTurnApplyCacheClear();

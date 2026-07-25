@@ -1,6 +1,6 @@
 // Tests approval command behavior for pending tool and execution requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveApprovalApprovers } from "../../plugin-sdk/approval-approvers.js";
 import {
@@ -52,11 +52,9 @@ function expectApprovalResolverCall(params: {
   expect(request).toHaveProperty("senderId");
   expect(request.approvalId).toBe(params.id);
   expect(request.decision).toBe(params.decision ?? "allow-once");
-  if (params.method === "plugin.approval.resolve") {
-    expect(request.resolveMethod).toBe("plugin");
-  } else {
-    expect(request).not.toHaveProperty("resolveMethod");
-  }
+  expect(request.resolveMethod).toBe(
+    params.method === "plugin.approval.resolve" ? "plugin" : "exec",
+  );
   expect(request.clientDisplayName).toMatch(/^Chat approval \(.+\)$/);
 }
 
@@ -74,7 +72,6 @@ function getDiscordExecApprovalApproversForTests(params: { cfg: OpenClawConfig }
   return resolveApprovalApprovers({
     explicit: discord?.execApprovals?.approvers,
     allowFrom: discord?.allowFrom,
-    extraAllowFrom: discord?.dm?.allowFrom,
     defaultTo: discord?.defaultTo,
     normalizeApprover: normalizeDiscordDirectApproverId,
     normalizeDefaultTo: (value) => normalizeDiscordDirectApproverId(value),
@@ -441,7 +438,7 @@ describe("handleApproveCommand", () => {
 
   function createTelegramApproveCfg(
     execApprovals: {
-      enabled: true;
+      enabled: boolean;
       approvers: string[];
       target: "dm";
     } | null = { enabled: true, approvers: ["123"], target: "dm" },
@@ -542,6 +539,28 @@ describe("handleApproveCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
     expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc12345" });
+  });
+
+  it("accepts forwarded Telegram plugin approvals from approvers when native delivery is disabled", async () => {
+    const params = buildApproveParams(
+      "/approve plugin:abc12345 allow-once",
+      createTelegramApproveCfg({ enabled: false, approvers: ["123"], target: "dm" }),
+      {
+        Provider: "telegram",
+        Surface: "telegram",
+        SenderId: "123",
+      },
+    );
+    params.command.isAuthorizedSender = false;
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval allow-once submitted");
+    expectApprovalResolverCall({
+      method: "plugin.approval.resolve",
+      id: "plugin:abc12345",
+    });
   });
 
   it("honors the configured default account for omitted-account /approve auth", async () => {
@@ -811,7 +830,7 @@ describe("handleApproveCommand", () => {
     }
   });
 
-  it("rejects legacy unprefixed plugin approval fallback on Discord before exec fallback", async () => {
+  it("rejects approval probing on Discord when neither kind is authorized", async () => {
     for (const testCase of [
       {
         name: "discord legacy plugin approval with exec approvals disabled",
@@ -840,7 +859,7 @@ describe("handleApproveCommand", () => {
     }
   });
 
-  it("preserves legacy unprefixed plugin approval fallback on Discord", async () => {
+  it("probes authorized legacy kinds explicitly without inferring from the id", async () => {
     resolveApprovalOverGatewayMock.mockRejectedValueOnce(
       new Error("unknown or expired approval id"),
     );
@@ -916,13 +935,13 @@ describe("handleApproveCommand", () => {
     expectApprovalResolverCall({ method: "plugin.approval.resolve", id: "abc123" });
   });
 
-  it("requires configured Discord approvers for plugin approvals", async () => {
+  it("requires configured Discord approvers before probing either kind", async () => {
     for (const testCase of [
       {
-        name: "discord plugin non approver",
+        name: "discord non approver",
         cfg: createDiscordApproveCfg({ enabled: false, approvers: ["999"], target: "channel" }),
         senderId: "123",
-        expectedText: "not authorized to approve plugin requests",
+        expectedText: "not authorized to approve",
         expectedResolverCalls: 0,
       },
       {
@@ -930,12 +949,14 @@ describe("handleApproveCommand", () => {
         cfg: createDiscordApproveCfg({ enabled: false, approvers: ["123"], target: "channel" }),
         senderId: "123",
         expectedText: "Approval allow-once submitted",
-        expectedResolverCalls: 1,
+        expectedResolverCalls: 2,
       },
     ] as const) {
       resolveApprovalOverGatewayMock.mockReset();
       if (testCase.expectedResolverCalls > 0) {
-        resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+        resolveApprovalOverGatewayMock
+          .mockRejectedValueOnce(new Error("unknown or expired approval id"))
+          .mockResolvedValueOnce(undefined);
       }
       const result = await handleApproveCommand(
         buildApproveParams("/approve plugin:abc123 allow-once", testCase.cfg, {
@@ -951,7 +972,12 @@ describe("handleApproveCommand", () => {
         testCase.expectedResolverCalls,
       );
       if (testCase.expectedResolverCalls > 0) {
-        expectApprovalResolverCall({ method: "plugin.approval.resolve", id: "plugin:abc123" });
+        expectApprovalResolverCall({ method: "exec.approval.resolve", id: "plugin:abc123" });
+        expectApprovalResolverCall({
+          callIndex: 1,
+          method: "plugin.approval.resolve",
+          id: "plugin:abc123",
+        });
       }
     }
   });
@@ -1072,3 +1098,4 @@ describe("handleApproveCommand", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatGatewayLogSentinelSummary,
   type GatewayLogSentinelFinding,
@@ -22,7 +23,7 @@ import {
 } from "./runtime-parity.js";
 import { buildTokenEfficiencyReport } from "./token-efficiency-report.js";
 
-export const QA_CONFIDENCE_VERDICTS = [
+const QA_CONFIDENCE_VERDICTS = [
   "pass",
   "product-bug",
   "qa-harness-bug",
@@ -32,9 +33,9 @@ export const QA_CONFIDENCE_VERDICTS = [
   "environment-blocked",
 ] as const;
 
-export type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
+type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
 
-export type QaConfidenceLaneKind =
+type QaConfidenceLaneKind =
   | "qa-suite-summary"
   | "runtime-parity-summary"
   | "harness-parity-summary"
@@ -43,7 +44,7 @@ export type QaConfidenceLaneKind =
   | "self-test-summary"
   | "generic-pass-summary";
 
-export type QaConfidenceManifestLane = {
+type QaConfidenceManifestLane = {
   id: string;
   title: string;
   kind: QaConfidenceLaneKind;
@@ -61,15 +62,15 @@ export type QaConfidenceManifestLane = {
   labels?: string[];
 };
 
-export type QaConfidenceManifest = {
+type QaConfidenceManifest = {
   version: 1;
   profile: string;
   lanes: QaConfidenceManifestLane[];
 };
 
-export type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
+type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
 
-export type QaConfidenceLaneResult = {
+type QaConfidenceLaneResult = {
   id: string;
   title: string;
   kind: QaConfidenceLaneKind;
@@ -89,7 +90,7 @@ export type QaConfidenceLaneResult = {
   skipBackfilled?: boolean;
 };
 
-export type QaConfidenceReport = {
+type QaConfidenceReport = {
   generatedAt: string;
   profile: string;
   strictZeroUnknowns: boolean;
@@ -109,7 +110,7 @@ export type QaConfidenceReport = {
   lanes: QaConfidenceLaneResult[];
 };
 
-export type QaConfidenceSelfTestCanary = {
+type QaConfidenceSelfTestCanary = {
   id: string;
   category:
     | "prompt"
@@ -124,7 +125,7 @@ export type QaConfidenceSelfTestCanary = {
   details: string;
 };
 
-export type QaConfidenceSelfTestSummary = {
+type QaConfidenceSelfTestSummary = {
   generatedAt: string;
   pass: boolean;
   canaries: QaConfidenceSelfTestCanary[];
@@ -139,10 +140,6 @@ const QA_CONFIDENCE_SELF_TEST_CANARY_IDS = [
   "token-efficiency-regression",
   "jsonl-replay-ordering-drift",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
@@ -296,7 +293,7 @@ function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
   };
 }
 
-export function normalizeQaConfidenceManifest(value: unknown): QaConfidenceManifest {
+function normalizeQaConfidenceManifest(value: unknown): QaConfidenceManifest {
   if (!isRecord(value)) {
     throw new Error("confidence manifest must be an object");
   }
@@ -389,8 +386,7 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const failedCount = readCount(counts?.failed);
   const explicitSkippedCount = readCount(counts?.skipped);
   if (totalCount !== undefined) {
-    const providedCountSum =
-      (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
+    const providedCountSum = (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
     if (totalCount < providedCountSum) {
       return {
         passed: false,
@@ -1140,7 +1136,7 @@ function detectJsonlReplayDrift(): boolean {
   }).passed;
 }
 
-export async function buildQaConfidenceSelfTestSummary(
+async function buildQaConfidenceSelfTestSummary(
   generatedAt = new Date().toISOString(),
 ): Promise<QaConfidenceSelfTestSummary> {
   const promptDriftDetected = detectHarnessDrift({
@@ -1273,9 +1269,7 @@ export async function buildQaConfidenceSelfTestSummary(
   };
 }
 
-export function renderQaConfidenceSelfTestMarkdownReport(
-  summary: QaConfidenceSelfTestSummary,
-): string {
+function renderQaConfidenceSelfTestMarkdownReport(summary: QaConfidenceSelfTestSummary): string {
   const lines = [
     "# OpenClaw QA Confidence Self-Test",
     "",
@@ -1306,3 +1300,4 @@ export async function writeQaConfidenceSelfTestArtifacts(params: {
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return { reportPath, summaryPath, summary };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

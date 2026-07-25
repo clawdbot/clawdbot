@@ -1,9 +1,6 @@
 // QA Convex credential tests validate credential payload shapes.
 import { describe, expect, it } from "vitest";
-import {
-  CredentialPayloadValidationError,
-  normalizeCredentialPayloadForKind,
-} from "../qa/convex-credential-broker/convex/payload-validation.js";
+import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload_validation.js";
 
 describe("QA Convex credential payload validation", () => {
   it("normalizes Discord credential payloads", () => {
@@ -36,7 +33,7 @@ describe("QA Convex credential payload validation", () => {
         sutBotToken: "sut-token",
         sutApplicationId: "1496963665587601428",
       }),
-    ).toThrow(CredentialPayloadValidationError);
+    ).toThrow(/Discord snowflake/u);
   });
 
   it("rejects empty Discord bot tokens", () => {

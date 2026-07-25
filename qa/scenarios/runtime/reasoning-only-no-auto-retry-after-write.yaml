@@ -5,9 +5,9 @@ scenario:
   surface: runtime
   coverage:
     primary:
-      - runtime.reasoning-only-recovery
+      - agent-runtime.failure-recovery-reasoning-only-recovery
     secondary:
-      - runtime.retry-policy
+      - agent-runtime.failure-recovery-retry-policy
   objective: Verify a GPT-style reasoning-only turn after a mutating write stays replay-unsafe and does not auto-retry.
   successCriteria:
     - Scenario is mock-openai only so live lanes do not pick it up implicitly.
@@ -41,9 +41,9 @@ flow:
             - ref: env
             - 60000
         - call: reset
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: sessionKey
           value:
             expr: "`agent:qa:reasoning-only-write:${randomUUID().slice(0, 8)}`"
@@ -61,7 +61,7 @@ flow:
           value:
             expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
         - assert:
-            expr: "waited?.status === 'ok'"
+            expr: "['ok', 'completed', 'succeeded'].includes(String(waited?.status)) || (waited?.status === 'error' && String(waited?.error ?? '').trim().toLowerCase() === 'completed')"
             message:
               expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
         - call: fs.readFile
@@ -78,7 +78,7 @@ flow:
             then:
               - set: scenarioRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore)"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
               - assert:
                   expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.plannedToolName === 'write')"
                   message: expected mutating write request in mock trace

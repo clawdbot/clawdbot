@@ -1,14 +1,31 @@
 /** Tests plugin slot normalization and exclusive slot selection behavior. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 import {
   applyExclusiveSlotSelection,
   hasKind,
   kindsEqual,
-  normalizeKinds,
-  slotKeysForPluginKind,
+  resetPluginSlotsToDefaults,
 } from "./slots.js";
-import type { PluginKind } from "./types.js";
+
+describe("resetPluginSlotsToDefaults", () => {
+  it("resets every slot owned by the plugin", () => {
+    expect(
+      resetPluginSlotsToDefaults(
+        { memory: "dual-plugin", contextEngine: "dual-plugin" },
+        "dual-plugin",
+      ),
+    ).toEqual({ memory: "memory-core", contextEngine: "legacy" });
+  });
+
+  it("preserves slot state when the plugin owns no slot", () => {
+    const slots = { memory: "memory-core", contextEngine: "legacy" };
+
+    expect(resetPluginSlotsToDefaults(slots, "other-plugin")).toBe(slots);
+    expect(resetPluginSlotsToDefaults(undefined, "other-plugin")).toBeUndefined();
+  });
+});
 
 describe("applyExclusiveSlotSelection", () => {
   const createMemoryConfig = (plugins?: OpenClawConfig["plugins"]): OpenClawConfig => ({
@@ -265,20 +282,6 @@ describe("applyExclusiveSlotSelection", () => {
   });
 });
 
-describe("normalizeKinds", () => {
-  it("returns empty array for undefined", () => {
-    expect(normalizeKinds(undefined)).toStrictEqual([]);
-  });
-
-  it("wraps a single kind in an array", () => {
-    expect(normalizeKinds("memory")).toEqual(["memory"]);
-  });
-
-  it("returns an array kind as-is", () => {
-    expect(normalizeKinds(["memory", "context-engine"])).toEqual(["memory", "context-engine"]);
-  });
-});
-
 describe("hasKind", () => {
   it("returns false for undefined kind", () => {
     expect(hasKind(undefined, "memory")).toBe(false);
@@ -292,23 +295,6 @@ describe("hasKind", () => {
   it("matches within a kind array", () => {
     expect(hasKind(["memory", "context-engine"], "memory")).toBe(true);
     expect(hasKind(["memory", "context-engine"], "context-engine")).toBe(true);
-  });
-});
-
-describe("slotKeysForPluginKind", () => {
-  it("returns empty for undefined", () => {
-    expect(slotKeysForPluginKind(undefined)).toStrictEqual([]);
-  });
-
-  it("returns single slot key for single kind", () => {
-    expect(slotKeysForPluginKind("memory")).toEqual(["memory"]);
-  });
-
-  it("returns multiple slot keys for multi-kind", () => {
-    expect(slotKeysForPluginKind(["memory", "context-engine"])).toEqual([
-      "memory",
-      "contextEngine",
-    ]);
   });
 });
 

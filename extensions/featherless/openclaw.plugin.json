@@ -1,0 +1,83 @@
+{
+  "id": "featherless",
+  "name": "Featherless AI",
+  "description": "OpenClaw Featherless AI provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["featherless"],
+  "providerRequest": {
+    "providers": {
+      "featherless": {
+        "family": "featherless"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "featherless",
+        "envVars": ["FEATHERLESS_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "featherless",
+      "method": "api-key",
+      "choiceId": "featherless-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Featherless AI API key",
+      "choiceHint": "OpenAI-compatible access to open models",
+      "groupId": "featherless",
+      "groupLabel": "Featherless AI",
+      "groupHint": "OpenAI-compatible access to open models",
+      "optionKey": "featherlessApiKey",
+      "cliFlag": "--featherless-api-key",
+      "cliOption": "--featherless-api-key <key>",
+      "cliDescription": "Featherless AI API key"
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "featherless": {
+        "baseUrl": "https://api.featherless.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "Qwen/Qwen3-32B",
+            "name": "Qwen3 32B",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 32768,
+            "maxTokens": 4096,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsReasoningEffort": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens",
+              "thinkingFormat": "qwen-chat-template",
+              "supportsStrictMode": false
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "featherless": "refreshable"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

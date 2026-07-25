@@ -13,6 +13,7 @@ import {
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { formatErrorMessage } from "../dreaming-shared.js";
+import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -32,10 +33,12 @@ export type EmbeddingProviderResult = {
 type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   provider: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
+const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
 
 function createMissingLlamaCppProviderError(): Error {
   return new Error(
@@ -51,7 +54,7 @@ function createMissingLlamaCppProviderError(): Error {
 function adaptGenericEmbeddingProvider(
   provider: GenericEmbeddingProvider,
 ): MemoryEmbeddingProvider {
-  return {
+  const adapted: MemoryEmbeddingProvider = {
     id: provider.id,
     model: provider.model,
     ...(typeof provider.maxInputTokens === "number"
@@ -74,6 +77,14 @@ function adaptGenericEmbeddingProvider(
       }),
     ...(provider.close ? { close: provider.close } : {}),
   };
+  const getRuntimeFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
+  if (typeof getRuntimeFacts === "function") {
+    Object.defineProperty(adapted, LOCAL_EMBEDDING_RUNTIME_FACTS, {
+      enumerable: false,
+      value: getRuntimeFacts,
+    });
+  }
+  return adapted;
 }
 
 function adaptGenericRuntime(
@@ -226,10 +237,11 @@ async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
-  const result = await adapter.create({
+  const createOptions = {
     ...options,
     model: resolveProviderModel(adapter, options.model),
-  });
+  };
+  const result = await adapter.create(createOptions);
   return {
     provider: result.provider,
     requestedProvider: options.provider,

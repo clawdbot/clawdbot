@@ -1,4 +1,6 @@
 // Verifies session tool-result guard inserts, truncates, and repairs tool results.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
@@ -457,8 +459,12 @@ describe("installSessionToolResultGuard", () => {
 
   it("blocks persistence when before_message_write returns block=true", () => {
     const sm = SessionManager.inMemory();
+    const blockedUserMessages: AgentMessage[] = [];
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: () => ({ block: true }),
+      onUserMessageBlocked: (message) => {
+        blockedUserMessages.push(message);
+      },
     });
 
     sm.appendMessage(
@@ -470,6 +476,8 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expect(getPersistedMessages(sm)).toHaveLength(0);
+    expect(blockedUserMessages).toHaveLength(1);
+    expect(blockedUserMessages[0]).toMatchObject({ role: "user", content: "hidden" });
   });
 
   it("applies before_message_write message mutations before persistence", () => {
@@ -498,7 +506,7 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: ({ message }) => ({
-        message: redactTranscriptMessage(message, { logging: { redactSensitive: "tools" } }),
+        message: redactTranscriptMessage(message, {}),
       }),
     });
 
@@ -531,7 +539,9 @@ describe("installSessionToolResultGuard", () => {
       };
     };
     const serializedToolResult = JSON.stringify(toolResult);
-    expect(toolResult.content[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(
+      expectDefined(toolResult.content[0], "toolResult.content[0] test invariant").text,
+    ).not.toContain("sk-abcdef1234567890xyz");
     expect(serializedToolResult).not.toContain("plainsecretvalue123");
     expect(serializedToolResult).not.toContain("hunter2");
     expect(serializedToolResult).not.toContain("nestedplainsecret123");
@@ -613,6 +623,26 @@ describe("installSessionToolResultGuard", () => {
     const persisted = getPersistedMessages(sm);
     expect(persisted.map((message) => message.role)).toEqual(["user"]);
     expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("second");
+  });
+
+  it("re-enables the next user write after the canonical entry is removed", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      suppressNextUserMessagePersistence: true,
+    });
+
+    guard.clearNextUserMessagePersistenceSuppression();
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "replacement",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("replacement");
   });
 
   it("suppresses assistant error stubs when requested", () => {

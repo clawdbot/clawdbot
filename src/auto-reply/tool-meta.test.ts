@@ -16,9 +16,7 @@ describe("tool meta formatting", () => {
     withHome(() => {
       expect(formatToolAggregate("fs", [`${home}/a.txt`])).toContain("~/a.txt");
       expect(formatToolAggregate("fs", [`${home}/a.txt:12`])).toContain("~/a.txt:12");
-      expect(formatToolAggregate("exec", [`cd ${home}/dir && ls`])).toContain(
-        "cd ~/dir && ls",
-      );
+      expect(formatToolAggregate("exec", [`cd ${home}/dir && ls`])).toContain("cd ~/dir && ls");
       expect(formatToolAggregate("fs", [""])).toBe("🧩 Fs");
     });
   });

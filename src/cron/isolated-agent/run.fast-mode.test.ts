@@ -173,6 +173,9 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
         key: "agent:default:cron:test",
         deleteTranscript: true,
         emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 0,
       },
       timeoutMs: 10_000,
     });

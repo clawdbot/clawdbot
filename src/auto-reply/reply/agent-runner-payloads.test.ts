@@ -1,4 +1,6 @@
 // Tests reply payload construction and metadata propagation from agent runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -13,6 +15,7 @@ import {
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
   isHeartbeat: false,
@@ -117,8 +120,45 @@ describe("buildReplyPayloads media filter integration", () => {
           plugin: createChannelTestPluginBase({ id: "discord" }),
           source: "test",
         },
+        {
+          pluginId: "feishu-plugin",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "feishu" }),
+            meta: {
+              id: "feishu",
+              label: "Feishu",
+              selectionLabel: "Feishu",
+              docsPath: "/channels/feishu",
+              blurb: "test stub",
+              aliases: ["lark"],
+            },
+          },
+        },
       ]),
     );
+  });
+
+  it("shares first-reply threading across staged payload builds", async () => {
+    const applyReplyToMode = createReplyToModeFilterForChannel("first", "whatsapp");
+    const sharedParams = {
+      ...baseParams,
+      replyToMode: "first" as const,
+      replyToChannel: "whatsapp" as const,
+      currentMessageId: "msg",
+      applyReplyToMode,
+    };
+    const first = await buildReplyPayloads({
+      ...sharedParams,
+      payloads: [{ text: "internal commentary", isCommentary: true }],
+    });
+    const fallback = await buildReplyPayloads({
+      ...sharedParams,
+      payloads: [{ text: "run failed", isError: true }],
+    });
+
+    expect(first.replyPayloads[0]?.replyToId).toBe("msg");
+    expect(fallback.replyPayloads[0]?.replyToId).toBeUndefined();
   });
 
   it("records the reply policy used by dedupe and final delivery", async () => {
@@ -129,7 +169,10 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChatType: "dm",
     });
 
-    expect(getReplyPayloadMetadata(replyPayloads[0])?.replyDelivery).toEqual({
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.replyDelivery,
+    ).toEqual({
       chatType: "direct",
       replyToMode: "first",
     });
@@ -172,9 +215,12 @@ describe("buildReplyPayloads media filter integration", () => {
       text: "⚠️ API rate limit reached.",
       replyToId: "msg-1",
     });
-    expectFields(getReplyPayloadMetadata(replyPayloads[0]), {
-      deliverDespiteSourceReplySuppression: true,
-    });
+    expectFields(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant")),
+      {
+        deliverDespiteSourceReplySuppression: true,
+      },
+    );
   });
 
   it("sanitizes source reply transcript mirror text with final payload text", async () => {
@@ -203,9 +249,10 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("Visible\n\nDone");
-    expect(getReplyPayloadMetadata(replyPayloads[0])?.sourceReplyTranscriptMirror?.text).toBe(
-      "Visible\n\nDone",
-    );
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.sourceReplyTranscriptMirror?.text,
+    ).toBe("Visible\n\nDone");
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
@@ -216,7 +263,9 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0].mediaUrl).toBeUndefined();
+    expect(
+      expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl,
+    ).toBeUndefined();
   });
 
   it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
@@ -227,7 +276,9 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
+    expect(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl).toBe(
+      "file:///tmp/photo.jpg",
+    );
   });
 
   it("normalizes sent media URLs before deduping normalized reply media", async () => {
@@ -361,7 +412,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("discord-only text");
   });
 
-  it("falls back to global text dedupe for legacy multi-target messaging telemetry", async () => {
+  it("does not apply ambiguous global text evidence across multiple routes", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!" }],
@@ -374,7 +425,8 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 
   it("dedupes final media only against message-tool media sent to the same route", async () => {
@@ -404,7 +456,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/discord-photo.jpg");
   });
 
-  it("falls back to global media dedupe for legacy multi-target messaging telemetry", async () => {
+  it("does not apply ambiguous global media evidence across multiple routes", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
@@ -420,8 +472,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
       text: "photo",
-      mediaUrl: undefined,
-      mediaUrls: undefined,
+      mediaUrl: "file:///tmp/photo.jpg",
     });
   });
 
@@ -445,28 +496,6 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("delivers distinct same-target replies when target provider is channel alias", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "feishu-plugin",
-          source: "test",
-          plugin: {
-            id: "feishu",
-            meta: {
-              id: "feishu",
-              label: "Feishu",
-              selectionLabel: "Feishu",
-              docsPath: "/channels/feishu",
-              blurb: "test stub",
-              aliases: ["lark"],
-            },
-            capabilities: { chatTypes: ["direct"] },
-            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-          },
-        },
-      ]),
-    );
     await expectSameTargetRepliesDelivered({ provider: "lark", to: "ou_abc123" });
   });
 
@@ -634,6 +663,36 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads.map((payload) => payload.text)).toEqual(["intro", "result"]);
+  });
+
+  it("dedupes against final routes when first-reply state is shared", async () => {
+    const applyReplyToMode = createReplyToModeFilterForChannel("first", "slack");
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "intro" }, { text: "result" }],
+      replyToMode: "first",
+      replyToChannel: "slack",
+      currentMessageId: "111.000",
+      applyReplyToMode,
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["result"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "result",
+        },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => [payload.text, payload.replyToId])).toEqual([
+      ["intro", "111.000"],
+      ["result", undefined],
+    ]);
   });
 
   it("does not treat a Discord native reply id as a thread route", async () => {
@@ -1509,3 +1568,4 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("hello world!");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

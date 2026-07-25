@@ -1,6 +1,6 @@
 // Audits configured model references for risky provider or model choices.
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { modelKey } from "../agents/model-selection-normalize.js";
+import { modelKey } from "../agents/model-ref-shared.js";
 import {
   buildModelAliasIndex,
   resolveModelRefFromString,
@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
  * Model reference used by security audit findings.
  * `id` is the normalized provider/model key; `source` is the config path shown in diagnostics.
  */
-export type AuditModelRef = { id: string; source: string };
+type AuditModelRef = { id: string; source: string };
 
 function resolveAuditModelId(
   cfg: OpenClawConfig,

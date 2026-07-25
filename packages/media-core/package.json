@@ -58,11 +58,6 @@
       "types": "./dist/read-byte-stream-with-limit.d.mts",
       "import": "./dist/read-byte-stream-with-limit.mjs",
       "default": "./dist/read-byte-stream-with-limit.mjs"
-    },
-    "./read-response-with-limit": {
-      "types": "./dist/read-response-with-limit.d.mts",
-      "import": "./dist/read-response-with-limit.mjs",
-      "default": "./dist/read-response-with-limit.mjs"
     }
   },
   "dependencies": {
@@ -70,6 +65,6 @@
     "file-type": "22.0.1"
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/base64.ts src/constants.ts src/content-length.ts src/file-name.ts src/inbound-path-policy.ts src/inline-image-data-url.ts src/media-source-url.ts src/mime.ts src/read-byte-stream-with-limit.ts src/read-response-with-limit.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/base64.ts src/constants.ts src/content-length.ts src/file-name.ts src/inbound-path-policy.ts src/inline-image-data-url.ts src/media-source-url.ts src/mime.ts src/read-byte-stream-with-limit.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   }
 }

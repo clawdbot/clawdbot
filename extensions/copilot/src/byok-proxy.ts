@@ -9,12 +9,13 @@ import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 
-export type CopilotByokProxyHandle = {
+type CopilotByokProxyHandle = {
   close: () => Promise<void>;
   provider: ResolvedCopilotProvider;
 };
 
 type HeaderValue = string | number | string[] | undefined;
+type ProviderConfig = NonNullable<ResolvedCopilotProvider["provider"]>;
 
 export async function createCopilotByokProxy(
   resolvedProvider: ResolvedCopilotProvider,
@@ -32,6 +33,7 @@ export async function createCopilotByokProxy(
   const targetPathPrefix = trimTrailingSlash(targetBaseUrl.pathname);
   const proxyPathPrefix = `/${nonce}${targetPathPrefix}`;
   const acceptsAzureSdkPaths = providerConfig.type === "azure";
+  const upstreamBearerAuthorization = resolveUpstreamBearerAuthorization(providerConfig);
   const activeFetches = new Set<AbortController>();
   const server = createServer((req, res) => {
     void handleProxyRequest(req, res, {
@@ -40,6 +42,7 @@ export async function createCopilotByokProxy(
       proxyPathPrefix,
       targetBaseUrl,
       targetPathPrefix,
+      upstreamBearerAuthorization,
     });
   });
 
@@ -74,6 +77,9 @@ export async function createCopilotByokProxy(
       }
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
+        // The proxy is private and ephemeral. Do not let a client's keep-alive
+        // socket delay shutdown after every upstream request has been aborted.
+        server.closeAllConnections();
       });
     },
   };
@@ -88,6 +94,7 @@ async function handleProxyRequest(
     proxyPathPrefix: string;
     targetBaseUrl: URL;
     targetPathPrefix: string;
+    upstreamBearerAuthorization: string | undefined;
   },
 ): Promise<void> {
   let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
@@ -101,6 +108,7 @@ async function handleProxyRequest(
     }
   });
   try {
+    const canInjectBearerAuthorization = isNonceProtectedProxyRequest(req, params.proxyPathPrefix);
     const url = resolveTargetUrl(req, params);
     if (!url) {
       res.writeHead(404);
@@ -112,7 +120,11 @@ async function handleProxyRequest(
       url: url.toString(),
       init: {
         method: req.method,
-        headers: normalizeProxyRequestHeaders(req.headers),
+        headers: buildProxyRequestHeaders(req.headers, {
+          upstreamBearerAuthorization: canInjectBearerAuthorization
+            ? params.upstreamBearerAuthorization
+            : undefined,
+        }),
         signal: upstreamAbort.signal,
         ...(body ? { body: toFetchBody(body) } : {}),
       },
@@ -129,9 +141,9 @@ async function handleProxyRequest(
       return;
     }
     await finished(
-      Readable.fromWeb(
-        guarded.response.body as unknown as NodeReadableStream<Uint8Array>,
-      ).pipe(res),
+      Readable.fromWeb(guarded.response.body as unknown as NodeReadableStream<Uint8Array>).pipe(
+        res,
+      ),
     );
   } catch (error) {
     if (res.destroyed || res.writableEnded) {
@@ -190,6 +202,14 @@ function isAzureSdkProxyPath(pathname: string): boolean {
   return pathname === "/openai" || pathname.startsWith("/openai/");
 }
 
+function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: string): boolean {
+  const incomingUrl = new URL(req.url ?? "/", `http://${LOOPBACK_HOST}`);
+  return (
+    incomingUrl.pathname === proxyPathPrefix ||
+    incomingUrl.pathname.startsWith(`${proxyPathPrefix}/`)
+  );
+}
+
 async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -219,6 +239,25 @@ function normalizeProxyRequestHeaders(headers: IncomingMessage["headers"]): Reco
   return out;
 }
 
+function buildProxyRequestHeaders(
+  headers: IncomingMessage["headers"],
+  params: { upstreamBearerAuthorization: string | undefined },
+): Record<string, string> {
+  const out = normalizeProxyRequestHeaders(headers);
+  if (params.upstreamBearerAuthorization && !hasHeader(out, "authorization")) {
+    // The SDK declares bearerToken as Authorization auth, but some BYOK
+    // adapter paths can omit it before reaching our loopback proxy. The proxy
+    // owns the final guarded hop, so inject only when the SDK left it absent.
+    out["authorization"] = params.upstreamBearerAuthorization;
+  }
+  return out;
+}
+
+function resolveUpstreamBearerAuthorization(providerConfig: ProviderConfig): string | undefined {
+  const bearerToken = providerConfig.bearerToken?.trim();
+  return bearerToken ? `Bearer ${bearerToken}` : undefined;
+}
+
 function normalizeProxyResponseHeaders(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
   headers.forEach((value, key) => {
@@ -234,6 +273,10 @@ function normalizeHeaderValue(value: HeaderValue): string | undefined {
     return undefined;
   }
   return Array.isArray(value) ? value.join(", ") : String(value);
+}
+
+function hasHeader(headers: Record<string, string>, target: string): boolean {
+  return Object.keys(headers).some((key) => key.toLowerCase() === target);
 }
 
 function isHopByHopHeader(key: string): boolean {

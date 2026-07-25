@@ -6,10 +6,10 @@ scenario:
   category: approvals
   coverage:
     primary:
-      - personal.approval-denial
+      - security.approval-policy-approval-denial
     secondary:
-      - runtime.approvals
-      - tools.safety
+      - security.approval-policy-approvals
+      - security.approval-policy-safety
   risk: high
   capabilities:
     - approvals.denial
@@ -58,9 +58,9 @@ flow:
           args:
             - ref: env
             - 60000
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -79,7 +79,7 @@ flow:
                 expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.setupMarker)"
             - expr: liveTurnTimeoutMs(env, 20000)
         - assert:
-            expr: "!env.mock || !(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.setupPrompt)).some((request) => request.plannedToolName)"
+            expr: "!env.mock || !(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.setupPrompt)).some((request) => request.plannedToolName)"
             message: setup turn should not plan a tool before any denied request
         - set: beforeDenialCursor
           value:
@@ -87,9 +87,9 @@ flow:
         - set: beforeDenialOutboundCursor
           value:
             expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length"
-        - set: denialRequestStart
+        - set: denialRequestCursor
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -110,7 +110,7 @@ flow:
             - sinceIndex:
                 ref: beforeDenialOutboundCursor
         - assert:
-            expr: "!env.mock || !(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(denialRequestStart).filter((request) => String(request.allInputText ?? '').includes(config.denialPromptSnippet)).some((request) => request.plannedToolName)"
+            expr: "!env.mock || !(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${denialRequestCursor}`)).filter((request) => String(request.allInputText ?? '').includes(config.denialPromptSnippet)).some((request) => request.plannedToolName)"
             message: denied personal approval turn should not plan a tool
         - set: newOutbounds
           value:

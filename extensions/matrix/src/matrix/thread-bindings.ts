@@ -28,9 +28,7 @@ import {
   resolveBindingKey,
   resolveEffectiveBindingExpiry,
   setBindingRecord,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingManagerEntry,
-  setMatrixThreadBindingMaxAgeBySessionKey,
   toMatrixBindingTargetKind,
   toSessionBindingRecord,
   type MatrixThreadBindingManager,
@@ -709,9 +707,4 @@ export async function createMatrixThreadBindingManager(params: {
   });
   return manager;
 }
-export {
-  getMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
-  setMatrixThreadBindingMaxAgeBySessionKey,
-};
+export { getMatrixThreadBindingManager, resetMatrixThreadBindingsForTests };

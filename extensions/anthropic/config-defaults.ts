@@ -14,7 +14,10 @@ import {
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
-const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = ["anthropic/claude-sonnet-4-6"] as const;
+const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = [
+  "anthropic/claude-sonnet-5",
+  "anthropic/claude-sonnet-4-6",
+] as const;
 
 function normalizeProviderId(provider: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(provider);

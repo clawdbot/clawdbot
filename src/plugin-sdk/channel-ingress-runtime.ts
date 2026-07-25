@@ -14,6 +14,7 @@ export {
   resolveChannelMessageIngress,
   resolveStableChannelMessageIngress,
 } from "../channels/message-access/index.js";
+export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
 export type {
   AccessGroupMembershipFact,
   ChannelIngressDecision,
@@ -42,3 +43,4 @@ export type {
   ResolveStableChannelMessageIngressParams,
   StableChannelIngressIdentityParams,
 } from "../channels/message-access/index.js";
+export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";

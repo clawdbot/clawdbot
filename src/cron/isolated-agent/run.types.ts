@@ -1,5 +1,10 @@
 /** Result types returned by isolated cron agent runs. */
-import type { CronDeliveryTrace, CronRunOutcome, CronRunTelemetry } from "../types.js";
+import type {
+  CronDeliveryTrace,
+  CronNextCheckProposal,
+  CronRunOutcome,
+  CronRunTelemetry,
+} from "../types.js";
 
 /** Final isolated cron turn result merged into service state and run logs. */
 export type RunCronAgentTurnResult = {
@@ -18,6 +23,9 @@ export type RunCronAgentTurnResult = {
    * cannot guarantee a final delivery ack synchronously.
    */
   deliveryAttempted?: boolean;
+  /** Post-run delivery failure on an otherwise successful isolated turn. */
+  deliveryError?: string;
   delivery?: CronDeliveryTrace;
+  nextCheck?: CronNextCheckProposal;
 } & CronRunOutcome &
   CronRunTelemetry;

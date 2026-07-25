@@ -1,5 +1,6 @@
 // Numeric coercion helpers for plugin runtime inputs.
 
+export { formatByteSize } from "../../packages/normalization-core/src/format.js";
 export {
   asDateTimestampMs,
   asFiniteNumberInRange,

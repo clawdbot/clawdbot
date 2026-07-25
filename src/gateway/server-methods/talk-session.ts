@@ -1,5 +1,4 @@
-// Talk session methods manage unified realtime/transcription/handoff sessions,
-// audio appends, tool results, steering, turns, joins, and cleanup.
+// Talk session methods manage realtime, transcription, handoff, turns, and cleanup.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -20,8 +19,8 @@ import {
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
-import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import {
@@ -56,6 +55,7 @@ import {
   stopTalkTranscriptionRelaySession,
 } from "../talk-transcription-relay.js";
 import { formatForLog } from "../ws-log.js";
+import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
 import {
   broadcastTalkRoomEvents,
   buildRealtimeInstructions,
@@ -63,49 +63,19 @@ import {
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
   canUseTalkDirectTools,
+  normalizeTalkSessionBrain,
+  normalizeTalkSessionMode,
+  normalizeTalkSessionTransport,
   resolveConfiguredRealtimeTranscriptionProvider,
+  resolveTalkRealtimeProviderInstructions,
   talkHandoffErrorCode,
   withRealtimeBrowserOverrides,
 } from "./talk-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-/**
- * Gateway-managed Talk session methods for managed rooms and audio relays.
- *
- * The public `sessionId` is resolved through the unified registry so each RPC
- * can enforce the correct connection ownership for its concrete backend.
- */
+/** Gateway-managed Talk sessions resolve public ids through connection-owned unified records. */
 type ManagedRoomTalkSession = Extract<UnifiedTalkSessionRecord, { kind: "managed-room" }>;
-
-function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
-  const mode = normalizeOptionalLowercaseString(params.mode) as TalkMode | undefined;
-  if (mode) {
-    return mode;
-  }
-  return normalizeOptionalLowercaseString(params.transport) === "managed-room"
-    ? "stt-tts"
-    : "realtime";
-}
-
-function normalizeTalkSessionTransport(params: {
-  mode: TalkMode;
-  transport?: string;
-}): TalkTransport {
-  const transport = normalizeOptionalLowercaseString(params.transport) as TalkTransport | undefined;
-  if (transport) {
-    return transport;
-  }
-  return params.mode === "stt-tts" ? "managed-room" : "gateway-relay";
-}
-
-function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: string }): TalkBrain {
-  const brain = normalizeOptionalLowercaseString(params.brain) as TalkBrain | undefined;
-  if (brain) {
-    return brain;
-  }
-  return params.mode === "transcription" ? "none" : "agent-consult";
-}
 
 function isActiveManagedRoomClient(
   session: { handoffId: string },
@@ -322,17 +292,31 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requested: params,
           defaults: realtimeConfig,
         });
+        const realtimeContext = await resolveTalkRealtimeProviderInstructions({
+          config: runtimeConfig,
+          configuredInstructions: realtimeConfig.instructions,
+          sessionKey: params.sessionKey,
+          requireSessionKeyForProfile: true,
+          warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
+        });
+        if (realtimeContext.requestedSessionKey) {
+          await ensureClientVoiceAgentSessionEntry({
+            agentId: realtimeContext.agentId,
+            sessionKey: realtimeContext.requestedSessionKey,
+          });
+        }
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
           cfg: runtimeConfig,
           provider: resolution.provider,
           providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, launchOptions),
-          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
+          instructions: buildRealtimeInstructions(realtimeContext.instructions),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
           model: launchOptions.model,
-          sessionKey: normalizeOptionalString(params.sessionKey),
+          sessionKey: realtimeContext.requestedSessionKey,
           voice: launchOptions.voice,
+          language: normalizeOptionalLowercaseString(params.language),
           forceAgentConsultOnFinalTranscript:
             realtimeConfig.consultRouting === "force-agent-consult",
         });
@@ -344,6 +328,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         respondOk(respond, {
           ...session,
           sessionId: session.relaySessionId,
+          // The relay session is the logical voice call; clients need not synthesize it.
+          voiceSessionId: session.relaySessionId,
           mode,
           brain,
         });
@@ -602,6 +588,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respondUnavailable(respond, err);
     }
   },
+  "talk.session.acknowledgeMark": acknowledgeTalkSessionMark,
   "talk.session.submitToolResult": async ({ params, respond, client }) => {
     if (
       !assertValidParams(
@@ -623,7 +610,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-      submitTalkRealtimeRelayToolResult({
+      await submitTalkRealtimeRelayToolResult({
         relaySessionId: session.relaySessionId,
         connId,
         callId: params.callId,

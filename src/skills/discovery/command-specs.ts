@@ -3,7 +3,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
@@ -16,10 +18,9 @@ import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { filterUserInvocableSkillEntries } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
-const skillCommandDebugOnce = new Set<string>();
+const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
 const SKILL_COMMAND_MAX_LENGTH = 32;
 const SKILL_COMMAND_FALLBACK = "skill";
-const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
 
 // De-duplicate noisy skill command diagnostics across large workspace scans.
 function debugSkillCommandOnce(
@@ -27,10 +28,9 @@ function debugSkillCommandOnce(
   message: string,
   meta?: Record<string, unknown>,
 ) {
-  if (skillCommandDebugOnce.has(messageKey)) {
+  if (skillCommandDebugOnce.check(messageKey)) {
     return;
   }
-  skillCommandDebugOnce.add(messageKey);
   skillsLogger.debug(message, meta);
 }
 
@@ -39,10 +39,9 @@ function traceSkillCommandOnce(
   message: string,
   meta?: Record<string, unknown>,
 ) {
-  if (skillCommandDebugOnce.has(messageKey)) {
+  if (skillCommandDebugOnce.check(messageKey)) {
     return;
   }
-  skillCommandDebugOnce.add(messageKey);
   skillsLogger.trace(message, meta);
 }
 
@@ -128,50 +127,53 @@ export function buildWorkspaceSkillCommandSpecs(
       );
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));
-    const rawDescription = entry.skill.description?.trim() || rawName;
-    const description =
-      rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
-        ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
-        : rawDescription;
-    const dispatch = (() => {
-      const kindRaw = normalizeLowercaseStringOrEmpty(
-        entry.frontmatter?.["command-dispatch"] ?? entry.frontmatter?.["command_dispatch"] ?? "",
-      );
-      if (!kindRaw || kindRaw !== "tool") {
-        return undefined;
-      }
+    const description = entry.skill.description?.trim() || rawName;
+    const dispatch = entry.disableCommandDispatch
+      ? undefined
+      : (() => {
+          const kindRaw = normalizeLowercaseStringOrEmpty(
+            entry.frontmatter?.["command-dispatch"] ??
+              entry.frontmatter?.["command_dispatch"] ??
+              "",
+          );
+          if (!kindRaw || kindRaw !== "tool") {
+            return undefined;
+          }
 
-      const toolName = (
-        entry.frontmatter?.["command-tool"] ??
-        entry.frontmatter?.["command_tool"] ??
-        ""
-      ).trim();
-      if (!toolName) {
-        debugSkillCommandOnce(
-          `dispatch:missingTool:${rawName}`,
-          `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
-          { skillName: rawName, command: unique },
-        );
-        return undefined;
-      }
+          const toolName = (
+            entry.frontmatter?.["command-tool"] ??
+            entry.frontmatter?.["command_tool"] ??
+            ""
+          ).trim();
+          if (!toolName) {
+            debugSkillCommandOnce(
+              `dispatch:missingTool:${rawName}`,
+              `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
+              { skillName: rawName, command: unique },
+            );
+            return undefined;
+          }
 
-      const argModeRaw = normalizeOptionalLowercaseString(
-        entry.frontmatter?.["command-arg-mode"] ?? entry.frontmatter?.["command_arg_mode"] ?? "",
-      );
-      const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
-      if (!argMode) {
-        debugSkillCommandOnce(
-          `dispatch:badArgMode:${rawName}:${argModeRaw}`,
-          `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
-          { skillName: rawName, command: unique, argMode: argModeRaw },
-        );
-      }
+          const argModeRaw = normalizeOptionalLowercaseString(
+            entry.frontmatter?.["command-arg-mode"] ??
+              entry.frontmatter?.["command_arg_mode"] ??
+              "",
+          );
+          const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
+          if (!argMode) {
+            debugSkillCommandOnce(
+              `dispatch:badArgMode:${rawName}:${argModeRaw}`,
+              `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
+              { skillName: rawName, command: unique, argMode: argModeRaw },
+            );
+          }
 
-      return { kind: "tool", toolName, argMode: "raw" } as const;
-    })();
+          return { kind: "tool", toolName, argMode: "raw" } as const;
+        })();
 
     specs.push({
       name: unique,
+      skillFile: canonicalizePath(entry.skill.filePath),
       skillName: rawName,
       description,
       skillSource: resolveSkillTelemetrySource(entry.skill),
@@ -201,14 +203,10 @@ export function buildWorkspaceSkillCommandSpecs(
       );
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));
-    const description =
-      entry.description.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
-        ? entry.description.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
-        : entry.description;
     specs.push({
       name: unique,
       skillName: entry.rawName,
-      description,
+      description: entry.description,
       promptTemplate: entry.promptTemplate,
       sourceFilePath: entry.sourceFilePath,
     });

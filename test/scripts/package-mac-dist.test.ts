@@ -113,6 +113,62 @@ describe("package-mac-dist plist validation", () => {
     expect(script).not.toContain('canonical_sparkle_build "$VERSION" 2>/dev/null || true');
   });
 
+  it("checks Swift before Sparkle metadata or dependency bootstrap work", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const swiftIndex = script.indexOf("\nrequire_swift_toolchain\n");
+    const versionIndex = script.indexOf('if [[ -z "$APP_VERSION_INPUT" ]]');
+    const appBuildIndex = script.indexOf(
+      'if [[ -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]',
+    );
+    const packageAppIndex = script.indexOf('"$ROOT_DIR/scripts/package-mac-app.sh"');
+    const preSwiftBlock = script.slice(0, swiftIndex);
+
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"');
+    expect(swiftIndex).toBeGreaterThanOrEqual(0);
+    expect(versionIndex).toBeGreaterThan(swiftIndex);
+    expect(appBuildIndex).toBeGreaterThan(versionIndex);
+    expect(packageAppIndex).toBeGreaterThan(appBuildIndex);
+    expect(preSwiftBlock).not.toContain("node -p");
+  });
+
+  it("fails on old Swift before reading package metadata", () => {
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-swift-tools-"));
+    tempDirs.push(toolsDir);
+
+    writeFileSync(
+      path.join(toolsDir, "swift"),
+      [
+        "#!/usr/bin/env bash",
+        "echo 'swift-driver version: 1.115.1 Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)'",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(path.join(toolsDir, "swift"), 0o755);
+    writeFileSync(
+      path.join(toolsDir, "node"),
+      [
+        "#!/usr/bin/env bash",
+        "echo 'node should not run before Swift preflight' >&2",
+        "exit 42",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(path.join(toolsDir, "node"), 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      BUILD_CONFIG=release bash ${scriptPath}
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.2+");
+    expect(result.stderr).toContain("Current Swift is 6.0");
+    expect(result.stderr).not.toContain("node should not run before Swift preflight");
+  });
+
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-dist-pnpm-root-"));

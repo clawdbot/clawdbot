@@ -65,7 +65,7 @@ function walkMarkdownFiles(dir, base = dir) {
         continue;
       }
       files.push(...walkMarkdownFiles(fullPath, base));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+    } else if (entry.isFile() && /\.(md|mdx)$/i.test(entry.name)) {
       files.push(relative(base, fullPath));
     }
   }

@@ -1,0 +1,95 @@
+title: Matrix per-room DM session isolation
+
+scenario:
+  id: dm-per-room-session
+  surface: dm
+  coverage:
+    primary:
+      - matrix.sender-bound-dm-routing
+      - channels.session-key-construction
+  objective: Verify Matrix dm.sessionScope=per-room isolates two DM rooms and suppresses the shared-session notice.
+  gatewayConfigPatch:
+    channels:
+      matrix:
+        accounts:
+          $selectedAccount:
+            dm:
+              sessionScope: per-room
+  successCriteria:
+    - Both DM rooms receive top-level marker replies.
+    - The second room does not receive a shared-session notice.
+  docsRefs:
+    - docs/channels/matrix.md
+  codeRefs:
+    - extensions/matrix/src/session-route.ts
+    - extensions/matrix/src/matrix/monitor/handler.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    profiles: { "matrix:adapter": 12, "matrix:all": 17, "matrix:transport": 16 }
+    kind: flow
+    channel: matrix
+    summary: Send consecutive DMs in two Matrix rooms and require per-room isolation.
+    config:
+      primaryConversationId: driver-dm
+      secondaryConversationId: driver-dm-shared
+      primaryMarker: QA-MATRIX-DM-PER-ROOM-PRIMARY-OK
+      secondaryMarker: QA-MATRIX-DM-PER-ROOM-SECONDARY-OK
+
+flow:
+  steps:
+    - name: suppresses the cross-room shared-session notice
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.primaryConversationId
+              kind: direct
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`Reply exactly: ${config.primaryMarker}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.primaryConversationId
+              kind: direct
+            textIncludes:
+              ref: config.primaryMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+        - set: secondaryStartIndex
+          value:
+            expr: state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.secondaryConversationId
+              kind: direct
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`Reply exactly: ${config.secondaryMarker}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.secondaryConversationId
+              kind: direct
+            sinceIndex:
+              ref: secondaryStartIndex
+            textIncludes:
+              ref: config.secondaryMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+          saveAs: reply
+        - call: sleep
+          args:
+            - 1500
+        - assert:
+            expr: "!state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.secondaryConversationId && String(candidate.text ?? '').includes('channels.matrix.dm.sessionScope'))"
+            message:
+              expr: "`per-room DM session emitted a shared-session notice; transcript=${formatTransportTranscript(state, { conversationId: config.secondaryConversationId })}`"
+        - assert:
+            expr: "!reply.threadId"
+            message: Matrix per-room DM reply must stay top-level
+      detailsExpr: reply.text

@@ -1,5 +1,6 @@
 // Dependency Guard Workflow tests cover dependency guard workflow script behavior.
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -32,6 +33,14 @@ type Workflow = {
 
 function readWorkflow(): Workflow {
   return parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+}
+
+function workflowStep(
+  steps: readonly WorkflowStep[],
+  index: number,
+  context: string,
+): WorkflowStep {
+  return expectDefined(steps[index], context);
 }
 
 describe("dependency guard workflow", () => {
@@ -88,11 +97,12 @@ describe("dependency guard workflow", () => {
       parsed.jobs?.["dependency-guard-autoscrub"],
       parsed.jobs?.["dependency-guard"],
     ];
-    for (const job of jobs) {
+    for (const [index, job] of jobs.entries()) {
       const steps = job?.steps ?? [];
-      expect(steps[0].uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
-      expect(steps[0].with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
-      expect(steps[0].with?.["persist-credentials"]).toBe(false);
+      const checkoutStep = workflowStep(steps, 0, `dependency guard checkout step ${index}`);
+      expect(checkoutStep.uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
+      expect(checkoutStep.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+      expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
       expect(steps.at(-1)?.run).toBe("node scripts/github/dependency-guard.mjs");
     }
   });
@@ -118,48 +128,59 @@ describe("dependency guard workflow", () => {
     const detectSteps = detectJob?.steps ?? [];
     const autoscrubSteps = autoscrubJob?.steps ?? [];
     const finalSteps = finalJob?.steps ?? [];
-    expect(detectSteps[1].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("detect");
-    expect(autoscrubSteps[1].uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+    const detectRunStep = workflowStep(detectSteps, 1, "dependency guard detect run step");
+    const primaryTokenStep = workflowStep(autoscrubSteps, 1, "dependency guard primary token step");
+    const fallbackTokenStep = workflowStep(
+      autoscrubSteps,
+      2,
+      "dependency guard fallback token step",
     );
-    expect(autoscrubSteps[1].with).toMatchObject({
+    const autoscrubRunStep = workflowStep(autoscrubSteps, 3, "dependency guard autoscrub run step");
+    const finalRunStep = workflowStep(finalSteps, 1, "dependency guard final run step");
+    expect(detectRunStep.env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("detect");
+    expect(primaryTokenStep.uses).toBe(
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+    );
+    expect(primaryTokenStep.with).toMatchObject({
       "app-id": "2729701",
       owner: "${{ needs.dependency-guard-detect.outputs.autoscrub-owner }}",
       repositories: "${{ needs.dependency-guard-detect.outputs.autoscrub-repository }}",
       "permission-contents": "write",
     });
-    expect(autoscrubSteps[1]["continue-on-error"]).toBe(true);
-    expect(autoscrubSteps[2].uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+    expect(primaryTokenStep["continue-on-error"]).toBe(true);
+    expect(fallbackTokenStep.uses).toBe(
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
-    expect(autoscrubSteps[2].with).toMatchObject({
+    expect(fallbackTokenStep.with).toMatchObject({
       "app-id": "2971289",
       owner: "${{ needs.dependency-guard-detect.outputs.autoscrub-owner }}",
       repositories: "${{ needs.dependency-guard-detect.outputs.autoscrub-repository }}",
       "permission-contents": "write",
     });
-    expect(autoscrubSteps[2]["continue-on-error"]).toBe(true);
-    expect(autoscrubSteps[3].env?.GITHUB_TOKEN).toBe("${{ github.token }}");
-    expect(autoscrubSteps[3].env?.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN).toBe(
+    expect(fallbackTokenStep["continue-on-error"]).toBe(true);
+    expect(autoscrubRunStep.env?.GITHUB_TOKEN).toBe("${{ github.token }}");
+    expect(autoscrubRunStep.env?.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN).toBe(
       "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
     );
-    expect(autoscrubSteps[3].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("autoscrub");
-    expect(finalSteps[1].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("enforce");
+    expect(autoscrubRunStep.env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("autoscrub");
+    expect(finalRunStep.env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("enforce");
   });
 
   it("preserves dependency-guard as the final required check", () => {
     const steps = readWorkflow().jobs?.["dependency-guard"]?.steps ?? [];
     expect(steps).toHaveLength(2);
-    expect(steps[0].uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
-    expect(steps[0].with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
-    expect(steps[0].with?.["persist-credentials"]).toBe(false);
-    expect(steps[1].run).toBe("node scripts/github/dependency-guard.mjs");
+    const checkoutStep = workflowStep(steps, 0, "final dependency guard checkout step");
+    const runStep = workflowStep(steps, 1, "final dependency guard run step");
+    expect(checkoutStep.uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
+    expect(checkoutStep.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+    expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
+    expect(runStep.run).toBe("node scripts/github/dependency-guard.mjs");
   });
 
   it("uses a dedicated checked-in script and bounded sticky comments", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const detectSteps = readWorkflow().jobs?.["dependency-guard-detect"]?.steps ?? [];
-    const runStep = detectSteps[1];
+    const runStep = workflowStep(detectSteps, 1, "dependency guard bounded comment run step");
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
 
     expect(runStep.env?.OPENCLAW_SECURITY_TEAM_SLUG).toBe("openclaw-secops");

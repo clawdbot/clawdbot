@@ -1,8 +1,10 @@
 // File Transfer tests cover node invoke policy plugin behavior.
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { appendFileTransferAudit } from "./audit.js";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
@@ -43,6 +45,14 @@ function tarEntries(entries: Record<string, string>): string {
   }
   blocks.push(Buffer.alloc(1024));
   return gzipSync(Buffer.concat(blocks)).toString("base64");
+}
+
+function archiveMetadata(tarBase64: string): { tarBytes: number; sha256: string } {
+  const buffer = Buffer.from(tarBase64, "base64");
+  return {
+    tarBytes: buffer.byteLength,
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
 }
 
 function writeTarString(header: Buffer, offset: number, length: number, value: string): void {
@@ -253,11 +263,95 @@ describe("file-transfer node invoke policy", () => {
     expect(invokeNode).not.toHaveBeenCalled();
   });
 
-  it("uses plugin approvals for ask-on-miss before invoking the node", async () => {
+  it.each(["allow-once", "allow-always"] as const)(
+    "uses exact %s plugin approval once across preflight and final invoke",
+    async (decision) => {
+      const policy = createFileTransferNodeInvokePolicy();
+      const approvals = {
+        request: vi.fn(async () => ({ id: "approval-1", decision })),
+      };
+      const { ctx, invokeNode } = createCtx({
+        params: { path: "/tmp/new.txt" },
+        pluginConfig: {
+          nodes: {
+            "node-1": {
+              ask: "on-miss",
+              allowReadPaths: ["/allowed/**"],
+              maxBytes: 256,
+            },
+          },
+        },
+        approvals,
+      });
+
+      const result = await policy.handle(ctx);
+
+      expect(result.ok).toBe(true);
+      expect(approvals.request).toHaveBeenCalledTimes(1);
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      const approvalCalls = approvals.request.mock.calls as unknown[][];
+      const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
+      expectRecordFields(approvalRequest, {
+        title: "Read file: /tmp/new.txt",
+        severity: "info",
+        toolName: "file.fetch",
+      });
+      expect(invokeNode).toHaveBeenNthCalledWith(1, {
+        params: {
+          path: "/tmp/new.txt",
+          followSymlinks: false,
+          maxBytes: 256,
+          preflightOnly: true,
+        },
+      });
+      expect(invokeNode).toHaveBeenNthCalledWith(2, {
+        params: {
+          path: "/tmp/new.txt",
+          followSymlinks: false,
+          maxBytes: 256,
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "explicit deny",
+      decision: "deny",
+      code: "APPROVAL_DENIED",
+      message: "file.fetch APPROVAL_DENIED: operator denied the prompt",
+    },
+    {
+      label: "null decision",
+      decision: null,
+      code: "APPROVAL_UNAVAILABLE",
+      message:
+        "file.fetch APPROVAL_UNAVAILABLE: no operator client connected to approve the request",
+    },
+    {
+      label: "undefined decision",
+      decision: undefined,
+      code: "APPROVAL_UNAVAILABLE",
+      message:
+        "file.fetch APPROVAL_UNAVAILABLE: no operator client connected to approve the request",
+    },
+    {
+      label: "arbitrary truthy string",
+      decision: "accept",
+      code: "APPROVAL_DENIED",
+      message: "file.fetch APPROVAL_DENIED: invalid approval decision",
+    },
+    {
+      label: "arbitrary truthy object",
+      decision: { action: "accept" },
+      code: "APPROVAL_DENIED",
+      message: "file.fetch APPROVAL_DENIED: invalid approval decision",
+    },
+  ])("fails closed for $label", async ({ decision, code, message }) => {
     const policy = createFileTransferNodeInvokePolicy();
     const approvals = {
-      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-once" as const })),
-    };
+      request: vi.fn(async () => ({ id: "approval-1", decision })),
+    } as unknown as NonNullable<OpenClawPluginNodeInvokePolicyContext["approvals"]>;
     const { ctx, invokeNode } = createCtx({
       params: { path: "/tmp/new.txt" },
       pluginConfig: {
@@ -265,7 +359,6 @@ describe("file-transfer node invoke policy", () => {
           "node-1": {
             ask: "on-miss",
             allowReadPaths: ["/allowed/**"],
-            maxBytes: 256,
           },
         },
       },
@@ -274,29 +367,9 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result.ok).toBe(true);
-    const approvalCalls = approvals.request.mock.calls as unknown[][];
-    const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
-    expectRecordFields(approvalRequest, {
-      title: "Read file: /tmp/new.txt",
-      severity: "info",
-      toolName: "file.fetch",
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: {
-        path: "/tmp/new.txt",
-        followSymlinks: false,
-        maxBytes: 256,
-        preflightOnly: true,
-      },
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: {
-        path: "/tmp/new.txt",
-        followSymlinks: false,
-        maxBytes: 256,
-      },
-    });
+    expectResultFields(result, { ok: false, code, message });
+    expect(approvals.request).toHaveBeenCalledTimes(1);
+    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("marks node transport failures as unavailable", async () => {
@@ -610,8 +683,7 @@ describe("file-transfer node invoke policy", () => {
             ok: true,
             path: "/tmp/project",
             tarBase64,
-            tarBytes: 7,
-            sha256: "c".repeat(64),
+            ...archiveMetadata(tarBase64),
             fileCount: 2,
             entries: ["a.txt", "sub/b.txt"],
           },
@@ -628,6 +700,97 @@ describe("file-transfer node invoke policy", () => {
       expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
     },
   );
+
+  testUnlessWindows("audits dir.fetch archive bytes after a successful transfer", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const tarBase64 = tarEntries({
+      "a.txt": "a",
+    });
+    const { tarBytes, sha256 } = archiveMetadata(tarBase64);
+    const { ctx } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project" },
+    });
+    const invokeNode = vi.mocked(ctx.invokeNode);
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          entries: ["a.txt"],
+          fileCount: 1,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          tarBase64,
+          tarBytes,
+          sha256,
+          fileCount: 1,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: true });
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        op: "dir.fetch",
+        requestedPath: "/tmp/project",
+        canonicalPath: "/tmp/project",
+        decision: "allowed",
+        sizeBytes: tarBytes,
+        sha256,
+      }),
+    );
+  });
+
+  testUnlessWindows("rejects mismatched dir.fetch archive integrity metadata", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const tarBase64 = tarEntries({ "a.txt": "a" });
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project" },
+    });
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          entries: ["a.txt"],
+          fileCount: 1,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          tarBase64,
+          tarBytes: 1,
+          sha256: "c".repeat(64),
+          fileCount: 1,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "ARCHIVE_SIZE_MISMATCH" });
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        op: "dir.fetch",
+        decision: "error",
+        errorCode: "ARCHIVE_SIZE_MISMATCH",
+      }),
+    );
+  });
 
   testUnlessWindows(
     "checks final dir.fetch archive entries before returning the archive",
@@ -666,8 +829,7 @@ describe("file-transfer node invoke policy", () => {
             ok: true,
             path: "/home/me",
             tarBase64,
-            tarBytes: 7,
-            sha256: "c".repeat(64),
+            ...archiveMetadata(tarBase64),
             fileCount: 2,
           },
         });
@@ -715,8 +877,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           path: "/tmp/project",
           tarBase64,
-          tarBytes: 7,
-          sha256: "c".repeat(64),
+          ...archiveMetadata(tarBase64),
           fileCount: 5001,
         },
       });

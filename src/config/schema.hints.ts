@@ -4,22 +4,13 @@ import {
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { z } from "zod";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints } from "./schema.tiers.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
-
-function getLog(): ReturnType<typeof createSubsystemLogger> {
-  if (!log) {
-    log = createSubsystemLogger("config/schema");
-  }
-  return log;
-}
 
 export type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
@@ -31,6 +22,7 @@ const GROUP_LABELS: Record<string, string> = {
   logging: "Logging",
   gateway: "Gateway",
   nodeHost: "Node Host",
+  cloudWorkers: "Cloud Workers",
   agents: "Agents",
   tools: "Tools",
   bindings: "Bindings",
@@ -40,6 +32,7 @@ const GROUP_LABELS: Record<string, string> = {
   commands: "Commands",
   session: "Session",
   cron: "Cron",
+  worktrees: "Worktrees",
   hooks: "Hooks",
   ui: "UI",
   browser: "Browser",
@@ -59,6 +52,7 @@ const GROUP_ORDER: Record<string, number> = {
   diagnostics: 27,
   gateway: 30,
   nodeHost: 35,
+  cloudWorkers: 37,
   agents: 40,
   tools: 50,
   bindings: 55,
@@ -68,6 +62,7 @@ const GROUP_ORDER: Record<string, number> = {
   commands: 85,
   session: 90,
   cron: 100,
+  worktrees: 105,
   hooks: 110,
   ui: 120,
   browser: 130,
@@ -85,6 +80,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
+  "gateway.remote.sshHostKeyPolicy": "strict",
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
@@ -106,14 +102,12 @@ function isKernelOwnedChannelHintPath(path: string): boolean {
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
-export function isPluginOwnedChannelHintPath(path: string): boolean {
+function isPluginOwnedChannelHintPath(path: string): boolean {
   if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
     return false;
   }
   return !isKernelOwnedChannelHintPath(path);
 }
-
-export { isSensitiveConfigPath };
 
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
 export function buildBaseHints(): ConfigUiHints {
@@ -146,7 +140,7 @@ export function buildBaseHints(): ConfigUiHints {
     const current = hints[path];
     hints[path] = current ? { ...current, placeholder } : { placeholder };
   }
-  return applyDerivedTags(hints);
+  return applyDerivedTags(applyConfigTierHints(hints));
 }
 
 /** Mark sensitive config paths in a hint map without overwriting explicit sensitivity metadata. */
@@ -286,8 +280,6 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
 
   if (isSensitive) {
     hints[path] = { ...hints[path], sensitive: true };
-  } else if (isSensitiveConfigPath(path) && !hints[path]?.sensitive) {
-    getLog().debug(`possibly sensitive key found: (${path})`);
   }
 
   if (currentSchema instanceof z.ZodObject) {
@@ -325,4 +317,3 @@ export const testApi = {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
 };
-export { testApi as __test__ };

@@ -1,6 +1,11 @@
 // Zai plugin module implements detect behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+} from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_DEFAULT_MODEL_ID,
@@ -36,6 +41,9 @@ type ProbeCandidate = ZaiDetectedEndpoint & {
 
 const UNSUPPORTED_MODEL_ERROR_CODES = new Set(["1211", "1311"]);
 
+/** Cap for the Z.AI probe error body; bounds untrusted error responses to avoid unbounded buffering/OOM. */
+const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
+
 function isUnsupportedModelResult(result: ProbeResult): boolean {
   if (result.ok) {
     return false;
@@ -56,21 +64,6 @@ function isUnsupportedModelResult(result: ProbeResult): boolean {
   );
 }
 
-async function fetchWithTimeoutLocal(
-  fetchFn: typeof fetch,
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetchFn(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function probeZaiChatCompletions(params: {
   baseUrl: string;
   apiKey: string;
@@ -78,26 +71,34 @@ async function probeZaiChatCompletions(params: {
   timeoutMs: number;
   fetchFn?: typeof fetch;
 }): Promise<ProbeResult> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: "Z.AI endpoint probe",
+  });
+  const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: params.timeoutMs,
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
+  timeout.unref?.();
+  let res: Response | undefined;
   try {
     const fetchFn = params.fetchFn ?? globalThis.fetch;
-    const res = await fetchWithTimeoutLocal(
-      fetchFn,
-      `${params.baseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${params.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: params.modelId,
-          stream: false,
-          max_tokens: 1,
-          messages: [{ role: "user", content: "ping" }],
-        }),
+    res = await fetchFn(`${params.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${params.apiKey}`,
+        "content-type": "application/json",
       },
-      params.timeoutMs,
-    );
+      body: JSON.stringify({
+        model: params.modelId,
+        stream: false,
+        max_tokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }),
+      signal: controller.signal,
+    });
 
     if (res.ok) {
       return { ok: true };
@@ -106,7 +107,16 @@ async function probeZaiChatCompletions(params: {
     let errorCode: string | undefined;
     let errorMessage: string | undefined;
     try {
-      const json = (await res.json()) as {
+      const bytes = await readResponseWithLimit(res, ZAI_DETECT_ERROR_BODY_MAX_BYTES, {
+        // Resolve immediately before body consumption so headers and every
+        // body shape share one operation budget, including slow-drip streams.
+        timeoutMs: resolveTimeoutMs,
+        onTimeout: ({ timeoutMs }) =>
+          new Error(`Z.AI probe error body timed out after ${timeoutMs}ms`),
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
+      });
+      const json = JSON.parse(new TextDecoder().decode(bytes)) as {
         error?: { code?: unknown; message?: unknown };
         code?: unknown;
         msg?: unknown;
@@ -123,12 +133,17 @@ async function probeZaiChatCompletions(params: {
         errorMessage = msg;
       }
     } catch {
-      // ignore malformed error bodies
+      // ignore malformed / stalled / oversized error bodies
     }
 
     return { ok: false, status: res.status, errorCode, errorMessage };
   } catch {
     return { ok: false };
+  } finally {
+    clearTimeout(timeout);
+    if (res?.bodyUsed !== true) {
+      await res?.body?.cancel().catch(() => undefined);
+    }
   }
 }
 

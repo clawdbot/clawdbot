@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
@@ -41,6 +42,7 @@ type CrabboxInspect = {
   sshPort?: string;
   sshUser?: string;
   state?: string;
+  tailscale?: unknown;
 };
 
 type Options = {
@@ -64,6 +66,7 @@ type Options = {
   idleTimeout: string;
   keepBox: boolean;
   leaseId?: string;
+  mcpAppFixture: boolean;
   mockResponseText: string;
   mockPort: number;
   outputDir: string;
@@ -91,6 +94,12 @@ type Options = {
   userDriverScript: string;
 };
 
+type FunnelBridge = {
+  proxyPath: string;
+  tunnelLog: string;
+  tunnelPid: number;
+};
+
 type LocalSut = {
   configPath: string;
   drained: {
@@ -107,6 +116,7 @@ type LocalSut = {
   workspace: string;
   gateway: ChildProcess;
   gatewayLog: string;
+  funnelBridge?: FunnelBridge;
 };
 
 type SessionFile = {
@@ -137,6 +147,7 @@ type SessionFile = {
     stateDir: string;
     tempRoot: string;
     workspace: string;
+    funnelBridge?: FunnelBridge;
   };
   outputDir: string;
   recorder: {
@@ -151,11 +162,11 @@ const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
-export const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
-export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
-export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
+const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
+const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
+const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
 export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
-export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
+const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
 export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
@@ -198,6 +209,7 @@ function usageText() {
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
     "  --mock-response-file <path>    Text returned by the mock model.",
+    "  --mcp-app-fixture              Configure the pinned MCP App fixture through a Crabbox Funnel.",
     "  --output-dir <path>           Artifact directory under the repo.",
     "  --message-id <id>             Telegram message id for proof-view deep link.",
     "  --preview-crop telegram-window Create a side-by-side friendly Telegram-window GIF.",
@@ -239,7 +251,7 @@ function trimToValue(value: string | undefined) {
 const positiveIntegerPattern = /^[1-9]\d*$/u;
 const SHORT_OPTION_TOKENS = new Set(["-h"]);
 
-function isMissingOptionValue(value: string | undefined) {
+function isMissingOptionValue(value: string) {
   return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
 }
 
@@ -301,6 +313,7 @@ export function parseArgs(argvInput: string[]): Options {
     gatewayPort: 19_879,
     idleTimeout: "60m",
     keepBox: false,
+    mcpAppFixture: false,
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
@@ -329,9 +342,12 @@ export function parseArgs(argvInput: string[]): Options {
   const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === undefined) {
+      usage();
+    }
     const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (isMissingOptionValue(value)) {
+      if (value === undefined || isMissingOptionValue(value)) {
         usage();
       }
       if (!options.repeatable) {
@@ -371,6 +387,8 @@ export function parseArgs(argvInput: string[]): Options {
       opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
       opts.mockResponseText = fs.readFileSync(resolveRepoPath(process.cwd(), readValue()), "utf8");
+    } else if (arg === "--mcp-app-fixture") {
+      opts.mcpAppFixture = true;
     } else if (arg === "--message-id") {
       opts.messageId = String(parsePositiveInteger(readValue(), "--message-id"));
     } else if (arg === "--output-dir") {
@@ -440,6 +458,12 @@ export function parseArgs(argvInput: string[]): Options {
   }
   if (command === "publish" && !opts.publishPr) {
     throw new Error("publish requires --pr.");
+  }
+  if (opts.mcpAppFixture && command !== "start") {
+    throw new Error("--mcp-app-fixture is available only for start sessions.");
+  }
+  if (opts.mcpAppFixture && opts.leaseId) {
+    throw new Error("--mcp-app-fixture requires a fresh lifecycle-owned Crabbox lease.");
   }
   return opts;
 }
@@ -526,12 +550,22 @@ function mockServerEnv(params: { mockPort: number; mockResponseText: string; req
   };
 }
 
-function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: string }) {
+function gatewayEnv(params: {
+  configPath: string;
+  gatewayPassword?: string;
+  stateDir: string;
+  sutToken: string;
+  tailscaleProxyDir?: string;
+}) {
   return {
     ...childProcessBaseEnv(),
     OPENAI_API_KEY: "sk-openclaw-e2e-mock",
     OPENCLAW_CONFIG_PATH: params.configPath,
+    ...(params.gatewayPassword ? { OPENCLAW_GATEWAY_PASSWORD: params.gatewayPassword } : {}),
     OPENCLAW_STATE_DIR: params.stateDir,
+    ...(params.tailscaleProxyDir
+      ? { PATH: `${params.tailscaleProxyDir}${path.delimiter}${process.env.PATH ?? ""}` }
+      : {}),
     TELEGRAM_BOT_TOKEN: params.sutToken,
   };
 }
@@ -576,12 +610,12 @@ function appendCommandText(current: string, chunk: Buffer): string {
   return current + chunk.toString("utf8");
 }
 
-export function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
+function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
   const next = appendCommandText(current, chunk);
   return next.length > maxChars ? next.slice(-maxChars) : next;
 }
 
-export function appendCommandStdout(
+function appendCommandStdout(
   current: string,
   chunk: Buffer,
   maxChars = COMMAND_STDOUT_MAX_CHARS,
@@ -593,7 +627,7 @@ export function appendCommandStdout(
   return { ok: true, value: next };
 }
 
-export function appendCommandStderrTail(
+function appendCommandStderrTail(
   current: string,
   chunk: Buffer,
   maxChars = COMMAND_STDERR_TAIL_CHARS,
@@ -629,7 +663,11 @@ export function signalCommandTree(
     useProcessGroup = platform !== "win32",
   }: {
     platform?: NodeJS.Platform;
-    runTaskkill?: typeof spawnSync;
+    runTaskkill?: (
+      command: string,
+      args: readonly string[],
+      options: { stdio: "ignore" },
+    ) => { error?: Error; status: number | null };
     useProcessGroup?: boolean;
   } = {},
 ) {
@@ -995,12 +1033,6 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function waitForChildExit(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(child.exitCode);
@@ -1102,11 +1134,13 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
   return value as JsonObject;
 }
 
-function writeSutConfig(params: {
+export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
+  mcpAppFixture?: boolean;
   mockPort: number;
   outputDir: string;
+  repoRoot?: string;
   testerId: string;
 }) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-crabbox-sut-"));
@@ -1118,19 +1152,23 @@ function writeSutConfig(params: {
   const config = {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.5" },
-        models: { "openai/gpt-5.5": { params: { openaiWsWarmup: false, transport: "sse" } } },
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: {
+          "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
+        },
       },
-      list: [
-        {
+      entries: {
+        main: {
           default: true,
-          id: "main",
-          model: { primary: "openai/gpt-5.5" },
+          model: { primary: "openai/gpt-5.6-luna" },
           name: "Main",
           workspace,
         },
-      ],
+      },
     },
+    // Exercise the opt-in message audit surface: the DM probe should produce
+    // inbound/outbound rows under the privacy-sensitive "direct" mode.
+    logging: { audit: { enabled: true, messages: "direct" } },
     channels: {
       telegram: {
         allowFrom: [params.testerId],
@@ -1150,7 +1188,39 @@ function writeSutConfig(params: {
         replyToMode: "first",
       },
     },
-    gateway: { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
+    gateway: params.mcpAppFixture
+      ? {
+          auth: {
+            mode: "password",
+            password: {
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+              provider: "default",
+              source: "env",
+            },
+          },
+          bind: "loopback",
+          mode: "local",
+          port: params.gatewayPort,
+          tailscale: { mode: "funnel", resetOnExit: true },
+        }
+      : { auth: { mode: "none" }, bind: "loopback", mode: "local", port: params.gatewayPort },
+    ...(params.mcpAppFixture
+      ? {
+          mcp: {
+            servers: {
+              fixture: {
+                args: [
+                  path.join(
+                    params.repoRoot ?? process.cwd(),
+                    "scripts/e2e/mcp-app-conformance-server.mjs",
+                  ),
+                ],
+                command: process.execPath,
+              },
+            },
+          },
+        }
+      : {}),
     messages: { groupChat: { visibleReplies: "automatic" } },
     models: {
       providers: {
@@ -1159,7 +1229,12 @@ function writeSutConfig(params: {
           apiKey: { id: "OPENAI_API_KEY", provider: "default", source: "env" },
           baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
           models: [
-            { api: "openai-responses", contextWindow: 128000, id: "gpt-5.5", name: "gpt-5.5" },
+            {
+              api: "openai-responses",
+              contextWindow: 128000,
+              id: "gpt-5.6-luna",
+              name: "gpt-5.6-luna",
+            },
           ],
           request: { allowPrivateNetwork: true },
         },
@@ -1211,10 +1286,11 @@ export async function startLocalSut(
       cwd: params.repoRoot,
       env: mockServerEnv({ ...params, requestLog }),
     });
+    const runningMock = mock;
     await waitForOutputReady(
-      mock.child,
+      runningMock.child,
       /mock-openai listening/u,
-      () => mock.output,
+      () => runningMock.output,
       "mock-openai",
       10_000,
     );
@@ -1224,23 +1300,24 @@ export async function startLocalSut(
       repoRoot: params.repoRoot,
     });
     gateway = spawnLoggedCommand(gatewaySpec.command, gatewaySpec.args, gatewaySpec.options);
+    const runningGateway = gateway;
     await waitForOutputReady(
-      gateway.child,
+      runningGateway.child,
       /\[gateway\] ready/u,
-      () => gateway.output,
+      () => runningGateway.output,
       "gateway",
       60_000,
     );
     return {
       ...config,
       drained,
-      gateway: gateway.child,
+      gateway: runningGateway.child,
       get gatewayLog() {
-        return gateway.output;
+        return runningGateway.output;
       },
-      mock: mock.child,
+      mock: runningMock.child,
       get mockLog() {
-        return mock.output;
+        return runningMock.output;
       },
       requestLog,
     };
@@ -1294,10 +1371,12 @@ export async function recordProbeVideo(params: {
 }
 
 async function startLocalSutDaemon(params: {
+  funnelBridge?: FunnelBridge;
   gatewayPort: number;
   groupId: string;
   mockResponseText: string;
   mockPort: number;
+  mcpAppFixture?: boolean;
   outputDir: string;
   sutToken: string;
   testerId: string;
@@ -1305,6 +1384,7 @@ async function startLocalSutDaemon(params: {
 }) {
   const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
+  const gatewayPassword = params.mcpAppFixture ? randomUUID() : undefined;
   const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
   const mockLog = path.join(params.outputDir, "mock-openai.log");
   const gatewayLog = path.join(params.outputDir, "gateway.log");
@@ -1323,7 +1403,14 @@ async function startLocalSutDaemon(params: {
     }
     await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
 
-    const gatewayEnvVars = gatewayEnv({ ...config, sutToken: params.sutToken });
+    const gatewayEnvVars = gatewayEnv({
+      ...config,
+      gatewayPassword,
+      sutToken: params.sutToken,
+      tailscaleProxyDir: params.funnelBridge
+        ? path.dirname(params.funnelBridge.proxyPath)
+        : undefined,
+    });
     const gatewaySpec = createOpenClawGatewaySpawnSpec({
       env: gatewayEnvVars,
       gatewayPort: params.gatewayPort,
@@ -1332,10 +1419,10 @@ async function startLocalSutDaemon(params: {
     gatewayPid = spawnDaemon({
       args: gatewaySpec.args,
       command: gatewaySpec.command,
-      cwd: gatewaySpec.options.cwd ?? params.repoRoot,
+      cwd: (gatewaySpec.options.cwd ?? params.repoRoot) as string,
       env: gatewaySpec.options.env ?? gatewayEnvVars,
       logPath: gatewayLog,
-      shell: gatewaySpec.options.shell,
+      shell: gatewaySpec.options.shell as boolean | undefined,
       windowsVerbatimArguments: gatewaySpec.options.windowsVerbatimArguments,
     });
     if (!gatewayPid) {
@@ -1350,6 +1437,7 @@ async function startLocalSutDaemon(params: {
       mockLog,
       mockPid,
       requestLog,
+      funnelBridge: params.funnelBridge,
     };
   } catch (error) {
     killPidTree(gatewayPid);
@@ -1362,24 +1450,34 @@ function extractLeaseId(output: string) {
   return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 
+export function createCrabboxWarmupArgs(
+  opts: Pick<
+    Options,
+    "crabboxClass" | "idleTimeout" | "mcpAppFixture" | "provider" | "target" | "ttl"
+  >,
+) {
+  return [
+    "warmup",
+    "--provider",
+    opts.provider,
+    "--target",
+    opts.target,
+    "--desktop",
+    "--browser",
+    "--class",
+    opts.crabboxClass,
+    "--idle-timeout",
+    opts.idleTimeout,
+    "--ttl",
+    opts.ttl,
+    ...(opts.mcpAppFixture ? ["--tailscale"] : []),
+  ];
+}
+
 async function warmupCrabbox(opts: Options, root: string) {
   const result = await runCommand({
     command: opts.crabboxBin,
-    args: [
-      "warmup",
-      "--provider",
-      opts.provider,
-      "--target",
-      opts.target,
-      "--desktop",
-      "--browser",
-      "--class",
-      opts.crabboxClass,
-      "--idle-timeout",
-      opts.idleTimeout,
-      "--ttl",
-      opts.ttl,
-    ],
+    args: createCrabboxWarmupArgs(opts),
     cwd: root,
     stdio: "inherit",
   });
@@ -1597,6 +1695,93 @@ async function sshRun(
     stdio: "inherit",
     timeoutMs: options.timeoutMs,
   });
+}
+
+export function renderTailscaleSshProxy(params: { gatewayPort: number; inspect: CrabboxInspect }) {
+  const ssh = sshArgs(params.inspect);
+  return `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+
+const args = process.argv.slice(2);
+const port = ${JSON.stringify(String(params.gatewayPort))};
+const allowed =
+  (args.length === 1 && args[0] === "--version") ||
+  (args.length === 2 && args[0] === "status" && args[1] === "--json") ||
+  (args.length === 4 && args[0] === "funnel" && args[1] === "--bg" && args[2] === "--yes" && args[3] === port) ||
+  (args.length === 2 && args[0] === "funnel" && args[1] === "reset");
+if (!allowed) {
+  process.stderr.write("unsupported proof Tailscale command\\n");
+  process.exit(64);
+}
+const quote = (value) => "'" + value.replaceAll("'", "'\\\\''") + "'";
+const remoteCommand = ["tailscale", ...args].map(quote).join(" ");
+const result = spawnSync("ssh", ${JSON.stringify([...ssh.base, ssh.target])}.concat(remoteCommand), {
+  stdio: "inherit",
+});
+process.exit(result.status ?? 1);
+`;
+}
+
+async function startTailscaleFunnelBridge(params: {
+  gatewayPort: number;
+  inspect: CrabboxInspect;
+  localRoot: string;
+}) {
+  if (!params.inspect.tailscale) {
+    throw new Error("MCP App fixture proof requires a Tailscale-enabled Crabbox lease.");
+  }
+  // Keep the SUT local while letting its real Gateway lifecycle own Funnel on
+  // the Tailscale-enabled desktop lease; no Tailscale credential leaves Crabbox.
+  const proxyPath = path.join(params.localRoot, "tailscale");
+  await writeExecutable(
+    proxyPath,
+    renderTailscaleSshProxy({ gatewayPort: params.gatewayPort, inspect: params.inspect }),
+  );
+  const tunnelLog = path.join(params.localRoot, "gateway-funnel-tunnel.log");
+  const ssh = sshArgs(params.inspect);
+  const tunnelPid = spawnDaemon({
+    args: [
+      ...ssh.base,
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-N",
+      "-R",
+      `127.0.0.1:${params.gatewayPort}:127.0.0.1:${params.gatewayPort}`,
+      ssh.target,
+    ],
+    command: "ssh",
+    cwd: params.localRoot,
+    env: childProcessBaseEnv(),
+    logPath: tunnelLog,
+  });
+  if (!tunnelPid) {
+    throw new Error("Gateway Funnel reverse tunnel did not start.");
+  }
+  await sleep(500);
+  try {
+    process.kill(tunnelPid, 0);
+  } catch {
+    throw new Error(`Gateway Funnel reverse tunnel exited early.\n${readLogTail(tunnelLog)}`);
+  }
+  return { proxyPath, tunnelLog, tunnelPid };
+}
+
+async function stopTailscaleFunnelBridge(
+  root: string,
+  bridge: Pick<FunnelBridge, "proxyPath" | "tunnelPid">,
+) {
+  try {
+    // Explicit reset is the backstop when Gateway shutdown loses its async
+    // resetOnExit cleanup; the public route must not outlive this fresh lease.
+    await runCommand({
+      args: ["funnel", "reset"],
+      command: bridge.proxyPath,
+      cwd: root,
+      timeoutMs: 30_000,
+    });
+  } finally {
+    killPidTree(bridge.tunnelPid);
+  }
 }
 
 export function renderRemoteSetup(params: { tdlibSha256?: string; tdlibUrl?: string }) {
@@ -2198,6 +2383,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   let leaseId = opts.leaseId;
   let createdLease = false;
   let localSut: Awaited<ReturnType<typeof startLocalSutDaemon>> | undefined;
+  let funnelBridge: Awaited<ReturnType<typeof startTailscaleFunnelBridge>> | undefined;
   try {
     credential = await leaseCredential({ localRoot, opts, root });
     const sut = opts.sutUsername
@@ -2209,6 +2395,13 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       createdLease = true;
     }
     const inspect = await inspectCrabbox(opts, root, leaseId);
+    if (opts.mcpAppFixture) {
+      funnelBridge = await startTailscaleFunnelBridge({
+        gatewayPort: opts.gatewayPort,
+        inspect,
+        localRoot,
+      });
+    }
     await writeRemoteSessionScripts({
       inspect,
       localRoot,
@@ -2218,10 +2411,12 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       sutUsername: sut.username,
     });
     localSut = await startLocalSutDaemon({
+      funnelBridge,
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
       mockResponseText: opts.mockResponseText,
       mockPort: opts.mockPort,
+      mcpAppFixture: opts.mcpAppFixture,
       outputDir,
       repoRoot: root,
       sutToken: credential.sutToken,
@@ -2274,6 +2469,9 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   } catch (error) {
     killPidTree(localSut?.gatewayPid);
     killPidTree(localSut?.mockPid);
+    if (funnelBridge) {
+      await stopTailscaleFunnelBridge(root, funnelBridge).catch(() => {});
+    }
     if (credential) {
       await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
     }
@@ -2523,6 +2721,13 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
   } finally {
     killPidTree(session.localSut.gatewayPid);
     killPidTree(session.localSut.mockPid);
+    if (session.localSut.funnelBridge) {
+      await stopTailscaleFunnelBridge(root, session.localSut.funnelBridge).catch(
+        (error: unknown) => {
+          summary.funnelResetError = error instanceof Error ? error.message : String(error);
+        },
+      );
+    }
     await terminateDesktopSession();
     await releaseCredential(root, opts, session.credential.leaseFile).catch((error: unknown) => {
       summary.credentialReleaseError = error instanceof Error ? error.message : String(error);

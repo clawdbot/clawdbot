@@ -6,13 +6,13 @@ read_when:
 title: "Getting started"
 ---
 
-Install OpenClaw, run onboarding, and chat with your AI assistant — all in
-about 5 minutes. By the end you will have a running Gateway, configured auth,
-and a working chat session.
+Install OpenClaw, run onboarding, and chat with your AI assistant in about 5
+minutes. By the end you will have a running Gateway, configured auth, and a
+working chat session.
 
 ## What you need
 
-- **Node.js** — Node 24 recommended (Node 22.19+ also supported)
+- **Node.js 22.22.3+, 24.15+, or 25.9+** (24 is the recommended default)
 - **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
 
 <Tip>
@@ -55,7 +55,10 @@ Need to install Node? See [Node setup](/install/node).
     ```
 
     The wizard walks you through choosing a model provider, setting an API key,
-    and configuring the Gateway. It takes about 2 minutes.
+    and configuring the Gateway. QuickStart is usually only a few minutes, but
+    provider sign-in, channel pairing, daemon install, network downloads, skills,
+    or optional plugins can make full onboarding take longer. Skip optional
+    steps and return later with `openclaw configure`.
 
     See [Onboarding (CLI)](/start/wizard) for the full reference.
 

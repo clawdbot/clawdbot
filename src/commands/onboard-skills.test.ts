@@ -7,14 +7,10 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
   installSkill: vi.fn(),
+  resolveInstallerKindReadiness: vi.fn(),
   detectBinary: vi.fn(),
   isContainerEnvironment: vi.fn(),
   resolveBrewExecutable: vi.fn(),
-  resolveNodeManagerOptions: vi.fn(() => [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ]),
 }));
 
 // Module under test imports these at module scope.
@@ -23,6 +19,8 @@ vi.mock("../skills/discovery/status.js", () => ({
 }));
 vi.mock("../skills/lifecycle/install.js", () => ({
   installSkill: mocks.installSkill,
+  resolveInstallerKindReadiness: mocks.resolveInstallerKindReadiness,
+  MIN_AUTO_GO_VERSION: "1.21",
 }));
 vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment: mocks.isContainerEnvironment,
@@ -32,17 +30,28 @@ vi.mock("../infra/brew.js", () => ({
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
-  resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
 }));
 
 import { setupSkills } from "./onboard-skills.js";
+import { testing } from "./onboard-skills.test-support.js";
+
+describe("skill onboarding text bounds", () => {
+  it("keeps install failures and hints UTF-16 well-formed", () => {
+    expect(testing.summarizeInstallFailure(`${"x".repeat(138)}🚀tail`)).toBe(`${"x".repeat(138)}…`);
+    expect(testing.formatSkillHint({ description: `${"x".repeat(88)}🚀tail`, install: [] })).toBe(
+      `${"x".repeat(88)}…`,
+    );
+  });
+});
 
 function createBundledSkill(params: {
   name: string;
   description: string;
   bins: string[];
+  env?: string[];
   os?: string[];
   installLabel: string;
+  installKind?: string;
 }): {
   name: string;
   description: string;
@@ -78,10 +87,39 @@ function createBundledSkill(params: {
     disabled: false,
     blockedByAllowlist: false,
     eligible: false,
-    requirements: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
-    missing: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
+    requirements: {
+      bins: params.bins,
+      anyBins: [],
+      env: params.env ?? [],
+      config: [],
+      os: params.os ?? [],
+    },
+    missing: {
+      bins: params.bins,
+      anyBins: [],
+      env: params.env ?? [],
+      config: [],
+      os: params.os ?? [],
+    },
     configChecks: [],
-    install: [{ id: "brew", kind: "brew", label: params.installLabel, bins: params.bins }],
+    install: [
+      {
+        id: params.installKind ?? "brew",
+        kind: params.installKind ?? "brew",
+        label: params.installLabel,
+        bins: params.bins,
+      },
+    ],
+  };
+}
+
+function createWorkspaceSkill(
+  params: Parameters<typeof createBundledSkill>[0],
+): ReturnType<typeof createBundledSkill> {
+  return {
+    ...createBundledSkill(params),
+    source: "openclaw-workspace",
+    bundled: false,
   };
 }
 
@@ -163,6 +201,8 @@ describe("setupSkills", () => {
     vi.clearAllMocks();
     mocks.isContainerEnvironment.mockReset();
     mocks.resolveBrewExecutable.mockReset();
+    mocks.resolveInstallerKindReadiness.mockReset();
+    mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: true });
   });
 
   it("hides brew-only installs in Linux containers when brew is missing", async () => {
@@ -206,7 +246,7 @@ describe("setupSkills", () => {
       const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
       await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
-      expect(prompter.multiselect).toHaveBeenCalled();
+      expect(prompter.multiselect).not.toHaveBeenCalled();
       expect(mocks.installSkill).toHaveBeenCalledWith(
         expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
       );
@@ -215,7 +255,67 @@ describe("setupSkills", () => {
     });
   });
 
-  it("does not recommend Homebrew when user skips installing brew-backed deps", async () => {
+  it("auto-installs ready bundled skill dependencies without running workspace skill recipes", async () => {
+    mockMissingBrewStatus([
+      createWorkspaceSkill({
+        name: "repo-helper",
+        description: "Workspace helper",
+        bins: ["repo-helper"],
+        installLabel: "Install repo-helper",
+      }),
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+
+    const { prompter, notes } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ skillName: "node-helper", installId: "node" }),
+    );
+    const installNote = notes.find((n) => n.message.includes("node-helper"));
+    expect(installNote?.message).toContain("node-helper");
+    expect(installNote?.message).not.toContain("repo-helper");
+  });
+
+  it("uses the requested node manager for node-backed auto installs", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({});
+    const next = await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
+      nodeManager: "pnpm",
+    });
+
+    expect(next.skills?.install?.nodeManager).toBe("pnpm");
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillName: "node-helper",
+        installId: "node",
+        config: expect.objectContaining({
+          skills: expect.objectContaining({
+            install: expect.objectContaining({ nodeManager: "pnpm" }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("recommends Homebrew and skips brew-backed deps when brew is missing", async () => {
     if (!supportsHomebrewPrompt) {
       return;
     }
@@ -235,6 +335,7 @@ describe("setupSkills", () => {
         installLabel: "Install ffmpeg (brew)",
       }),
     ]);
+    mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: false, reason: "brew" });
 
     const { prompter, notes } = createPrompter({ multiselect: ["__skip__"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
@@ -251,10 +352,14 @@ describe("setupSkills", () => {
     });
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
-    expect(brewNote).toBeUndefined();
+    expect(brewNote).toBeDefined();
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(mocks.installSkill).not.toHaveBeenCalled();
+    const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+    expect(manualNote?.message).toContain("Homebrew: video-frames");
   });
 
-  it("recommends Homebrew when user selects a brew-backed install and brew is missing", async () => {
+  it("does not run brew-backed installs when brew is missing", async () => {
     if (!supportsHomebrewPrompt) {
       return;
     }
@@ -267,12 +372,92 @@ describe("setupSkills", () => {
         installLabel: "Install ffmpeg (brew)",
       }),
     ]);
+    mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: false, reason: "brew" });
 
     const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote?.title).toBe("Homebrew recommended");
+    expect(mocks.installSkill).not.toHaveBeenCalled();
+    const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+    expect(manualNote?.message).toContain("Homebrew: video-frames");
+  });
+
+  it("skips go and uv installs when local tool prerequisites are not ready", async () => {
+    await withPlatform("linux", async () => {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "blogwatcher",
+          description: "RSS helper",
+          bins: ["blogwatcher"],
+          installLabel: "Install blogwatcher (go)",
+          installKind: "go",
+        }),
+        createBundledSkill({
+          name: "nano-pdf",
+          description: "PDF helper",
+          bins: ["nano-pdf"],
+          installLabel: "Install nano-pdf (uv)",
+          installKind: "uv",
+        }),
+        createBundledSkill({
+          name: "mcporter",
+          description: "MCP helper",
+          bins: ["mcporter"],
+          installLabel: "Install mcporter (node)",
+          installKind: "node",
+        }),
+      ]);
+      mocks.resolveInstallerKindReadiness.mockImplementation(async (kind: string) =>
+        kind === "go" || kind === "uv" ? { ready: false, reason: kind } : { ready: true },
+      );
+
+      const { prompter, notes } = createPrompter({});
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+      expect(mocks.installSkill).toHaveBeenCalledWith(
+        expect.objectContaining({ skillName: "mcporter", installId: "node" }),
+      );
+      const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+      expect(manualNote?.message).toContain("Go toolchain (1.21+): blogwatcher");
+      expect(manualNote?.message).toContain("uv: nano-pdf");
+    });
+  });
+
+  it("groups Go prerequisite skips discovered after policy approval", async () => {
+    await withPlatform("linux", async () => {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "blogwatcher",
+          description: "RSS helper",
+          bins: ["blogwatcher"],
+          installLabel: "Install blogwatcher (go)",
+          installKind: "go",
+        }),
+      ]);
+      mocks.installSkill.mockResolvedValueOnce({
+        ok: false,
+        message:
+          "Install failed (exit 1): go: blogwatcher requires go >= 1.24 (running go 1.22; GOTOOLCHAIN=local)",
+        stdout: "",
+        stderr: "",
+        code: null,
+        skipReason: "go",
+      });
+
+      const { prompter, notes } = createPrompter({});
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+      const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+      expect(manualNote?.message).toContain("Go toolchain (1.21+): blogwatcher");
+      expect(manualNote?.message).toContain(
+        "blogwatcher: go: blogwatcher requires go >= 1.24 (running go 1.22; GOTOOLCHAIN=local)",
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Docs:"));
+    });
   });
 
   it("displays a clear empty state note when all skill dependencies are ready", async () => {
@@ -304,7 +489,28 @@ describe("setupSkills", () => {
 
       const brewNote = notes.find((n) => n.title === "Homebrew recommended");
       expect(brewNote).toBeUndefined();
+      expect(prompter.multiselect).not.toHaveBeenCalled();
       expect(mocks.detectBinary).not.toHaveBeenCalledWith("brew");
     });
+  });
+
+  it("does not ask for API keys when skills are missing env vars", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "goplaces",
+        description: "Places lookup",
+        bins: [],
+        env: ["GOOGLE_PLACES_API_KEY"],
+        installLabel: "",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({});
+    const next = await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(next).toEqual({});
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(prompter.multiselect).not.toHaveBeenCalled();
   });
 });

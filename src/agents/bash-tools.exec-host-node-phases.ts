@@ -4,7 +4,6 @@
  * requirements, and formats node invoke results for the exec tool.
  */
 import crypto from "node:crypto";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -34,12 +33,11 @@ import {
 } from "../infra/system-run-approval-context.js";
 import {
   extractShellCommandFromArgv,
-  formatExecCommand,
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecOutputText } from "./bash-tools.exec-output.js";
+import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -59,6 +57,7 @@ type PreparedNodeRun = {
   plan: SystemRunApprovalPlan;
   argv: string[];
   rawCommand: string;
+  transportRawCommand: string;
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
@@ -225,6 +224,7 @@ export function formatNodeRunToolResult(params: {
   raw: unknown;
   startedAt: number;
   cwd: string | undefined;
+  warnings?: string[];
 }): AgentToolResult<ExecToolDetails> {
   const payload =
     params.raw && typeof params.raw === "object"
@@ -241,7 +241,10 @@ export function formatNodeRunToolResult(params: {
     content: [
       {
         type: "text",
-        text: renderExecOutputText(stdout || stderr || errorText),
+        text: renderExecUpdateText({
+          tailText: stdout || stderr || errorText,
+          warnings: params.warnings ?? [],
+        }),
       },
     ],
     details: {
@@ -348,6 +351,7 @@ export function buildNodeSystemRunInvoke(params: {
   turnSourceThreadId?: string | number;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
+  approvalSource?: "ask-fallback";
   runId?: string;
   suppressNotifyOnExit?: boolean;
   notifyOnExit?: boolean;
@@ -377,6 +381,7 @@ export function buildNodeSystemRunInvoke(params: {
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
+      approvalSource: params.approvalSource,
       runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
@@ -404,7 +409,12 @@ export async function invokeNodeSystemRunDirect(params: {
       notifyOnExit: params.request.notifyOnExit,
     }),
   );
-  return formatNodeRunToolResult({ raw, startedAt, cwd: params.request.workdir });
+  return formatNodeRunToolResult({
+    raw,
+    startedAt,
+    cwd: params.request.workdir,
+    warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+  });
 }
 
 /** Prepares a node-host system run using remote prepare support or local fallback. */
@@ -413,7 +423,7 @@ export async function prepareNodeSystemRun(params: {
   target: NodeExecutionTarget;
 }): Promise<PreparedNodeRun> {
   if (!params.target.supportsSystemRunPrepare) {
-    return buildLocalPreparedNodeRun(params);
+    throw new Error("exec denied: node approval requires system.run.prepare support");
   }
 
   const prepareRaw = await callGatewayTool(
@@ -442,47 +452,12 @@ export async function prepareNodeSystemRun(params: {
     plan: prepared.plan,
     argv: prepared.plan.argv,
     rawCommand: prepared.plan.commandText,
+    transportRawCommand: prepared.plan.commandText,
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
     ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
     allowAlwaysCoverage: prepared.allowAlwaysCoverage,
-  };
-}
-
-function buildLocalPreparedNodeRun(params: {
-  request: ExecuteNodeHostCommandParams;
-  target: NodeExecutionTarget;
-}): PreparedNodeRun {
-  const rawCommand = formatExecCommand(params.target.argv);
-  const command = resolveSystemRunCommandRequest({
-    command: params.target.argv,
-    rawCommand,
-  });
-  if (!command.ok) {
-    throw new Error(command.message);
-  }
-  if (command.argv.length === 0) {
-    throw new Error("command required");
-  }
-  const commandText = formatExecCommand(command.argv);
-  const previewText = params.request.command.trim() || command.previewText?.trim();
-  const commandPreview = previewText && previewText !== commandText ? previewText : null;
-  const plan = {
-    argv: [...command.argv],
-    cwd: normalizeNullableString(params.request.workdir),
-    commandText,
-    commandPreview,
-    agentId: normalizeNullableString(params.request.agentId),
-    sessionKey: normalizeNullableString(params.request.sessionKey),
-  } satisfies SystemRunApprovalPlan;
-  return {
-    plan,
-    argv: plan.argv,
-    rawCommand: plan.commandText,
-    cwd: plan.cwd ?? params.request.workdir,
-    agentId: plan.agentId ?? params.request.agentId,
-    sessionKey: plan.sessionKey ?? params.request.sessionKey,
   };
 }
 
@@ -690,9 +665,9 @@ export async function analyzeNodeApprovalRequirement(params: {
     }),
     autoReviewArgv:
       autoReviewBindingEval.segments.length === 1 &&
-      (autoReviewBindingEval.segments[0]?.raw === undefined ||
-        autoReviewBindingEval.segments[0].raw.trim() === autoReviewBindingCommand.trim())
-        ? autoReviewBindingEval.segments[0].argv
+      (autoReviewBindingEval.segments.at(0)?.raw === undefined ||
+        autoReviewBindingEval.segments.at(0)?.raw.trim() === autoReviewBindingCommand.trim())
+        ? autoReviewBindingEval.segments.at(0)?.argv
         : undefined,
   };
 }

@@ -1,5 +1,5 @@
 // Format Generated Module tests cover format generated module script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +7,6 @@ import {
   formatGeneratedModule,
   GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
   GENERATED_MODULE_FORMAT_TIMEOUT_MS,
-  resolveGeneratedModuleFormatter,
 } from "../../scripts/lib/format-generated-module.mjs";
 
 const tempDirs: string[] = [];
@@ -15,9 +14,6 @@ const tempDirs: string[] = [];
 function makeRepoRoot() {
   const repoRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-format-generated-module-"));
   tempDirs.push(repoRoot);
-  const formatterDir = path.join(repoRoot, "node_modules", ".bin");
-  mkdirSync(formatterDir, { recursive: true });
-  writeFileSync(path.join(formatterDir, "oxfmt"), "#!/bin/sh\n", "utf8");
   return repoRoot;
 }
 
@@ -27,48 +23,7 @@ afterEach(() => {
   }
 });
 
-describe("resolveGeneratedModuleFormatter", () => {
-  it("uses the direct formatter binary on non-Windows when available", () => {
-    const formatterPath = path.join("/repo", "node_modules", ".bin", "oxfmt");
-
-    expect(
-      resolveGeneratedModuleFormatter({
-        existsSync: (value) => value === formatterPath,
-        outputPath: "/tmp/generated.ts",
-        platform: "linux",
-        repoRoot: "/repo",
-      }),
-    ).toEqual({
-      command: formatterPath,
-      args: ["--write", "/tmp/generated.ts"],
-      shell: false,
-    });
-  });
-
-  it("wraps pnpm.cmd explicitly on Windows instead of using shell mode", () => {
-    expect(
-      resolveGeneratedModuleFormatter({
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: { PATH: "" },
-        existsSync: () => false,
-        npmExecPath: "",
-        outputPath: "C:\\Users\\test\\AppData\\Local\\Temp\\generated output.ts",
-        platform: "win32",
-        repoRoot: "C:\\repo",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        'pnpm.cmd exec oxfmt --write "C:\\Users\\test\\AppData\\Local\\Temp\\generated output.ts"',
-      ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
-
+describe("formatGeneratedModule", () => {
   it("runs generated module formatting with bounded child execution", () => {
     const repoRoot = makeRepoRoot();
     const calls: unknown[] = [];
@@ -81,14 +36,9 @@ describe("resolveGeneratedModuleFormatter", () => {
         repoRoot,
       },
       {
-        resolveFormatter: ({ outputPath }: { outputPath: string }) => ({
-          args: ["--write", outputPath],
-          command: "oxfmt",
-          shell: false,
-        }),
-        spawnSync: (_command: string, args: string[], options: unknown) => {
-          calls.push(options);
-          writeFileSync(args[1] ?? "", "export const value = 1;\n", "utf8");
+        spawnSync: (command: string, args: string[], options: unknown) => {
+          calls.push({ args, command, options });
+          writeFileSync(args[2] ?? "", "export const value = 1;\n", "utf8");
           return { status: 0, stderr: "", stdout: "" };
         },
       },
@@ -97,11 +47,19 @@ describe("resolveGeneratedModuleFormatter", () => {
     expect(formatted).toBe("export const value = 1;\n");
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
-      shell: false,
-      timeout: GENERATED_MODULE_FORMAT_TIMEOUT_MS,
+      args: [
+        path.join(repoRoot, "node_modules", "oxfmt", "bin", "oxfmt"),
+        "--write",
+        expect.stringMatching(/generated\.ts$/u),
+      ],
+      command: process.execPath,
+      options: {
+        cwd: repoRoot,
+        encoding: "utf8",
+        maxBuffer: GENERATED_MODULE_FORMAT_MAX_BUFFER_BYTES,
+        shell: false,
+        timeout: GENERATED_MODULE_FORMAT_TIMEOUT_MS,
+      },
     });
   });
 
@@ -120,11 +78,6 @@ describe("resolveGeneratedModuleFormatter", () => {
           repoRoot,
         },
         {
-          resolveFormatter: ({ outputPath }: { outputPath: string }) => ({
-            args: ["--write", outputPath],
-            command: "oxfmt",
-            shell: false,
-          }),
           spawnSync: () => ({
             error: timeoutError,
             signal: "SIGTERM",
@@ -147,11 +100,6 @@ describe("resolveGeneratedModuleFormatter", () => {
           repoRoot,
         },
         {
-          resolveFormatter: ({ outputPath }: { outputPath: string }) => ({
-            args: ["--write", outputPath],
-            command: "oxfmt",
-            shell: false,
-          }),
           spawnSync: () => ({
             error: timeoutError,
             signal: "SIGTERM",

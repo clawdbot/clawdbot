@@ -1,6 +1,7 @@
 // Bench Model script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type Usage = {
@@ -111,9 +112,13 @@ function median(values: number[]): number {
   const sorted = [...values].toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
-    return Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+    return Math.round(
+      (expectDefined(sorted[mid - 1], "lower middle model benchmark sample") +
+        expectDefined(sorted[mid], "upper middle model benchmark sample")) /
+        2,
+    );
   }
-  return sorted[mid];
+  return expectDefined(sorted[mid], "middle model benchmark sample");
 }
 
 async function runModel(opts: {
@@ -182,6 +187,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     name: "Claude Opus 4.6",
     api: "anthropic-messages",
     provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },

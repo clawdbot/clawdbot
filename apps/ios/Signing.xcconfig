@@ -2,7 +2,7 @@
 // Auto-selected local team overrides live in .local-signing.xcconfig (git-ignored).
 // Manual local overrides can go in LocalSigning.xcconfig (git-ignored).
 
-#include "Config/Version.xcconfig"
+#include "build/Version.xcconfig"
 
 OPENCLAW_CODE_SIGN_STYLE = Manual
 OPENCLAW_CODE_SIGN_IDENTITY = Apple Development
@@ -25,3 +25,10 @@ OPENCLAW_WATCH_APP_PROFILE =
 // so later assignments in local files override the defaults above.
 #include? ".local-signing.xcconfig"
 #include? "LocalSigning.xcconfig"
+
+// Debug products install alongside release products and keep their app-group data separate.
+OPENCLAW_DEBUG_APP_BUNDLE_ID = $(OPENCLAW_APP_BUNDLE_ID).debug
+OPENCLAW_DEBUG_SHARE_BUNDLE_ID = $(OPENCLAW_DEBUG_APP_BUNDLE_ID).share
+OPENCLAW_DEBUG_ACTIVITY_WIDGET_BUNDLE_ID = $(OPENCLAW_DEBUG_APP_BUNDLE_ID).activitywidget
+OPENCLAW_DEBUG_WATCH_APP_BUNDLE_ID = $(OPENCLAW_DEBUG_APP_BUNDLE_ID).watchkitapp
+OPENCLAW_DEBUG_APP_GROUP_ID = $(OPENCLAW_APP_GROUP_ID).debug

@@ -24,7 +24,7 @@ type TextRange = {
 };
 
 /** Streaming cleaner used to strip TTS tags before final text parsing is available. */
-export type TtsDirectiveTextStreamCleaner = {
+type TtsDirectiveTextStreamCleaner = {
   push: (text: string) => string;
   flush: () => string;
   hasBufferedDirectiveText: () => boolean;

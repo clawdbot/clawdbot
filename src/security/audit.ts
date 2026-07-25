@@ -1,11 +1,7 @@
 // Orchestrates security audit collection and report formatting.
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
@@ -13,7 +9,6 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import type { CliBackendConfig } from "../config/types.agent-defaults.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
 import {
@@ -21,21 +16,24 @@ import {
   materializeGatewayAuthSecretRefs,
 } from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type ExecApprovalsFile,
   loadExecApprovals,
-  maxAsk,
-  minSecurity,
-  resolveExecApprovalsFromFile,
+  resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
+import {
+  normalizeConfiguredSafeBins,
+  normalizeConfiguredTrustedSafeBinDirs,
+} from "../infra/exec-safe-bin-config.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -44,6 +42,11 @@ import {
   inspectPathPermissions,
 } from "./audit-fs.js";
 import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from "./audit-gateway-config.js";
+import {
+  readBoundedMcporterRegistry,
+  type McporterRegistryReadOutcome,
+  type McporterRegistryRejectReason,
+} from "./audit-mcporter-registry.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -61,19 +64,21 @@ type SecurityAuditExplicitGatewayAuth = {
   password?: string;
 };
 type SecurityAuditGatewayAuthOverride = Pick<GatewayAuthConfig, "mode" | "token" | "password">;
-type ClaudePermissionModeHit = {
-  argSet: "args" | "resumeArgs";
-  mode: string;
+type McpServerSourceSummary = {
+  label: string;
+  names: string[];
+};
+type AgentSkillMcpBoundaryScope = {
+  id: string;
+  skillSource: string;
+  execHost: string;
+  execSecurity: string;
+  execAsk: string;
 };
 
-export type {
-  SecurityAuditFinding,
-  SecurityAuditReport,
-  SecurityAuditSeverity,
-  SecurityAuditSummary,
-} from "./audit.types.js";
+export type { SecurityAuditReport } from "./audit.types.js";
 
-export type SecurityAuditOptions = {
+type SecurityAuditOptions = {
   config: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -109,7 +114,7 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: ProbeGatewayFn;
 };
 
-export type AuditExecutionContext = {
+type AuditExecutionContext = {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -132,70 +137,32 @@ export type AuditExecutionContext = {
   workspaceDir?: string;
 };
 
-let readOnlyChannelPluginsModulePromise:
-  | Promise<typeof import("../channels/plugins/read-only.js")>
-  | undefined;
-let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
-let auditChannelModulePromise:
-  | Promise<typeof import("./audit-channel.collect.runtime.js")>
-  | undefined;
-let pluginMetadataRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
-  | undefined;
-let pluginAutoEnableModulePromise:
-  | Promise<typeof import("../config/plugin-auto-enable.js")>
-  | undefined;
-let channelPluginIdsModulePromise:
-  | Promise<typeof import("../plugins/channel-plugin-ids.js")>
-  | undefined;
-let pluginRuntimeModulePromise: Promise<typeof import("../plugins/runtime.js")> | undefined;
-let gatewayProbeDepsPromise:
-  | Promise<{
-      buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
-      resolveGatewayProbeAuthSafe: typeof import("../gateway/probe-auth.js").resolveGatewayProbeAuthSafe;
-      resolveGatewayProbeTarget: typeof import("../gateway/probe-auth.js").resolveGatewayProbeTarget;
-      probeGateway: typeof import("../gateway/probe.js").probeGateway;
-    }>
-  | undefined;
+const loadReadOnlyChannelPlugins = createLazyRuntimeModule(
+  () => import("../channels/plugins/read-only.js"),
+);
 
-async function loadReadOnlyChannelPlugins() {
-  readOnlyChannelPluginsModulePromise ??= import("../channels/plugins/read-only.js");
-  return await readOnlyChannelPluginsModulePromise;
-}
+const loadAuditNonDeepModule = createLazyRuntimeModule(() => import("./audit.nondeep.runtime.js"));
 
-async function loadAuditNonDeepModule() {
-  auditNonDeepModulePromise ??= import("./audit.nondeep.runtime.js");
-  return await auditNonDeepModulePromise;
-}
+const loadAuditChannelModule = createLazyRuntimeModule(
+  () => import("./audit-channel.collect.runtime.js"),
+);
 
-async function loadAuditChannelModule() {
-  auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
-  return await auditChannelModulePromise;
-}
+const loadPluginMetadataRegistryLoaderModule = createLazyRuntimeModule(
+  () => import("../plugins/runtime/metadata-registry-loader.js"),
+);
 
-async function loadPluginMetadataRegistryLoaderModule() {
-  pluginMetadataRegistryLoaderModulePromise ??=
-    import("../plugins/runtime/metadata-registry-loader.js");
-  return await pluginMetadataRegistryLoaderModulePromise;
-}
+const loadPluginAutoEnableModule = createLazyRuntimeModule(
+  () => import("../config/plugin-auto-enable.js"),
+);
 
-async function loadPluginAutoEnableModule() {
-  pluginAutoEnableModulePromise ??= import("../config/plugin-auto-enable.js");
-  return await pluginAutoEnableModulePromise;
-}
+const loadChannelPluginIdsModule = createLazyRuntimeModule(
+  () => import("../plugins/channel-plugin-ids.js"),
+);
 
-async function loadChannelPluginIdsModule() {
-  channelPluginIdsModulePromise ??= import("../plugins/channel-plugin-ids.js");
-  return await channelPluginIdsModulePromise;
-}
+const loadPluginRuntimeModule = createLazyRuntimeModule(() => import("../plugins/runtime.js"));
 
-async function loadPluginRuntimeModule() {
-  pluginRuntimeModulePromise ??= import("../plugins/runtime.js");
-  return await pluginRuntimeModulePromise;
-}
-
-async function loadGatewayProbeDeps() {
-  gatewayProbeDepsPromise ??= Promise.all([
+const loadGatewayProbeDeps = createLazyRuntimeModule(() =>
+  Promise.all([
     import("../gateway/call.js"),
     import("../gateway/probe-auth.js"),
     import("../gateway/probe.js"),
@@ -204,9 +171,8 @@ async function loadGatewayProbeDeps() {
     resolveGatewayProbeAuthSafe: probeAuthModule.resolveGatewayProbeAuthSafe,
     resolveGatewayProbeTarget: probeAuthModule.resolveGatewayProbeTarget,
     probeGateway: probeModule.probeGateway,
-  }));
-  return await gatewayProbeDepsPromise;
-}
+  })),
+);
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;
@@ -329,7 +295,7 @@ function buildSecurityAuditSuppressionsActiveFinding(params: {
   };
 }
 
-export function applySecurityAuditSuppressions(
+function applySecurityAuditSuppressions(
   findings: SecurityAuditFinding[],
   suppressions: SecurityAuditSuppression[] | undefined,
 ): { findings: SecurityAuditFinding[]; suppressedFindings: SecurityAuditSuppressedFinding[] } {
@@ -362,7 +328,7 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
   return normalizeStringEntries(list);
 }
 
-export async function collectFilesystemFindings(params: {
+async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
   env?: NodeJS.ProcessEnv;
@@ -493,7 +459,7 @@ export async function collectFilesystemFindings(params: {
   return findings;
 }
 
-export function collectGatewayConfigFindings(
+function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -505,7 +471,31 @@ export function collectGatewayConfigFindings(
   });
 }
 
-export async function collectPluginSecurityAuditFindings(
+function collectControlUiDeviceAuthMigrationFindings(params: {
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): SecurityAuditFinding[] {
+  const migration = readControlUiDeviceAuthMigrationState({
+    env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
+  });
+  if (migration?.status !== "pending") {
+    return [];
+  }
+  return [
+    {
+      checkId: "gateway.control_ui.device_auth_disabled",
+      severity: "critical",
+      title: "Control UI device-auth migration is pending",
+      detail:
+        "The retired device-auth bypass was imported into pending migration state. " +
+        "Device-less Control UI sessions with valid shared auth can still connect for remediation until an operator browser completes pairing.",
+      remediation:
+        "Reopen the Control UI over HTTPS or localhost and click Secure this browser to complete pairing and end the compatibility window.",
+    },
+  ];
+}
+
+async function collectPluginSecurityAuditFindings(
   context: AuditExecutionContext,
 ): Promise<SecurityAuditFinding[]> {
   if (!context.loadPluginSecurityCollectors) {
@@ -597,23 +587,7 @@ export async function collectPluginSecurityAuditFindings(
   return collectorResults.flat();
 }
 
-export function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const redact = cfg.logging?.redactSensitive;
-  if (redact !== "off") {
-    return [];
-  }
-  return [
-    {
-      checkId: "logging.redact_off",
-      severity: "warn",
-      title: "Tool summary redaction is disabled",
-      detail: `logging.redactSensitive="off" can leak secrets into logs and status output.`,
-      remediation: `Set logging.redactSensitive="tools".`,
-    },
-  ];
-}
-
-export function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const enabled = cfg.tools?.elevated?.enabled;
   const allowFrom = cfg.tools?.elevated?.allowFrom ?? {};
@@ -648,133 +622,13 @@ export function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFindi
   return findings;
 }
 
-const CLAUDE_PERMISSION_MODE_FLAG = "--permission-mode";
-const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
-
-function extractClaudePermissionMode(args: readonly string[] | undefined): string | undefined {
-  if (!Array.isArray(args)) {
-    return undefined;
-  }
-  for (let i = args.length - 1; i >= 0; i -= 1) {
-    const arg = args[i] ?? "";
-    if (arg === CLAUDE_PERMISSION_MODE_FLAG) {
-      const value = args[i + 1];
-      if (typeof value === "string" && value.trim().length > 0 && !value.startsWith("-")) {
-        return value.trim();
-      }
-      continue;
-    }
-    if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_FLAG}=`)) {
-      const value = arg.slice(`${CLAUDE_PERMISSION_MODE_FLAG}=`.length).trim();
-      if (value.length > 0 && !value.startsWith("-")) {
-        return value;
-      }
-    }
-  }
-  return undefined;
-}
-
-function collectRestrictiveClaudePermissionModeHits(
-  backend: CliBackendConfig | undefined,
-): ClaudePermissionModeHit[] {
-  if (!isManagedClaudeLiveBackendConfig(backend)) {
-    return [];
-  }
-  const hits: ClaudePermissionModeHit[] = [];
-  const argsMode = extractClaudePermissionMode(backend.args);
-  if (argsMode && argsMode !== CLAUDE_BYPASS_PERMISSION_MODE) {
-    hits.push({ argSet: "args", mode: argsMode });
-  }
-  const resumeArgsMode = extractClaudePermissionMode(backend.resumeArgs);
-  if (resumeArgsMode && resumeArgsMode !== CLAUDE_BYPASS_PERMISSION_MODE) {
-    hits.push({ argSet: "resumeArgs", mode: resumeArgsMode });
-  }
-  return hits;
-}
-
-function isManagedClaudeLiveBackendConfig(
-  backend: CliBackendConfig | undefined,
-): backend is CliBackendConfig {
-  if (!backend) {
-    return false;
-  }
-  const output = backend.output ?? "jsonl";
-  const input = backend.input ?? "stdin";
-  const liveSession =
-    backend.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined);
-  return liveSession === "claude-stdio" && output === "jsonl" && input === "stdin";
-}
-
-function findClaudeCliBackendConfig(
-  backends: Record<string, CliBackendConfig> | undefined,
-): CliBackendConfig | undefined {
-  if (!backends) {
-    return undefined;
-  }
-  const directKey = Object.keys(backends).find(
-    (key) => normalizeOptionalLowercaseString(key) === "claude-cli",
-  );
-  if (directKey) {
-    return backends[directKey];
-  }
-  for (const [key, backend] of Object.entries(backends)) {
-    const normalizedKey = normalizeProviderId(key);
-    const command = normalizeOptionalLowercaseString(backend.command);
-    if (
-      normalizedKey === "claude-cli" ||
-      normalizedKey === "anthropic-cli" ||
-      command === "claude"
-    ) {
-      return backend;
-    }
-  }
-  return undefined;
-}
-
-function collectYoloExecScopeIds(cfg: OpenClawConfig, approvals: ExecApprovalsFile): string[] {
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return [
-    { id: DEFAULT_AGENT_ID },
-    ...agents
-      .filter(
-        (entry): entry is NonNullable<(typeof agents)[number]> =>
-          Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
-      )
-      .map((entry) => ({ id: entry.id })),
-  ]
-    .filter((entry) => {
-      const execDefaults = resolveExecDefaults({
-        cfg,
-        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
-      });
-      const resolvedApprovals = resolveExecApprovalsFromFile({
-        file: approvals,
-        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
-        overrides: {
-          security: execDefaults.security,
-          ask: execDefaults.ask,
-        },
-      });
-      return (
-        minSecurity(execDefaults.security, resolvedApprovals.agent.security) === "full" &&
-        maxAsk(execDefaults.ask, resolvedApprovals.agent.ask) === "off"
-      );
-    })
-    .map((entry) => entry.id);
-}
-
-export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
   const globalStrictInlineEval = cfg.tools?.exec?.strictInlineEval === true;
   const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
   const defaultHostIsExplicitSandbox = globalExecHost === "sandbox";
   const approvals = loadExecApprovals();
-  const claudePermissionModeHits = collectRestrictiveClaudePermissionModeHits(
-    findClaudeCliBackendConfig(cfg.agents?.defaults?.cliBackends),
-  );
-  const yoloExecScopeIds =
-    claudePermissionModeHits.length > 0 ? collectYoloExecScopeIds(cfg, approvals) : [];
 
   if (defaultHostIsExplicitSandbox && defaultSandboxMode === "off") {
     findings.push({
@@ -820,7 +674,11 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
       [
         {
           id: DEFAULT_AGENT_ID,
-          security: cfg.tools?.exec?.security ?? "deny",
+          security: resolveExecModePolicy({
+            mode: cfg.tools?.exec?.mode,
+            security: cfg.tools?.exec?.security ?? "deny",
+            ask: cfg.tools?.exec?.ask ?? "off",
+          }).security,
           host: cfg.tools?.exec?.host ?? "auto",
         },
         ...agents
@@ -828,11 +686,22 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
             (entry): entry is NonNullable<(typeof agents)[number]> =>
               Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
           )
-          .map((entry) => ({
-            id: entry.id,
-            security: entry.tools?.exec?.security ?? cfg.tools?.exec?.security ?? "deny",
-            host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
-          })),
+          .map((entry) => {
+            const inherited = resolveExecModePolicy({
+              mode: cfg.tools?.exec?.mode,
+              security: cfg.tools?.exec?.security ?? "deny",
+              ask: cfg.tools?.exec?.ask ?? "off",
+            });
+            return {
+              id: entry.id,
+              security: resolveExecModePolicy({
+                mode: entry.tools?.exec?.mode,
+                security: entry.tools?.exec?.security ?? inherited.security,
+                ask: entry.tools?.exec?.ask ?? inherited.ask,
+              }).security,
+              host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
+            };
+          }),
       ].map((entry) => [entry.id, entry] as const),
     ).values(),
   );
@@ -851,18 +720,7 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
           ? ` Open channel access was also detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}`
           : ""),
       remediation:
-        'Prefer tools.exec.security="allowlist" with ask prompts, and reserve "full" for tightly scoped break-glass agents only.',
-    });
-  }
-
-  if (claudePermissionModeHits.length > 0 && yoloExecScopeIds.length > 0) {
-    findings.push({
-      checkId: "agents.claude_cli.permission_mode_overridden_by_yolo",
-      severity: "warn",
-      title: "Claude permission mode is ignored under YOLO exec",
-      detail: `claude-cli sets ${claudePermissionModeHits.map((hit) => `${hit.argSet}=${hit.mode}`).join(", ")}, but OpenClaw exec is YOLO for: ${yoloExecScopeIds.join(", ")}. Managed Claude live sessions use --permission-mode bypassPermissions.`,
-      remediation:
-        "Restrict OpenClaw tools.exec.security/tools.exec.ask, or remove the Claude --permission-mode override.",
+        'Prefer tools.exec.mode="ask" or "allowlist", and reserve "full" for tightly scoped break-glass agents only.',
     });
   }
 
@@ -928,26 +786,6 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     });
   }
 
-  const normalizeConfiguredSafeBins = (entries: unknown): string[] => {
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return Array.from(
-      new Set(
-        entries
-          .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
-          .filter((entry) => entry.length > 0),
-      ),
-    ).toSorted();
-  };
-  const normalizeConfiguredTrustedDirs = (entries: unknown): string[] => {
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return normalizeTrustedSafeBinDirs(
-      entries.filter((entry): entry is string => typeof entry === "string"),
-    );
-  };
   const classifyRiskySafeBinTrustedDir = (entry: string): string | null => {
     const raw = entry.trim();
     if (!raw) {
@@ -991,7 +829,7 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
   const globalExec = cfg.tools?.exec;
   const riskyTrustedDirHits: string[] = [];
   const collectRiskyTrustedDirHits = (scopePath: string, entries: unknown): void => {
-    for (const entry of normalizeConfiguredTrustedDirs(entries)) {
+    for (const entry of normalizeConfiguredTrustedSafeBinDirs(entries)) {
       const reason = classifyRiskySafeBinTrustedDir(entry);
       if (!reason) {
         continue;
@@ -1098,6 +936,185 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     });
   }
 
+  return findings;
+}
+
+function formatNamesPreview(names: readonly string[]): string {
+  const visible = names.slice(0, 6);
+  const suffix = names.length > visible.length ? `, +${names.length - visible.length} more` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
+function listConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
+  return Object.entries(cfg.mcp?.servers ?? {})
+    .filter(([, server]) => server?.enabled !== false)
+    .map(([name]) => name)
+    .toSorted();
+}
+
+type GlobalMcporterRegistrySummary =
+  | { status: "source"; summary: McpServerSourceSummary }
+  | { status: "absent" }
+  | Extract<McporterRegistryReadOutcome, { status: "rejected" }>;
+
+async function readGlobalMcporterRegistrySummary(
+  stateDir: string,
+): Promise<GlobalMcporterRegistrySummary> {
+  const outcome = await readBoundedMcporterRegistry(stateDir);
+  if (outcome.status === "missing") {
+    return { status: "absent" };
+  }
+  if (outcome.status === "rejected") {
+    return outcome;
+  }
+  const mcpServers = asNullableRecord(asNullableRecord(outcome.value)?.mcpServers);
+  if (!mcpServers) {
+    return { status: "absent" };
+  }
+  const names = Object.entries(mcpServers)
+    .filter(([, value]) => asNullableRecord(value)?.enabled !== false)
+    .map(([name]) => name)
+    .toSorted();
+  return names.length > 0
+    ? { status: "source", summary: { label: "skills/config/mcporter.json", names } }
+    : { status: "absent" };
+}
+
+function describeMcporterRegistryRejection(reason: McporterRegistryRejectReason): string {
+  switch (reason) {
+    case "oversized":
+      return "larger than the 16 MiB audit cap";
+    case "unreadable":
+      return "unreadable";
+    case "non-regular":
+      return "not a regular file";
+    case "malformed":
+      return "not valid JSON";
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
+}
+
+function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
+  return Boolean(entry && Object.hasOwn(entry, "skills"));
+}
+
+function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
+  const candidates = [
+    ...(defaultsHaveSkillAllowlist
+      ? [
+          {
+            id: DEFAULT_AGENT_ID,
+            skillSource: "agents.defaults.skills",
+            agentId: undefined,
+          },
+        ]
+      : []),
+    ...agents
+      .filter(
+        (entry): entry is NonNullable<(typeof agents)[number]> =>
+          Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
+      )
+      .flatMap((entry) => {
+        if (hasOwnSkillsAllowlist(entry)) {
+          return [{ id: entry.id, skillSource: "agents.list[].skills", agentId: entry.id }];
+        }
+        if (defaultsHaveSkillAllowlist) {
+          return [
+            {
+              id: entry.id,
+              skillSource: "agents.defaults.skills (inherited)",
+              agentId: entry.id,
+            },
+          ];
+        }
+        return [];
+      }),
+  ];
+
+  return candidates.flatMap((candidate) => {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, candidate.agentId).mode;
+    const exec = resolveExecDefaults({
+      cfg,
+      agentId: candidate.agentId,
+      sandboxAvailable: sandboxMode !== "off",
+    });
+    if (exec.security === "deny" || exec.effectiveHost === "sandbox") {
+      return [];
+    }
+    return [
+      {
+        id: candidate.id,
+        skillSource: candidate.skillSource,
+        execHost: exec.effectiveHost,
+        execSecurity: exec.security,
+        execAsk: exec.ask,
+      },
+    ];
+  });
+}
+
+async function collectAgentSkillMcpBoundaryFindings(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+}): Promise<SecurityAuditFinding[]> {
+  const scopes = collectAgentSkillMcpBoundaryScopes(params.cfg);
+  if (scopes.length === 0) {
+    return [];
+  }
+
+  const findings: SecurityAuditFinding[] = [];
+  const sources: McpServerSourceSummary[] = [];
+  const configServerNames = listConfiguredMcpServerNames(params.cfg);
+  if (configServerNames.length > 0) {
+    sources.push({ label: "mcp.servers", names: configServerNames });
+  }
+  const globalMcporterRegistry = await readGlobalMcporterRegistrySummary(params.stateDir);
+  if (globalMcporterRegistry.status === "rejected") {
+    // An existing registry that cannot be inspected must not silently vanish
+    // from the audit; tell the operator the MCP boundary check is incomplete.
+    findings.push({
+      checkId: "tools.exec.mcporter_registry_inspection_incomplete",
+      severity: "warn",
+      title: "Global mcporter registry could not be inspected",
+      detail:
+        `skills/config/mcporter.json exists but could not be safely inspected (${describeMcporterRegistryRejection(globalMcporterRegistry.reason)}). ` +
+        "The MCP boundary inspection is incomplete: the audit could not verify which MCP servers a host exec process can reach.",
+      remediation:
+        "Repair or remove skills/config/mcporter.json so the audit can inspect it: keep it a regular file readable by the gateway user, valid JSON, and below the 16 MiB audit cap.",
+    });
+  } else if (globalMcporterRegistry.status === "source") {
+    sources.push(globalMcporterRegistry.summary);
+  }
+  if (sources.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "tools.exec.agent_skill_mcp_boundary_drift",
+    severity: "warn",
+    title: "Agent skill allowlists do not constrain host exec MCP clients",
+    detail:
+      `Detected agent skill allowlists on host-exec-capable scopes:\n${scopes
+        .slice(0, 8)
+        .map(
+          (scope) =>
+            `- ${scope.id}: ${scope.skillSource}, exec.host=${scope.execHost}, security=${scope.execSecurity}, ask=${scope.execAsk}`,
+        )
+        .join("\n")}` +
+      (scopes.length > 8 ? `\n- +${scopes.length - 8} more scopes.` : "") +
+      `\nMCP server registries visible to the gateway configuration/state:\n${sources
+        .map((source) => `- ${source.label}: ${formatNamesPreview(source.names)}`)
+        .join("\n")}\n` +
+      "agents.*.skills filters OpenClaw skill visibility and snapshots; it is not a shell-time authorization boundary. " +
+      "A host exec process can run external MCP clients or read a global mcporter registry unless sandbox, filesystem, network, or MCP credential boundaries block it.",
+    remediation:
+      'For agents that need per-agent MCP isolation, set their exec policy to security="deny" or a tight allowlist, run them in sandbox/container/OS-user isolation where the global MCP registry is not readable, split sensitive MCP servers into a separate gateway/trust boundary, or require per-agent MCP credentials at the server layer.',
+  });
   return findings;
 }
 
@@ -1281,10 +1298,11 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );
+  findings.push(...collectControlUiDeviceAuthMigrationFindings({ env, stateDir }));
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
-  findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
+  findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));
   const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
     ? await materializeAuditGatewayAuthRefs({
         cfg,
@@ -1446,3 +1464,4 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     deep,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

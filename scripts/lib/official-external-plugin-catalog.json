@@ -1,4 +1,9 @@
 {
+  "schemaVersion": 1,
+  "id": "openclaw-official-external-plugins",
+  "generatedAt": "2026-06-22T00:00:00.000Z",
+  "sequence": 1,
+  "description": "Bundled fallback feed for official external OpenClaw plugins.",
   "entries": [
     {
       "name": "@openclaw/acpx",
@@ -47,6 +52,26 @@
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10",
           "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
+      "name": "@openclaw/codex",
+      "description": "OpenClaw Codex app-server harness and native session catalog",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "codex",
+          "label": "Codex"
+        },
+        "contracts": {
+          "migrationProviders": ["codex"]
+        },
+        "install": {
+          "npmSpec": "@openclaw/codex",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.1-beta.1"
         }
       }
     },
@@ -114,7 +139,12 @@
           "id": "diffs",
           "label": "Diffs"
         },
+        "catalog": {
+          "featured": true,
+          "order": 40
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/diffs",
           "npmSpec": "@openclaw/diffs",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.30"
@@ -196,7 +226,8 @@
             "firecrawl"
           ],
           "webSearchProviders": [
-            "firecrawl"
+            "firecrawl",
+            "firecrawl-free"
           ],
           "tools": [
             "firecrawl_search",
@@ -220,6 +251,20 @@
             "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
             "credentialPath": "plugins.entries.firecrawl.config.webSearch.apiKey",
             "autoDetectOrder": 60
+          },
+          {
+            "id": "firecrawl-free",
+            "label": "Firecrawl Search (Free)",
+            "hint": "Free web search via Firecrawl's hosted starter tier — no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://www.firecrawl.dev/",
+            "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
+            "credentialPath": ""
           }
         ],
         "install": {
@@ -303,7 +348,12 @@
           "id": "lobster",
           "label": "Lobster"
         },
+        "catalog": {
+          "featured": true,
+          "order": 50
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/lobster",
           "npmSpec": "@openclaw/lobster",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
@@ -320,7 +370,12 @@
           "id": "memory-lancedb",
           "label": "Memory LanceDB"
         },
+        "catalog": {
+          "featured": true,
+          "order": 70
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/memory-lancedb",
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.31"
@@ -582,6 +637,10 @@
         "plugin": {
           "id": "tokenjuice",
           "label": "Tokenjuice"
+        },
+        "catalog": {
+          "featured": true,
+          "order": 60
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/tokenjuice",

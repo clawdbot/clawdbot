@@ -62,7 +62,7 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
 
 function createCommandContext(
   args?: string,
-  overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes">>,
+  overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ): PluginCommandContext {
   return {
     channel: "webchat",
@@ -71,6 +71,7 @@ function createCommandContext(
     args,
     config: {},
     gatewayClientScopes: overrides?.gatewayClientScopes,
+    senderIsOwner: overrides?.senderIsOwner,
     requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
     detachConversationBinding: async () => ({ removed: false }),
     getCurrentConversationBinding: async () => null,
@@ -80,7 +81,7 @@ function createCommandContext(
 async function runDreamingCommand(
   harness: ReturnType<typeof createHarness>,
   args?: string,
-  overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes">>,
+  overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ) {
   return await handleDreamingCommand(harness.api, createCommandContext(args, overrides));
 }
@@ -98,7 +99,18 @@ describe("memory-core /dreaming command", () => {
     );
   });
 
-  it("persists global enablement under plugins.entries.memory-core.config.dreaming.enabled", async () => {
+  it("blocks non-owner external channel callers from persisting dreaming config", async () => {
+    const harness = createHarness();
+
+    const result = await runDreamingCommand(harness, "off");
+
+    expect(result.text).toContain(
+      "requires owner status for channel callers or operator.admin for gateway clients",
+    );
+    expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows owner external channel callers to persist global enablement", async () => {
     const harness = createHarness({
       plugins: {
         entries: {
@@ -118,7 +130,9 @@ describe("memory-core /dreaming command", () => {
       },
     });
 
-    const result = await runDreamingCommand(harness, "off");
+    const result = await runDreamingCommand(harness, "off", {
+      senderIsOwner: true,
+    });
 
     expect(harness.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
     const storedDreaming = resolveStoredDreaming(harness.getRuntimeConfig());
@@ -134,7 +148,9 @@ describe("memory-core /dreaming command", () => {
       gatewayClientScopes: [],
     });
 
-    expect(result.text).toContain("requires operator.admin");
+    expect(result.text).toContain(
+      "requires owner status for channel callers or operator.admin for gateway clients",
+    );
     expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 
@@ -145,7 +161,9 @@ describe("memory-core /dreaming command", () => {
       gatewayClientScopes: ["operator.write"],
     });
 
-    expect(result.text).toContain("requires operator.admin");
+    expect(result.text).toContain(
+      "requires owner status for channel callers or operator.admin for gateway clients",
+    );
     expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 

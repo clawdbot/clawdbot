@@ -1,0 +1,35 @@
+title: Matrix E2EE sync cursor loss keeps crypto decryptability intact
+scenario:
+  id: matrix-e2ee-sync-state-loss-crypto-intact
+  surface: channels
+  coverage:
+    primary:
+      - matrix.legacy-state
+  execution:
+    profiles: { "matrix:all": 76, "matrix:e2ee-deep": 10 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 150000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-sync-state-loss-crypto-intact
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Sync State Loss Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeSyncStateLossCryptoIntactScenario
+  args:
+    - expr: "scenarioContext"

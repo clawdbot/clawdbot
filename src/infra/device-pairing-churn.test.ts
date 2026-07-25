@@ -92,6 +92,9 @@ describe("device pairing requestId churn", () => {
 
     expect(approveReconnect.created).toBe(true);
     expect(approveReconnect.request.requestId).not.toBe(readRepair.request.requestId);
+    expect(approveReconnect.superseded).toEqual([
+      { requestId: readRepair.request.requestId, deviceId: DEVICE_ID },
+    ]);
 
     const staleApprove = await approveDevicePairing(
       readRepair.request.requestId,
@@ -113,6 +116,86 @@ describe("device pairing requestId churn", () => {
     expect(pending.publicKey).toBe(PUBLIC_KEY);
     expect(pending.role).toBe("operator");
     expectScopesToContain(pending.scopes, ["operator.pairing", "operator.read"]);
+  });
+
+  test("keeps the requestId when a reconnect re-requests a subset of a pending request", async () => {
+    const baseDir = await makeDevicePairingDir();
+
+    // A TUI connect files a broad scope-upgrade request the owner sees in
+    // `devices list`.
+    const broad = await requestDevicePairing(
+      {
+        deviceId: DEVICE_ID,
+        publicKey: PUBLIC_KEY,
+        role: "operator",
+        scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    expect(broad.created).toBe(true);
+
+    // `openclaw devices approve <id>` reconnects as a CLI probe that only needs
+    // `operator.pairing`. That subset re-request must not mint a new id, or the
+    // id the owner copied would fail to approve with "unknown requestId".
+    const subsetReconnect = await requestDevicePairing(
+      {
+        deviceId: DEVICE_ID,
+        publicKey: PUBLIC_KEY,
+        role: "operator",
+        scopes: ["operator.pairing"],
+      },
+      baseDir,
+    );
+
+    expect(subsetReconnect.created).toBe(false);
+    expect(subsetReconnect.request.requestId).toBe(broad.request.requestId);
+    // The broader pending scopes the owner already saw are preserved.
+    expectScopesToContain(subsetReconnect.request.scopes, [
+      "operator.admin",
+      "operator.pairing",
+      "operator.read",
+      "operator.write",
+    ]);
+
+    const pairingList = await listDevicePairing(baseDir);
+    expect(pairingList.pending).toHaveLength(1);
+    expect(pairingList.pending[0]?.requestId).toBe(broad.request.requestId);
+
+    // The originally-listed id remains approvable.
+    const approved = await approveDevicePairing(
+      broad.request.requestId,
+      { callerScopes: ["operator.admin"] },
+      baseDir,
+    );
+    expect(approved?.status).toBe("approved");
+  });
+
+  test("keeps the requestId when operator.admin covers a pairing reconnect", async () => {
+    const baseDir = await makeDevicePairingDir();
+
+    const adminRequest = await requestDevicePairing(
+      {
+        deviceId: DEVICE_ID,
+        publicKey: PUBLIC_KEY,
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+
+    const pairingReconnect = await requestDevicePairing(
+      {
+        deviceId: DEVICE_ID,
+        publicKey: PUBLIC_KEY,
+        role: "operator",
+        scopes: ["operator.pairing"],
+      },
+      baseDir,
+    );
+
+    expect(pairingReconnect.created).toBe(false);
+    expect(pairingReconnect.request.requestId).toBe(adminRequest.request.requestId);
+    expect(pairingReconnect.request.scopes).toEqual(["operator.admin"]);
   });
 
   test("supports cron-first progressive operator escalation from read to pairing to admin", async () => {

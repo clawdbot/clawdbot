@@ -1,5 +1,7 @@
 // Voice Call plugin module implements tunnel behavior.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendBoundedChildOutput,
   emptyBoundedChildOutput,
@@ -8,6 +10,62 @@ import {
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
+const NGROK_ERROR_MARKER = "ERR_NGROK";
+const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
+const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
+const NGROK_STOP_GRACE_MS = 2_000;
+const NGROK_FORCE_KILL_WAIT_MS = 1_000;
+
+async function terminateNgrokProcess(
+  proc: Pick<ChildProcess, "kill" | "once" | "off">,
+  isClosed: () => boolean,
+): Promise<void> {
+  if (isClosed()) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let finished = false;
+    let forceKillWaitTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      if (forceKillWaitTimer) {
+        clearTimeout(forceKillWaitTimer);
+      }
+      proc.off("close", finish);
+      resolve();
+    };
+    proc.once("close", finish);
+    // Give ngrok a graceful window before forcing termination. The final bounded
+    // close wait avoids returning before SIGKILL normally reaps the child without
+    // letting an unobservable close event hang cleanup forever.
+    const forceKillTimer = setTimeout(() => {
+      forceKillWaitTimer = setTimeout(finish, NGROK_FORCE_KILL_WAIT_MS);
+      if (!isClosed()) {
+        proc.kill("SIGKILL");
+      }
+    }, NGROK_STOP_GRACE_MS);
+    proc.kill("SIGTERM");
+    if (isClosed()) {
+      finish();
+    }
+  });
+}
+
+function listenForChildStreamErrors(
+  proc: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
+  onError: (stream: "stdout" | "stderr", error: Error) => void,
+): void {
+  // Keep both listeners for the child lifetime: a late unhandled stream error
+  // would otherwise escape after the startup promise has already settled.
+  proc.stdout.on("error", (error) => onError("stdout", error));
+  proc.stderr.on("error", (error) => onError("stderr", error));
+}
 
 /**
  * Tunnel configuration for exposing the webhook server.
@@ -47,7 +105,7 @@ export interface TunnelResult {
  * console.log('Public URL:', tunnel.publicUrl);
  * // Later: await tunnel.stop();
  */
-export async function startNgrokTunnel(config: {
+async function startNgrokTunnel(config: {
   port: number;
   path: string;
   authToken?: string;
@@ -71,17 +129,37 @@ export async function startNgrokTunnel(config: {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let resolved = false;
+    // Startup settlement and OS process closure are separate: the deadline can
+    // win before the child has been reaped.
+    let startupSettled = false;
+    let childClosed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
+    // Keep only enough UTF-16-safe suffix to recognize an error marker split
+    // at the next stream chunk boundary; otherwise the caller loses the code.
+    let stderrTail = "";
 
     const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        proc.kill("SIGTERM");
-        reject(new Error("ngrok startup timed out (30s)"));
+      if (!startupSettled) {
+        startupSettled = true;
+        void terminateNgrokProcess(proc, () => childClosed).then(() => {
+          reject(new Error("ngrok startup timed out (30s)"));
+        });
       }
     }, 30000);
+    // Do not keep the host process alive solely waiting on ngrok startup.
+    timeout.unref();
+
+    const rejectIfPending = (message: string, kill = false) => {
+      if (!startupSettled) {
+        startupSettled = true;
+        clearTimeout(timeout);
+        if (kill && !childClosed) {
+          proc.kill("SIGKILL");
+        }
+        reject(new Error(message));
+      }
+    };
 
     const processLine = (line: string) => {
       try {
@@ -98,8 +176,8 @@ export async function startNgrokTunnel(config: {
         }
 
         // Check for ready state
-        if (publicUrl && !resolved) {
-          resolved = true;
+        if (publicUrl && !startupSettled) {
+          startupSettled = true;
           clearTimeout(timeout);
 
           // Add path to the public URL
@@ -111,11 +189,7 @@ export async function startNgrokTunnel(config: {
             publicUrl: fullUrl,
             provider: "ngrok",
             stop: async () => {
-              proc.kill("SIGTERM");
-              await new Promise<void>((res) => {
-                proc.on("close", () => res());
-                setTimeout(res, 2000); // Fallback timeout
-              });
+              await terminateNgrokProcess(proc, () => childClosed);
             },
           });
         }
@@ -124,11 +198,17 @@ export async function startNgrokTunnel(config: {
       }
     };
 
-    proc.stdout.on("data", (data: Buffer) => {
-      const lines = (outputBuffer + data.toString()).split("\n");
+    // Decode pipes statefully so a multibyte UTF-8 code point split across
+    // chunk boundaries does not become U+FFFD in startup logs / ERR_NGROK text.
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      const lines = (outputBuffer + chunk).split("\n");
       outputBuffer = lines.pop() || "";
       if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
-        outputBuffer = outputBuffer.slice(-NGROK_LOG_BUFFER_MAX_CHARS);
+        // Same UTF-16 contract as appendBoundedChildOutput: do not leave a lone
+        // surrogate when an incomplete ngrok log line is trimmed to the ring cap.
+        outputBuffer = sliceUtf16Safe(outputBuffer, -NGROK_LOG_BUFFER_MAX_CHARS);
       }
 
       for (const line of lines) {
@@ -137,31 +217,30 @@ export async function startNgrokTunnel(config: {
         }
       }
     });
-
-    proc.stderr.on("data", (data: Buffer) => {
-      const msg = data.toString();
-      // Check for common errors
-      if (msg.includes("ERR_NGROK")) {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          const output = appendBoundedChildOutput(emptyBoundedChildOutput(), msg);
-          reject(new Error(`ngrok error: ${formatBoundedChildOutput(output)}`));
-        }
+    proc.stderr.on("data", (chunk: string) => {
+      const combined = stderrTail + chunk;
+      if (combined.includes(NGROK_ERROR_MARKER)) {
+        rejectIfPending(
+          `ngrok error: ${formatBoundedChildOutput(
+            appendBoundedChildOutput(emptyBoundedChildOutput(), combined),
+          )}`,
+          true,
+        );
       }
+      stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
+    });
+    listenForChildStreamErrors(proc, (stream, error) => {
+      rejectIfPending(`ngrok ${stream} error: ${error.message}`, true);
     });
 
     proc.on("error", (err) => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        reject(new Error(`Failed to start ngrok: ${err.message}`));
-      }
+      rejectIfPending(`Failed to start ngrok: ${err.message}`);
     });
 
     proc.on("close", (code) => {
-      if (!resolved) {
-        resolved = true;
+      childClosed = true;
+      if (!startupSettled) {
+        startupSettled = true;
         clearTimeout(timeout);
         reject(new Error(`ngrok exited unexpectedly with code ${code}`));
       }
@@ -173,38 +252,28 @@ export async function startNgrokTunnel(config: {
  * Run an ngrok command and wait for completion.
  */
 async function runNgrokCommand(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("ngrok", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = emptyBoundedChildOutput();
-    let stderr = emptyBoundedChildOutput();
-
-    proc.stdout.on("data", (data) => {
-      stdout = appendBoundedChildOutput(stdout, data.toString());
-    });
-    proc.stderr.on("data", (data) => {
-      stderr = appendBoundedChildOutput(stderr, data.toString());
-    });
-
-    proc.on("close", (code) => {
-      if (code === 0) {
-        resolve(stdout.text);
-      } else {
-        const output = stderr.text ? stderr : stdout;
-        reject(new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`));
-      }
-    });
-
-    proc.on("error", reject);
+  const result = await runCommandWithTimeout(["ngrok", ...args], {
+    killProcessTree: true,
+    maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
+    outputCapture: "tail",
+    timeoutMs: 30_000,
   });
+  if (result.termination === "timeout") {
+    throw new Error("ngrok command timed out");
+  }
+  if (result.code === 0) {
+    return result.stdout;
+  }
+  const output = result.stderr
+    ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
+    : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
+  throw new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`);
 }
 
 /**
  * Start a Tailscale serve/funnel tunnel.
  */
-export async function startTailscaleTunnel(config: {
+async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
   path: string;
@@ -218,71 +287,46 @@ export async function startTailscaleTunnel(config: {
   const path = config.path.startsWith("/") ? config.path : `/${config.path}`;
   const localUrl = `http://127.0.0.1:${config.port}${path}`;
 
-  return new Promise((resolve, reject) => {
-    const proc = spawn("tailscale", [config.mode, "--bg", "--yes", "--set-path", path, localUrl], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = emptyBoundedChildOutput();
-    let stderr = emptyBoundedChildOutput();
+  const result = await runCommandWithTimeout(
+    ["tailscale", config.mode, "--bg", "--yes", "--set-path", path, localUrl],
+    {
+      killProcessTree: true,
+      maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
+      outputCapture: "tail",
+      timeoutMs: 10_000,
+    },
+  );
+  if (result.termination === "timeout") {
+    throw new Error(`Tailscale ${config.mode} timed out`);
+  }
+  if (result.code !== 0) {
+    const output = result.stderr
+      ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
+      : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
+    const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
+    throw new Error(`Tailscale ${config.mode} failed with code ${result.code}${detail}`);
+  }
+  const publicUrl = `https://${dnsName}${path}`;
+  console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
 
-    const timeout = setTimeout(() => {
-      proc.kill("SIGKILL");
-      reject(new Error(`Tailscale ${config.mode} timed out`));
-    }, 10000);
-
-    proc.stdout.on("data", (data) => {
-      stdout = appendBoundedChildOutput(stdout, data.toString());
-    });
-    proc.stderr.on("data", (data) => {
-      stderr = appendBoundedChildOutput(stderr, data.toString());
-    });
-
-    proc.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code === 0) {
-        const publicUrl = `https://${dnsName}${path}`;
-        console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
-
-        resolve({
-          publicUrl,
-          provider: `tailscale-${config.mode}`,
-          stop: async () => {
-            await stopTailscaleTunnel(config.mode, path);
-          },
-        });
-      } else {
-        const output = stderr.text ? stderr : stdout;
-        const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
-        reject(new Error(`Tailscale ${config.mode} failed with code ${code}${detail}`));
-      }
-    });
-
-    proc.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
+  return {
+    publicUrl,
+    provider: `tailscale-${config.mode}`,
+    stop: async () => {
+      await stopTailscaleTunnel(config.mode, path);
+    },
+  };
 }
 
 /**
  * Stop a Tailscale serve/funnel tunnel.
  */
 async function stopTailscaleTunnel(mode: "serve" | "funnel", path: string): Promise<void> {
-  return new Promise((resolve) => {
-    const proc = spawn("tailscale", [mode, "off", path], {
-      stdio: "ignore",
-    });
-
-    const timeout = setTimeout(() => {
-      proc.kill("SIGKILL");
-      resolve();
-    }, 5000);
-
-    proc.on("close", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-  });
+  await runCommandWithTimeout(["tailscale", mode, "off", path], {
+    killProcessTree: true,
+    maxOutputBytes: 1,
+    timeoutMs: 5_000,
+  }).catch(() => {});
 }
 
 /**

@@ -6,8 +6,9 @@ import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
-import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+
+type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
 type GetPluginCommandSpecsFn =
   typeof import("./bot-native-commands.runtime.js").getPluginCommandSpecs;
@@ -148,10 +149,18 @@ export function createNativeCommandsHarness(params?: {
   const sendMessage: AnyAsyncMock = vi.fn(async () => undefined);
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
   const log: AnyMock = vi.fn();
+  const baseCfg = params?.cfg ?? ({} as OpenClawConfig);
+  const cfg =
+    params?.useAccessGroups === undefined
+      ? baseCfg
+      : {
+          ...baseCfg,
+          commands: { ...baseCfg.commands, useAccessGroups: params.useAccessGroups },
+        };
   const readChannelAllowFromStore: AnyAsyncMock =
     params?.readChannelAllowFromStore ?? vi.fn(async () => params?.storeAllowFrom ?? []);
   const telegramDeps = {
-    getRuntimeConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
+    getRuntimeConfig: vi.fn(() => cfg),
     readChannelAllowFromStore:
       readChannelAllowFromStore as TelegramNativeCommandDeps["readChannelAllowFromStore"],
     dispatchReplyWithBufferedBlockDispatcher:
@@ -172,15 +181,10 @@ export function createNativeCommandsHarness(params?: {
 
   registerTelegramNativeCommands({
     bot,
-    cfg: params?.cfg ?? ({} as OpenClawConfig),
+    cfg,
     runtime: params?.runtime ?? ({ log } as unknown as RuntimeEnv),
     accountId: "default",
     telegramCfg: params?.telegramCfg ?? ({} as TelegramAccountConfig),
-    allowFrom: params?.allowFrom ?? [],
-    groupAllowFrom: params?.groupAllowFrom ?? [],
-    replyToMode: "off",
-    textLimit: 4000,
-    useAccessGroups: params?.useAccessGroups ?? false,
     nativeEnabled: params?.nativeEnabled ?? true,
     nativeSkillsEnabled: false,
     nativeDisabledExplicit: false,
@@ -197,7 +201,12 @@ export function createNativeCommandsHarness(params?: {
       topicConfig: undefined,
     }),
     shouldSkipUpdate: () => false,
-    opts: { token: "token" },
+    opts: {
+      token: "token",
+      allowFrom: params?.allowFrom ?? [],
+      groupAllowFrom: params?.groupAllowFrom ?? [],
+      replyToMode: "off",
+    },
   });
 
   return { handlers, sendMessage, setMyCommands, log, bot, readChannelAllowFromStore };

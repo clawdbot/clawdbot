@@ -5,19 +5,22 @@
  */
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { resolveEffectiveOAuthCredential as resolveManagedOAuthCredential } from "./oauth-manager.js";
-import type { OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 /** Resolves the effective OAuth credential, optionally reading external CLI bootstrap state. */
 export function resolveEffectiveOAuthCredential(params: {
+  store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
   allowKeychainPrompt?: boolean;
 }): OAuthCredential {
   return resolveManagedOAuthCredential({
+    store: params.store,
     profileId: params.profileId,
     credential: params.credential,
-    readBootstrapCredential: ({ profileId, credential }) =>
+    readBootstrapCredential: ({ store, profileId, credential }) =>
       readExternalCliBootstrapCredential({
+        store,
         profileId,
         credential,
         allowKeychainPrompt: params.allowKeychainPrompt ?? false,

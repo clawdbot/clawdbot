@@ -1,4 +1,5 @@
 // Discord plugin module implements mentions behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,7 +12,6 @@ type DiscordMentionAliasesConfig = Record<string, string>;
 const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
-const DISCORD_TARGETED_MENTION_PATTERN = /<@!?\d+>|<@&\d+>/;
 const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
@@ -38,7 +38,7 @@ export function formatMention(params: {
   if (values.length !== 1) {
     throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
   }
-  const target = values[0];
+  const target = expectDefined(values.at(0), "single Discord mention target");
   if (target.kind === "user") {
     return `<@${target.id}>`;
   }
@@ -212,11 +212,6 @@ export function rewriteDiscordKnownMentions(
   }
   rewritten += rewritePlainTextMentions(text.slice(offset), params);
   return rewritten;
-}
-
-/** Whether text carries a Discord user/role mention (`<@id>`, `<@!id>`, `<@&id>`) that pings when sent fresh. */
-export function discordTextHasTargetedMention(text: string): boolean {
-  return DISCORD_TARGETED_MENTION_PATTERN.test(text);
 }
 
 /** Whether text carries an `@everyone`/`@here` broadcast mention. */

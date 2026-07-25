@@ -1,11 +1,14 @@
 // Gateway HTTP session history endpoint.
 // Serves JSON and SSE history snapshots backed by transcript files.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -67,17 +70,20 @@ function getRequestUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? "/", "http://localhost");
 }
 
-function resolveLimit(req: IncomingMessage): number | undefined {
+function resolveLimit(req: IncomingMessage): Result<number | undefined, string> {
   const raw = getRequestUrl(req).searchParams.get("limit");
-  if (raw == null || raw.trim() === "") {
-    return undefined;
+  if (raw == null) {
+    return ok(undefined);
   }
   const trimmed = raw.trim();
-  const value = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isSafeInteger(value) || value < 1) {
-    return 1;
+  const value = parseStrictPositiveInteger(trimmed);
+  if (value !== undefined) {
+    return ok(Math.min(MAX_SESSION_HISTORY_LIMIT, value));
   }
-  return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
+  if (/^\d+$/.test(trimmed) && /[1-9]/.test(trimmed)) {
+    return ok(MAX_SESSION_HISTORY_LIMIT);
+  }
+  return err("limit must be a positive integer");
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
@@ -140,44 +146,69 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const limit = resolveLimit(req);
+  const limitResult = resolveLimit(req);
+  if (!limitResult.ok) {
+    sendInvalidRequest(res, limitResult.error);
+    return true;
+  }
+  const limit = limitResult.value;
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const boundedSnapshot =
-    cursor === undefined && typeof limit === "number"
-      ? await readRecentSessionMessagesWithStatsAsync(
-          {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
-          },
-          {
-            ...resolveSessionHistoryTailReadOptions(limit),
-            allowResetArchiveFallback: true,
-          },
-        )
-      : undefined;
-  // Cursor reads still need an arbitrary historical window. The common first
-  // page path is bounded above so `limit=1` cannot materialize huge transcripts.
-  const fullSnapshot =
-    boundedSnapshot === undefined && entry?.sessionId
-      ? await readSessionMessagesWithSourceAsync(
-          {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
-          },
-          {
-            mode: "full",
-            reason: "session history cursor pagination",
-            allowResetArchiveFallback: true,
-          },
-        )
-      : undefined;
+  let boundedSnapshot:
+    | Awaited<ReturnType<typeof readRecentSessionMessagesWithStatsAsync>>
+    | undefined;
+  let fullSnapshot: Awaited<ReturnType<typeof readSessionMessagesWithSourceAsync>> | undefined;
+  try {
+    boundedSnapshot =
+      cursor === undefined && typeof limit === "number"
+        ? await readRecentSessionMessagesWithStatsAsync(
+            {
+              agentId: target.agentId,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: target.canonicalKey,
+              storePath: target.storePath,
+            },
+            {
+              ...resolveSessionHistoryTailReadOptions(limit),
+              allowResetArchiveFallback: true,
+            },
+          )
+        : undefined;
+    // Cursor reads still need an arbitrary historical window. The common first
+    // page path is bounded above so `limit=1` cannot materialize huge transcripts.
+    fullSnapshot =
+      boundedSnapshot === undefined && entry?.sessionId
+        ? await readSessionMessagesWithSourceAsync(
+            {
+              agentId: target.agentId,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: target.canonicalKey,
+              storePath: target.storePath,
+            },
+            {
+              mode: "full",
+              reason: "session history cursor pagination",
+              allowResetArchiveFallback: true,
+            },
+          )
+        : undefined;
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    res.setHeader("Retry-After", "1");
+    sendJson(res, 503, {
+      ok: false,
+      error: {
+        type: "unavailable",
+        message: "session history is rebuilding; retry shortly",
+        retryable: true,
+      },
+    });
+    return true;
+  }
   const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
@@ -228,40 +259,97 @@ export async function handleSessionHistoryHttpRequest(
     cursor,
   });
   sentHistory = sseState.snapshot();
+  let streamStopped = false;
+  let streamQueue = Promise.resolve();
+  const streamResources: {
+    heartbeat?: ReturnType<typeof setInterval>;
+    unsubscribe?: () => void;
+  } = {};
+
+  function releaseStreamResources() {
+    if (streamStopped) {
+      return;
+    }
+    streamStopped = true;
+    if (streamResources.heartbeat) {
+      clearInterval(streamResources.heartbeat);
+    }
+    if (streamResources.unsubscribe) {
+      streamResources.unsubscribe();
+    }
+  }
+
+  function detachStreamListeners() {
+    req.off("close", handleRequestStreamClose);
+    req.off("error", handleRequestStreamError);
+    res.off("close", handleResponseStreamClose);
+    res.off("finish", handleResponseStreamFinish);
+    res.off("error", handleResponseStreamError);
+  }
+
+  function closeStream() {
+    releaseStreamResources();
+    if (!res.writableEnded && !res.destroyed) {
+      res.end();
+    }
+  }
+
+  function handleRequestStreamClose() {
+    releaseStreamResources();
+    req.off("close", handleRequestStreamClose);
+    req.off("error", handleRequestStreamError);
+  }
+
+  function handleRequestStreamError(error: Error) {
+    // Node HTTP streams emit process-fatal `error` events without listeners.
+    // Request-side failures mean the SSE owner should release and end locally.
+    log.warn("session history SSE request stream errored; closing stream", { error });
+    closeStream();
+  }
+
+  function handleResponseStreamFinish() {
+    releaseStreamResources();
+    // `finish` only means Node handed the response bytes to the OS. Keep the
+    // error listener until `close` so a late flush failure stays stream-local.
+    res.off("finish", handleResponseStreamFinish);
+  }
+
+  function handleResponseStreamClose() {
+    releaseStreamResources();
+    detachStreamListeners();
+  }
+
+  function handleResponseStreamError(error: Error) {
+    // The response stream is already failing, so only release local resources;
+    // writing an end frame here can re-enter the errored ServerResponse.
+    log.warn("session history SSE response stream errored; cleaning up stream", { error });
+    releaseStreamResources();
+  }
+  const isStreamClosed = () => streamStopped || res.writableEnded || res.destroyed;
+
+  req.on("close", handleRequestStreamClose);
+  req.on("error", handleRequestStreamError);
+  res.on("close", handleResponseStreamClose);
+  res.on("finish", handleResponseStreamFinish);
+  res.on("error", handleResponseStreamError);
+
   setSseHeaders(res);
   res.write("retry: 1000\n\n");
+  if (isStreamClosed()) {
+    return true;
+  }
   sseWrite(res, "history", {
     sessionKey: target.canonicalKey,
     ...sentHistory,
   });
-
-  let cleanedUp = false;
-  let streamQueue = Promise.resolve();
-
-  const cleanup = () => {
-    if (cleanedUp) {
-      return;
-    }
-    cleanedUp = true;
-    if (heartbeat) {
-      clearInterval(heartbeat);
-    }
-    if (unsubscribe) {
-      unsubscribe();
-    }
-  };
-
-  const closeStream = () => {
-    cleanup();
-    if (!res.writableEnded) {
-      res.end();
-    }
-  };
+  if (isStreamClosed()) {
+    return true;
+  }
 
   const queueStreamWork = (work: () => Promise<void>) => {
     streamQueue = streamQueue
       .then(async () => {
-        if (cleanedUp || res.writableEnded) {
+        if (streamStopped || res.writableEnded) {
           return;
         }
         await work();
@@ -295,7 +383,7 @@ export async function handleSessionHistoryHttpRequest(
     return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
   };
 
-  const heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
+  streamResources.heartbeat = setInterval(() => {
     queueStreamWork(async () => {
       if (!(await isStreamStillAuthorized())) {
         closeStream();
@@ -307,7 +395,7 @@ export async function handleSessionHistoryHttpRequest(
     });
   }, 15_000);
 
-  const unsubscribe: (() => void) | undefined = onInternalSessionTranscriptUpdate((update) => {
+  streamResources.unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     // Filter to candidate sessions synchronously before enqueueing any async
     // work. Transcript updates use a global fan-out listener, so every
     // transcript write in the gateway would otherwise append a Promise-chain
@@ -377,8 +465,5 @@ export async function handleSessionHistoryHttpRequest(
       });
     });
   });
-  req.on("close", cleanup);
-  res.on("close", cleanup);
-  res.on("finish", cleanup);
   return true;
 }

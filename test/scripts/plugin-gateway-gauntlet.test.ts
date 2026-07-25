@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildObservationGuardFailures,
@@ -24,7 +25,6 @@ import {
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
-  schemaHasRequiredFields,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mjs";
 
@@ -88,7 +88,7 @@ describe("plugin gateway gauntlet helpers", () => {
       if (await predicate()) {
         return;
       }
-      await delay(25);
+      await delay(5);
     }
     throw new Error("condition was not met before timeout");
   }
@@ -145,9 +145,7 @@ describe("plugin gateway gauntlet helpers", () => {
     ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
 
     vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
-    expect(() => parseArgs(["--plugin", "telegram"])).toThrow(
-      "Duplicate --plugin value: telegram",
-    );
+    expect(() => parseArgs(["--plugin", "telegram"])).toThrow("Duplicate --plugin value: telegram");
   });
 
   it("rejects duplicate single-value controls", () => {
@@ -236,10 +234,11 @@ describe("plugin gateway gauntlet helpers", () => {
       runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
       skills: [],
     });
-    expect(matrix[1].runtimeSlashAliases).toEqual([
+    const beta = expectDefined(matrix[1], "beta bundled plugin manifest");
+    expect(beta.runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
-    expect(matrix[1].buildId).toBe("beta");
+    expect(beta.buildId).toBe("beta");
   });
 
   it("keeps manifest ids separate from bounded build entry ids", async () => {
@@ -253,7 +252,8 @@ describe("plugin gateway gauntlet helpers", () => {
         id: "kimi",
       }),
     ]);
-    expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
+    const kimi = expectDefined(matrix[0], "Kimi bundled plugin manifest");
+    expect(buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -334,25 +334,9 @@ describe("plugin gateway gauntlet helpers", () => {
       { id: "beta", requiredPlugins: ["alpha"] },
     ];
 
-    expect(() => collectRequiredPluginEntries(entries, [entries[0]])).toThrow(
-      "Bundled plugin dependency cycle detected: alpha -> beta -> alpha",
-    );
-  });
-
-  it("detects required schema fields recursively", () => {
-    expect(
-      schemaHasRequiredFields({
-        type: "object",
-        properties: {
-          auth: {
-            oneOf: [{ type: "object" }, { type: "object", required: ["token"] }],
-          },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      schemaHasRequiredFields({ type: "object", properties: { enabled: { type: "boolean" } } }),
-    ).toBe(false);
+    expect(() =>
+      collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
+    ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
   });
 
   it("flags gateway startup CPU observations using bench summary keys", () => {
@@ -505,7 +489,7 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(buildGauntletPrebuildEnv({ EXISTING: "1" }, { includePrivateQa: true })).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab,qa-matrix",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -542,7 +526,7 @@ describe("plugin gateway gauntlet helpers", () => {
     ).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab,qa-matrix",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -606,7 +590,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
     expect(row.status).toBe(1);
     expect(row.spawnError?.code).toBe("ENOENT");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
 
   it("clamps oversized measured command timers before scheduling", async () => {
@@ -626,7 +610,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
     expect(row.status).toBe(0);
     expect(row.timedOut).toBe(false);
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.not.toContain("ETIMEDOUT");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -663,7 +647,7 @@ setInterval(() => {}, 1000);
           label: "timeout-leader-exits",
           phase: "probe",
           timeoutKillGraceMs: 25,
-          timeoutMs: 1_000,
+          timeoutMs: 250,
           timeMode: "none",
         });
 
@@ -708,7 +692,7 @@ const grandchildScript = [
   "  setTimeout(() => {",
   "    fs.writeFileSync(process.argv[3], 'drained');",
   "    process.exit(0);",
-  "  }, 50);",
+  "  }, 20);",
   "});",
   "fs.writeFileSync(process.argv[2], 'ready');",
   "setInterval(() => {}, 1000);",
@@ -730,7 +714,7 @@ setInterval(() => {}, 1000);
         args: [scriptPath, readyPath, drainedPath],
         label: "timeout-leader-drain",
         phase: "probe",
-        timeoutKillGraceMs: 1_000,
+        timeoutKillGraceMs: 200,
         timeoutMs: 500,
         timeMode: "none",
       });
@@ -764,8 +748,8 @@ setInterval(() => {}, 1000);
     });
 
     expect(row.status).toBe(0);
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stdout");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stdout");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stderr");
   });
 
   it("returns a failed row when measured command log writing fails", async () => {
@@ -952,19 +936,19 @@ const promise = runMeasuredCommandLive({
   )}, ${JSON.stringify(leaderExitedPath)}],
   label: "timeout-parent-termination",
   phase: "probe",
-  timeoutKillGraceMs: 1_000,
-  timeoutMs: 1_000,
+  timeoutKillGraceMs: 150,
+  timeoutMs: 200,
   timeMode: "none",
 });
 for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
           leaderExitedPath,
         )}); attempt += 1) {
-  await delay(25);
+  await delay(10);
 }
 if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
   process.exit(2);
 }
-await delay(100);
+await delay(20);
 process.kill(process.pid, "SIGTERM");
 await promise;
 process.exit(7);
@@ -1016,7 +1000,7 @@ process.exit(7);
     });
 
     expect(row.status).toBe(0);
-    const log = await fs.readFile(row.logPath, "utf8");
+    const log = await fs.readFile(row.logPath!, "utf8");
     expect(log).toContain("x".repeat(12));
     expect(log).toContain("[stdout truncated after 12 bytes]");
   });
@@ -1048,7 +1032,7 @@ process.exit(7);
     expect(relayed).toContain("x".repeat(12));
     expect(relayed).not.toContain("x".repeat(32));
     expect(relayed).toContain("[stdout relay truncated after 12 bytes]");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("x".repeat(32));
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("x".repeat(32));
   });
 
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
@@ -1066,7 +1050,7 @@ process.exit(7);
           "const marker = process.argv[1];",
           "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
-          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 5);",
+          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 1);",
         ].join(""),
         markerPath,
       ],
@@ -1082,7 +1066,7 @@ process.exit(7);
     expect(row.wallMs).toBeLessThan(5_000);
     const afterReturn = await fs.readFile(markerPath, "utf8");
     await new Promise((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, 30);
     });
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
@@ -1369,8 +1353,17 @@ process.exit(7);
     expect(result.stdout).toContain("failures=0");
   });
 
-  it("probes plugin-owned slash help while the plugin is installed", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
+  it.each([
+    ["probes plugin-owned slash help while the plugin is installed", "default", [], 0],
+    ["skips plugin-owned slash help when requested", "skip", ["--skip-slash-help"], 0],
+    [
+      "rejects slash-only probes without the install lifecycle",
+      "slash-only",
+      ["--skip-lifecycle"],
+      1,
+    ],
+  ] as const)("%s", async (_title, mode, extraArgs, expectedStatus) => {
+    const outputDir = path.join(repoRoot, `artifacts-${mode}`);
     await writeManifest(
       "workboard",
       "openclaw.plugin.json",
@@ -1424,6 +1417,7 @@ process.exit(7);
         outputDir,
         "--skip-prebuild",
         "--skip-qa",
+        ...extraArgs,
         "--plugin",
         "workboard",
       ],
@@ -1433,95 +1427,49 @@ process.exit(7);
       },
     );
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(expectedStatus);
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
     );
-    expect(summary.failures).toEqual([]);
-    const slashHelpRow = summary.rows.find(
-      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
-    );
-    expect(summary.rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          label: "workboard-slash-help:workboard",
-          phase: "slash:help",
-          pluginId: "workboard",
-          status: 0,
-        }),
-      ]),
-    );
-    const slashHelpLogPath = slashHelpRow?.logPath;
-    expect(slashHelpLogPath).toEqual(expect.any(String));
-    await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
-      "Usage: openclaw workboard",
-    );
+    if (mode === "default") {
+      expect(summary.failures).toEqual([]);
+      const slashHelpRow = summary.rows.find(
+        (row: { label?: string; logPath?: string }) =>
+          row.label === "workboard-slash-help:workboard",
+      );
+      expect(summary.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            label: "workboard-slash-help:workboard",
+            phase: "slash:help",
+            pluginId: "workboard",
+            status: 0,
+          }),
+        ]),
+      );
+      const slashHelpLogPath = slashHelpRow?.logPath;
+      expect(slashHelpLogPath).toEqual(expect.any(String));
+      await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
+        "Usage: openclaw workboard",
+      );
+      return;
+    }
 
-    const skipOutputDir = path.join(repoRoot, "artifacts-skip");
-    const skipResult = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        skipOutputDir,
-        "--skip-prebuild",
-        "--skip-qa",
-        "--skip-slash-help",
-        "--plugin",
-        "workboard",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
+    if (mode === "skip") {
+      expect(summary.failures).toEqual([]);
+      expect(summary.rows).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "slash:help",
+            pluginId: "workboard",
+          }),
+        ]),
+      );
+      return;
+    }
 
-    expect(skipResult.status, skipResult.stderr).toBe(0);
-    const skipSummary = JSON.parse(
-      await fs.readFile(path.join(skipOutputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(skipSummary.failures).toEqual([]);
-    expect(skipSummary.rows).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          phase: "slash:help",
-          pluginId: "workboard",
-        }),
-      ]),
-    );
-
-    const slashOnlyOutputDir = path.join(repoRoot, "artifacts-slash-only");
-    const slashOnlyResult = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        slashOnlyOutputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-qa",
-        "--plugin",
-        "workboard",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(slashOnlyResult.status, slashOnlyResult.stderr).toBe(1);
-    const slashOnlySummary = JSON.parse(
-      await fs.readFile(
-        path.join(slashOnlyOutputDir, "plugin-gateway-gauntlet-summary.json"),
-        "utf8",
-      ),
-    );
-    expect(slashOnlySummary.guardFailures).toEqual([]);
-    expect(slashOnlySummary.failures).toEqual([
+    expect(summary.guardFailures).toEqual([]);
+    expect(summary.failures).toEqual([
       expect.objectContaining({
         label: "workboard-slash-workboard",
         phase: "slash:help",
@@ -1585,7 +1533,7 @@ process.exit(7);
     expect(result.status, result.stderr).toBe(0);
     await expect(
       fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "env.txt"), "utf8"),
-    ).resolves.toBe("alpha,beta,qa-channel,qa-lab,qa-matrix");
+    ).resolves.toBe("alpha,beta,qa-channel,qa-lab");
     await expect(
       fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "args.txt"), "utf8"),
     ).resolves.toContain(["--enable-plugin", "beta", "--enable-plugin", "alpha"].join("\n"));

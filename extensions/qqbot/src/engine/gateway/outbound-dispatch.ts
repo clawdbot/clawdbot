@@ -10,9 +10,13 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
 import {
   parseAndSendMediaTags,
@@ -82,10 +86,9 @@ function shouldDeliverToolProgressImmediately(
   if (useOfficialC2cStream) {
     return true;
   }
+  // Absent streaming keeps tool progress buffered; a configured object opts in
+  // unless mode is "off". Legacy scalar spellings are doctor-migrated.
   const streaming = account.config?.streaming;
-  if (streaming === true) {
-    return true;
-  }
   return typeof streaming === "object" && streaming !== null && streaming.mode !== "off";
 }
 
@@ -117,6 +120,10 @@ function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
   return !hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
 }
 
+function isMediaOnlyBlockReply(payload: ReplyDeliverPayload): boolean {
+  return hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
+}
+
 // ============ dispatchOutbound ============
 
 /**
@@ -132,6 +139,12 @@ export async function dispatchOutbound(
   const { runtime, cfg, account, log } = deps;
   const { event, qualifiedTarget } = inbound;
 
+  const openClawCfg = cfg as OpenClawConfig;
+  const routeAgentId = inbound.route.agentId ?? resolveDefaultAgentId(openClawCfg);
+  const workspaceDir = resolveAgentWorkspaceDir(openClawCfg, routeAgentId);
+  const gatewayMediaContext = workspaceDir
+    ? { mediaAccess: { workspaceDir }, mediaLocalRoots: [workspaceDir] }
+    : {};
   const replyTarget = {
     type: event.type,
     senderId: event.senderId,
@@ -140,7 +153,7 @@ export async function dispatchOutbound(
     guildId: event.guildId,
     groupOpenid: event.groupOpenid,
   };
-  const replyCtx = { target: replyTarget, account, cfg, log };
+  const replyCtx = { target: replyTarget, account, cfg, log, ...gatewayMediaContext };
 
   const sendWithRetry = <T>(sendFn: (token: string) => Promise<T>) =>
     sendWithTokenRetry(account.appId, account.clientSecret, sendFn, log, account.accountId);
@@ -192,6 +205,7 @@ export async function dispatchOutbound(
           accountId: account.accountId,
           replyToId: event.messageId,
           account,
+          ...gatewayMediaContext,
         }).then((r) => {
           if (ac.signal.aborted) {
             return { channel: "qqbot", error: "suppressed" } as OutboundResult;
@@ -225,10 +239,9 @@ export async function dispatchOutbound(
           thrownError: "Tool fallback failed",
         });
       }
-      return;
     }
     if (toolTexts.length > 0) {
-      await sendErrorMessage(toolTexts.slice(-3).join("\n---\n").slice(0, 2000));
+      await sendErrorMessage(truncateUtf16Safe(toolTexts.slice(-3).join("\n---\n"), 2000));
     }
   };
 
@@ -270,10 +283,11 @@ export async function dispatchOutbound(
   // a longer configured ceiling (e.g. slow local ollama models) is not
   // silently undercut by a plugin-local 5-minute cap.
   const responseTimeoutMs = resolveResponseTimeoutMs(cfg);
+  const responseTimeoutError = new Error("Response timeout");
   const timeoutPromise = new Promise<void>((_, reject) => {
     timeoutId = setTimeout(() => {
       if (!hasResponse) {
-        reject(new Error("Response timeout"));
+        reject(responseTimeoutError);
       }
     }, responseTimeoutMs);
   });
@@ -355,7 +369,7 @@ export async function dispatchOutbound(
             groupOpenid: event.groupOpenid,
             msgIdx: event.msgIdx,
           },
-          { account, qualifiedTarget, log },
+          { account, qualifiedTarget, log, ...gatewayMediaContext },
           sendWithRetry,
           () => undefined,
           deliverDeps,
@@ -372,10 +386,7 @@ export async function dispatchOutbound(
     });
 
   // ---- Dispatch ----
-  const messagesConfig = runtime.channel.reply.resolveEffectiveMessagesConfig(
-    cfg,
-    inbound.route.agentId,
-  );
+  const messagesConfig = runtime.channel.reply.resolveEffectiveMessagesConfig(cfg, routeAgentId);
 
   const targetType =
     event.type === "c2c"
@@ -407,15 +418,11 @@ export async function dispatchOutbound(
           channelId: event.channelId,
         },
         log,
+        ...gatewayMediaContext,
       },
     });
   }
 
-  const cfgWithSession = cfg as { session?: { store?: unknown } };
-  const agentId = inbound.route.agentId ?? "default";
-  const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
-    agentId,
-  });
   const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
     accountId: inbound.route.accountId,
@@ -429,281 +436,294 @@ export async function dispatchOutbound(
         raw: inbound,
       }),
       resolveTurn: () => ({
+        cfg: openClawCfg,
         channel: "qqbot",
         accountId: inbound.route.accountId,
-        routeSessionKey: inbound.route.sessionKey,
-        storePath,
+        route: {
+          agentId: routeAgentId,
+          dmScope: inbound.route.dmScope,
+          sessionKey: inbound.route.sessionKey,
+        },
         ctxPayload,
-        recordInboundSession: runtime.channel.session.recordInboundSession,
         record: {
           onRecordError: (err: unknown) => {
             log?.error(
               `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           },
+          ...(inbound.isGroupChat
+            ? {
+                updateLastRoute: {
+                  sessionKey: inbound.route.sessionKey,
+                  channel: "qqbot",
+                  to: qualifiedTarget,
+                  accountId: inbound.route.accountId,
+                },
+              }
+            : {}),
         },
-        runDispatch: () =>
-          runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: ctxPayload,
-            cfg,
-            dispatcherOptions: {
-              responsePrefix: messagesConfig.responsePrefix,
-              deliver: async (payload: ReplyDeliverPayload, info: { kind: string }) => {
-                hasResponse = true;
+        dispatcherOptions: {
+          responsePrefix: messagesConfig.responsePrefix,
+          onSkip: (
+            _payload: ReplyDeliverPayload,
+            info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+          ) => {
+            if (
+              !streamingController &&
+              (info.kind === "block" || info.kind === "final") &&
+              (info.reason === "silent" || info.reason === "empty")
+            ) {
+              skippedSilentBlockResponse = true;
+            }
+          },
+          onFreshSettledDelivery: async () => {
+            if (skippedSilentBlockResponse && !hasVisibleBlockResponse) {
+              markBlockResponse();
+              if (await flushPendingToolDeliveriesOnce()) {
+                return { visibleReplySent: true };
+              }
+            }
+            return undefined;
+          },
+        },
+        delivery: {
+          deliver: async (payload: ReplyDeliverPayload, info: { kind: string }) => {
+            hasResponse = true;
 
-                // ---- Tool deliver ----
-                if (info.kind === "tool") {
-                  toolDeliverCount++;
-                  const toolText = (payload.text ?? "").trim();
-                  const textOnlyProgress = immediateToolProgressText(payload);
-                  if (!hasBlockResponse && deliverToolProgressImmediately && textOnlyProgress) {
-                    if (toolOnlyTimeoutId || hasPendingToolFallbackPayload()) {
-                      renewToolOnlyFallback();
-                    }
-                    await sendTextOnlyReply(
-                      textOnlyProgress,
-                      {
-                        type: event.type,
-                        senderId: event.senderId,
-                        messageId: event.messageId,
-                        channelId: event.channelId,
-                        groupOpenid: event.groupOpenid,
-                        msgIdx: event.msgIdx,
-                      },
-                      { account, qualifiedTarget, log },
-                      sendWithRetry,
-                      () => undefined,
-                      deliverDeps,
-                    );
-                    recordOutbound();
-                    return;
-                  }
-                  if (toolText) {
-                    toolTexts.push(toolText);
-                  }
-                  if (payload.mediaUrls?.length) {
-                    toolMediaUrls.push(...payload.mediaUrls);
-                  }
-                  if (payload.mediaUrl && !toolMediaUrls.includes(payload.mediaUrl)) {
-                    toolMediaUrls.push(payload.mediaUrl);
-                  }
-
-                  if (hasBlockResponse && toolMediaUrls.length > 0) {
-                    const urlsToSend = [...toolMediaUrls];
-                    toolMediaUrls.length = 0;
-                    for (const mediaUrl of urlsToSend) {
-                      try {
-                        await sendMedia({
-                          to: qualifiedTarget,
-                          text: "",
-                          mediaUrl,
-                          accountId: account.accountId,
-                          replyToId: event.messageId,
-                          account,
-                        });
-                      } catch {}
-                    }
-                    return;
-                  }
-                  if (toolFallbackSent) {
-                    return;
-                  }
+            if (info.kind === "tool") {
+              toolDeliverCount++;
+              const toolText = (payload.text ?? "").trim();
+              const textOnlyProgress = immediateToolProgressText(payload);
+              if (!hasBlockResponse && deliverToolProgressImmediately && textOnlyProgress) {
+                if (toolOnlyTimeoutId || hasPendingToolFallbackPayload()) {
                   renewToolOnlyFallback();
-                  return;
                 }
-
-                // ---- Block deliver ----
-                markBlockResponse();
-
-                if (!streamingController && isSilentBlockReply(payload)) {
-                  if (!(await flushPendingToolDeliveriesOnce()) && event.type === "group") {
-                    log?.info(
-                      `Model decided to skip group message (${(payload.text ?? "").trim() || "empty reply"}) from ${event.senderId}`,
-                    );
-                  }
-                  return;
-                }
-                hasVisibleBlockResponse = true;
-
-                if (streamingController && !streamingController.isTerminalPhase) {
-                  try {
-                    await streamingController.onDeliver(payload);
-                  } catch (err) {
-                    log?.error(
-                      `Streaming deliver error: ${err instanceof Error ? err.message : String(err)}`,
-                    );
-                  }
-
-                  const replyPreview = (payload.text ?? "").trim();
-                  if (
-                    event.type === "group" &&
-                    (replyPreview === "NO_REPLY" || replyPreview === "[SKIP]")
-                  ) {
-                    log?.info(
-                      `Model decided to skip group message (${replyPreview}) from ${event.senderId}`,
-                    );
-                    return;
-                  }
-
-                  if (streamingController.shouldFallbackToStatic) {
-                    log?.info("Streaming API unavailable, falling back to static for this deliver");
-                  } else {
-                    recordOutbound();
-                    return;
-                  }
-                }
-
-                const quoteRef = event.msgIdx;
-                let quoteRefUsed = false;
-                const consumeQuoteRef = (): string | undefined => {
-                  if (quoteRef && !quoteRefUsed) {
-                    quoteRefUsed = true;
-                    return quoteRef;
-                  }
-                  return undefined;
-                };
-
-                let replyText = blockReplyTextForDelivery(payload);
-                const deliverEvent = {
-                  type: event.type,
-                  senderId: event.senderId,
-                  messageId: event.messageId,
-                  channelId: event.channelId,
-                  groupOpenid: event.groupOpenid,
-                  msgIdx: event.msgIdx,
-                };
-                const deliverActx = { account, qualifiedTarget, log };
-
-                // 1. Media tags
-                const mediaResult = await parseAndSendMediaTags(
-                  replyText,
-                  deliverEvent,
-                  deliverActx,
+                await sendTextOnlyReply(
+                  textOnlyProgress,
+                  {
+                    type: event.type,
+                    senderId: event.senderId,
+                    messageId: event.messageId,
+                    channelId: event.channelId,
+                    groupOpenid: event.groupOpenid,
+                    msgIdx: event.msgIdx,
+                  },
+                  { account, qualifiedTarget, log, ...gatewayMediaContext },
                   sendWithRetry,
-                  consumeQuoteRef,
-                  deliverDeps,
-                );
-                if (mediaResult.handled) {
-                  recordOutbound();
-                  return;
-                }
-                replyText = mediaResult.normalizedText;
-
-                // 2. Structured payload (QQBOT_PAYLOAD:)
-                const handled = await handleStructuredPayload(
-                  replyCtx,
-                  replyText,
-                  recordOutbound,
-                  replyDeps,
-                );
-                if (handled) {
-                  return;
-                }
-
-                // 3. Voice-intent plain text
-                if (
-                  payload.audioAsVoice === true &&
-                  !payload.mediaUrl &&
-                  !payload.mediaUrls?.length
-                ) {
-                  const sentVoice = await sendTextAsVoiceReply(replyCtx, replyText, replyDeps);
-                  if (sentVoice) {
-                    recordOutbound();
-                    return;
-                  }
-                }
-
-                // 4. Plain text + images/media
-                await sendPlainReply(
-                  payload,
-                  replyText,
-                  deliverEvent,
-                  deliverActx,
-                  sendWithRetry,
-                  consumeQuoteRef,
-                  toolMediaUrls,
+                  () => undefined,
                   deliverDeps,
                 );
                 recordOutbound();
-              },
-              onError: async (err: unknown) => {
-                if (streamingController && !streamingController.isTerminalPhase) {
+                return;
+              }
+              if (toolText) {
+                toolTexts.push(toolText);
+              }
+              if (payload.mediaUrls?.length) {
+                toolMediaUrls.push(...payload.mediaUrls);
+              }
+              if (payload.mediaUrl && !toolMediaUrls.includes(payload.mediaUrl)) {
+                toolMediaUrls.push(payload.mediaUrl);
+              }
+
+              if (hasBlockResponse && toolMediaUrls.length > 0) {
+                const urlsToSend = [...toolMediaUrls];
+                toolMediaUrls.length = 0;
+                for (const mediaUrl of urlsToSend) {
                   try {
-                    await streamingController.onError(err);
-                  } catch (streamErr) {
-                    const streamErrMsg =
-                      streamErr instanceof Error ? streamErr.message : String(streamErr);
-                    log?.error(`Streaming onError failed: ${streamErrMsg}`);
-                  }
-                  if (!streamingController.shouldFallbackToStatic) {
-                    return;
-                  }
+                    await sendMedia({
+                      to: qualifiedTarget,
+                      text: "",
+                      mediaUrl,
+                      accountId: account.accountId,
+                      replyToId: event.messageId,
+                      account,
+                      ...gatewayMediaContext,
+                    });
+                  } catch {}
                 }
-                const errMsg = err instanceof Error ? err.message : String(err);
-                log?.error(`Dispatch error: ${errMsg}`);
-                hasResponse = true;
-                if (timeoutId) {
-                  clearTimeout(timeoutId);
-                  timeoutId = null;
-                }
-              },
-              onSkip: (
-                _payload: ReplyDeliverPayload,
-                info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
-              ) => {
-                if (
-                  !streamingController &&
-                  (info.kind === "block" || info.kind === "final") &&
-                  (info.reason === "silent" || info.reason === "empty")
-                ) {
-                  skippedSilentBlockResponse = true;
-                }
-              },
-              onFreshSettledDelivery: async () => {
-                if (skippedSilentBlockResponse && !hasVisibleBlockResponse) {
-                  markBlockResponse();
-                  if (await flushPendingToolDeliveriesOnce()) {
-                    return { visibleReplySent: true };
+                return;
+              }
+              if (toolFallbackSent) {
+                return;
+              }
+              renewToolOnlyFallback();
+              return;
+            }
+
+            markBlockResponse();
+
+            if (!streamingController && isSilentBlockReply(payload)) {
+              if (!(await flushPendingToolDeliveriesOnce()) && event.type === "group") {
+                log?.info(
+                  `Model decided to skip group message (${(payload.text ?? "").trim() || "empty reply"}) from ${event.senderId}`,
+                );
+              }
+              return;
+            }
+            hasVisibleBlockResponse = true;
+
+            if (
+              streamingController &&
+              !streamingController.isTerminalPhase &&
+              !isMediaOnlyBlockReply(payload)
+            ) {
+              try {
+                await streamingController.onDeliver(payload);
+              } catch (err) {
+                log?.error(
+                  `Streaming deliver error: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+
+              const replyPreview = (payload.text ?? "").trim();
+              if (
+                event.type === "group" &&
+                (replyPreview === "NO_REPLY" || replyPreview === "[SKIP]")
+              ) {
+                log?.info(
+                  `Model decided to skip group message (${replyPreview}) from ${event.senderId}`,
+                );
+                return;
+              }
+
+              if (streamingController.shouldFallbackToStatic) {
+                log?.info("Streaming API unavailable, falling back to static for this deliver");
+              } else {
+                recordOutbound();
+                return;
+              }
+            }
+
+            const quoteRef = event.msgIdx;
+            let quoteRefUsed = false;
+            const consumeQuoteRef = (): string | undefined => {
+              if (quoteRef && !quoteRefUsed) {
+                quoteRefUsed = true;
+                return quoteRef;
+              }
+              return undefined;
+            };
+
+            let replyText = blockReplyTextForDelivery(payload);
+            const deliverEvent = {
+              type: event.type,
+              senderId: event.senderId,
+              messageId: event.messageId,
+              channelId: event.channelId,
+              groupOpenid: event.groupOpenid,
+              msgIdx: event.msgIdx,
+            };
+            const deliverActx = { account, qualifiedTarget, log, ...gatewayMediaContext };
+
+            // 1. Media tags
+            const mediaResult = await parseAndSendMediaTags(
+              replyText,
+              deliverEvent,
+              deliverActx,
+              sendWithRetry,
+              consumeQuoteRef,
+              deliverDeps,
+            );
+            if (mediaResult.handled) {
+              recordOutbound();
+              return;
+            }
+            replyText = mediaResult.normalizedText;
+
+            // 2. Structured payload (QQBOT_PAYLOAD:)
+            const handled = await handleStructuredPayload(
+              replyCtx,
+              replyText,
+              recordOutbound,
+              replyDeps,
+            );
+            if (handled) {
+              return;
+            }
+
+            // 3. Voice-intent plain text
+            if (payload.audioAsVoice === true && !payload.mediaUrl && !payload.mediaUrls?.length) {
+              const sentVoice = await sendTextAsVoiceReply(replyCtx, replyText, replyDeps);
+              if (sentVoice) {
+                recordOutbound();
+                return;
+              }
+            }
+
+            // 4. Plain text + images/media
+            await sendPlainReply(
+              payload,
+              replyText,
+              deliverEvent,
+              deliverActx,
+              sendWithRetry,
+              consumeQuoteRef,
+              toolMediaUrls,
+              deliverDeps,
+            );
+            recordOutbound();
+          },
+          onError: async (err: unknown) => {
+            if (streamingController && !streamingController.isTerminalPhase) {
+              try {
+                await streamingController.onError(err);
+              } catch (streamErr) {
+                const streamErrMsg =
+                  streamErr instanceof Error ? streamErr.message : String(streamErr);
+                log?.error(`Streaming onError failed: ${streamErrMsg}`);
+              }
+              if (!streamingController.shouldFallbackToStatic) {
+                return;
+              }
+            }
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log?.error(`Dispatch error: ${errMsg}`);
+            hasResponse = true;
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
+          },
+        },
+        replyOptions: {
+          ...(event.turnAdoptionLifecycle
+            ? bindIngressLifecycleToReplyOptions(event.turnAdoptionLifecycle)
+            : {}),
+          disableBlockStreaming: useOfficialC2cStream
+            ? true
+            : account.config?.streaming?.mode === "off",
+          ...(streamingController
+            ? {
+                onPartialReply: async (payload: { text?: string }) => {
+                  try {
+                    await streamingController.onPartialReply(payload);
+                  } catch (partialErr) {
+                    log?.error(
+                      `Streaming onPartialReply error: ${partialErr instanceof Error ? partialErr.message : String(partialErr)}`,
+                    );
                   }
-                }
-                return undefined;
-              },
-            },
-            replyOptions: {
-              disableBlockStreaming: useOfficialC2cStream
-                ? true
-                : (() => {
-                    const s = account.config?.streaming;
-                    if (s === false) {
-                      return true;
-                    }
-                    return typeof s === "object" && s !== null && s.mode === "off";
-                  })(),
-              ...(streamingController
-                ? {
-                    onPartialReply: async (payload: { text?: string }) => {
-                      try {
-                        await streamingController.onPartialReply(payload);
-                      } catch (partialErr) {
-                        log?.error(
-                          `Streaming onPartialReply error: ${partialErr instanceof Error ? partialErr.message : String(partialErr)}`,
-                        );
-                      }
-                    },
-                  }
-                : {}),
-            },
-          }),
+                },
+              }
+            : {}),
+        },
       }),
     },
   });
 
   try {
     await Promise.race([dispatchPromise, timeoutPromise]);
-  } catch {
+  } catch (error) {
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
+    }
+    if (error === responseTimeoutError && event.turnAdoptionLifecycle) {
+      // The watchdog cannot cancel a live agent turn. Keep durable settlement with that turn;
+      // releasing here would let a retry overlap its later replies and adoption callback.
+      await dispatchPromise;
+    } else if (event.turnAdoptionLifecycle) {
+      throw error;
     }
   } finally {
     if (timeoutId) {
@@ -763,9 +783,17 @@ async function buildCtxPayload(
 ): Promise<FinalizedMsgContext> {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
-  const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
+  // QQ inbound attachments are images only; remote URLs carry no MIME, so the
+  // explicit kind keeps image/vision gates from classifying them as generic files.
+  const imageMedia = [
+    ...inbound.localMediaPaths.map((path, index) => ({
+      path,
+      contentType: inbound.localMediaTypes[index],
+      kind: "image" as const,
+    })),
+    ...inbound.remoteMediaUrls.map((url) => ({ url, kind: "image" as const })),
+  ];
   return buildChannelInboundEventContext({
-    finalize: runtime.channel.reply.finalizeInboundContext,
     channel: "qqbot",
     accountId: inbound.route.accountId,
     messageId: event.messageId,
@@ -780,7 +808,8 @@ async function buildCtxPayload(
       id: inbound.peerId,
     },
     route: {
-      agentId: inbound.route.agentId ?? "main",
+      agentId: inbound.route.agentId ?? resolveDefaultAgentId(cfg as OpenClawConfig),
+      dmScope: inbound.route.dmScope,
       routeSessionKey: inbound.route.sessionKey,
       accountId: inbound.route.accountId,
     },
@@ -805,9 +834,10 @@ async function buildCtxPayload(
           authorized: inbound.commandAuthorized,
         }
       : undefined,
-    media: hasImageMedia
-      ? undefined
-      : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
+    media:
+      imageMedia.length > 0
+        ? imageMedia
+        : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
     supplemental: {
       quote: inbound.replyTo
         ? {
@@ -830,17 +860,7 @@ async function buildCtxPayload(
       QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
       QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
       ...(commandSource ? { CommandSource: commandSource } : {}),
-      ...(inbound.localMediaPaths.length > 0
-        ? {
-            MediaPaths: inbound.localMediaPaths,
-            MediaPath: inbound.localMediaPaths[0],
-            MediaTypes: inbound.localMediaTypes,
-            MediaType: inbound.localMediaTypes[0],
-          }
-        : {}),
-      ...(inbound.remoteMediaUrls.length > 0
-        ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
-        : {}),
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

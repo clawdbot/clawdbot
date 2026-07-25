@@ -11,20 +11,37 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
+      fetchWithSsrFGuardMock(...args);
+      return actual.fetchWithSsrFGuard(...args);
+    },
+  };
+});
+
 vi.mock("node-edge-tts", () => ({
   EdgeTTS: class {
     async ttsPromise(): Promise<void> {}
   },
 }));
 
-import {
-  buildMicrosoftSpeechProvider,
-  isCjkDominant,
-  listMicrosoftVoices,
-} from "./speech-provider.js";
+import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 import * as ttsModule from "./tts.js";
 
 const TEST_CFG = {} as OpenClawConfig;
+
+async function listVoicesThroughProvider() {
+  const listVoices = buildMicrosoftSpeechProvider().listVoices;
+  if (!listVoices) {
+    throw new Error("expected Microsoft voice listing support");
+  }
+  return await listVoices({ providerConfig: {} });
+}
 
 function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
   config?: unknown;
@@ -70,9 +87,58 @@ describe("listMicrosoftVoices", () => {
       ),
     ) as unknown as typeof globalThis.fetch;
 
-    const voices = await listMicrosoftVoices();
+    const voices = await listVoicesThroughProvider();
 
     expect(voices).toEqual([
+      {
+        id: "en-US-AvaNeural",
+        name: "Microsoft Ava Online (Natural) - English (United States)",
+        category: "General",
+        description: "Friendly, Positive",
+        locale: "en-US",
+        gender: "Female",
+        personalities: ["Friendly", "Positive"],
+      },
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+  });
+
+  it("returns an empty catalog for a malformed top-level payload", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response("null", { status: 200 }),
+      ) as unknown as typeof globalThis.fetch;
+
+    await expect(listVoicesThroughProvider()).resolves.toEqual([]);
+  });
+
+  it("skips malformed rows without discarding valid voices", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          null,
+          "unexpected",
+          [],
+          { ShortName: 42 },
+          {
+            ShortName: "en-US-AvaNeural",
+            FriendlyName: "Microsoft Ava Online (Natural) - English (United States)",
+            Locale: "en-US",
+            Gender: "Female",
+            VoiceTag: {
+              ContentCategories: [null, "General"],
+              VoicePersonalities: [false, "Friendly", "Positive"],
+            },
+          },
+        ]),
+        { status: 200 },
+      ),
+    ) as unknown as typeof globalThis.fetch;
+
+    await expect(listVoicesThroughProvider()).resolves.toEqual([
       {
         id: "en-US-AvaNeural",
         name: "Microsoft Ava Online (Natural) - English (United States)",
@@ -92,7 +158,23 @@ describe("listMicrosoftVoices", () => {
         new Response("nope", { status: 503 }),
       ) as unknown as typeof globalThis.fetch;
 
-    await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
+    await expect(listVoicesThroughProvider()).rejects.toThrow("Microsoft voices API error (503)");
+  });
+
+  it("prefers the configured provider request timeout", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response("[]", { status: 200 })) as unknown as typeof globalThis.fetch;
+    const listVoices = buildMicrosoftSpeechProvider().listVoices;
+    if (!listVoices) {
+      throw new Error("expected Microsoft voice listing support");
+    }
+
+    await listVoices({ providerConfig: { timeoutMs: 2_345 }, timeoutMs: 1_234 });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 2_345 }),
+    );
   });
 
   it("records voice discovery exchanges in debug proxy capture mode", async () => {
@@ -117,7 +199,7 @@ describe("listMicrosoftVoices", () => {
       sourceProcess: "openclaw",
     });
 
-    await listMicrosoftVoices();
+    await listVoicesThroughProvider();
 
     await vi.waitFor(() => {
       const events = store.getSessionEvents("ms-voices-session", 10);
@@ -156,7 +238,7 @@ describe("listMicrosoftVoices", () => {
     initializeDebugProxyCapture("test");
 
     try {
-      await listMicrosoftVoices();
+      await listVoicesThroughProvider();
 
       let events: Array<Record<string, unknown>> = [];
       await vi.waitFor(() => {
@@ -171,28 +253,6 @@ describe("listMicrosoftVoices", () => {
       globalThis.fetch = proxyReset.originalFetch;
       finalizeDebugProxyCapture();
     }
-  });
-});
-
-describe("isCjkDominant", () => {
-  it("returns true for Chinese text", () => {
-    expect(isCjkDominant("你好世界")).toBe(true);
-  });
-
-  it("returns true for mixed text with majority CJK", () => {
-    expect(isCjkDominant("你好，这是一个测试 hello")).toBe(true);
-  });
-
-  it("returns false for English text", () => {
-    expect(isCjkDominant("Hello, this is a test")).toBe(false);
-  });
-
-  it("returns false for empty string", () => {
-    expect(isCjkDominant("")).toBe(false);
-  });
-
-  it("returns false for mostly English with a few CJK chars", () => {
-    expect(isCjkDominant("This is a long English sentence with one 字")).toBe(false);
   });
 });
 

@@ -73,4 +73,19 @@ describe("callGatewayFromCliRuntime", () => {
       }),
     );
   });
+
+  it("forwards caller cancellation to the gateway call", async () => {
+    const controller = new AbortController();
+
+    await callGatewayFromCliRuntime("logs.tail", {}, undefined, {
+      signal: controller.signal,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "logs.tail",
+        signal: controller.signal,
+      }),
+    );
+  });
 });

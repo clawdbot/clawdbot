@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -78,14 +78,6 @@ export function resolveReservedTargetLiteral(params: {
   return reserved.has(normalized) ? normalized : undefined;
 }
 
-function resetTargetNormalizerCacheForTests(): void {
-  targetNormalizerCacheByChannelId.clear();
-}
-
-export const testing = {
-  resetTargetNormalizerCacheForTests,
-} as const;
-
 function resolveTargetNormalizer(
   channelId: ChannelId,
   preparedPlugin?: ChannelPlugin,
@@ -142,12 +134,12 @@ export function normalizeTargetForProvider(
 /**
  * Directory target kinds accepted by plugin-backed target resolution.
  */
-export type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
+type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 
 /**
  * Resolved outbound target returned by a channel plugin target resolver.
  */
-export type ResolvedPluginMessagingTarget = {
+type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
   display?: string;
@@ -288,4 +280,3 @@ function hashSignature(value: string): string {
   }
   return (hash >>> 0).toString(36);
 }
-export { testing as __testing };

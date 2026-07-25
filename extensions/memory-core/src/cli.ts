@@ -1,5 +1,6 @@
 // Memory Core plugin module implements cli behavior.
 import type { Command } from "commander";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   formatDocsLink,
   formatHelpExamples,
@@ -17,59 +18,67 @@ import type {
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
 } from "./short-term-promotion.js";
 
-type MemoryCliRuntime = typeof import("./cli.runtime.js");
-
-let memoryCliRuntimePromise: Promise<MemoryCliRuntime> | null = null;
-
-async function loadMemoryCliRuntime(): Promise<MemoryCliRuntime> {
-  memoryCliRuntimePromise ??= import("./cli.runtime.js");
-  return await memoryCliRuntimePromise;
-}
+const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
-export async function runMemoryStatus(opts: MemoryCommandOptions) {
+async function runMemoryStatus(opts: MemoryCommandOptions, hostOptions?: MemoryCoreRuntimeHost) {
   const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryStatus(opts);
+  await runtime.runMemoryStatus(opts, hostOptions);
 }
 
-async function runMemoryIndex(opts: MemoryCommandOptions) {
+async function runMemoryIndex(opts: MemoryCommandOptions, hostOptions?: MemoryCoreRuntimeHost) {
   const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryIndex(opts);
+  await runtime.runMemoryIndex(opts, hostOptions);
 }
 
-async function runMemorySearch(queryArg: string | undefined, opts: MemorySearchCommandOptions) {
+async function runMemorySearch(
+  queryArg: string | undefined,
+  opts: MemorySearchCommandOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
   const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemorySearch(queryArg, opts);
+  await runtime.runMemorySearch(queryArg, opts, hostOptions);
 }
 
-async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
+async function runMemoryPromote(
+  opts: MemoryPromoteCommandOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
   const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryPromote(opts);
+  await runtime.runMemoryPromote(opts, hostOptions);
 }
 
 async function runMemoryPromoteExplain(
   selectorArg: string | undefined,
   opts: MemoryPromoteExplainOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
 ) {
   const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryPromoteExplain(selectorArg, opts);
+  await runtime.runMemoryPromoteExplain(selectorArg, opts, hostOptions);
 }
 
-async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
+async function runMemoryRemHarness(
+  opts: MemoryRemHarnessOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
   const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryRemHarness(opts);
+  await runtime.runMemoryRemHarness(opts, hostOptions);
 }
 
-async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
+async function runMemoryRemBackfill(
+  opts: MemoryRemBackfillOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
   const runtime = await loadMemoryCliRuntime();
-  await runtime.runMemoryRemBackfill(opts);
+  await runtime.runMemoryRemBackfill(opts, hostOptions);
 }
 
 function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
@@ -106,7 +115,7 @@ function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): nu
   return parsed;
 }
 
-export function registerMemoryCli(program: Command) {
+export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRuntimeHost) {
   const memory = program
     .command("memory")
     .description("Search, inspect, and reindex memory files")
@@ -164,7 +173,7 @@ export function registerMemoryCli(program: Command) {
     .option("--fix", "Repair stale recall locks and normalize promotion metadata")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
-      await runMemoryStatus(opts);
+      await runMemoryStatus(opts, hostOptions);
     });
 
   memory
@@ -174,7 +183,7 @@ export function registerMemoryCli(program: Command) {
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
-      await runMemoryIndex(opts);
+      await runMemoryIndex(opts, hostOptions);
     });
 
   memory
@@ -191,7 +200,7 @@ export function registerMemoryCli(program: Command) {
     )
     .option("--json", "Print JSON")
     .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
-      await runMemorySearch(queryArg, opts);
+      await runMemorySearch(queryArg, opts, hostOptions);
     });
 
   memory
@@ -220,7 +229,7 @@ export function registerMemoryCli(program: Command) {
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryPromoteCommandOptions) => {
-      await runMemoryPromote(opts);
+      await runMemoryPromote(opts, hostOptions);
     });
 
   memory
@@ -231,7 +240,7 @@ export function registerMemoryCli(program: Command) {
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (selectorArg: string | undefined, opts: MemoryPromoteExplainOptions) => {
-      await runMemoryPromoteExplain(selectorArg, opts);
+      await runMemoryPromoteExplain(selectorArg, opts, hostOptions);
     });
 
   memory
@@ -243,7 +252,7 @@ export function registerMemoryCli(program: Command) {
     .option("--include-promoted", "Include already promoted deep candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemHarnessOptions) => {
-      await runMemoryRemHarness(opts);
+      await runMemoryRemHarness(opts, hostOptions);
     });
 
   memory
@@ -264,7 +273,7 @@ export function registerMemoryCli(program: Command) {
     )
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
-      await runMemoryRemBackfill(opts);
+      await runMemoryRemBackfill(opts, hostOptions);
     });
 
   memory.action(() => {

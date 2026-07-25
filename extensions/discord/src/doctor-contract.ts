@@ -8,11 +8,59 @@ import {
   isSupportedRealtimeVoiceActivationName,
   normalizeRealtimeVoiceActivationNamePrefix,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
+import {
+  asObjectRecord,
+  defineChannelAliasMigration,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelAccounts,
+  stripRetiredChannelKeys,
+} from "openclaw/plugin-sdk/runtime-doctor";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
+const RETIRED_TUNING_KEYS = new Set([
+  "gatewayInfoTimeoutMs",
+  "gatewayReadyTimeoutMs",
+  "gatewayRuntimeReadyTimeoutMs",
+  "eventQueue",
+  "retry",
+]);
 type AgentBindingConfig = NonNullable<OpenClawConfig["bindings"]>[number];
+
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "discord",
+  streaming: {
+    // Runtime mode resolution dropped legacy streamMode reads; the doctor
+    // resolver keeps them so migration preserves configured intent.
+    defaultMode: "off",
+    // Discord previews default to progress only while `streaming` is absent;
+    // any present object (even without mode) resolves off, so migration pins
+    // progress when delivery-only aliases create the object with no root
+    // streaming object to inherit from.
+    absentObjectDefault: "progress",
+    includePreviewChunk: true,
+  },
+  // Discord's account merge replaces the root streaming object wholesale
+  // (`streaming` not in mergeDiscordAccountConfig nestedObjectKeys), so doctor
+  // must seed materialized account objects with the inherited root settings.
+  accountStreamingReplacesRoot: true,
+  dm: { root: true, accounts: true },
+  normalizeAccountExtra: ({ account, pathPrefix, changes }) => {
+    const accountVoice = asObjectRecord(account.voice);
+    if (
+      !accountVoice ||
+      !migrateLegacyTtsConfig(asObjectRecord(accountVoice.tts), `${pathPrefix}.voice.tts`, changes)
+    ) {
+      return { entry: account, changed: false };
+    }
+    return {
+      entry: {
+        ...account,
+        voice: accountVoice,
+      },
+      changed: true,
+    };
+  },
+});
 
 function hasLegacyTtsProviderKeys(value: unknown): boolean {
   const tts = asObjectRecord(value);
@@ -20,18 +68,6 @@ function hasLegacyTtsProviderKeys(value: unknown): boolean {
     return false;
   }
   return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.hasOwn(tts, key));
-}
-
-function hasLegacyDiscordAccountTtsProviderKeys(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((accountValue) => {
-    const account = asObjectRecord(accountValue);
-    const voice = asObjectRecord(account?.voice);
-    return hasLegacyTtsProviderKeys(voice?.tts);
-  });
 }
 
 function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
@@ -66,22 +102,6 @@ function hasLegacyDiscordGuildChannelAgentId(value: unknown): boolean {
   });
 }
 
-function hasLegacyDiscordAccountGuildChannelAllowAlias(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAllowAlias(account));
-}
-
-function hasLegacyDiscordAccountGuildChannelAgentId(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAgentId(account));
-}
-
 function hasUnsupportedRealtimeWakeNamesInVoice(value: unknown): boolean {
   const voice = asObjectRecord(value);
   const realtime = asObjectRecord(voice?.realtime);
@@ -101,14 +121,6 @@ function hasUnsupportedDiscordRealtimeWakeNames(value: unknown): boolean {
     return false;
   }
   return hasUnsupportedRealtimeWakeNamesInVoice(entry.voice);
-}
-
-function hasUnsupportedDiscordAccountRealtimeWakeNames(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasUnsupportedDiscordRealtimeWakeNames(account));
 }
 
 function mergeMissing(target: Record<string, unknown>, source: Record<string, unknown>) {
@@ -428,7 +440,11 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       'channels.discord.accounts.<id>.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.accounts.<id>.voice.tts.providers.<provider>. Run "openclaw doctor --fix".',
-    match: hasLegacyDiscordAccountTtsProviderKeys,
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, (accountValue) => {
+        const account = asObjectRecord(accountValue);
+        return hasLegacyTtsProviderKeys(asObjectRecord(account?.voice)?.tts);
+      }),
   },
   {
     path: ["channels", "discord"],
@@ -440,7 +456,8 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacyDiscordAccountGuildChannelAllowAlias,
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, hasLegacyDiscordGuildChannelAllowAlias),
   },
   {
     path: ["channels", "discord"],
@@ -452,7 +469,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.agentId is legacy; use top-level bindings[] with match.accountId for per-channel Discord agent routing. Run "openclaw doctor --fix".',
-    match: hasLegacyDiscordAccountGuildChannelAgentId,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyDiscordGuildChannelAgentId),
   },
   {
     path: ["channels", "discord"],
@@ -464,8 +481,10 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       'channels.discord.accounts.<id>.voice.realtime.wakeNames entries longer than two words are unsupported; use one- or two-word activation names. Run "openclaw doctor --fix".',
-    match: hasUnsupportedDiscordAccountRealtimeWakeNames,
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, hasUnsupportedDiscordRealtimeWakeNames),
   },
+  ...streamingAliasMigration.legacyConfigRules,
 ];
 
 export function normalizeCompatibilityConfig({
@@ -473,49 +492,27 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.discord);
+  const changes: string[] = [];
+  const bindingsToAdd: AgentBindingConfig[] = [];
+
+  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const tuningKnobs = stripRetiredChannelKeys({
+    cfg: aliases.config,
+    channelId: "discord",
+    keys: RETIRED_TUNING_KEYS,
+    scope: "root-and-accounts",
+  });
+  const rawEntry = asObjectRecord(
+    (tuningKnobs.config.channels as Record<string, unknown> | undefined)?.discord,
+  );
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
-
-  const changes: string[] = [];
-  let updated;
-  let changed;
-  const bindingsToAdd: AgentBindingConfig[] = [];
-
-  const aliases = normalizeLegacyChannelAliases({
-    entry: rawEntry,
-    pathPrefix: "channels.discord",
-    changes,
-    normalizeDm: true,
-    normalizeAccountDm: true,
-    resolveStreamingOptions: (entry) => ({
-      resolvedMode: resolveDiscordPreviewStreamMode(entry),
-      includePreviewChunk: true,
-    }),
-    normalizeAccountExtra: ({ account, pathPrefix }) => {
-      const accountVoice = asObjectRecord(account.voice);
-      if (
-        !accountVoice ||
-        !migrateLegacyTtsConfig(
-          asObjectRecord(accountVoice.tts),
-          `${pathPrefix}.voice.tts`,
-          changes,
-        )
-      ) {
-        return { entry: account, changed: false };
-      }
-      return {
-        entry: {
-          ...account,
-          voice: accountVoice,
-        },
-        changed: true,
-      };
-    },
-  });
-  updated = aliases.entry;
-  changed = aliases.changed;
+  let updated = rawEntry;
+  let changed = tuningKnobs.config !== cfg;
+  if (tuningKnobs.changed) {
+    changes.push("Removed retired Discord tuning knobs.");
+  }
 
   const guildAliases = normalizeDiscordGuildChannelAllowAliases({
     entry: updated,
@@ -535,50 +532,37 @@ export function normalizeCompatibilityConfig({
   updated = channelAgentIds.entry;
   changed = changed || channelAgentIds.changed;
 
-  const accounts = asObjectRecord(updated.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = asObjectRecord(accountValue);
-      if (!account) {
-        continue;
-      }
-      const normalized = normalizeDiscordGuildChannelAllowAliases({
+  const accounts = normalizeChannelAccounts({
+    entry: updated,
+    pathPrefix: "channels.discord",
+    changes,
+    normalizeAccount: ({ account, accountId, pathPrefix, changes: accountChanges }) => {
+      const guilds = normalizeDiscordGuildChannelAllowAliases({
         entry: account,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
-        changes,
+        pathPrefix,
+        changes: accountChanges,
       });
-      let nextAccount = normalized.entry;
-      let accountChanged = normalized.changed;
-      const normalizedAgentIds = normalizeDiscordGuildChannelAgentIds({
+      const agentIds = normalizeDiscordGuildChannelAgentIds({
         cfg,
-        entry: nextAccount,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
+        entry: guilds.entry,
+        pathPrefix,
         accountId,
-        changes,
+        changes: accountChanges,
         bindingsToAdd,
       });
-      nextAccount = normalizedAgentIds.entry;
-      accountChanged = accountChanged || normalizedAgentIds.changed;
-      const normalizedWakeNames = normalizeUnsupportedRealtimeWakeNames(
-        nextAccount,
-        `channels.discord.accounts.${accountId}`,
-        changes,
+      const wakeNames = normalizeUnsupportedRealtimeWakeNames(
+        agentIds.entry,
+        pathPrefix,
+        accountChanges,
       );
-      nextAccount = normalizedWakeNames.entry;
-      accountChanged = accountChanged || normalizedWakeNames.changed;
-      if (!accountChanged) {
-        continue;
-      }
-      nextAccounts[accountId] = nextAccount;
-      accountsChanged = true;
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts: nextAccounts };
-      changed = true;
-    }
-  }
+      return {
+        entry: wakeNames.entry,
+        changed: guilds.changed || agentIds.changed || wakeNames.changed,
+      };
+    },
+  });
+  updated = accounts.entry;
+  changed = changed || accounts.changed;
 
   const voice = asObjectRecord(updated.voice);
   if (
@@ -601,9 +585,9 @@ export function normalizeCompatibilityConfig({
   }
   return {
     config: {
-      ...cfg,
+      ...tuningKnobs.config,
       channels: {
-        ...cfg.channels,
+        ...tuningKnobs.config.channels,
         discord: updated,
       } as OpenClawConfig["channels"],
       bindings:

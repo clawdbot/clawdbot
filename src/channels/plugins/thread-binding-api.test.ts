@@ -68,10 +68,12 @@ describe("bundled channel thread binding fast path", () => {
   });
 
   it("treats missing artifacts as absent hints", () => {
-    expect(resolveBundledChannelThreadBindingDefaultPlacement("discord")).toBeUndefined();
+    // "absent" is a synthetic channel; real bundled artifacts are covered by
+    // the thread-binding artifact parity contract test.
+    expect(resolveBundledChannelThreadBindingDefaultPlacement("absent")).toBeUndefined();
     expect(
       resolveBundledChannelThreadBindingInboundConversation({
-        channelId: "discord",
+        channelId: "absent",
         to: "channel:general",
         isGroup: true,
       }),

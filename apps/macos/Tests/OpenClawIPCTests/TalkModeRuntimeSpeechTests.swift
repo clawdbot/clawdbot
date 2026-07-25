@@ -11,6 +11,7 @@ struct TalkModeRuntimeSpeechTests {
 
         #expect(request.shouldReportPartialResults)
         #expect(request.taskHint == .dictation)
+        #expect(!request.requiresOnDeviceRecognition)
     }
 
     @Test func `playback plan routes unsupported local providers through gateway speak`() {
@@ -43,6 +44,15 @@ struct TalkModeRuntimeSpeechTests {
         #expect(customPlan == .gatewayTalkSpeakThenSystemVoice)
         #expect(mlxPlan == .mlxThenSystemVoice)
         #expect(systemPlan == .systemVoiceOnly)
+    }
+
+    @Test func `mlx cancellation stops while failures preserve system fallback`() {
+        #expect(TalkModeRuntime.mlxFailureDisposition(
+            TalkMLXSpeechSynthesizer.SynthesizeError.canceled) == .canceled)
+        #expect(TalkModeRuntime.mlxFailureDisposition(
+            TalkMLXSpeechSynthesizer.SynthesizeError.audioGenerationFailed) == .fallback)
+        #expect(TalkModeRuntime.mlxFailureDisposition(
+            TalkMLXSpeechSynthesizer.SynthesizeError.modelLoadFailed("missing")) == .fallback)
     }
 
     @Test func `talk speak params carry resolved voice and directive overrides`() {

@@ -1,0 +1,256 @@
+title: Live OpenAI multi-restart task recovery
+
+scenario:
+  id: gateway-restart-multi-live
+  surface: runtime
+  runtimePairLane: core
+  coverage:
+    primary:
+      - session-memory.recovery-restart-recovery
+    secondary:
+      - gateway.restart-and-stop-gateway-restart
+      - session-memory.recovery-delivery
+  gatewayRuntime:
+    preserveDebugArtifacts: true
+  gatewayConfigPatch:
+    tools:
+      alsoAllow:
+        - qa_restart_wait
+        - qa_restart_unsafe_probe
+      codeMode:
+        enabled: true
+        timeoutMs: 60000
+  objective: Verify one substantive live OpenAI task automatically resumes through three Gateway replacements and delivers exactly once.
+  successCriteria:
+    - The live model reaches three distinct replay-safe Code Mode wait checkpoints in one user turn.
+    - The Gateway child and qa-channel recover after every replacement without a user follow-up.
+    - Restart-safe policy remains active, the unsafe probe stays unavailable, and the completed audit is delivered exactly once.
+  docsRefs:
+    - docs/reference/code-mode.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-lab/src/suite-runtime-agent-session.ts
+    - extensions/qa-lab/src/suite-runtime-gateway.ts
+    - src/agents/main-session-restart-recovery.ts
+  execution:
+    kind: flow
+    summary: Run a fixture-backed audit with GPT-5.4 while replacing the Gateway child three times at durable wait checkpoints.
+    suiteIsolation: isolated
+    isolationReason: Replaces the Gateway child three times and inspects one persistent in-flight session.
+    config:
+      requiredProviderMode: live-frontier
+      requiredProvider: openai
+      requiredModel: gpt-5.4
+      finalMarker: LIVE-MULTI-RESTART-OK
+      restartNoticeNeedle: "couldn't safely resume"
+      prompt: |-
+        Perform a restart-resilience release audit. This is one task; do not ask me to follow up.
+
+        First, use OpenClaw Code Mode to create three sequential restart checkpoints. Count prior assistant `exec` calls in this transcript whose code contains `qa_restart_wait`. If the count is below three, make exactly the next checkpoint with an `exec` call whose `restartSafe` flag is true. Its JavaScript must search for `qa_restart_wait`, call the single match with `{}`, and return `CHECKPOINT-N`, where N is the next count. If `exec` reports waiting, call `wait` with its run id. A gateway restart will interrupt each checkpoint. On the recovery turn, count the transcript again and continue with the next checkpoint; do not repeat a completed checkpoint.
+
+        After three checkpoint calls are visible, use restart-safe Code Mode to search for `qa_restart_unsafe_probe` and record whether it is visible. Do not call it. Then read all five files under `restart-audit/` and calculate:
+        - component total from services, workers, and jobs
+        - risk total from low, medium, and high
+        - deployment total across all regions
+        - control checksum from approvals, rollbacks, and drills
+        - the release recommendation from the evidence
+
+        Finish with exactly one concise report containing these exact lines:
+        components=16
+        risks=6
+        deployments=27
+        controls=21
+        unsafeVisible=false
+        recommendation=GO
+        LIVE-MULTI-RESTART-OK
+
+flow:
+  steps:
+    - name: verifies live OpenAI lane
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: scenario requires live-frontier provider mode
+        - set: selected
+          value:
+            expr: splitModelRef(env.primaryModel)
+        - assert:
+            expr: "selected?.provider === config.requiredProvider && selected?.model === config.requiredModel"
+            message:
+              expr: "`expected ${config.requiredProvider}/${config.requiredModel}, got ${env.primaryModel}`"
+        - assert:
+            expr: "Boolean(env.gateway.runtimeEnv.OPENAI_API_KEY?.trim() || env.gateway.runtimeEnv.OPENCLAW_LIVE_OPENAI_KEY?.trim())"
+            message: live OpenAI API key did not reach the Gateway child
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} auth=env-api-key`"
+
+    - name: resumes one substantive task through three restarts
+      actions:
+        - call: fs.mkdir
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit')"
+            - recursive: true
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'components.md')"
+            - "services=4\nworkers=7\njobs=5\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'risks.md')"
+            - "low=3\nmedium=2\nhigh=1\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'deployments.md')"
+            - "us-west-2=12\nus-east-1=9\neu-west-1=6\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'controls.md')"
+            - "approvals=8\nrollbacks=7\ndrills=6\n"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'restart-audit', 'recommendation.md')"
+            - "Release only when components=16, risks=6, deployments=27, controls=21, and the unsafe probe is unavailable. Matching evidence means GO.\n"
+            - utf8
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 180000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 180000
+        - call: reset
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: gatewayLogCursor
+          value:
+            expr: markGatewayLogCursor()
+        - set: conversationId
+          value:
+            expr: "`restart-multi-live-${randomUUID().slice(0, 8)}`"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: conversationId }, dmScope: 'per-channel-peer', identityLinks: env.cfg.session?.identityLinks })"
+        - call: startAgentRun
+          saveAs: started
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              to:
+                expr: "`dm:${conversationId}`"
+              taskTracking: false
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 180000)
+        - forEach:
+            items:
+              - 1
+              - 2
+              - 3
+            item: checkpoint
+            actions:
+              - call: waitForCondition
+                saveAs: checkpointTranscript
+                args:
+                  - lambda:
+                      async: true
+                      expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint ? summary : undefined).catch(() => undefined)"
+                  - expr: liveTurnTimeoutMs(env, 180000)
+                  - 50
+              - call: restartGatewayWithConfigPatch
+                args:
+                  - env:
+                      ref: env
+                    patch:
+                      gateway:
+                        controlUi:
+                          allowedOrigins:
+                            - expr: "`http://127.0.0.1:${64000 + checkpoint}`"
+              - call: waitForGatewayHealthy
+                args:
+                  - ref: env
+                  - 180000
+              - call: waitForQaChannelReady
+                args:
+                  - ref: env
+                  - 180000
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      expr: "readGatewayLogs().slice(gatewayLogCursor).split('dispatching restart-safe recovery').length - 1 >= checkpoint ? true : undefined"
+                  - expr: liveTurnTimeoutMs(env, 120000)
+                  - 50
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === conversationId && candidate.text.includes(config.finalMarker)"
+            - expr: liveTurnTimeoutMs(env, 300000)
+            - sinceIndex:
+                ref: startIndex
+        - call: sleep
+          args:
+            - 3000
+        - call: readSessionTranscriptSummary
+          saveAs: finalTranscript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - set: finalMatches
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.finalMarker))"
+        - set: restartNotices
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.restartNoticeNeedle))"
+        - assert:
+            expr: "finalMatches.length === 1"
+            message:
+              expr: "`expected one recovered final delivery, got ${finalMatches.length}; outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "restartNotices.length === 0"
+            message:
+              expr: "`automatic recovery emitted ${restartNotices.length} resend notice(s); outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "(finalTranscript.assistantToolCallCounts.exec ?? 0) >= 4 && (finalTranscript.assistantToolCallCounts.wait ?? 0) >= 3"
+            message:
+              expr: "`expected three distinct checkpoint execs plus the audit exec; transcript=${JSON.stringify(finalTranscript)}`"
+        - assert:
+            expr: "['components=16', 'risks=6', 'deployments=27', 'controls=21', 'unsafeVisible=false', 'recommendation=GO'].every((needle) => outbound.text.includes(needle))"
+            message:
+              expr: "`substantive audit output was incomplete: ${outbound.text}`"
+        - assert:
+            expr: "finalTranscript.lastAssistantStopReason !== 'error' && finalTranscript.lastAssistantStopReason !== 'aborted'"
+            message:
+              expr: "`restart recovery left a terminal artifact: ${JSON.stringify(finalTranscript)}`"
+        - set: recoveryLogs
+          value:
+            expr: readGatewayLogs().slice(gatewayLogCursor)
+        - set: recoveryDispatches
+          value:
+            expr: "recoveryLogs.split('dispatching restart-safe recovery').length - 1"
+        - set: retainedPolicies
+          value:
+            expr: "recoveryLogs.split('restart-safe recovery tool policy retained').length - 1"
+        - assert:
+            expr: "recoveryDispatches >= 3 && retainedPolicies >= 3"
+            message:
+              expr: "`expected restart-safe policy on all recoveries; dispatches=${recoveryDispatches} retained=${retainedPolicies}`"
+        - assert:
+            expr: "!recoveryLogs.includes('unsafe-probe-executed')"
+            message: non-replay-safe QA probe executed during recovery
+        - assert:
+            expr: "!recoveryLogs.split(String.fromCharCode(10)).some((line) => line.includes('tool policy removed') && line.includes('qa_restart_wait'))"
+            message: replay-safe QA checkpoint tool was removed before Code Mode catalog construction
+        - call: assertNoGatewayLogSentinels
+          args:
+            - sinceIndex:
+                ref: gatewayLogCursor
+      detailsExpr: "`runId=${started.runId} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"

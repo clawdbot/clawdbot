@@ -4,11 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
+const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
+
+function makeOversizedStreamResponse(): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
 
 describe("buildXiaomiSpeechProvider", () => {
   const provider = buildXiaomiSpeechProvider();
@@ -17,9 +35,7 @@ describe("buildXiaomiSpeechProvider", () => {
     it("registers Xiaomi MiMo as a speech provider", () => {
       expect(provider.id).toBe("xiaomi");
       expect(provider.aliases).toContain("mimo");
-      expect(provider.models).toContain("mimo-v2.5-tts");
-      expect(provider.models).toContain("mimo-v2-tts");
-      expect(provider.models).toContain("mimo-v2.5-tts-voicedesign");
+      expect(provider.models).toEqual(["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign"]);
       expect(provider.voices).toContain("mimo_default");
     });
   });
@@ -46,6 +62,11 @@ describe("buildXiaomiSpeechProvider", () => {
       process.env.XIAOMI_API_KEY = "sk-env";
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
+
+    it.each(["", "   "])("returns false when XIAOMI_API_KEY is blank", (apiKey) => {
+      process.env.XIAOMI_API_KEY = apiKey;
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    });
   });
 
   describe("resolveConfig", () => {
@@ -55,7 +76,7 @@ describe("buildXiaomiSpeechProvider", () => {
           providers: {
             xiaomi: {
               baseUrl: "https://example.com/v1/",
-              model: "mimo-v2-tts",
+              model: "mimo-v2.5-tts",
               voice: "default_en",
               format: "wav",
               style: "Bright and fast.",
@@ -68,7 +89,7 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(config).toEqual({
         apiKey: undefined,
         baseUrl: "https://example.com/v1",
-        model: "mimo-v2-tts",
+        model: "mimo-v2.5-tts",
         voice: "default_en",
         format: "wav",
         style: "Bright and fast.",
@@ -120,9 +141,9 @@ describe("buildXiaomiSpeechProvider", () => {
         handled: true,
         overrides: { voice: "default_en" },
       });
-      expect(provider.parseDirectiveToken!({ key: "model", value: "mimo-v2-tts", policy })).toEqual(
-        { handled: true, overrides: { model: "mimo-v2-tts" } },
-      );
+      expect(
+        provider.parseDirectiveToken!({ key: "model", value: "mimo-v2.5-tts", policy }),
+      ).toEqual({ handled: true, overrides: { model: "mimo-v2.5-tts" } });
       expect(provider.parseDirectiveToken!({ key: "style", value: "whispered", policy })).toEqual({
         handled: true,
         overrides: { style: "whispered" },
@@ -169,7 +190,7 @@ describe("buildXiaomiSpeechProvider", () => {
         cfg: {} as never,
         providerConfig: {
           apiKey: "sk-test",
-          model: "mimo-v2-tts",
+          model: "mimo-v2.5-tts",
           voice: "default_en",
           style: "Bright.",
         },
@@ -190,7 +211,7 @@ describe("buildXiaomiSpeechProvider", () => {
         "Content-Type": "application/json",
       });
       const body = JSON.parse(init!.body as string);
-      expect(body.model).toBe("mimo-v2-tts");
+      expect(body.model).toBe("mimo-v2.5-tts");
       expect(body.messages).toEqual([
         { role: "user", content: "Bright." },
         { role: "assistant", content: "Hello from OpenClaw." },
@@ -393,6 +414,66 @@ describe("buildXiaomiSpeechProvider", () => {
       }
     });
 
+    it("rejects blank keys before building request credentials", async () => {
+      const blank = "   ";
+      const savedKey = process.env.XIAOMI_API_KEY;
+      process.env.XIAOMI_API_KEY = blank;
+      try {
+        const mockFetch = vi.mocked(globalThis.fetch);
+        await expect(
+          provider.synthesize({
+            text: "Test",
+            cfg: {} as never,
+            providerConfig: { apiKey: blank },
+            target: "audio-file",
+            timeoutMs: 30000,
+          }),
+        ).rejects.toThrow("Xiaomi API key missing");
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(
+          mockFetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("api-key")),
+        ).toEqual([]);
+      } finally {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
+          process.env.XIAOMI_API_KEY = savedKey;
+        }
+      }
+    });
+
+    it("trims a padded environment key before building the credential header", async () => {
+      const padded = "  fake  ";
+      const savedKey = process.env.XIAOMI_API_KEY;
+      process.env.XIAOMI_API_KEY = padded;
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      try {
+        await provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: {},
+          target: "audio-file",
+          timeoutMs: 30000,
+        });
+
+        const [, init] = mockFetch.mock.calls[0] ?? [];
+        expect(new Headers(init?.headers).get("api-key")).toBe("fake");
+      } finally {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
+          process.env.XIAOMI_API_KEY = savedKey;
+        }
+      }
+    });
+
     it("throws when the API response has no audio data", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
         new Response(JSON.stringify({ choices: [{ message: {} }] }), {
@@ -409,6 +490,20 @@ describe("buildXiaomiSpeechProvider", () => {
           timeoutMs: 30000,
         }),
       ).rejects.toThrow("Xiaomi TTS API returned no audio data");
+    });
+
+    it("bounds oversized Xiaomi TTS success response reads", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(makeOversizedStreamResponse());
+
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("Xiaomi TTS API: JSON response exceeds 16777216 bytes");
     });
   });
 });

@@ -2,17 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
-import {
-  runPreflightCompactionIfNeeded,
-  setAgentRunnerMemoryTestDeps,
-} from "./agent-runner-memory.js";
+} from "../../plugins/memory-state.test-fixtures.js";
+import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -26,10 +24,14 @@ function createReplyOperation(): ReplyOperation {
     resetTriggered: false,
     phase: "queued",
     result: null,
+    startedAtMs: Date.now(),
+    lastActivityAtMs: Date.now(),
+    recordActivity: vi.fn(),
     setPhase: vi.fn(),
     updateSessionId: vi.fn(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
+    freezeAbort: vi.fn(),
     retainFailureUntilComplete: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn((afterClear: () => void) => {
@@ -113,7 +115,11 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       totalTokens: 200_000,
       totalTokensFresh: false,
     };
-    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "agent:main:main", sessionEntry);
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
 
     const entry = await runWithEntry(sessionEntry, sessionFile);
 
@@ -135,7 +141,11 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       totalTokens: 200_000,
       totalTokensFresh: true,
     };
-    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "agent:main:main", sessionEntry);
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
 
     await runWithEntry(sessionEntry, sessionFile);
 

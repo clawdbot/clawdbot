@@ -1,0 +1,79 @@
+title: Channel DM and group routing
+
+scenario:
+  id: channel-dm-group-routing
+  surface: channels
+  coverage:
+    primary:
+      - channels.inbound-routing-dm
+      - channels.runtime-conversation-routing
+    secondary:
+      - channels.automatic-final-reply
+  objective: Verify direct and group replies stay on their originating conversation routes.
+  successCriteria:
+    - A direct message receives its marker only on the direct conversation.
+    - A mentioned group message receives its marker only on the group conversation.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/concepts/session.md
+  codeRefs:
+    - extensions/qa-lab/src/qa-transport.ts
+    - src/routing/resolve-route.ts
+  execution:
+    profiles: { "matrix:adapter": 2, "whatsapp:adapter": 2 }
+    kind: flow
+    summary: Send sequential DM and group turns and assert route separation.
+    transportPolicy:
+      requireGroupMention: true
+    config:
+      dmConversationId: qa-routing-dm
+      dmMarker: QA-DM-ROUTING-OK
+      groupConversationId: qa-routing-group
+      groupMarker: QA-GROUP-ROUTING-OK
+
+flow:
+  steps:
+    - name: routes direct and group replies independently
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id: { ref: config.dmConversationId }
+              kind: direct
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`Reply exactly: ${config.dmMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.dmConversationId }
+              kind: direct
+            textIncludes: { ref: config.dmMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: dmOutbound
+        - sendInbound:
+            conversation:
+              id: { ref: config.groupConversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw reply exactly: ${config.groupMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.groupConversationId }
+              kind: group
+            textIncludes: { ref: config.groupMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: groupOutbound
+        - assert:
+            expr: "dmOutbound.conversation.id !== groupOutbound.conversation.id && !String(dmOutbound.text ?? '').includes(config.groupMarker) && !String(groupOutbound.text ?? '').includes(config.dmMarker)"
+            message:
+              expr: "`DM/group routes crossed; transcript=${formatTransportTranscript(state)}`"
+      detailsExpr: "`${dmOutbound.conversation.kind}:${dmOutbound.text} | ${groupOutbound.conversation.kind}:${groupOutbound.text}`"

@@ -1,5 +1,7 @@
 name: Plugin Prerelease
 
+run-name: ${{ inputs.dispatch_id != '' && format('Plugin Prerelease {0}', inputs.dispatch_id) || 'Plugin Prerelease' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +20,16 @@ on:
         required: false
         default: false
         type: boolean
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_json:
+        description: Immutable package and Docker image artifact tuple from Full Release Validation
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -47,12 +59,12 @@ jobs:
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
     steps:
       - name: Checkout target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Build plugin prerelease manifest
@@ -114,9 +126,16 @@ jobs:
             }).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
-              runner: [0, 1, 2, 3].includes(shard.index)
-                ? "blacksmith-8vcpu-ubuntu-2404"
-                : "blacksmith-4vcpu-ubuntu-2404",
+              vitest_max_workers: shard.extensionIds.some((extensionId) =>
+                extensionId.startsWith("memory-"),
+              )
+                ? 4
+                : 1,
+              runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
+                ? "blacksmith-16vcpu-ubuntu-2404"
+                : [0, 1, 2, 3].includes(shard.index)
+                  ? "blacksmith-8vcpu-ubuntu-2404"
+                  : "blacksmith-4vcpu-ubuntu-2404",
               shard_index: shard.index + 1,
               task: "extensions-batch",
             }));
@@ -216,12 +235,12 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -252,12 +271,12 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_node_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -325,12 +344,12 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -342,9 +361,9 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
-          OPENCLAW_VITEST_MAX_WORKERS: 1
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --exclude extensions/codex/src/app-server/run-attempt.test.ts
+        run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
 
   plugin-prerelease-inspector:
     permissions:
@@ -357,12 +376,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -532,7 +551,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
@@ -541,9 +560,27 @@ jobs:
       include_release_path_suites: false
       include_openwebui: false
       docker_lanes: ${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}
-      targeted_docker_lane_group_size: 4
+      targeted_docker_lane_group_size: 2
+      allow_unreleased_changelog: true
       include_live_suites: false
       live_models_only: false
+      shared_image_artifact_namespace: plugin-prerelease
+      package_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName || '' }}
+      package_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}
+      package_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest || '' }}
+      package_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId || '' }}
+      package_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt || '' }}
+      package_file_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageFileName || '' }}
+      package_source_sha: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha || '' }}
+      package_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 || '' }}
+      package_version: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageVersion || '' }}
+      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
+      shared_image_policy: no-push-artifact
 
   plugin-prerelease-suite:
     permissions:

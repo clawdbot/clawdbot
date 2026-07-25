@@ -1,0 +1,69 @@
+title: WhatsApp dmPolicy open allows direct messages
+
+scenario:
+  id: whatsapp-access-control-dm-open
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.direct-message-dmpolicy
+  objective: Verify dmPolicy open accepts a direct message.
+  gatewayConfigPatch:
+    channels:
+      whatsapp:
+        accounts:
+          $selectedAccount:
+            dmPolicy: open
+  successCriteria:
+    - The direct message receives one marker reply.
+  docsRefs:
+    - docs/channels/whatsapp.md
+  codeRefs:
+    - extensions/whatsapp/src/monitor.ts
+  execution:
+    kind: flow
+    channel: whatsapp
+    suiteIsolation: isolated
+    summary: Verify WhatsApp dmPolicy open behavior through the canonical adapter.
+    config:
+      conversationKind: direct
+      conversationId: 15550000001@s.whatsapp.net
+      senderId: 15550000002@s.whatsapp.net
+      mentionPrefix: ""
+      expectReply: true
+      markerPrefix: WHATSAPP_QA_DM_OPEN
+      timeoutMs: 60000
+
+flow:
+  steps:
+    - name: enforces configured access policy
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: marker
+          value:
+            expr: "`${config.markerPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`"
+        - set: outboundCount
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: { ref: config.conversationKind }
+            senderId: { ref: config.senderId }
+            senderName: QA Driver
+            text:
+              expr: "`${config.mentionPrefix}Reply with only this exact marker: ${marker}`"
+        - if:
+            expr: config.expectReply
+            then:
+              - waitForOutbound:
+                  textIncludes: { ref: marker }
+                  timeoutMs: { ref: config.timeoutMs }
+            else:
+              - waitForNoOutbound:
+                  quietMs: { ref: config.timeoutMs }
+                  sinceIndex: { ref: outboundCount }
+      detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`"

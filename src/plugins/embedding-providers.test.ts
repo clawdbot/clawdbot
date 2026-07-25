@@ -1,13 +1,11 @@
 // Covers plugin embedding provider registration and lookup.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { collectRegisteredEmbeddingProviderIds } from "./channel-plugin-ids.js";
 import {
   clearEmbeddingProviders,
-  getEmbeddingProvider,
   getRegisteredEmbeddingProvider,
-  listEmbeddingProviders,
   listRegisteredEmbeddingProviders,
   registerEmbeddingProvider,
-  restoreEmbeddingProviders,
   restoreRegisteredEmbeddingProviders,
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
@@ -31,36 +29,6 @@ afterEach(() => {
 });
 
 describe("embedding provider registry", () => {
-  it("registers and lists adapters in insertion order", () => {
-    const alpha = createAdapter("alpha");
-    const beta = createAdapter("beta");
-
-    registerEmbeddingProvider(alpha);
-    registerEmbeddingProvider(beta);
-
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
-      "openai-compatible",
-      "alpha",
-      "beta",
-    ]);
-    expect(getEmbeddingProvider("alpha")).toBe(alpha);
-  });
-
-  it("restores adapter snapshots", () => {
-    const alpha = createAdapter("alpha");
-    const beta = createAdapter("beta");
-    registerEmbeddingProvider(alpha);
-
-    restoreEmbeddingProviders([beta]);
-
-    expect(getEmbeddingProvider("alpha")).toBeUndefined();
-    expect(getEmbeddingProvider("beta")).toBe(beta);
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
-      "openai-compatible",
-      "beta",
-    ]);
-  });
-
   it("preserves owner metadata in registered snapshots", () => {
     const adapter = createAdapter("local-compatible");
     const entry = {
@@ -106,5 +74,36 @@ describe("embedding provider registry", () => {
       adapter,
       ownerPluginId: "local-protocol",
     });
+  });
+});
+
+describe("collectRegisteredEmbeddingProviderIds", () => {
+  // Boot-equivalence: the shared helper unions the same three sources the gateway
+  // startup "configured but unregistered" warning uses, so the /status drift line and
+  // the boot warning agree on what counts as "registered".
+  it("unions registry memory + general embedding providers with the global registry", () => {
+    registerEmbeddingProvider(createAdapter("global-embed"), { ownerPluginId: "p" });
+    const registry = {
+      memoryEmbeddingProviders: [{ provider: { id: "mem-embed" } }],
+      embeddingProviders: [{ provider: { id: "gen-embed" } }],
+    } as never;
+
+    const ids = collectRegisteredEmbeddingProviderIds(registry);
+
+    expect(ids.has("mem-embed")).toBe(true);
+    expect(ids.has("gen-embed")).toBe(true);
+    expect(ids.has("global-embed")).toBe(true);
+    // Every globally registered provider (core + plugin-registered) is always included.
+    for (const entry of listRegisteredEmbeddingProviders()) {
+      expect(ids.has(entry.adapter.id)).toBe(true);
+    }
+  });
+
+  it("returns only the global registry ids when the runtime registry omits embedding providers", () => {
+    const ids = collectRegisteredEmbeddingProviderIds({});
+
+    expect(ids).toEqual(
+      new Set(listRegisteredEmbeddingProviders().map((entry) => entry.adapter.id)),
+    );
   });
 });

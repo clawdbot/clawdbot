@@ -8,9 +8,12 @@ import {
   handleCompactionStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import {
+  capturePendingAssistantUsage,
   handleMessageEnd,
   handleMessageStart,
   handleMessageUpdate,
+  preservePendingAssistantUsage,
+  resetPendingAssistantUsage,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import {
   handleToolExecutionEnd,
@@ -22,6 +25,7 @@ import type {
   EmbeddedAgentSubscribeEvent,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
+import type { AgentMessage } from "./runtime/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
@@ -78,16 +82,30 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   return (evt: EmbeddedAgentSubscribeEvent) => {
     switch (evt.type) {
       case "message_start":
+        // Delivery from the previous message may still be queued, but usage is
+        // message-scoped. Reset only its accounting boundary synchronously so
+        // this message's streamed usage cannot inherit the prior commit state.
+        resetPendingAssistantUsage(ctx, evt.message as AgentMessage);
         scheduleEvent(evt, () => {
           handleMessageStart(ctx, evt as never);
         });
         return;
       case "message_update":
+        // AgentSession persists message_end after this listener returns, while
+        // delivery handlers may still be queued. Capture usage synchronously so
+        // the following final snapshot can be repaired before persistence.
+        capturePendingAssistantUsage(ctx, evt as never);
         scheduleEvent(evt, () => {
           handleMessageUpdate(ctx, evt as never);
         });
         return;
       case "message_end":
+        if ((evt.message as AgentMessage)?.role === "assistant") {
+          preservePendingAssistantUsage(
+            evt.message as Extract<AgentMessage, { role: "assistant" }>,
+            ctx.state.pendingAssistantUsage,
+          );
+        }
         scheduleEvent(evt, () => {
           return handleMessageEnd(ctx, evt as never);
         });

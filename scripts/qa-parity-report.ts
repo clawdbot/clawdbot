@@ -1,5 +1,4 @@
 // Qa Parity Report script supports OpenClaw repository automation.
-import { runQaParityReportCommand } from "../extensions/qa-lab/src/cli.runtime.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
 type Options = {
@@ -69,6 +68,7 @@ try {
     }
   }
 
+  const { runQaParityReportCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
   await runQaParityReportCommand({
     ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
     ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),

@@ -1,13 +1,14 @@
 // Covers exec sandbox host audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectExecRuntimeFindings } from "./audit.js";
+import { collectSecurityAuditFindings } from "./audit.test-support.js";
+import type { SecurityAuditFinding } from "./audit.types.js";
 
 function hasFinding(
   checkId:
     | "tools.exec.host_sandbox_no_sandbox_defaults"
     | "tools.exec.host_sandbox_no_sandbox_agents",
-  findings: ReturnType<typeof collectExecRuntimeFindings>,
+  findings: SecurityAuditFinding[],
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === "warn");
 }
@@ -60,7 +61,7 @@ describe("security audit exec sandbox host findings", () => {
       } satisfies OpenClawConfig,
       checkId: "tools.exec.host_sandbox_no_sandbox_agents" as const,
     },
-  ])("$name", ({ cfg, checkId }) => {
-    expect(hasFinding(checkId, collectExecRuntimeFindings(cfg))).toBe(true);
+  ])("$name", async ({ cfg, checkId }) => {
+    expect(hasFinding(checkId, await collectSecurityAuditFindings(cfg))).toBe(true);
   });
 });

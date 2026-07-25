@@ -7,9 +7,6 @@ struct HealthCommand: ParsableCommand {
         CommandDescription(commandName: "health", abstract: "Health probe")
     }
 
-    init() {}
-    init(parsed: ParsedValues) {}
-
     mutating func run() async throws {
         print("ok")
     }

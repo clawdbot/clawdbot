@@ -32,7 +32,7 @@ import {
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
-import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
+import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -54,6 +54,11 @@ import {
 } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import {
+  isModelPolicyCompatSelector,
+  isValidExactModelPolicyRef,
+  parseModelPolicyWildcardRef,
+} from "./model-policy-ref.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import {
@@ -91,18 +96,6 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
-
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
-    return raw;
-  }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
-  return {
-    ...raw,
-    commands,
-  };
-}
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
@@ -205,6 +198,17 @@ function toConfigPathSegments(pathLocal3: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function withConfigIssuePath(
+  issue: ConfigValidationIssue,
+  pathSegments: readonly ConfigPathSegment[],
+): ConfigValidationIssue {
+  Object.defineProperty(issue, "pathSegments", {
+    value: [...pathSegments],
+    enumerable: false,
+  });
+  return issue;
 }
 
 function formatMissingOfficialExternalPluginWarning(
@@ -631,7 +635,7 @@ function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
 
 function extractBindingsSpecificUnionIssue(
   record: UnknownIssueRecord,
-  parentPath: string,
+  parentPathSegments: readonly ConfigPathSegment[],
 ): ConfigValidationIssue | null {
   if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
     return null;
@@ -700,11 +704,16 @@ function extractBindingsSpecificUnionIssue(
     return null;
   }
 
-  const subPath = formatConfigPath(toConfigPathSegments(matchingBranchIssue.path));
-  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const fullPathSegments = [
+    ...parentPathSegments,
+    ...toConfigPathSegments(matchingBranchIssue.path),
+  ];
   const subMessage =
     typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
-  return { path: fullPath, message: subMessage };
+  return withConfigIssuePath(
+    { path: formatConfigPath(fullPathSegments), message: subMessage },
+    fullPathSegments,
+  );
 }
 
 function isObjectSecretRefCandidate(value: unknown): boolean {
@@ -739,7 +748,7 @@ function pushUnsupportedMutableSecretRefIssue(
 
 function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
-  for (const candidate of collectUnsupportedSecretRefConfigCandidates(raw)) {
+  for (const candidate of unsupportedSecretRefSurfacePolicy.collectConfigCandidates(raw)) {
     pushUnsupportedMutableSecretRefIssue(issues, candidate.path, candidate.value);
   }
 
@@ -783,7 +792,9 @@ function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   if (!unrecognizedKeys.includes(childKey)) {
     return issue;
   }
-  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  const remainingKeys = unrecognizedKeys.filter(
+    (key): key is string => key !== undefined && key !== childKey,
+  );
   if (remainingKeys.length === 0) {
     return null;
   }
@@ -822,7 +833,8 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const pathItem = formatConfigPath(toConfigPathSegments(record?.path));
+  const pathSegments = toConfigPathSegments(record?.path);
+  const pathItem = formatConfigPath(pathSegments);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
 
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
@@ -841,22 +853,25 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     record.code === "invalid_union" &&
     !allowedValuesSummary
   ) {
-    const betterIssue = extractBindingsSpecificUnionIssue(record, pathItem);
+    const betterIssue = extractBindingsSpecificUnionIssue(record, pathSegments);
     if (betterIssue) {
       return betterIssue;
     }
   }
 
   if (!allowedValuesSummary) {
-    return { path: pathItem, message: enrichedMessage };
+    return withConfigIssuePath({ path: pathItem, message: enrichedMessage }, pathSegments);
   }
 
-  return {
-    path: pathItem,
-    message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
-    allowedValues: allowedValuesSummary.values,
-    allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
-  };
+  return withConfigIssuePath(
+    {
+      path: pathItem,
+      message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
+      allowedValues: allowedValuesSummary.values,
+      allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
+    },
+    pathSegments,
+  );
 }
 
 function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
@@ -933,15 +948,15 @@ function resolveExplicitPluginReferencePath(
   }
   return undefined;
 }
-
-export const testing = {
-  mapZodIssueToConfigIssue,
-};
-
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
   return isPathWithinRoot(workspaceRoot, resolved);
+}
+
+function createIdentityAvatarIssue(index: number, message: string): ConfigValidationIssue {
+  const pathSegments = ["agents", "list", index, "identity", "avatar"] as const;
+  return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
 }
 
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -966,18 +981,22 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       continue;
     }
     if (avatar.startsWith("~")) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const hasScheme = hasAvatarUriScheme(avatar);
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const workspaceDir = resolveAgentWorkspaceDir(
@@ -985,10 +1004,9 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       entry.id ?? resolveDefaultAgentId(config),
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must stay within the agent workspace.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(index, "identity.avatar must stay within the agent workspace."),
+      );
     }
   }
   return issues;
@@ -1034,6 +1052,61 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const defaultModels = config.agents?.defaults?.models;
+  const collectAliases = (...modelMaps: Array<typeof defaultModels | undefined>): Set<string> => {
+    const aliases = new Set<string>();
+    for (const models of modelMaps) {
+      for (const entry of Object.values(models ?? {})) {
+        const alias = normalizeLowercaseStringOrEmpty(entry?.alias);
+        if (alias) {
+          aliases.add(alias);
+        }
+      }
+    }
+    return aliases;
+  };
+  const validateRefs = (
+    refs: readonly string[] | undefined,
+    configPath: string,
+    aliases: Set<string>,
+  ) => {
+    for (const [index, raw] of (refs ?? []).entries()) {
+      const trimmed = raw.trim();
+      if (
+        aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+        isModelPolicyCompatSelector(trimmed) ||
+        isValidExactModelPolicyRef(trimmed) ||
+        parseModelPolicyWildcardRef(trimmed)
+      ) {
+        continue;
+      }
+      issues.push({
+        path: `${configPath}.${index}`,
+        message:
+          `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".',
+      });
+    }
+  };
+
+  const defaultAliases = collectAliases(defaultModels);
+  validateRefs(
+    config.agents?.defaults?.modelPolicy?.allow,
+    "agents.defaults.modelPolicy.allow",
+    defaultAliases,
+  );
+  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
+    validateRefs(
+      agent.modelPolicy?.allow,
+      `agents.list.${index}.modelPolicy.allow`,
+      collectAliases(defaultModels, agent.models),
+    );
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -1048,7 +1121,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    stripDeprecatedValidationKeys(raw),
+    raw,
     opts?.preservedLegacyRootKeys,
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
@@ -1060,7 +1133,9 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
-  const validatedConfig = materializeBundledModelProviderOverlays(validated.data as OpenClawConfig);
+  const validatedConfig = attachAgentListProjection(
+    materializeBundledModelProviderOverlays(validated.data as OpenClawConfig),
+  );
   const channelIssues =
     policyIssues.length > 0 || opts?.validateBundledChannels
       ? collectRawBundledChannelConfigIssues(validatedConfig)
@@ -1080,7 +1155,7 @@ export function validateConfigObjectRaw(
       ok: false,
       issues: [
         {
-          path: "agents.list",
+          path: "agents.entries",
           message: formatDuplicateAgentDirError(duplicates),
         },
       ],
@@ -1097,6 +1172,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
   if (gatewayTailscaleAuthIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleAuthIssues };
+  }
+  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
+  if (modelPolicyAllowIssues.length > 0) {
+    return { ok: false, issues: modelPolicyAllowIssues };
   }
   return {
     ok: true,
@@ -1117,10 +1196,27 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: materializeRuntimeConfig(result.config, "snapshot", {
-      manifestRegistry: opts?.manifestRegistry,
-    }),
+    config: attachAgentListProjection(
+      materializeRuntimeConfig(result.config, "snapshot", {
+        manifestRegistry: opts?.manifestRegistry,
+      }),
+    ),
   };
+}
+
+function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
+  if (!config.agents) {
+    return config;
+  }
+  Object.defineProperty(config.agents, "list", {
+    configurable: true,
+    enumerable: false,
+    value: Object.entries(config.agents.entries ?? {}).map(([id, entry]) =>
+      Object.assign({ id }, entry),
+    ),
+    writable: false,
+  });
+  return config;
 }
 
 type ValidateConfigWithPluginsResult =
@@ -1931,7 +2027,7 @@ function validateConfigObjectWithPluginsBase(
     if (
       normalizePluginId(pluginId) === "codex" &&
       pathLocal === "plugins.entries.codex" &&
-      shouldSuppressMissingCodexPluginDiagnostics(config)
+      shouldSuppressMissingCodexPluginDiagnostics(config, opts.env ?? process.env)
     ) {
       return;
     }
@@ -2125,4 +2221,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

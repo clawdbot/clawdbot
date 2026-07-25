@@ -66,7 +66,7 @@ function pixVerseRegionNote(region: PixVerseApiRegion): string {
   return `PixVerse endpoint: ${label} (${PIXVERSE_BASE_URL_BY_REGION[region]})`;
 }
 
-export function applyPixVerseProviderConfig(
+function applyPixVerseProviderConfig(
   cfg: OpenClawConfig,
   region: PixVerseApiRegion,
   options?: { resetBaseUrl?: boolean },
@@ -94,13 +94,13 @@ export function applyPixVerseProviderConfig(
   };
 }
 
-export function applyPixVerseConfig(
+function applyPixVerseConfig(
   cfg: OpenClawConfig,
   region: PixVerseApiRegion,
   options?: { resetBaseUrl?: boolean },
 ): OpenClawConfig {
   const next = applyPixVerseProviderConfig(cfg, region, options);
-  if (next.agents?.defaults?.videoGenerationModel) {
+  if (next.agents?.defaults?.mediaModels?.video) {
     return next;
   }
   return {
@@ -109,8 +109,9 @@ export function applyPixVerseConfig(
       ...next.agents,
       defaults: {
         ...next.agents?.defaults,
-        videoGenerationModel: {
-          primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
+        mediaModels: {
+          ...next.agents?.defaults?.mediaModels,
+          video: { primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF },
         },
       },
     },

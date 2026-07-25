@@ -103,6 +103,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
       env: {},
     },
     reusableCliSession: {
+      mode: "reuse",
       sessionId: "existing-external-cli-session",
     },
     hadSessionFile: true,
@@ -175,7 +176,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const dispose = vi.fn(async () => {});
     const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain, dispose });
     const context = buildPreparedContext(contextEngine);
-    context.params.bootstrapContextRunKind = "heartbeat";
+    context.params.bootstrapContextRunKind = "commitment-only";
     const result = await runPreparedCliAgent(context);
 
     expect(result.meta.agentMeta?.sessionId).toBe("external-cli-session-1");

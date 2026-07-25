@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { writeGatewayRestartIntentSync } from "../src/infra/restart.js";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
@@ -342,7 +343,7 @@ function resolveOutputPath(raw: string | undefined): string | undefined {
 
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
-    return [GATEWAY_CASES[0]];
+    return [expectDefined(GATEWAY_CASES[0], "default gateway restart benchmark case")];
   }
   const seenIds = new Set<string>();
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
@@ -412,7 +413,11 @@ function median(values: number[]): number {
   const sorted = [...values].toSorted((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
+    return (
+      (expectDefined(sorted[middle - 1], "lower middle gateway restart sample") +
+        expectDefined(sorted[middle], "upper middle gateway restart sample")) /
+      2
+    );
   }
   return sorted[middle] ?? 0;
 }
@@ -510,8 +515,8 @@ function slope(values: Array<number | null>): number | null {
   if (points.length < 2) {
     return null;
   }
-  const first = points[0];
-  const last = points[points.length - 1];
+  const first = expectDefined(points[0], "first gateway restart slope point");
+  const last = expectDefined(points[points.length - 1], "last gateway restart slope point");
   const denominator = Math.max(1, last.index - first.index);
   return (last.value - first.value) / denominator;
 }
@@ -831,7 +836,6 @@ function sanitizedEnv(
     TMPDIR: process.env.TMPDIR,
     USER: process.env.USER ?? "openclaw-bench",
     npm_config_update_notifier: "false",
-    OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_RESTART_TRACE: "1",
     OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
@@ -910,10 +914,11 @@ function collectTraceLine(
     "u",
   ).exec(line);
   if (phaseMatch) {
-    trace[phaseMatch[1]] = Number(phaseMatch[2]);
-    trace[`${phaseMatch[1]}.total`] = Number(phaseMatch[3]);
+    const phase = expectDefined(phaseMatch[1], `${prefix} phase name`);
+    trace[phase] = Number(expectDefined(phaseMatch[2], `${prefix} phase duration`));
+    trace[`${phase}.total`] = Number(expectDefined(phaseMatch[3], `${prefix} total duration`));
     for (const metric of parseTraceMetrics(phaseMatch[4] ?? "")) {
-      trace[`${phaseMatch[1]}.${metric.key}`] = metric.value;
+      trace[`${phase}.${metric.key}`] = metric.value;
     }
     return true;
   }
@@ -921,8 +926,10 @@ function collectTraceLine(
   if (!detailMatch) {
     return false;
   }
-  for (const metric of parseTraceMetrics(detailMatch[2])) {
-    trace[`${detailMatch[1]}.${metric.key}`] = metric.value;
+  const phase = expectDefined(detailMatch[1], `${prefix} detail phase name`);
+  const metrics = expectDefined(detailMatch[2], `${prefix} detail metrics`);
+  for (const metric of parseTraceMetrics(metrics)) {
+    trace[`${phase}.${metric.key}`] = metric.value;
   }
   return true;
 }
@@ -934,8 +941,8 @@ function parseTraceMetrics(raw: string): Array<{ key: string; value: number }> {
     if (!metricMatch) {
       continue;
     }
-    const key = metricMatch[1];
-    const value = Number(metricMatch[2]);
+    const key = expectDefined(metricMatch[1], "gateway restart trace metric key");
+    const value = Number(expectDefined(metricMatch[2], `gateway restart ${key} metric value`));
     if (!Number.isFinite(value)) {
       continue;
     }
@@ -1687,4 +1694,3 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     process.exitCode = 1;
   });
 }
-export { testing as __testing };

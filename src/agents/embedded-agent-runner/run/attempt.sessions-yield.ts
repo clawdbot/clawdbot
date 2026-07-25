@@ -1,8 +1,9 @@
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import type { AgentMessage } from "../../runtime/index.js";
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
@@ -107,6 +108,25 @@ export function createYieldAbortedResponse(model: {
     async *[Symbol.asyncIterator]() {},
     result: async () => message,
   };
+}
+
+// sessions_yield ends the turn as a clean handoff, not an interruption.
+// turnHandoff:true tells agent-core to skip <turn_aborted> guidance
+// (packages/agent-core/src/turn-interruption.ts); code keys the runner's
+// own yield checks in attempt.ts and attempt-stream.ts.
+export const SESSIONS_YIELD_ABORT_REASON = { code: "sessions_yield", turnHandoff: true } as const;
+
+/** True when a runner abort error was raised by the sessions_yield handoff. */
+export function isSessionsYieldAbortError(err: unknown): boolean {
+  return isRunnerAbortError(err) && err instanceof Error && isSessionsYieldAbortReason(err.cause);
+}
+
+export function isSessionsYieldAbortReason(reason: unknown): boolean {
+  return (
+    typeof reason === "object" &&
+    reason !== null &&
+    (reason as { code?: unknown }).code === "sessions_yield"
+  );
 }
 
 // Queue a hidden steering message so agent runtime injects it before the next

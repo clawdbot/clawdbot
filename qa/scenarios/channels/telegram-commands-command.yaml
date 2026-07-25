@@ -1,0 +1,58 @@
+title: Telegram commands list reply
+
+scenario:
+  id: telegram-commands-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify Telegram renders the full native command catalog.
+  successCriteria:
+    - The command list is returned through the Telegram group command path.
+    - The joined reply includes session and stop commands.
+  codeRefs:
+    - src/auto-reply/reply/commands-core.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles:
+      {
+        "telegram:adapter": 4,
+        "telegram:all": 3,
+        "telegram:mock-release": 3,
+        "telegram:release": 3,
+      }
+    kind: flow
+    channel: telegram
+    summary: Request the Telegram command catalog and verify representative entries.
+    config:
+      expectedAny: [/session, /stop]
+
+flow:
+  steps:
+    - name: commands renders the full catalog
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: group }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text:
+              expr: "transport.id === 'telegram' ? '/commands@openclaw' : '/commands'"
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: group }
+            sinceIndex: { ref: startIndex }
+            timeoutMs: 60000
+        - call: sleep
+          args: [1000]
+        - set: joinedReply
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).map((message) => message.text).join('\\n')"
+        - assert:
+            expr: "config.expectedAny.every((needle) => joinedReply.includes(needle)) && (transport.id === 'qa-channel' ? joinedReply.includes('Slash commands') : joinedReply.includes('Commands (1/'))"
+            message:
+              expr: "`commands reply missing expected text: ${joinedReply}`"
+      detailsExpr: joinedReply

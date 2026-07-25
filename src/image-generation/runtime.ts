@@ -13,6 +13,7 @@ import {
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
@@ -24,7 +25,7 @@ const log = createSubsystemLogger("image-generation");
 // Runtime dependency seam for tests and plugin-host callers. Production uses
 // the plugin registry and provider-env helpers by default.
 /** Dependency seam used by image-generation runtime tests and plugin host callers. */
-export type ImageGenerationRuntimeDeps = {
+type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
@@ -40,7 +41,7 @@ function buildNoImageGenerationModelConfiguredMessage(
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "image-generation",
-    modelConfigKey: "imageGenerationModel",
+    modelConfigKey: "mediaModels.image",
     providers: listProviders(cfg),
     getProviderEnvVars: deps.getProviderEnvVars,
   });
@@ -63,10 +64,10 @@ export async function generateImage(
   const logger = deps.log ?? log;
   const requestedTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.image);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.image,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,
@@ -98,17 +99,43 @@ export async function generateImage(
       continue;
     }
 
+    const inputImageCount = params.inputImages?.length ?? 0;
+    const maxInputImages = resolveImageGenerationMaxInputImages({
+      provider,
+      model: candidate.model,
+    });
+    if (maxInputImages !== undefined && inputImageCount > maxInputImages) {
+      const error = `${candidate.provider}/${candidate.model} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${inputImageCount} requested`;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+      });
+      lastError = new Error(error);
+      logger.warn(`image-generation candidate skipped: ${error}`);
+      continue;
+    }
+
     try {
       const timeoutMs = resolveMediaProviderRequestTimeoutMs({
         timeoutMs: requestedTimeoutMs,
         providerDefaultTimeoutMs: provider.defaultTimeoutMs,
       });
+      const modelResolutions =
+        provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+      const modeCapabilities = params.inputImages?.length
+        ? provider.capabilities.edit
+        : provider.capabilities.generate;
+      const inferredResolution =
+        modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
+          ? undefined
+          : params.inferredResolution;
       const sanitized = resolveImageGenerationOverrides({
         provider,
         model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        resolution: params.resolution ?? inferredResolution,
         quality: params.quality,
         outputFormat: params.outputFormat,
         background: params.background,
@@ -143,6 +170,7 @@ export async function generateImage(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        ...(sanitized.resolution ? { appliedResolution: sanitized.resolution } : {}),
         normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,

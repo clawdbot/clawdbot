@@ -22,6 +22,7 @@ import {
   GOOGLE_VIDEO_MAX_DURATION_SECONDS,
   GOOGLE_VIDEO_MIN_DURATION_SECONDS,
 } from "./generation-provider-metadata.js";
+import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -465,7 +466,15 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const restBaseUrl = resolveGoogleVideoRestBaseUrl(configuredBaseUrl);
-      const authHeaders = parseGeminiAuth(apiKey).headers;
+      const authHeaders = {
+        ...parseGeminiAuth(apiKey).headers,
+        ...resolveGoogleApiClientHeaders({
+          baseUrl: restBaseUrl,
+          api: "google-generative-ai",
+          capability: "video",
+          transport: "http",
+        }),
+      };
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
       const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });

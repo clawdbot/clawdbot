@@ -2,11 +2,20 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import {
+  mergeAgentRunAttemptTerminal,
+  normalizeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+} from "../agents/agent-run-terminal-outcome.js";
 import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams as CoreEmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "../agents/embedded-agent-runner/run/types.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
@@ -28,33 +37,55 @@ import { truncateUtf16Safe } from "../utils.js";
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "../agents/embedded-agent-message-tool-source-reply.js";
 export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
 export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
+  AgentHarnessAuthBindingFingerprintParams,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
+  AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionResult,
+  AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
+  AgentHarnessSessionForkFailureCode,
+  AgentHarnessSessionForkParams,
+  AgentHarnessSessionForkResult,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+} from "../agents/harness/errors.js";
+export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
+export const agentHarnessAttemptTerminal = {
+  merge: mergeAgentRunAttemptTerminal,
+  normalize: normalizeAgentRunAttemptTerminal,
+  project: projectAgentRunAttemptTerminal,
+  setFailure: setAgentRunAttemptTerminalFailure,
+};
+export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
+export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
-export type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../agents/embedded-agent-runner/run/types.js";
+export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
+export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
+export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,
@@ -89,7 +120,6 @@ export type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
-  AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
   AgentToolResultMiddlewareRuntime,
@@ -115,6 +145,8 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
+export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
+export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export {
@@ -122,7 +154,6 @@ export {
   /** @deprecated Use classifyEmbeddedAgentRunResultForModelFallback. */
   classifyEmbeddedAgentRunResultForModelFallback as classifyEmbeddedPiRunResultForModelFallback,
 } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
-export { resolveEmbeddedAgentRuntime } from "../agents/agent-runtime-id.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
@@ -146,8 +177,13 @@ export {
   isToolResultError,
   sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
+export {
+  formatToolExecutionErrorMessage,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
+  type ToolResultFailureKind,
+} from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
   resolveAgentDir,
   resolveDefaultAgentDir,
@@ -164,6 +200,11 @@ export {
   formatAgentHarnessUserInputPrompt,
   normalizeAgentHarnessUserInputAnswer,
 } from "../agents/harness/user-input-bridge.js";
+export {
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
+  runAgentHarnessGatewayQuestion,
+} from "../agents/harness/gateway-question.js";
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -228,6 +269,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   model: { input?: string[] };
   existingImages?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  media?: import("../media/media-facts.js").MediaFact[];
   config?: import("../config/types.openclaw.js").OpenClawConfig;
   workspaceOnly?: boolean;
   localRoots?: readonly string[];
@@ -251,6 +293,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
     model: params.model,
     existingImages: params.existingImages,
     imageOrder: params.imageOrder,
+    media: params.media,
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
     workspaceOnly: params.workspaceOnly,
@@ -265,6 +308,70 @@ export async function loadCodexBundleMcpThreadConfig(
 ): Promise<CodexBundleMcpThreadConfig> {
   const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
   return load(params);
+}
+
+export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+
+/**
+ * Materialize an MCP App view for a tool executed by a harness-native MCP client.
+ * The harness supplies a runtime adapter so the view keeps using that exact connection.
+ */
+export async function prepareHarnessNativeMcpAppPreview(params: {
+  runtime: import("../agents/agent-bundle-mcp-types.js").SessionMcpRuntime;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  toolCallId: string;
+  toolInput: unknown;
+  toolResult: import("@modelcontextprotocol/sdk/types.js").CallToolResult;
+  allowedAppToolNames: ReadonlySet<string>;
+  resultMetaState?: "unavailable";
+}): Promise<{ mcpAppPreview: unknown } | undefined> {
+  if (params.runtime.mcpAppsEnabled !== true) {
+    return undefined;
+  }
+  const { buildMcpAppCanvasPayload, fetchMcpAppView } =
+    await import("../agents/mcp-ui-resource.js");
+  const view = await fetchMcpAppView({
+    runtime: params.runtime,
+    serverName: params.serverName,
+    toolName: params.toolName,
+    uiResourceUri: params.uiResourceUri,
+    toolCallId: params.toolCallId,
+    toolInput: params.toolInput,
+    toolResult: params.toolResult,
+    allowedAppToolNames: params.allowedAppToolNames,
+  });
+  if (!view) {
+    return undefined;
+  }
+  return {
+    mcpAppPreview: buildMcpAppCanvasPayload({
+      ...view,
+      ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
+      ...(params.resultMetaState ? { resultMetaState: params.resultMetaState } : {}),
+    }),
+  };
+}
+
+/**
+ * Materialize requester-scoped MCP tools for a harness run (dynamic tools, not
+ * harness-native MCP config). Lazy-loaded so harness plugins avoid the MCP manager graph.
+ */
+export async function materializeRequesterScopedMcpToolsForHarnessRun(
+  params: Parameters<
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+  >[0],
+): Promise<
+  Awaited<
+    ReturnType<
+      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+    >
+  >
+> {
+  const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
+    await import("../agents/agent-bundle-mcp-harness.js");
+  return materialize(params);
 }
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
@@ -286,12 +393,11 @@ export {
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
-export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
+  getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -300,6 +406,7 @@ export {
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";

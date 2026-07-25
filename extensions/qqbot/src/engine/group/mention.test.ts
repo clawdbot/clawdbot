@@ -1,11 +1,20 @@
 // Qqbot tests cover mention plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectWasMentioned,
   hasAnyMention,
   resolveImplicitMention,
   stripMentionText,
 } from "./mention.js";
+
+vi.mock("../utils/log.js", () => ({
+  debugWarn: vi.fn(),
+}));
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+});
 
 describe("engine/group/mention", () => {
   describe("detectWasMentioned", () => {
@@ -37,6 +46,50 @@ describe("engine/group/mention", () => {
     it("ignores invalid regex patterns gracefully", () => {
       // "[" is an invalid regex; should not throw.
       expect(detectWasMentioned({ content: "hi", mentionPatterns: ["[", "@bot"] })).toBe(false);
+    });
+
+    it("rejects ReDoS patterns via compileSafeRegexDetailed guard", () => {
+      // "(a+)+" has nested repetition — catastrophic backtracking on long input.
+      // The guard must reject it (return false) rather than hang.
+      const longInput = "a".repeat(64);
+      expect(detectWasMentioned({ content: longInput, mentionPatterns: ["(a+)+$"] })).toBe(false);
+    });
+
+    it("still matches safe patterns after a rejected unsafe one", () => {
+      // Unsafe pattern is skipped; the next safe pattern should still match.
+      expect(
+        detectWasMentioned({
+          content: "hello @bot",
+          mentionPatterns: ["(a+)+$", "@bot"],
+        }),
+      ).toBe(true);
+    });
+
+    it("emits a debugWarn with the rejection reason for each rejected pattern", async () => {
+      const { debugWarn } = await import("../utils/log.js");
+      detectWasMentioned({
+        content: "hi",
+        mentionPatterns: ["(b+)+$", "[invalid", "@safe"],
+      });
+      expect(debugWarn).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(debugWarn).mock.calls[0]![0]).toContain("unsafe-nested-repetition");
+      expect(vi.mocked(debugWarn).mock.calls[0]![0]).toMatch(/\(b\+\)\+\$/);
+      expect(vi.mocked(debugWarn).mock.calls[1]![0]).toContain("invalid-regex");
+      expect(vi.mocked(debugWarn).mock.calls[1]![0]).toMatch(/\[invalid/);
+    });
+
+    it("does not re-warn rejected mentionPatterns on every message", async () => {
+      const { debugWarn } = await import("../utils/log.js");
+      const input = {
+        content: "hi",
+        mentionPatterns: ["(c+)+$", "@safe"],
+      };
+
+      detectWasMentioned(input);
+      detectWasMentioned(input);
+
+      expect(debugWarn).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(debugWarn).mock.calls[0]![0]).toMatch(/\(c\+\)\+\$/);
     });
 
     it("matches case-insensitively", () => {

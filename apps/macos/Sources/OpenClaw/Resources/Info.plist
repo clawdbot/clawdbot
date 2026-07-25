@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.6.10</string>
+    <string>2026.7.2</string>
     <key>CFBundleVersion</key>
-    <string>2026061000</string>
+    <string>2026070200</string>
     <key>CFBundleIconFile</key>
     <string>OpenClaw</string>
     <key>CFBundleURLTypes</key>
@@ -40,6 +40,8 @@
     <string></string>
     <key>OpenClawGitCommit</key>
     <string></string>
+    <key>OpenClawPortGuardianStorageVersion</key>
+    <integer>2</integer>
 
     <key>NSUserNotificationUsageDescription</key>
     <string>OpenClaw needs notification permission to show alerts for agent actions.</string>
@@ -55,10 +57,10 @@
 	<string>OpenClaw can share your location when requested by the agent.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenClaw uses the local network to connect to your remote OpenClaw gateway over LAN, Tailnet, or SSH.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenClaw needs the mic for Voice Wake tests and agent audio capture.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.</string>
+    <string>OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>OpenClaw needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
     <key>NSRemindersUsageDescription</key>

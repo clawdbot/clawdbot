@@ -1,18 +1,70 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
-import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
-import { promisify } from "node:util";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
+import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
 import { pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
-const execFileAsync = promisify(execFile);
+const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
+
+type GatewayTlsLog = {
+  info?: (message: string) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+type GatewayTlsDegradation = {
+  event: "gateway.tls.degraded";
+  ownerKind: "gateway";
+  ownerId: "tls";
+  reason: "atomic hard-link publication unavailable";
+  state: "best-effort";
+};
+
+const GATEWAY_TLS_DEGRADATION: GatewayTlsDegradation = {
+  event: "gateway.tls.degraded",
+  ownerKind: "gateway",
+  ownerId: "tls",
+  reason: "atomic hard-link publication unavailable",
+  state: "best-effort",
+};
+
+function isHardLinkUnsupportedError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
+}
+
+async function publishGeneratedTlsOutput(
+  stagedPath: string,
+  finalPath: string,
+  contents: string,
+): Promise<boolean> {
+  try {
+    await fs.link(stagedPath, finalPath);
+    return false;
+  } catch (error) {
+    if (!isHardLinkUnsupportedError(error)) {
+      throw error;
+    }
+  }
+
+  // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
+  // no-overwrite semantics without pathname cleanup that could delete concurrent output;
+  // a failed best-effort write may leave this attempt's partial file for operator cleanup.
+  const handle = await fs.open(finalPath, "wx", 0o600);
+  try {
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  return true;
+}
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
 // fingerprint advertised to clients.
@@ -30,7 +82,7 @@ export type GatewayTlsRuntime = {
 async function generateSelfSignedCert(params: {
   certPath: string;
   keyPath: string;
-  log?: { info?: (msg: string) => void };
+  log?: GatewayTlsLog;
 }): Promise<void> {
   const certDir = path.dirname(params.certPath);
   const keyDir = path.dirname(params.keyPath);
@@ -44,35 +96,74 @@ async function generateSelfSignedCert(params: {
       "openssl not found in trusted system directories. Install it in an OS-managed location.",
     );
   }
-  // Use execFile with a trusted system binary; certificate paths are arguments,
-  // not shell text.
-  await execFileAsync(opensslBin, [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-sha256",
-    "-days",
-    "3650",
-    "-nodes",
-    "-keyout",
-    params.keyPath,
-    "-out",
-    params.certPath,
-    "-subj",
-    "/CN=openclaw-gateway",
-  ]);
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
-  params.log?.info?.(
-    `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
-  );
+  const certStageDir = await fs.mkdtemp(path.join(certDir, ".openclaw-gateway-tls-cert-"));
+  const stagedCertPath = path.join(certStageDir, "cert.pem");
+  let keyStageDir: string | undefined;
+  try {
+    keyStageDir = await fs.mkdtemp(path.join(keyDir, ".openclaw-gateway-tls-key-"));
+    const stagedKeyPath = path.join(keyStageDir, "key.pem");
+    await Promise.all([fs.chmod(certStageDir, 0o700), fs.chmod(keyStageDir, 0o700)]);
+    // OpenSSL never sees the configured final paths, so timeout and generation
+    // failures cannot strand a half-written certificate pair there.
+    await runExec(
+      opensslBin,
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-days",
+        "3650",
+        "-nodes",
+        "-keyout",
+        stagedKeyPath,
+        "-out",
+        stagedCertPath,
+        "-subj",
+        "/CN=openclaw-gateway",
+      ],
+      {
+        logOutput: false,
+        timeoutMs: GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS,
+      },
+    );
+    await Promise.all([fs.chmod(stagedKeyPath, 0o600), fs.chmod(stagedCertPath, 0o600)]);
+    const [cert, key] = await Promise.all([
+      fs.readFile(stagedCertPath, "utf8"),
+      fs.readFile(stagedKeyPath, "utf8"),
+    ]);
+    tls.createSecureContext({ cert, key, minVersion: "TLSv1.3" });
+    let usedBestEffortPublication = await publishGeneratedTlsOutput(
+      stagedCertPath,
+      params.certPath,
+      cert,
+    );
+    usedBestEffortPublication =
+      (await publishGeneratedTlsOutput(stagedKeyPath, params.keyPath, key)) ||
+      usedBestEffortPublication;
+    if (usedBestEffortPublication) {
+      params.log?.warn?.(
+        `[GATEWAY_TLS_DEGRADED] best-effort gateway:tls: ${GATEWAY_TLS_DEGRADATION.reason}.`,
+        GATEWAY_TLS_DEGRADATION,
+      );
+    }
+    params.log?.info?.(
+      `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
+    );
+  } finally {
+    await Promise.allSettled(
+      [certStageDir, keyStageDir]
+        .filter((dir): dir is string => Boolean(dir))
+        .map((dir) => fs.rm(dir, { force: true, recursive: true })),
+    );
+  }
 }
 
 /** Load or generate gateway TLS material and return server-ready TLS options. */
 export async function loadGatewayTlsRuntime(
   cfg: GatewayTlsConfig | undefined,
-  log?: { info?: (msg: string) => void; warn?: (msg: string) => void },
+  log?: GatewayTlsLog,
 ): Promise<GatewayTlsRuntime> {
   if (!cfg || cfg.enabled !== true) {
     return { enabled: false, required: false };

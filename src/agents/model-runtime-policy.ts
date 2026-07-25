@@ -4,6 +4,7 @@
  * Agent execution uses this to choose a model/provider-specific runtime policy
  * from agent entries, model catalog config, provider config, or QA overrides.
  */
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
@@ -79,13 +80,7 @@ function normalizeModelIdForProvider(
 }
 
 function parseProviderModelKey(key: string): { provider: string; modelId: string } | undefined {
-  const slash = key.indexOf("/");
-  if (slash <= 0) {
-    return undefined;
-  }
-  const provider = normalizeProviderId(key.slice(0, slash));
-  const modelId = key.slice(slash + 1).trim();
-  return provider && modelId ? { provider, modelId } : undefined;
+  return parseModelCatalogRef(key) ?? undefined;
 }
 
 function resolveEffectiveProvider(

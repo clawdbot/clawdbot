@@ -10,8 +10,8 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
-} from "./memory-state.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+} from "./memory-state.test-fixtures.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 afterEach(() => {
   clearMemoryPluginState();
@@ -48,7 +48,7 @@ describe("dual-kind memory registration gate", () => {
       name: "Dual Plugin",
       kind: ["memory", "context-engine"],
       register(api) {
-        api.registerMemoryRuntime(createStubMemoryRuntime());
+        api.registerMemoryCapability({ runtime: createStubMemoryRuntime() });
       },
     });
 
@@ -59,7 +59,7 @@ describe("dual-kind memory registration gate", () => {
         level: "warn",
         source: "/virtual/dual-plugin/index.ts",
         message:
-          "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
+          "dual-kind plugin not selected for memory slot; skipping memory capability registration",
       },
     ]);
   });
@@ -77,7 +77,7 @@ describe("dual-kind memory registration gate", () => {
         memorySlotSelected: true,
       }),
       register(api) {
-        api.registerMemoryRuntime(createStubMemoryRuntime());
+        api.registerMemoryCapability({ runtime: createStubMemoryRuntime() });
       },
     });
 
@@ -101,7 +101,7 @@ describe("dual-kind memory registration gate", () => {
       name: "Memory Only",
       kind: "memory",
       register(api) {
-        api.registerMemoryRuntime(createStubMemoryRuntime());
+        api.registerMemoryCapability({ runtime: createStubMemoryRuntime() });
       },
     });
 

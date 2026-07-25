@@ -9,6 +9,7 @@ type ResolveConfigPathMock = Mock<() => string>;
 
 type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
+  resolveGatewayPort: Mock<(cfg?: OpenClawConfig) => number>;
   hasConfiguredChannels: UnknownMock;
   hasConfiguredChannelsForReadOnlyScope: UnknownMock;
   readBestEffortConfig: UnknownMock;
@@ -28,6 +29,7 @@ type StatusScanSharedMocks = {
 export function createStatusScanSharedMocks(configPathLabel: string): StatusScanSharedMocks {
   return {
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
+    resolveGatewayPort: vi.fn((cfg?: OpenClawConfig) => cfg?.gateway?.port ?? 18789),
     hasConfiguredChannels: vi.fn(),
     hasConfiguredChannelsForReadOnlyScope: vi.fn(),
     readBestEffortConfig: vi.fn(),
@@ -217,6 +219,7 @@ export async function loadStatusScanModuleForTest(
       const config = await mocks.readBestEffortConfig();
       return { config, sourceConfig: config };
     },
+    resolveGatewayPort: mocks.resolveGatewayPort,
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
     getStatusCommandSecretTargetIds,
@@ -368,13 +371,11 @@ function createStatusGatewayProbeFailure() {
 
 export function createStatusMemorySearchConfig(): OpenClawConfig {
   return createStatusScanConfig({
-    agents: {
-      defaults: {
-        memorySearch: {
-          provider: "local",
-          local: { modelPath: "/tmp/model.gguf" },
-          fallback: "none",
-        },
+    memory: {
+      search: {
+        provider: "local",
+        local: { modelPath: "/tmp/model.gguf" },
+        fallback: "none",
       },
     },
   });

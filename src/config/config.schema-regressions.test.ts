@@ -3,26 +3,16 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
-  it("accepts session write-lock acquire timeout", () => {
-    const res = validateConfigObject({
-      session: {
-        writeLock: {
-          acquireTimeoutMs: 60_000,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            fallback: "voyage",
-          },
+      memory: {
+        search: {
+          fallback: "voyage",
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -31,12 +21,14 @@ describe("config schema regressions", () => {
 
   it('accepts memorySearch provider "mistral"', () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "mistral",
-          },
+      memory: {
+        search: {
+          provider: "mistral",
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -45,12 +37,14 @@ describe("config schema regressions", () => {
 
   it('accepts memorySearch provider "bedrock"', () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-          },
+      memory: {
+        search: {
+          provider: "bedrock",
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -59,15 +53,17 @@ describe("config schema regressions", () => {
 
   it("rejects local memorySearch GPU policy", () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "local",
-            local: {
-              gpu: "cpu",
-            },
+      memory: {
+        search: {
+          provider: "local",
+          local: {
+            gpu: "cpu",
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
@@ -76,37 +72,40 @@ describe("config schema regressions", () => {
 
   it("accepts memorySearch.qmd.extraCollections", () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            qmd: {
-              extraCollections: [
-                { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-              ],
-            },
+      memory: {
+        search: {
+          qmd: {
+            extraCollections: [
+              { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+            ],
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     });
 
     expect(res.ok).toBe(true);
   });
 
-  it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
+  it("accepts agents.entries.*.memory.search.qmd.extraCollections", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
-            memorySearch: {
-              qmd: {
-                extraCollections: [
-                  { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-                ],
+        entries: {
+          main: {
+            memory: {
+              search: {
+                qmd: {
+                  extraCollections: [
+                    { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+                  ],
+                },
               },
             },
           },
-        ],
+        },
       },
     });
 
@@ -147,34 +146,17 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts 1M-character tool result caps for long-context agents", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          contextLimits: {
-            toolResultMaxChars: 1_000_000,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts agents.defaults and agents.list contextLimits overrides", () => {
+  it("accepts agents.defaults and agents.entries contextLimits overrides", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 24_000,
             postCompactionMaxChars: 4_000,
           },
         },
-        list: [
-          {
-            id: "writer",
+        entries: {
+          writer: {
             skillsLimits: {
               maxSkillsPromptChars: 30_000,
             },
@@ -182,24 +164,23 @@ describe("config schema regressions", () => {
               memoryGetMaxChars: 24_000,
             },
           },
-        ],
+        },
       },
     });
 
     expect(res.ok).toBe(true);
   });
 
-  it("accepts agents.list experimental localModelLean overrides", () => {
+  it("accepts agents.entries experimental localModelLean overrides", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "gemma",
+        entries: {
+          gemma: {
             experimental: {
               localModelLean: true,
             },
           },
-        ],
+        },
       },
     });
 
@@ -300,7 +281,7 @@ describe("config schema regressions", () => {
             primary: "anthropic/claude-opus-4-6",
             fallbacks: ["openai/gpt-5.4-mini"],
           },
-          pdfMaxBytesMb: 12,
+          pdfMaxMb: 12,
           pdfMaxPages: 25,
         },
       },
@@ -314,7 +295,7 @@ describe("config schema regressions", () => {
       agents: {
         defaults: {
           pdfModel: { primary: "openai/gpt-5.4-mini" },
-          pdfMaxBytesMb: 0,
+          pdfMaxMb: 0,
           pdfMaxPages: 0,
         },
       },
@@ -323,7 +304,7 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       const issuePaths = res.issues.map((issue) => issue.path);
-      expect(issuePaths).toContain("agents.defaults.pdfMaxBytesMb");
+      expect(issuePaths).toContain("agents.defaults.pdfMaxMb");
       expect(issuePaths).toContain("agents.defaults.pdfMaxPages");
     }
   });
@@ -338,59 +319,10 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts browser local startup timeout settings", () => {
-    const res = validateConfigObject({
-      browser: {
-        localLaunchTimeoutMs: 45_000,
-        localCdpReadyTimeoutMs: 30_000,
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects out-of-range browser local startup timeout settings", () => {
-    const res = validateConfigObject({
-      browser: {
-        localLaunchTimeoutMs: 120_001,
-        localCdpReadyTimeoutMs: 0,
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {
         extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts browser.tabCleanup overrides", () => {
-    const res = validateConfigObject({
-      browser: {
-        tabCleanup: {
-          enabled: true,
-          idleMinutes: 10,
-          maxTabsPerSession: 10,
-          sweepMinutes: 5,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects browser.tabCleanup.sweepMinutes when not positive", () => {
-    const res = validateConfigObject({
-      browser: {
-        tabCleanup: {
-          sweepMinutes: 0,
-        },
       },
     });
 
@@ -409,24 +341,10 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts tools.media.asyncCompletion.directSend", () => {
-    const res = validateConfigObject({
-      tools: {
-        media: {
-          asyncCompletion: {
-            directSend: true,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
   it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
     const res = validateConfigObject({
       discovery: {
         wideArea: {
-          enabled: true,
           domain: "openclaw.internal",
         },
       },
@@ -435,10 +353,10 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects bindings referencing an agentId missing from agents.list (openclaw#84692)", () => {
+  it("rejects bindings referencing an agentId missing from agents.entries (openclaw#84692)", () => {
     const res = validateConfigObject({
       agents: {
-        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
       },
       bindings: [
         {
@@ -455,10 +373,10 @@ describe("config schema regressions", () => {
     }
   });
 
-  it("accepts bindings whose agentId is present in agents.list", () => {
+  it("accepts bindings whose agentId is present in agents.entries", () => {
     const res = validateConfigObject({
       agents: {
-        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
       },
       bindings: [
         {
@@ -472,24 +390,17 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts bindings that match normalized agents.list ids", () => {
+  it("rejects non-addressable agents.entries keys", () => {
     const res = validateConfigObject({
       agents: {
-        list: [{ id: "Team Ops", model: "anthropic/claude-3-5-sonnet" }],
+        entries: { "Team Ops": { model: "anthropic/claude-3-5-sonnet" } },
       },
-      bindings: [
-        {
-          type: "route",
-          agentId: "team-ops",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
   });
 
-  it("skips binding agentId check when agents.list is empty (legacy passthrough)", () => {
+  it("skips binding agentId check when agents.entries is absent", () => {
     const res = validateConfigObject({
       bindings: [
         {

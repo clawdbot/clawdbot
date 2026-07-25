@@ -109,3 +109,8 @@ export {
   type CapturedPluginRegistration,
 } from "../plugins/captured-registration.js";
 export { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
+export {
+  createPluginRuntimeMediaMock,
+  createPluginRuntimeMock,
+  type PluginRuntimeMediaMock,
+} from "./test-helpers/plugin-runtime-mock.js";

@@ -1,7 +1,7 @@
 /**
  * Collects configured native harness runtime ids from model provider config.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { OPENCLAW_AGENT_RUNTIME_ID, isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
@@ -59,15 +59,7 @@ function parseConfiguredModelRef(
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
-    return undefined;
-  }
-  return {
-    provider: normalizeProviderId(trimmed.slice(0, slash)),
-    modelId: trimmed.slice(slash + 1).trim(),
-  };
+  return parseModelCatalogRef(value) ?? undefined;
 }
 
 function resolveConfiguredModelHarnessRuntime(params: {

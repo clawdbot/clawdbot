@@ -3,6 +3,7 @@
  * lazy-loads HTTP execution only when a search is run.
  */
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SearchConfigRecord,
   WebSearchProviderPlugin,
@@ -15,14 +16,9 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildBraveWebSearchProviderBase } from "../web-search-shared.js";
 
-type BraveWebSearchRuntime = typeof import("./brave-web-search-provider.runtime.js");
-
-let braveWebSearchRuntimePromise: Promise<BraveWebSearchRuntime> | undefined;
-
-function loadBraveWebSearchRuntime(): Promise<BraveWebSearchRuntime> {
-  braveWebSearchRuntimePromise ??= import("./brave-web-search-provider.runtime.js");
-  return braveWebSearchRuntimePromise;
-}
+const loadBraveWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./brave-web-search-provider.runtime.js"),
+);
 
 const BraveSearchSchema = {
   type: "object",

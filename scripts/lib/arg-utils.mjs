@@ -1,5 +1,8 @@
 // Shared argument parsing helpers for repository scripts.
-/** Read a flag value from `--flag value` or `--flag=value` arguments. */
+/**
+ * Read a flag value from `--flag value` or `--flag=value` arguments.
+ * @internal Shared repository-script contract.
+ */
 export function readFlagValue(args, name) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -13,7 +16,10 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
-/** Remove the leading `--` separator inserted by package-manager script invocations. */
+/**
+ * Remove the leading `--` separator inserted by package-manager script invocations.
+ * @internal Shared repository-script contract.
+ */
 export function stripLeadingPackageManagerSeparator(argv) {
   return argv[0] === "--" ? argv.slice(1) : argv;
 }
@@ -68,25 +74,6 @@ function consumeIntFlag(argv, index, flag, options = {}) {
   };
 }
 
-function consumeFloatFlag(argv, index, flag, options = {}) {
-  const raw = readFlagOptionValue(argv, index, flag);
-  if (!raw) {
-    return null;
-  }
-  const parsed = parseFloatFlagValue(raw.value, flag);
-  const min = options.min ?? Number.NEGATIVE_INFINITY;
-  const includeMin = options.includeMin ?? true;
-  const isValid = Number.isFinite(parsed) && (includeMin ? parsed >= min : parsed > min);
-  if (!isValid) {
-    const comparator = includeMin ? "at least" : "greater than";
-    throw new Error(`${flag} must be ${comparator} ${min}`);
-  }
-  return {
-    nextIndex: raw.nextIndex,
-    value: parsed,
-  };
-}
-
 function readInlineFlagValue(arg, flag) {
   const prefix = `${flag}=`;
   return arg.startsWith(prefix) ? arg.slice(prefix.length) : null;
@@ -122,18 +109,6 @@ function parseIntegerFlagValue(raw, flag) {
   return parsed;
 }
 
-function parseFloatFlagValue(raw, flag) {
-  const text = String(raw).trim();
-  if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    throw new Error(`${flag} must be a number`);
-  }
-  const parsed = Number(text);
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`${flag} must be a finite number`);
-  }
-  return parsed;
-}
-
 /** Create a flag spec that assigns one string value to the parsed args object. */
 export function stringFlag(flag, key, options = {}) {
   return {
@@ -154,7 +129,10 @@ export function stringFlag(flag, key, options = {}) {
   };
 }
 
-/** Create a flag spec that appends repeated string values to an array field. */
+/**
+ * Create a flag spec that appends repeated string values to an array field.
+ * @internal Shared repository-script contract.
+ */
 export function stringListFlag(flag, key, options = {}) {
   return {
     consume(argv, index) {
@@ -194,18 +172,13 @@ function createAssignedValueFlag(flag, consumeOption) {
   };
 }
 
-/** Create a flag spec that parses and assigns a safe integer value. */
+/**
+ * Create a flag spec that parses and assigns a safe integer value.
+ * @internal Shared repository-script contract.
+ */
 export function intFlag(flag, key, options) {
   return createAssignedValueFlag(flag, (argv, index) => {
     const option = consumeIntFlag(argv, index, flag, options);
-    return option ? { ...option, key } : null;
-  });
-}
-
-/** Create a flag spec that parses and assigns a finite floating-point value. */
-export function floatFlag(flag, key, options) {
-  return createAssignedValueFlag(flag, (argv, index) => {
-    const option = consumeFloatFlag(argv, index, flag, options);
     return option ? { ...option, key } : null;
   });
 }

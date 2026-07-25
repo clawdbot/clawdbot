@@ -8,7 +8,7 @@ import type {
 } from "./config.js";
 
 /** Tool names owned by Codex app-server and normally excluded from OpenClaw dynamic tools. */
-export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
+const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "read",
   "write",
   "edit",
@@ -21,6 +21,8 @@ export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "tool_search",
   "tool_search_code",
 ] as const;
+const CODEX_NATIVE_GOAL_TOOL_EXCLUDES = ["get_goal", "create_goal", "update_goal"] as const;
+const CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES = new Set(["exec", "process"]);
 
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
@@ -36,6 +38,15 @@ type CodexDynamicToolProfileEnv = {
 export function normalizeCodexDynamicToolName(name: string): string {
   const normalized = name.trim().toLowerCase();
   return DYNAMIC_TOOL_NAME_ALIASES[normalized] ?? normalized;
+}
+
+/** True only for the host-scoped OpenClaw run's exact tool contract. */
+export function isSystemAgentOnlyCodexDynamicToolAllowlist(
+  toolsAllow: readonly string[] | undefined,
+): boolean {
+  return (
+    toolsAllow?.length === 1 && normalizeCodexDynamicToolName(toolsAllow[0] ?? "") === "openclaw"
+  );
 }
 
 /** Returns true for private QA runs that force the Codex runtime profile. */
@@ -67,7 +78,7 @@ function normalizeCodexModelId(modelId: string | undefined): string {
 }
 
 /** Returns true when model behavior requires direct dynamic-tool registration. */
-export function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
+function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
   return shouldDisableCodexToolSearchForModel(modelId);
 }
 
@@ -77,7 +88,7 @@ export function shouldDisableCodexToolSearchForModel(modelId: string | undefined
 }
 
 /** Resolves dynamic-tool loading after applying model-specific restrictions. */
-export function resolveCodexDynamicToolsLoadingForModel(
+function resolveCodexDynamicToolsLoadingForModel(
   config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
   modelId: string | undefined,
   env: CodexDynamicToolProfileEnv = process.env,
@@ -105,9 +116,37 @@ export function filterCodexDynamicTools<T extends { name: string }>(
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
   env: CodexDynamicToolProfileEnv = process.env,
 ): T[] {
+  return filterCodexDynamicToolsWithOptions(tools, config, env, {
+    preserveOpenClawShell: false,
+  });
+}
+
+/** Keeps exec/process only when Codex cannot advertise an environment-backed native shell. */
+export function filterCodexDynamicToolsWithOpenClawShell<T extends { name: string }>(
+  tools: T[],
+  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
+  env: CodexDynamicToolProfileEnv = process.env,
+): T[] {
+  return filterCodexDynamicToolsWithOptions(tools, config, env, {
+    preserveOpenClawShell: true,
+  });
+}
+
+function filterCodexDynamicToolsWithOptions<T extends { name: string }>(
+  tools: T[],
+  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
+  env: CodexDynamicToolProfileEnv,
+  options: { preserveOpenClawShell: boolean },
+): T[] {
   const excludes = new Set<string>();
+  for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
+    excludes.add(name);
+  }
   if (!isForcedPrivateQaCodexRuntime(env)) {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
+      if (options.preserveOpenClawShell && CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)) {
+        continue;
+      }
       excludes.add(name);
     }
   }

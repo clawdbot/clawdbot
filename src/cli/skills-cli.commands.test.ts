@@ -353,13 +353,19 @@ describe("skills cli commands", () => {
     );
   }
 
-  it("searches ClawHub skills from the native CLI", async () => {
+  it("distinguishes duplicate ClawHub skill slugs by owner", async () => {
     searchSkillsFromClawHubMock.mockResolvedValue([
       {
         slug: "calendar",
+        ownerHandle: "demo-owner",
         displayName: "Calendar",
         summary: "CalDAV helpers",
         version: "1.2.3",
+      },
+      {
+        slug: "calendar",
+        ownerHandle: "work-owner",
+        displayName: "Team Calendar",
       },
     ]);
 
@@ -369,10 +375,61 @@ describe("skills cli commands", () => {
       query: "calendar",
       limit: undefined,
     });
-    expect(
-      runtimeLogs.some((line) => line.includes("calendar v1.2.3  Calendar")),
-      "search result log",
-    ).toBe(true);
+    expect(runtimeLogs).toEqual([
+      "@demo-owner/calendar v1.2.3  Calendar  CalDAV helpers",
+      "@work-owner/calendar  Team Calendar",
+    ]);
+  });
+
+  it("keeps bare skill slugs when ClawHub omits the owner", async () => {
+    searchSkillsFromClawHubMock.mockResolvedValue([
+      {
+        slug: "legacy-calendar",
+        displayName: "Legacy Calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "search", "calendar"]);
+
+    expect(runtimeLogs).toEqual(["legacy-calendar  Legacy Calendar"]);
+  });
+
+  it("keeps multiline ClawHub search metadata on one terminal line", async () => {
+    searchSkillsFromClawHubMock.mockResolvedValue([
+      {
+        slug: "oauth-helper",
+        ownerHandle: "demo-owner",
+        displayName: "Oauth\nHelper",
+        summary:
+          "Automate OAuth login flows.\nSupports multiple providers.\n\nFeatures:\n- Confirm before authorizing",
+      },
+    ]);
+
+    await runCommand(["skills", "search", "oauth-helper"]);
+
+    expect(runtimeLogs).toEqual([
+      "@demo-owner/oauth-helper  Oauth Helper  Automate OAuth login flows. Supports multiple providers. Features: - Confirm before authorizing",
+    ]);
+  });
+
+  it("keeps ClawHub skill search JSON output unchanged", async () => {
+    const results = [
+      {
+        score: 0.9,
+        slug: "calendar",
+        ownerHandle: "demo-owner",
+        displayName: "Calendar",
+        summary: "CalDAV helpers",
+        version: "1.2.3",
+        updatedAt: 1_700_000_000_000,
+      },
+    ];
+    searchSkillsFromClawHubMock.mockResolvedValue(results);
+
+    await runCommand(["skills", "search", "calendar", "--json"]);
+
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeStdout).toEqual([JSON.stringify({ results }, null, 2)]);
   });
 
   it("rejects partial numeric search limits", async () => {
@@ -1467,3 +1524,4 @@ describe("skills cli commands", () => {
     expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

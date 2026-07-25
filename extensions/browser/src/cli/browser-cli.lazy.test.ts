@@ -180,6 +180,28 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(tabsCommand.parent?.opts().json).toBe(true);
   });
 
+  it("accepts the shipped trailing browser profile order after lazy loading", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "tabs",
+      "--browser-profile",
+      "remote",
+    ]);
+
+    await program.parseAsync(["browser", "tabs", "--browser-profile", "remote"], {
+      from: "user",
+    });
+
+    const tabsCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.tabsAction, "tabs action call"),
+      "tabs action",
+    );
+    expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
+  });
+
   it("skips browser option values when selecting the lazy command group", async () => {
     const program = new Command();
     program.name("openclaw");

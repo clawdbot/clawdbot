@@ -5,6 +5,8 @@ import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 const text = (value: string) => ({ type: "text", text: value }) as const;
 const thinking = (value: string) => ({ type: "thinking", thinking: value }) as const;
 const toolUse = () => ({ type: "tool_use", name: "search" }) as const;
+const pairingQr = (terminalText: string) =>
+  ({ type: "openclaw_pairing_qr", terminalText }) as const;
 
 const messageWithContent = (content: readonly Record<string, unknown>[]) =>
   ({
@@ -85,6 +87,22 @@ describe("TuiStreamAssembler", () => {
     assembler.ingestDelta("run-3", messageWithContent([text("Streamed")]), false);
     const finalText = assembler.finalize("run-3", { role: "assistant", content: [] }, false);
     expect(finalText).toBe("Streamed");
+  });
+
+  it("renders pairing QR terminal text from final assistant content", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-pair-qr",
+      messageWithContent([
+        text("Scan this QR code with the OpenClaw iOS app:"),
+        pairingQr("\u001b[47m\u001b[30m█ ▄\u001b[0m"),
+      ]),
+      false,
+    );
+    expect(finalText).toContain("Scan this QR code with the OpenClaw iOS app:");
+    expect(finalText).toContain("█ ▄");
+    expect(finalText).not.toContain("\u001b[47m");
+    expect(finalText).not.toBe("(no output)");
   });
 
   it("falls back to event error message when final payload has no renderable text", () => {

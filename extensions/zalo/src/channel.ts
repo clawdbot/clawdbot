@@ -14,15 +14,18 @@ import {
   createChatChannelPlugin,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  defineChannelMessageAdapter,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createEmptyChannelResult,
-  createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -30,15 +33,15 @@ import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversatio
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  isNumericTargetId,
-  sendPayloadWithChunkedTextAndMedia,
-} from "openclaw/plugin-sdk/reply-payload";
+import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-payload";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -51,7 +54,7 @@ import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
-import { createZaloSetupWizardProxy, zaloSetupAdapter } from "./setup-core.js";
+import { createZaloSetupWizardProxy, zaloSetupAdapter, zaloSetupContract } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -74,36 +77,46 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
   return trimmed.replace(/^(zalo|zl):/i, "").trim();
 }
 
+function looksLikeZaloChatId(raw: string, normalized?: string): boolean {
+  const target = normalizeZaloMessagingTarget(normalized ?? raw);
+  return Boolean(target);
+}
+
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 const zaloSetupWizard = createZaloSetupWizardProxy(
   async () => (await import("./setup-surface.js")).zaloSetupWizard,
 );
 const zaloTextChunkLimit = 2000;
 
-const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
+async function sendZaloDelivery(ctx: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  accountId?: string | null;
+  mediaUrl?: string;
+}): Promise<{ messageId: string; receipt: MessageReceipt }> {
+  const result = await (
+    await loadZaloChannelRuntime()
+  ).sendZaloText({
+    to: ctx.to,
+    text: ctx.text,
+    accountId: ctx.accountId ?? undefined,
+    mediaUrl: ctx.mediaUrl,
+    cfg: ctx.cfg,
+  });
+  if (!result.ok) {
+    throw new Error(result.error ?? `Failed to send Zalo ${ctx.mediaUrl ? "media" : "message"}`);
+  }
+  return { messageId: result.messageId ?? "", receipt: result.receipt };
+}
+
+const zaloSendResultAdapter = createAttachedChannelResultAdapter({
   channel: "zalo",
-  sendText: async ({ to, text, accountId, cfg }) =>
-    await (
-      await loadZaloChannelRuntime()
-    ).sendZaloText({
-      to,
-      text,
-      accountId: accountId ?? undefined,
-      cfg,
-    }),
-  sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) =>
-    await (
-      await loadZaloChannelRuntime()
-    ).sendZaloText({
-      to,
-      text,
-      accountId: accountId ?? undefined,
-      mediaUrl,
-      cfg,
-    }),
+  sendText: sendZaloDelivery,
+  sendMedia: sendZaloDelivery,
 });
 
-export const zaloMessageAdapter = defineChannelMessageAdapter({
+const zaloMessageAdapter = defineChannelMessageAdapter({
   id: "zalo",
   durableFinal: {
     capabilities: {
@@ -113,25 +126,8 @@ export const zaloMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async ({ to, text, accountId, cfg }) =>
-      await (
-        await loadZaloChannelRuntime()
-      ).sendZaloText({
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        cfg,
-      }),
-    media: async ({ to, text, mediaUrl, accountId, cfg }) =>
-      await (
-        await loadZaloChannelRuntime()
-      ).sendZaloText({
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        mediaUrl,
-        cfg,
-      }),
+    text: sendZaloDelivery,
+    media: sendZaloDelivery,
   },
 });
 
@@ -195,6 +191,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       id: "zalo",
       meta,
       setup: zaloSetupAdapter,
+      setupContract: zaloSetupContract,
       setupWizard: zaloSetupWizard,
       capabilities: {
         chatTypes: ["direct", "group"],
@@ -234,7 +231,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         normalizeTarget: normalizeZaloMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
-          looksLikeId: isNumericTargetId,
+          looksLikeId: looksLikeZaloChatId,
           hint: "<chatId>",
         },
       },
@@ -296,15 +293,19 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       chunker: chunkTextForOutbound,
       chunkerMode: "text",
       textChunkLimit: zaloTextChunkLimit,
+      // Core strips only conservative runtime markers. This delivery profile also
+      // removes model/tool XML and failed-tool traces before Zalo chunking.
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({
           ctx,
           textChunkLimit: zaloTextChunkLimit,
           chunker: chunkTextForOutbound,
-          sendText: (nextCtx) => zaloRawSendResultAdapter.sendText!(nextCtx),
-          sendMedia: (nextCtx) => zaloRawSendResultAdapter.sendMedia!(nextCtx),
+          sendText: (nextCtx) => zaloSendResultAdapter.sendText!(nextCtx),
+          sendMedia: (nextCtx) => zaloSendResultAdapter.sendMedia!(nextCtx),
           emptyResult: createEmptyChannelResult("zalo"),
+          onResult: ctx.onDeliveryResult,
         }),
-      ...zaloRawSendResultAdapter,
+      ...zaloSendResultAdapter,
     },
   });

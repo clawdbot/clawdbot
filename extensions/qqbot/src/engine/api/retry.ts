@@ -10,6 +10,9 @@
  * parameterized by `RetryPolicy` and optional `PersistentRetryPolicy`.
  */
 
+import { createChannelApiRetryRunner, resolveRetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -60,41 +63,58 @@ export async function withRetry<T>(
   persistentPolicy?: PersistentRetryPolicy,
   logger?: EngineLogger,
 ): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= policy.maxRetries; attempt++) {
+  // A persistent loop owns its terminal failure. Mark that Error so the outer
+  // bounded runner does not accidentally restart the completed deadline loop.
+  const persistentFailures = new WeakSet<Error>();
+  const retryConfig = resolveRetryConfig(undefined, {
+    attempts: policy.maxRetries + 1,
+    minDelayMs: policy.baseDelayMs,
+    maxDelayMs: policy.backoff === "fixed" ? policy.baseDelayMs : 2_147_000_000,
+    jitter: 0,
+  });
+  const runWithRetry = createChannelApiRetryRunner({
+    retry: retryConfig,
+    strictShouldRetry: true,
+    retryAfterMs: () => undefined,
+    shouldRetry: (err, attempt) => {
+      const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+      const shouldRetry =
+        !persistentFailures.has(error) && policy.shouldRetry?.(error, attempt - 1) !== false;
+      if (shouldRetry) {
+        const delayMs =
+          policy.backoff === "fixed"
+            ? retryConfig.minDelayMs
+            : Math.min(retryConfig.minDelayMs * 2 ** (attempt - 1), retryConfig.maxDelayMs);
+        logger?.debug?.(
+          `[qqbot:retry] Attempt ${attempt} failed, retrying in ${delayMs}ms: ${truncateUtf16Safe(error.message, 100)}`,
+        );
+      }
+      return shouldRetry;
+    },
+  });
+  return await runWithRetry(async () => {
     try {
       return await fn();
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(formatErrorMessage(err));
-
-      // Check for persistent-retry trigger before standard retry logic.
-      if (persistentPolicy?.shouldPersistRetry(lastError)) {
-        (logger?.warn ?? logger?.error)?.(
-          `[qqbot:retry] Hit persistent-retry trigger, entering persistent loop (timeout=${persistentPolicy.timeoutMs / 1000}s)`,
-        );
+      const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
+      if (!persistentPolicy?.shouldPersistRetry(error)) {
+        throw error;
+      }
+      (logger?.warn ?? logger?.error)?.(
+        `[qqbot:retry] Hit persistent-retry trigger, entering persistent loop (timeout=${persistentPolicy.timeoutMs / 1000}s)`,
+      );
+      try {
         return await persistentRetryLoop(fn, persistentPolicy, logger);
-      }
-
-      // Check whether this error is retryable under the standard policy.
-      if (policy.shouldRetry?.(lastError, attempt) === false) {
-        throw lastError;
-      }
-
-      // Schedule the next retry with the configured backoff.
-      if (attempt < policy.maxRetries) {
-        const delay =
-          policy.backoff === "exponential" ? policy.baseDelayMs * 2 ** attempt : policy.baseDelayMs;
-
-        logger?.debug?.(
-          `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${lastError.message.slice(0, 100)}`,
-        );
-        await sleep(delay);
+      } catch (persistentError) {
+        const terminal =
+          persistentError instanceof Error
+            ? persistentError
+            : new Error(formatErrorMessage(persistentError));
+        persistentFailures.add(terminal);
+        throw terminal;
       }
     }
-  }
-
-  throw lastError!;
+  });
 }
 
 /**
@@ -144,12 +164,6 @@ async function persistentRetryLoop<T>(
     `[qqbot:retry] Persistent retry timed out after ${policy.timeoutMs / 1000}s (${attempt} attempts)`,
   );
   throw lastError ?? new Error(`Persistent retry timed out (${policy.timeoutMs / 1000}s)`);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 // ============ Pre-built Retry Policies ============

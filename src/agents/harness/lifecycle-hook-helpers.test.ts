@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitAgentHarnessAgentEndHook,
-  clearAgentHarnessFinalizeRetryBudget,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessLlmInputHook,
@@ -30,7 +29,7 @@ const EVENT = {
 
 describe("agent harness lifecycle hook helpers", () => {
   afterEach(() => {
-    clearAgentHarnessFinalizeRetryBudget();
+    Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
   });
 
   it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
@@ -126,83 +125,6 @@ describe("agent harness lifecycle hook helpers", () => {
     ).resolves.toEqual({ action: "continue" });
   });
 
-  it("clears finalize retry budgets by run id", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        retry: {
-          instruction: "revise once",
-          idempotencyKey: "stable",
-          maxAttempts: 1,
-        },
-      }),
-    };
-
-    // Retry budgets are per run. A finalize hook may ask for exactly one
-    // revision, and clearing the run id should make that run eligible again.
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise once" });
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "continue" });
-
-    clearAgentHarnessFinalizeRetryBudget({ runId: "run-1" });
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise once" });
-  });
-
-  it("does not clear finalize retry budgets for runs that only share a prefix", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        retry: {
-          instruction: "revise child once",
-          idempotencyKey: "stable",
-          maxAttempts: 1,
-        },
-      }),
-    };
-    const childEvent = {
-      ...EVENT,
-      runId: "run:child",
-    };
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: childEvent,
-        ctx: { runId: "run:child", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise child once" });
-
-    clearAgentHarnessFinalizeRetryBudget({ runId: "run" });
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: childEvent,
-        ctx: { runId: "run:child", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "continue" });
-  });
-
   it("keys finalize retry budgets by context run id when the event omits run id", async () => {
     const hookRunner = {
       hasHooks: () => true,
@@ -235,16 +157,6 @@ describe("agent harness lifecycle hook helpers", () => {
         hookRunner: hookRunner as never,
       }),
     ).resolves.toEqual({ action: "continue" });
-
-    clearAgentHarnessFinalizeRetryBudget({ runId: "run-from-context" });
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: eventWithoutRunId,
-        ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise from context run" });
   });
 
   it("preserves merged revise reasons when retry metadata is present", async () => {

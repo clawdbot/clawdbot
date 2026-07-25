@@ -3,21 +3,21 @@
  * Core is outcome-agnostic — it handles the mechanics of each outcome
  * without knowing *why* the decision was made.
  */
-export type HookDecision = HookDecisionPass | HookDecisionBlock;
+type HookDecision = HookDecisionPass | HookDecisionBlock;
 
 /** Content is fine. Proceed normally. */
-export type HookDecisionPass = {
+type HookDecisionPass = {
   outcome: "pass";
 };
 
 /** Prefix for user-facing replacement messages when a `block` decision stops a request. */
-export const BLOCK_MESSAGE_PREFIX = "Your message could not be sent";
+const BLOCK_MESSAGE_PREFIX = "Your message could not be sent";
 
 /**
  * Content is blocked. `reason` is internal plugin-local detail; core must not log,
  * persist, broadcast, or expose it verbatim. `message` is user-facing detail.
  */
-export type HookDecisionBlock = {
+type HookDecisionBlock = {
   outcome: "block";
   /** Internal plugin-local reason. Do not log, persist, broadcast, or expose verbatim. */
   reason: string;
@@ -43,23 +43,6 @@ export function resolveBlockMessage(
   return blockedBy
     ? `${BLOCK_MESSAGE_PREFIX}: blocked by ${blockedBy}`
     : `${BLOCK_MESSAGE_PREFIX}: blocked`;
-}
-
-/** Outcome severity for most-restrictive-wins merging. Higher = more restrictive. */
-export const HOOK_DECISION_SEVERITY: Record<HookDecision["outcome"], number> = {
-  pass: 0,
-  block: 2,
-};
-
-/**
- * Merge two HookDecisions using most-restrictive-wins semantics.
- * `block > pass`
- */
-export function mergeHookDecisions(a: HookDecision | undefined, b: HookDecision): HookDecision {
-  if (!a) {
-    return b;
-  }
-  return HOOK_DECISION_SEVERITY[b.outcome] > HOOK_DECISION_SEVERITY[a.outcome] ? b : a;
 }
 
 /**

@@ -1,0 +1,30 @@
+{
+  "embeddedAgentSessionTarget": {},
+  "memoryHostSessionCorpus": {},
+  "sessionAccessorRead": {
+    "src/agents/subagent-announce-output.ts": 3,
+    "src/agents/subagent-announce.test-support.ts": 2,
+    "src/agents/tools/transcripts-tool.ts": 2,
+    "src/auto-reply/reply/commands-session-store.ts": 2,
+    "src/config/sessions/session-accessor.entry.ts": 2,
+    "src/config/sessions/transcript.ts": 2
+  },
+  "sessionAccessorWrite": {
+    "src/agents/subagent-spawn.test-helpers.ts": 1,
+    "src/plugins/registry-runtime.ts": 1
+  },
+  "sessionCompactManualTrim": {},
+  "sessionLifecycleCleanup": {
+    "src/config/sessions/session-accessor.sqlite-projection.ts": 2,
+    "src/config/sessions/store-maintenance-operations.ts": 2,
+    "src/infra/state-migrations.legacy-session-store.ts": 2
+  },
+  "transcriptWriter": {
+    "src/agents/embedded-agent-runner/compaction-hooks.ts": 2,
+    "src/agents/embedded-agent-runner/thinking-replay-repair.ts": 2,
+    "src/agents/embedded-agent-runner/tool-result-truncation.ts": 3,
+    "src/agents/embedded-agent-runner/transcript-rewrite.ts": 3,
+    "src/config/sessions/session-accessor.sqlite-events.ts": 3,
+    "src/config/sessions/session-accessor.transcript.ts": 2
+  }
+}

@@ -13,13 +13,6 @@ public struct OpenClawCanvasPlacement: Codable, Sendable, Equatable {
     public var y: Double?
     public var width: Double?
     public var height: Double?
-
-    public init(x: Double? = nil, y: Double? = nil, width: Double? = nil, height: Double? = nil) {
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
-    }
 }
 
 public struct OpenClawCanvasPresentParams: Codable, Sendable, Equatable {
@@ -67,10 +60,4 @@ public struct OpenClawCanvasSnapshotParams: Codable, Sendable, Equatable {
     public var maxWidth: Int?
     public var quality: Double?
     public var format: OpenClawCanvasSnapshotFormat?
-
-    public init(maxWidth: Int? = nil, quality: Double? = nil, format: OpenClawCanvasSnapshotFormat? = nil) {
-        self.maxWidth = maxWidth
-        self.quality = quality
-        self.format = format
-    }
 }

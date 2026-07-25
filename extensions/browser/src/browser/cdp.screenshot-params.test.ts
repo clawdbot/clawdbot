@@ -13,6 +13,7 @@ const sentMessages = vi.hoisted(() => {
 // Tracks whether emulation has been cleared so post-clear Runtime.evaluate
 // can return different values for the "emulated tab" vs "non-emulated tab" tests.
 const mockState = vi.hoisted(() => ({
+  bringToFrontError: undefined as Error | undefined,
   emulationCleared: false,
   emulatedTab: true,
   viewport: { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 } as Record<string, unknown>,
@@ -28,6 +29,9 @@ vi.mock("./cdp.helpers.js", () => ({
     ) => {
       const send = (method: string, params?: Record<string, unknown>) => {
         sentMessages.push({ method, params });
+        if (method === "Page.bringToFront" && mockState.bringToFrontError) {
+          return Promise.reject(mockState.bringToFrontError);
+        }
         if (method === "Page.captureScreenshot") {
           return Promise.resolve({ data: "AAAA" });
         }
@@ -89,6 +93,7 @@ const localProfile: ResolvedBrowserProfile = {
 
 beforeEach(() => {
   sentMessages.length = 0;
+  mockState.bringToFrontError = undefined;
   mockState.emulationCleared = false;
   mockState.emulatedTab = true;
   mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
@@ -113,10 +118,25 @@ describe("CDP screenshot params", () => {
     expect(call.params).not.toHaveProperty("captureBeyondViewport");
     expect(call.params).not.toHaveProperty("clip");
 
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).toContain("Page.bringToFront");
+    expect(methods.indexOf("Page.enable")).toBeLessThan(methods.indexOf("Page.bringToFront"));
+    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
+      methods.indexOf("Page.captureScreenshot"),
+    );
+
     const emulationCalls = sentMessages.filter(
       (m) => m.method === "Emulation.setDeviceMetricsOverride",
     );
     expect(emulationCalls).toHaveLength(0);
+  });
+
+  it("captures when Page.bringToFront is unsupported", async () => {
+    mockState.bringToFrontError = new Error("unsupported");
+
+    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X" });
+
+    requireSentMessage("Page.captureScreenshot");
   });
 
   it("uses the requested timeout as the raw CDP command timeout", async () => {

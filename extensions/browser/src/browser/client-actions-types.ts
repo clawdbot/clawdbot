@@ -1,6 +1,7 @@
 /**
  * Shared result types for browser client action helpers.
  */
+import type { BrowserDownloadResult } from "./download-types.js";
 import type { AnnotationItem } from "./screenshot-annotate.js";
 
 /** Generic success result for action endpoints. */
@@ -11,6 +12,7 @@ export type BrowserActionTabResult = {
   ok: true;
   targetId: string;
   url?: string;
+  download?: BrowserDownloadResult;
 };
 
 /** Success result carrying a filesystem output path. */

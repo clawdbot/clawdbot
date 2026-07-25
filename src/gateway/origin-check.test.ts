@@ -1,7 +1,7 @@
 // Browser origin tests document same-origin, private-network, loopback, forwarded
 // host, and explicit allowlist decisions for gateway browser surfaces.
 import { describe, expect, it } from "vitest";
-import { checkBrowserOrigin } from "./origin-check.js";
+import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
   it.each([
@@ -143,5 +143,44 @@ describe("checkBrowserOrigin", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
+  });
+
+  it.each([
+    "chrome-extension://abcdefghijklmnop",
+    "tauri://localhost",
+    "electron://localhost",
+    "app://desktop",
+  ])("accepts an exactly allowlisted hosted app origin: %s", (origin) => {
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+      ok: true,
+      matchedBy: "allowlist",
+    });
+  });
+
+  it.each([
+    "tauri://localhost/path",
+    "tauri://localhost/admin/..",
+    "tauri://localhost/%2e",
+    "https://control.example.com\\admin",
+    "tauri://localhost?mode=admin",
+    "tauri://localhost#admin",
+    "tauri://user@localhost",
+    "file:///tmp/openclaw.html",
+    "data:text/plain,hello",
+  ])("rejects a non-origin URL value: %s", (origin) => {
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+      ok: false,
+      reason: "origin missing or invalid",
+    });
+  });
+
+  it("recognizes only canonical Chrome extension origins", () => {
+    expect(
+      normalizeChromeExtensionOrigin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBe("chrome-extension://abcdefghijklmnopabcdefghijklmnop");
+    expect(normalizeChromeExtensionOrigin("chrome-extension://abc")).toBeUndefined();
+    expect(
+      normalizeChromeExtensionOrigin("https://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBeUndefined();
   });
 });

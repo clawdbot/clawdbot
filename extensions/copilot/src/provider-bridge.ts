@@ -4,11 +4,11 @@ import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 
-export const COPILOT_BYOK_PROVIDER_ERROR =
+const COPILOT_BYOK_PROVIDER_ERROR =
   "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
-export const COPILOT_BYOK_TRANSPORT_POLICY_ERROR =
+const COPILOT_BYOK_TRANSPORT_POLICY_ERROR =
   "[copilot-attempt] BYOK does not support OpenClaw provider request proxy, TLS, or private-network policy overrides";
-export const COPILOT_BYOK_ENDPOINT_POLICY_ERROR =
+const COPILOT_BYOK_ENDPOINT_POLICY_ERROR =
   "[copilot-attempt] BYOK endpoint is blocked by OpenClaw SSRF policy";
 
 const CREDENTIAL_QUERY_PARAM_NAMES = new Set([
@@ -43,9 +43,9 @@ const CREDENTIAL_QUERY_PARAM_NAMES = new Set([
 ]);
 const QUERY_PARAM_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
-export type CopilotProviderMode = "github-copilot" | "byok";
+type CopilotProviderMode = "github-copilot" | "byok";
 
-export type CopilotModelProviderInput = {
+type CopilotModelProviderInput = {
   api?: string;
   id: string;
   provider: string;

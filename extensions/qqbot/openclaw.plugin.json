@@ -10,9 +10,6 @@
   "contracts": {
     "tools": ["qqbot_channel_api", "qqbot_remind"]
   },
-  "channelEnvVars": {
-    "qqbot": ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"]
-  },
   "enabledByDefault": true,
   "skills": ["./skills"],
   "configSchema": {
@@ -109,26 +106,19 @@
             "enum": ["doc", "hot-reload"]
           },
           "streaming": {
-            "anyOf": [
-              {
-                "type": "boolean"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["off", "partial"],
+                "default": "partial"
               },
-              {
-                "type": "object",
-                "additionalProperties": true,
-                "properties": {
-                  "mode": {
-                    "type": "string",
-                    "enum": ["off", "partial"],
-                    "default": "partial"
-                  },
-                  "c2cStreamApi": {
-                    "type": "boolean",
-                    "description": "Use QQ C2C official stream_messages API (single-message typing-style updates)."
-                  }
-                }
+              "nativeTransport": {
+                "type": "boolean",
+                "description": "Use QQ's official C2C stream_messages API for DM replies (single-message typing-style updates)."
               }
-            ]
+            }
           },
           "groups": { "$ref": "#/$defs/groups" }
         }
@@ -159,26 +149,19 @@
         "enum": ["doc", "hot-reload"]
       },
       "streaming": {
-        "anyOf": [
-          {
-            "type": "boolean"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "partial"],
+            "default": "partial"
           },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": ["off", "partial"],
-                "default": "partial"
-              },
-              "c2cStreamApi": {
-                "type": "boolean",
-                "description": "Use QQ C2C official stream_messages API (single-message typing-style updates)."
-              }
-            }
+          "nativeTransport": {
+            "type": "boolean",
+            "description": "Use QQ's official C2C stream_messages API for DM replies (single-message typing-style updates)."
           }
-        ]
+        }
       },
       "accounts": {
         "type": "object",

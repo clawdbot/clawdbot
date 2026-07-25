@@ -9,7 +9,7 @@ title: "ACP agents — setup"
 
 For the overview, operator runbook, and concepts, see [ACP agents](/tools/acp-agents).
 
-The sections below cover acpx harness config, plugin setup for the MCP bridges, and permission configuration.
+This page covers acpx harness config, plugin setup for the MCP bridges, and permission configuration.
 
 Use this page only when you are setting up the ACP/acpx route. For native Codex
 app-server runtime config, use [Codex harness](/plugins/codex-harness). For
@@ -27,21 +27,30 @@ Prefer the native route unless you explicitly need ACP/acpx behavior.
 
 ## acpx harness support (current)
 
-Current acpx built-in harness aliases:
+Built-in acpx harness aliases (from the pinned `acpx` dependency):
 
-- `claude`
-- `codex`
-- `copilot`
-- `cursor` (Cursor CLI: `cursor-agent acp`)
-- `droid`
-- `gemini`
-- `iflow`
-- `kilocode`
-- `kimi`
-- `kiro`
-- `openclaw`
-- `opencode`
-- `qwen`
+| Alias        | Wraps                                                                                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------- |
+| `claude`     | [Claude Code](https://claude.ai/code)                                                                           |
+| `codex`      | [Codex CLI](https://codex.openai.com)                                                                           |
+| `copilot`    | [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-chat/use-copilot-chat-in-the-command-line) |
+| `cursor`     | [Cursor CLI](https://cursor.com/docs/cli/acp) (`cursor-agent acp`)                                              |
+| `droid`      | [Factory Droid](https://www.factory.ai)                                                                         |
+| `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                             |
+| `gemini`     | [Gemini CLI](https://github.com/google/gemini-cli)                                                              |
+| `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                              |
+| `kilocode`   | [Kilocode](https://kilocode.ai)                                                                                 |
+| `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                              |
+| `kiro`       | [Kiro CLI](https://kiro.dev)                                                                                    |
+| `mux`        | [Mux](https://mux.coder.com)                                                                                    |
+| `opencode`   | [OpenCode](https://opencode.ai)                                                                                 |
+| `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                                     |
+| `pi`         | [Pi Coding Agent](https://github.com/mariozechner/pi)                                                           |
+| `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                                     |
+| `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                                |
+| `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                            |
+
+`factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
 If your local Cursor install still exposes ACP as `agent acp`, override the `cursor` agent command in your acpx config instead of changing the built-in default.
@@ -78,22 +87,16 @@ Core ACP baseline:
       "kiro",
       "openclaw",
       "opencode",
-      "openclaw",
       "qwen",
     ],
-    maxConcurrentSessions: 8,
     stream: {
-      coalesceIdleMs: 300,
-      maxChunkChars: 1200,
-    },
-    runtime: {
-      ttlMinutes: 120,
+      deliveryMode: "live",
     },
   },
 }
 ```
 
-Thread binding config is channel-adapter specific. Example for Discord:
+Thread binding config is shared across supported channel adapters:
 
 ```json5
 {
@@ -102,14 +105,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
       enabled: true,
       idleHours: 24,
       maxAgeHours: 0,
-    },
-  },
-  channels: {
-    discord: {
-      threadBindings: {
-        enabled: true,
-        spawnSessions: true,
-      },
+      spawnSessions: true,
     },
   },
 }
@@ -117,7 +113,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
 
 If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 
-- Discord: `channels.discord.threadBindings.spawnSessions=true`
+- Discord: `session.threadBindings.spawnSessions=true`
 
 Current-conversation binds do not require child-thread creation. They require an active conversation context and a channel adapter that exposes ACP conversation bindings.
 
@@ -161,36 +157,15 @@ Then verify backend health:
 /acp doctor
 ```
 
-### acpx command and version configuration
+### acpx runtime startup probe
 
-By default, the `acpx` plugin registers the embedded ACP backend during Gateway
-startup and waits for the embedded runtime startup probe before the gateway
-`ready` signal. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
+The `acpx` plugin embeds the ACP runtime directly (no separate `acpx` binary or
+version to configure). By default it registers the embedded backend during
+Gateway startup and waits for a startup probe before the gateway `ready`
+signal. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
 intentionally keep the startup probe disabled. Run `/acp doctor` for an explicit
 on-demand probe.
-
-Override the command or version in plugin config:
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "acpx": {
-        "enabled": true,
-        "config": {
-          "command": "../acpx/dist/cli.js",
-          "expectedVersion": "any"
-        }
-      }
-    }
-  }
-}
-```
-
-- `command` accepts an absolute path, relative path (resolved from the OpenClaw workspace), or command name.
-- `expectedVersion: "any"` disables strict version matching.
-- Custom `command` paths disable plugin-local auto-install.
 
 Override an individual ACP agent command with structured arguments when a path
 or flag value should remain one argv token:
@@ -220,12 +195,12 @@ or flag value should remain one argv token:
 
 See [Plugins](/tools/plugin).
 
-### Automatic dependency install
+### Automatic adapter download
 
-When you install OpenClaw globally with `npm install -g openclaw`, the acpx
-runtime dependencies (platform-specific binaries) are installed automatically
-via a postinstall hook. If the automatic install fails, the gateway still starts
-normally and reports the missing dependency through `openclaw acp doctor`.
+`acpx` auto-downloads ACP adapters (for example the Claude and Codex ACP
+bridges) via `npx` on first use. You do not need to install adapter packages
+manually, and there is no separate postinstall step for OpenClaw itself. If an
+adapter download or spawn fails, `/acp doctor` reports the failure.
 
 ### Plugin tools MCP bridge
 
@@ -245,6 +220,8 @@ What this does:
   bootstrap.
 - Exposes plugin tools already registered by installed and enabled OpenClaw
   plugins.
+- Passes the active ACP session identity to plugin tool factories, so
+  agent-scoped tools stay in that agent's namespace.
 - Keeps the feature explicit and default-off.
 
 Security and trust notes:
@@ -287,8 +264,9 @@ openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
 Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
-`sessions_spawn` does not accept per-call timeout overrides. Restart the
-gateway after changing this value.
+`sessions_spawn` does not accept per-call timeout overrides; the operator path
+is `agents.defaults.subagents.runTimeoutSeconds`. Restart the gateway after
+changing `timeoutSeconds`.
 
 ### Health probe agent configuration
 
@@ -327,10 +305,10 @@ Controls which operations the harness agent can perform without prompting.
 
 Controls what happens when a permission prompt would be shown but no interactive TTY is available (which is always the case for ACP sessions).
 
-| Value  | Behavior                                                          |
-| ------ | ----------------------------------------------------------------- |
-| `fail` | Abort the session with `AcpRuntimeError`. **(default)**           |
-| `deny` | Silently deny the permission and continue (graceful degradation). |
+| Value  | Behavior                                                                 |
+| ------ | ------------------------------------------------------------------------ |
+| `fail` | Abort the session with `PermissionPromptUnavailableError`. **(default)** |
+| `deny` | Silently deny the permission and continue (graceful degradation).        |
 
 ### Configuration
 
@@ -344,7 +322,7 @@ openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
 Restart the gateway after changing these values.
 
 <Warning>
-OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `AcpRuntimeError: Permission prompt unavailable in non-interactive mode`.
+OpenClaw defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode`.
 
 If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
 </Warning>

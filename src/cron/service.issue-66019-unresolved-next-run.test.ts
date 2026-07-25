@@ -8,7 +8,7 @@ import {
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import * as schedule from "./schedule.js";
 import { createCronServiceState } from "./service/state.js";
-import { onTimer } from "./service/timer.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
 
 const issue66019Fixtures = setupCronRegressionFixtures({ prefix: "cron-66019-" });

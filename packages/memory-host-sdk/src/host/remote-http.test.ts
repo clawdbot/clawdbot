@@ -1,6 +1,6 @@
 // Memory Host SDK tests cover remote http behavior.
 import { describe, expect, it } from "vitest";
-import { MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE, withRemoteHttpResponse } from "./remote-http.js";
+import { withRemoteHttpResponse } from "./remote-http.js";
 
 describe("package withRemoteHttpResponse", () => {
   function makeFetchDeps({ useEnvProxy = false }: { useEnvProxy?: boolean } = {}) {
@@ -29,7 +29,7 @@ describe("package withRemoteHttpResponse", () => {
     });
 
     expect(deps.calls[0]).toHaveProperty("url", "https://memory.example/v1/embeddings");
-    expect(deps.calls[0]).toHaveProperty("mode", MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE);
+    expect(deps.calls[0]).toHaveProperty("mode", "trusted_env_proxy");
   });
 
   it("keeps strict guarded fetch mode when proxy env would not proxy the target", async () => {

@@ -136,7 +136,7 @@ function extractImagesFromPart(
   throwMalformedOpenRouterImageResponse(malformedResponseError);
 }
 
-export function extractOpenRouterImagesFromResponse(
+function extractOpenRouterImagesFromResponse(
   body: unknown,
   options: { malformedResponseError?: string } = {},
 ): GeneratedImageAsset[] {

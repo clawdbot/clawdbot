@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements tool coverage report behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isRecord,
   normalizeOptionalString as readString,
@@ -32,11 +33,11 @@ export type QaToolCoverageSuiteSummary = {
   };
 };
 
-export type QaToolCoverageStatus = "pass" | "fail" | "missing" | "not-run";
-export type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
-export type QaToolCoverageBucket = QaRuntimeToolBucket;
+type QaToolCoverageStatus = "pass" | "fail" | "missing" | "not-run";
+type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
+type QaToolCoverageBucket = QaRuntimeToolBucket;
 
-export type QaToolCoverageRow = {
+type QaToolCoverageRow = {
   tool: string;
   runtimeToolName?: string;
   bucket: QaToolCoverageBucket;
@@ -58,7 +59,7 @@ export type QaToolCoverageRow = {
   details?: string;
 };
 
-export type QaToolCoverageReport = {
+type QaToolCoverageReport = {
   runtimePair: [RuntimeId, RuntimeId];
   generatedAt: string;
   evaluated: boolean;
@@ -203,7 +204,11 @@ function buildRow(params: {
   const metadata = params.group.scenarios
     .map(readScenarioRuntimeToolCoverageMetadata)
     .find((entry) => entry.required);
-  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]);
+  const firstScenario = expectDefined(
+    params.group.scenarios[0],
+    `QA tool fixture group ${params.group.tool} scenario`,
+  );
+  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(firstScenario);
   const rowMetadata = metadata ?? fallbackMetadata;
   const runtimeToolName = params.group.scenarios.map(readScenarioRuntimeToolName).find(Boolean);
   return {

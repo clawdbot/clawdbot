@@ -9,8 +9,8 @@ import {
   resolveCanonicalReadPath,
 } from "./path-errors.js";
 
-export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
+const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const TEXT_SNIFF_MAX_BYTES = 8192;
 
 type FileFetchParams = {

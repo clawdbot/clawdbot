@@ -57,6 +57,63 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
+  it("rejects hex and exponent integer strings for dreaming phase counts", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          phases: {
+            deep: {
+              limit: "0x10",
+              minRecallCount: "1e3",
+              minUniqueQueries: "2.5",
+              recencyHalfLifeDays: "1.5",
+              maxAgeDays: "0x20",
+              maxPromotedSnippetTokens: "1e2",
+              execution: {
+                maxOutputTokens: "0x40",
+                timeoutMs: "1e4",
+              },
+            },
+            light: {
+              lookbackDays: "0x0a",
+              limit: "1e2",
+            },
+          },
+        },
+      },
+    });
+
+    // Non-decimal forms fall back to shipped defaults / omit optional fields.
+    expect(resolved.phases.deep.limit).toBe(10);
+    expect(resolved.phases.deep.minRecallCount).toBe(3);
+    expect(resolved.phases.deep.minUniqueQueries).toBe(3);
+    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
+    expect(resolved.phases.deep.maxAgeDays).toBe(30);
+    expect(resolved.phases.deep.maxPromotedSnippetTokens).toBe(160);
+    expect(resolved.phases.deep.execution.maxOutputTokens).toBeUndefined();
+    expect(resolved.phases.deep.execution.timeoutMs).toBeUndefined();
+    expect(resolved.phases.light.lookbackDays).toBe(2);
+    expect(resolved.phases.light.limit).toBe(100);
+  });
+
+  it("parses true/false strings while keeping invalid-value defaults local", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          enabled: " TRUE ",
+          verboseLogging: "false",
+          storage: { separateReports: "invalid" },
+          phases: { light: { enabled: " FALSE " } },
+        },
+      },
+    });
+
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.verboseLogging).toBe(false);
+    expect(resolved.storage.separateReports).toBe(false);
+    expect(resolved.phases.light.enabled).toBe(false);
+  });
+
   it("lets execution defaults and phase execution override the top-level dreaming model", () => {
     const resolved = resolveMemoryDreamingConfig({
       pluginConfig: {

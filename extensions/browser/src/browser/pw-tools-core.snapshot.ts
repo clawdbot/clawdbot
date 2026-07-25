@@ -7,19 +7,23 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Page } from "playwright-core";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { Frame, Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
+import type { BrowserDownloadResult } from "./download-types.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
-  getRoleSnapshotStats,
+  finalizeRoleSnapshot,
   type RoleSnapshotOptions,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
@@ -30,6 +34,7 @@ import {
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  isDownloadStartingNavigationError,
   isPolicyDenyNavigationError,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
@@ -76,7 +81,7 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
           (anchor.textContent || anchor.getAttribute("aria-label") || "")
             .replace(/\s+/g, " ")
             .trim()
-            .slice(0, 120) || href;
+            .slice(0, 121) || href;
         seen.add(href);
         out.push({ text, url: href });
         if (out.length >= 100) {
@@ -86,7 +91,12 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
       return out;
     })
     .catch(() => []);
-  return Array.isArray(urls) ? urls : [];
+  return Array.isArray(urls)
+    ? urls.map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
+        return entry;
+      })
+    : [];
 }
 
 function buildStoredAriaRefs(
@@ -257,33 +267,61 @@ export async function snapshotAiViaPlaywright(opts: {
     ssrfPolicy: opts.ssrfPolicy,
   });
 
-  let snapshot = await page.ariaSnapshot({
-    mode: "ai",
-    timeout: resolveSnapshotTimeoutMs(opts.timeoutMs),
-  });
-  if (opts.urls) {
-    snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page));
-  }
-  const maxChars = opts.maxChars;
-  const limit =
-    typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
-      ? Math.floor(maxChars)
-      : undefined;
-  let truncated = false;
-  if (limit && snapshot.length > limit) {
-    snapshot = `${snapshot.slice(0, limit)}\n\n[...TRUNCATED - page too large]`;
-    truncated = true;
-  }
-
-  const built = buildRoleSnapshotFromAiSnapshot(snapshot);
-  storeRoleRefsForTarget({
+  return await withSnapshotFrameGuard({
     page,
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    refs: built.refs,
-    mode: "aria",
+    run: async (isFrameCurrent) => {
+      let snapshot = await page.ariaSnapshot({
+        mode: "ai",
+        timeout: resolveSnapshotTimeoutMs(opts.timeoutMs),
+      });
+      if (opts.urls) {
+        snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page));
+      }
+      const built = buildRoleSnapshotFromAiSnapshot(snapshot);
+      const finalized = finalizeRoleSnapshot({
+        snapshot,
+        refs: built.refs,
+        maxChars: opts.maxChars,
+      });
+      assertSnapshotFrameCurrent(isFrameCurrent);
+      storeRoleRefsForTarget({
+        page,
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        refs: finalized.refs,
+        mode: "aria",
+      });
+      return finalized;
+    },
   });
-  return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
+}
+
+function assertSnapshotFrameCurrent(isFrameCurrent: () => boolean): void {
+  if (!isFrameCurrent()) {
+    throw new Error("Frame changed while its browser snapshot was being captured; retry.");
+  }
+}
+
+async function withSnapshotFrameGuard<T>(opts: {
+  page: Page;
+  /** Omit for page-wide AI snapshots, whose refs can include every frame. */
+  frame?: Frame;
+  run: (isFrameCurrent: () => boolean) => Promise<T>;
+}): Promise<T> {
+  let frameCurrent = true;
+  const onFrameChanged = (frame: Frame) => {
+    if (!opts.frame || frame === opts.frame) {
+      frameCurrent = false;
+    }
+  };
+  opts.page.on("framenavigated", onFrameChanged);
+  opts.page.on("framedetached", onFrameChanged);
+  try {
+    return await opts.run(() => frameCurrent);
+  } finally {
+    opts.page.off("framenavigated", onFrameChanged);
+    opts.page.off("framedetached", onFrameChanged);
+  }
 }
 
 async function finalizeRoleSnapshotViaPlaywright(params: {
@@ -291,30 +329,39 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   cdpUrl: string;
   targetId?: string;
   frameSelector?: string;
+  frame?: Frame;
+  isFrameCurrent?: () => boolean;
   mode: "aria" | "role";
   built: { snapshot: string; refs: RoleRefMap };
   urls?: boolean;
+  maxChars?: number;
 }): Promise<{
   snapshot: string;
+  truncated?: boolean;
   refs: RoleRefMap;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
   const snapshot = params.urls
     ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
     : params.built.snapshot;
+  if (params.isFrameCurrent) {
+    assertSnapshotFrameCurrent(params.isFrameCurrent);
+  }
+  const finalized = finalizeRoleSnapshot({
+    snapshot,
+    refs: params.built.refs,
+    maxChars: params.maxChars,
+  });
   storeRoleRefsForTarget({
     page: params.page,
     cdpUrl: params.cdpUrl,
     targetId: params.targetId,
-    refs: params.built.refs,
+    refs: finalized.refs,
     ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
+    ...(params.frame ? { frame: params.frame } : {}),
     mode: params.mode,
   });
-  return {
-    snapshot,
-    refs: params.built.refs,
-    stats: getRoleSnapshotStats(snapshot, params.built.refs),
-  };
+  return finalized;
 }
 
 /** Captures a role-ref snapshot used by model-facing browser interaction tools. */
@@ -326,10 +373,12 @@ export async function snapshotRoleViaPlaywright(opts: {
   refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
   urls?: boolean;
+  maxChars?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   snapshot: string;
+  truncated?: boolean;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
@@ -345,41 +394,70 @@ export async function snapshotRoleViaPlaywright(opts: {
     if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
       throw new Error("refs=aria does not support selector/frame snapshots yet.");
     }
-    const snapshot = await page.ariaSnapshot({
-      mode: "ai",
-      timeout: ariaSnapshotTimeout,
-    });
-    const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
-    return await finalizeRoleSnapshotViaPlaywright({
+    return await withSnapshotFrameGuard({
       page,
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      built,
-      mode: "aria",
-      urls: opts.urls,
+      run: async (isFrameCurrent) => {
+        const snapshot = await page.ariaSnapshot({
+          mode: "ai",
+          timeout: ariaSnapshotTimeout,
+        });
+        const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
+        return await finalizeRoleSnapshotViaPlaywright({
+          page,
+          cdpUrl: opts.cdpUrl,
+          targetId: opts.targetId,
+          isFrameCurrent,
+          built,
+          mode: "aria",
+          urls: opts.urls,
+          maxChars: opts.maxChars,
+        });
+      },
     });
   }
 
   const frameSelector = normalizeOptionalString(opts.frameSelector) ?? "";
   const selector = normalizeOptionalString(opts.selector) ?? "";
-  const locator = frameSelector
-    ? selector
-      ? page.frameLocator(frameSelector).locator(selector)
-      : page.frameLocator(frameSelector).locator(":root")
-    : selector
-      ? page.locator(selector)
-      : page.locator(":root");
-
-  const ariaSnapshot = await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
-  const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
-  return await finalizeRoleSnapshotViaPlaywright({
+  const frameElement = frameSelector
+    ? await page.locator(frameSelector).elementHandle({ timeout: ariaSnapshotTimeout })
+    : undefined;
+  let frame: Frame | undefined;
+  if (frameElement) {
+    try {
+      frame = (await frameElement.contentFrame()) ?? undefined;
+    } finally {
+      await frameElement.dispose();
+    }
+  }
+  if (frameSelector && !frame) {
+    throw new Error("Frame was unavailable while its browser snapshot was being captured.");
+  }
+  return await withSnapshotFrameGuard({
     page,
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-    frameSelector: frameSelector || undefined,
-    built,
-    mode: "role",
-    urls: opts.urls,
+    frame: frame ?? page.mainFrame(),
+    run: async (isFrameCurrent) => {
+      const locator = frame
+        ? selector
+          ? frame.locator(selector)
+          : frame.locator(":root")
+        : selector
+          ? page.locator(selector)
+          : page.locator(":root");
+      const ariaSnapshot = await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
+      const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
+      return await finalizeRoleSnapshotViaPlaywright({
+        page,
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        frameSelector: frameSelector || undefined,
+        frame: frame ?? undefined,
+        isFrameCurrent,
+        built,
+        mode: "role",
+        urls: opts.urls,
+        maxChars: opts.maxChars,
+      });
+    },
   });
 }
 
@@ -391,7 +469,7 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string }> {
+}): Promise<{ url: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -409,15 +487,16 @@ export async function navigateViaPlaywright(opts: {
   if (!url) {
     throw new Error("url is required");
   }
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   await assertBrowserNavigationAllowed({
     url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
-      browserProxyMode: opts.browserProxyMode,
-    }),
+    ...navigationPolicy,
   });
   const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
   let page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  let pageState = ensurePageState(page);
   const navigate = async () =>
     await gotoPageWithNavigationGuard({
       cdpUrl: opts.cdpUrl,
@@ -428,9 +507,54 @@ export async function navigateViaPlaywright(opts: {
       browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
-  let response;
+  const navigateWithDownloadCapture = async (): Promise<{
+    response: Awaited<ReturnType<typeof navigate>> | null;
+    download?: BrowserDownloadResult;
+  }> => {
+    const downloadCapture = createDownloadCaptureForPage(page, pageState, timeout, {
+      mode: "passive",
+      timeoutMessage: "Timeout waiting for navigation download",
+      beforeSave: async (download) => {
+        await assertBrowserNavigationResultAllowed({
+          url: download.url || url,
+          ...navigationPolicy,
+        });
+      },
+    });
+    void downloadCapture.promise.catch(() => {});
+    try {
+      const response = await navigate();
+      downloadCapture.cancel();
+      return { response };
+    } catch (err) {
+      if (!isDownloadStartingNavigationError(err, url) || !downloadCapture.armed) {
+        downloadCapture.cancel();
+        throw err;
+      }
+      try {
+        return { response: null, download: await downloadCapture.promise };
+      } catch (downloadErr) {
+        if (
+          downloadErr instanceof Error &&
+          downloadErr.message === "Timeout waiting for navigation download"
+        ) {
+          throw err;
+        }
+        if (isPolicyDenyNavigationError(downloadErr)) {
+          await closeBlockedNavigationTarget({
+            cdpUrl: opts.cdpUrl,
+            page,
+            targetId: opts.targetId,
+          });
+        }
+        throw downloadErr;
+      }
+    }
+  };
+
+  let navigationResult: Awaited<ReturnType<typeof navigateWithDownloadCapture>>;
   try {
-    response = await navigate();
+    navigationResult = await navigateWithDownloadCapture();
   } catch (err) {
     if (!isRetryableNavigateError(err)) {
       throw err;
@@ -444,18 +568,20 @@ export async function navigateViaPlaywright(opts: {
       reason: "retry navigate after detached frame",
     }).catch(() => {});
     page = await getPageForTargetId(opts);
-    ensurePageState(page);
-    response = await navigate();
+    pageState = ensurePageState(page);
+    navigationResult = await navigateWithDownloadCapture();
   }
   try {
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response,
-      ssrfPolicy: opts.ssrfPolicy,
-      browserProxyMode: opts.browserProxyMode,
-      targetId: opts.targetId,
-    });
+    if (!navigationResult.download) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response: navigationResult.response,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        targetId: opts.targetId,
+      });
+    }
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
       await closeBlockedNavigationTarget({
@@ -466,8 +592,11 @@ export async function navigateViaPlaywright(opts: {
     }
     throw err;
   }
-  const finalUrl = page.url();
-  return { url: finalUrl };
+  const finalUrl = navigationResult.download?.url || page.url();
+  return {
+    url: finalUrl,
+    ...(navigationResult.download ? { download: navigationResult.download } : {}),
+  };
 }
 
 /** Resizes the target page viewport within the browser action policy bounds. */

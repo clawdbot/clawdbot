@@ -38,7 +38,7 @@ import {
   normalizeTargetKind,
   normalizeThreadBindingDurationMs,
   normalizeThreadId,
-  rememberRecentUnboundWebhookEcho,
+  refreshUnboundThreadWebhookIdentity,
   removeBindingRecord,
   resolveBindingIdsForSession,
   resolveBindingRecordKey,
@@ -435,7 +435,7 @@ export function createThreadBindingManager(params: {
       if (!removed) {
         return null;
       }
-      rememberRecentUnboundWebhookEcho(removed);
+      refreshUnboundThreadWebhookIdentity(removed);
       if (persist) {
         saveBindingsToDisk();
       }

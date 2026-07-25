@@ -65,8 +65,29 @@ function makeStallingFetch(firstChunk: Uint8Array) {
   });
 }
 
+function makeResponseHeaderStallingFetch() {
+  return vi.fn(
+    async (_input: RequestInfo | URL, init?: RequestInit) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const rejectForAbort = () => reject(abortReasonError(signal));
+        if (signal?.aborted) {
+          rejectForAbort();
+          return;
+        }
+        signal?.addEventListener("abort", rejectForAbort, { once: true });
+      }),
+  );
+}
+
 function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
+}
+
+function abortReasonError(signal?: AbortSignal | null): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new Error("request aborted", { cause: signal?.reason });
 }
 
 function requireFetchGuardRequest(): unknown {
@@ -223,7 +244,8 @@ describe("readRemoteMediaBuffer", () => {
     readRemoteMediaBuffer = fetchModule.readRemoteMediaBuffer;
     saveRemoteMedia = fetchModule.saveRemoteMedia;
     saveResponseMedia = fetchModule.saveResponseMedia;
-    defaultFetchMediaMaxBytes = fetchModule.DEFAULT_FETCH_MEDIA_MAX_BYTES;
+    // Default cap mirrors the module-private DEFAULT_FETCH_MEDIA_MAX_BYTES.
+    defaultFetchMediaMaxBytes = (await import("@openclaw/media-core/constants")).MAX_DOCUMENT_BYTES;
   });
 
   beforeEach(() => {
@@ -233,6 +255,7 @@ describe("readRemoteMediaBuffer", () => {
         url: string;
         fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
         init?: RequestInit;
+        signal?: AbortSignal;
       };
       if (params.url.startsWith("http://127.0.0.1/")) {
         throw new Error("Blocked hostname or private/internal/special-use IP address");
@@ -242,7 +265,10 @@ describe("readRemoteMediaBuffer", () => {
         throw new Error("fetch is not available");
       }
       return {
-        response: await fetcher(params.url, params.init),
+        response: await fetcher(params.url, {
+          ...params.init,
+          ...(params.signal ? { signal: params.signal } : {}),
+        }),
         finalUrl: params.url,
         release: async () => {},
       };
@@ -310,6 +336,25 @@ describe("readRemoteMediaBuffer", () => {
     expect(body.wasCanceled()).toBe(true);
   });
 
+  it("accepts comma-joined identical content-length values", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("hello", {
+          status: 200,
+          headers: { "content-length": "5, 5" },
+        }),
+    );
+
+    const result = await readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      maxBytes: 5,
+      lookupFn: makeLookupFn(),
+    });
+
+    expect(result.buffer.toString()).toBe("hello");
+  });
+
   it("applies a default stream limit when maxBytes is omitted", async () => {
     const fetchImpl = vi.fn(
       async () =>
@@ -370,6 +415,166 @@ describe("readRemoteMediaBuffer", () => {
       fetchImpl,
       readIdleTimeoutMs,
       expectedError,
+    });
+  });
+
+  it("aborts when response headers exceed their deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = makeResponseHeaderStallingFetch();
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        responseHeaderTimeoutMs: 20,
+      }).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(result).resolves.toMatchObject({
+        name: "MediaFetchError",
+        code: "fetch_failed",
+        cause: { name: "TimeoutError" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the default response-header deadline for stalled media", async () => {
+    vi.useFakeTimers();
+    try {
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl: makeResponseHeaderStallingFetch(),
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+      }).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(15 * 60_000 + 5);
+
+      await expect(result).resolves.toMatchObject({
+        name: "MediaFetchError",
+        code: "fetch_failed",
+        cause: { name: "TimeoutError" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the response-header deadline while a healthy body keeps progressing", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              const failForAbort = () => controller.error(signal?.reason);
+              if (signal?.aborted) {
+                failForAbort();
+                return;
+              }
+              signal?.addEventListener("abort", failForAbort, { once: true });
+              setTimeout(() => controller.enqueue(new Uint8Array([1])), 25);
+              setTimeout(() => controller.enqueue(new Uint8Array([2])), 50);
+              setTimeout(() => {
+                signal?.removeEventListener("abort", failForAbort);
+                controller.close();
+              }, 75);
+            },
+          }),
+          { status: 200 },
+        );
+      });
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        responseHeaderTimeoutMs: 10,
+        readIdleTimeoutMs: 30,
+      });
+
+      await vi.advanceTimersByTimeAsync(80);
+
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from([1, 2]) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates a parent abort while waiting for response headers", async () => {
+    const parent = new AbortController();
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          const rejectForAbort = () => reject(abortReasonError(signal));
+          if (signal?.aborted) {
+            rejectForAbort();
+            return;
+          }
+          signal?.addEventListener("abort", rejectForAbort, { once: true });
+        }),
+    );
+    const result = readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      requestInit: { signal: parent.signal },
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      responseHeaderTimeoutMs: 60_000,
+    }).catch((error: unknown) => error);
+
+    parent.abort();
+
+    await expect(result).resolves.toMatchObject({
+      name: "MediaFetchError",
+      code: "fetch_failed",
+      cause: { name: "AbortError" },
+    });
+  });
+
+  it("keeps the parent abort active while reading the response body", async () => {
+    const parent = new AbortController();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]));
+            const failForAbort = () => controller.error(signal?.reason);
+            if (signal?.aborted) {
+              failForAbort();
+              return;
+            }
+            signal?.addEventListener("abort", failForAbort, { once: true });
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const result = readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      requestInit: { signal: parent.signal },
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      responseHeaderTimeoutMs: 60_000,
+    }).catch((error: unknown) => error);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    parent.abort();
+
+    await expect(result).resolves.toMatchObject({
+      name: "MediaFetchError",
+      code: "fetch_failed",
+      cause: { name: "AbortError" },
     });
   });
 
@@ -590,15 +795,18 @@ describe("readRemoteMediaBuffer", () => {
       lookupFn,
       dispatcherPolicy,
       mode: "trusted_explicit_proxy",
+      signal: expect.any(AbortSignal),
     });
   });
 
   it("passes request timeout through the guarded fetch path", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+    const parent = new AbortController();
 
     await readRemoteMediaBuffer({
       url: "https://example.com/file.bin",
       fetchImpl,
+      requestInit: { signal: parent.signal },
       lookupFn: makeLookupFn(),
       maxBytes: 1024,
       timeoutMs: 1234,
@@ -608,6 +816,7 @@ describe("readRemoteMediaBuffer", () => {
     expect(requireFetchGuardRequest()).toMatchObject({
       url: "https://example.com/file.bin",
       timeoutMs: 1234,
+      signal: parent.signal,
     });
   });
 
@@ -635,6 +844,92 @@ describe("readRemoteMediaBuffer", () => {
     expect(saved.path).toMatch(/[a-f0-9-]{36}\.png$/);
     expect(saved.path).not.toMatch(/photo---/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it("keeps saving a healthy streaming body after the response-header deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              const failForAbort = () => controller.error(signal?.reason);
+              if (signal?.aborted) {
+                failForAbort();
+                return;
+              }
+              signal?.addEventListener("abort", failForAbort, { once: true });
+              setTimeout(() => controller.enqueue(new Uint8Array([1])), 25);
+              setTimeout(() => controller.enqueue(new Uint8Array([2])), 50);
+              setTimeout(() => {
+                signal?.removeEventListener("abort", failForAbort);
+                controller.close();
+              }, 75);
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/octet-stream" } },
+        );
+      });
+      const result = saveRemoteMedia({
+        url: "https://example.com/download",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 8,
+        responseHeaderTimeoutMs: 10,
+        readIdleTimeoutMs: 30,
+      });
+
+      await vi.advanceTimersByTimeAsync(80);
+
+      const saved = await result;
+      await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the parent abort active while saving the response body", async () => {
+    const parent = new AbortController();
+    let bodyStarted!: () => void;
+    const bodyReady = new Promise<void>((resolve) => {
+      bodyStarted = resolve;
+    });
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]));
+            const failForAbort = () => controller.error(signal?.reason);
+            if (signal?.aborted) {
+              failForAbort();
+              return;
+            }
+            signal?.addEventListener("abort", failForAbort, { once: true });
+            bodyStarted();
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const result = saveRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      requestInit: { signal: parent.signal },
+      lookupFn: makeLookupFn(),
+      maxBytes: 8,
+      responseHeaderTimeoutMs: 60_000,
+    }).catch((error: unknown) => error);
+
+    await bodyReady;
+    parent.abort();
+
+    await expect(result).resolves.toMatchObject({
+      name: "MediaFetchError",
+      code: "fetch_failed",
+      cause: { name: "AbortError" },
+    });
   });
 
   it("clamps oversized saved-response idle timeout timers", async () => {
@@ -756,6 +1051,35 @@ describe("readRemoteMediaBuffer", () => {
 
       const saved = await saveRemoteMedia({
         url,
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 8,
+      });
+
+      expect(saved.fileName).toBe(fileName);
+    },
+  );
+
+  it.each([
+    [`attachment; filename*=UTF-8''reports%2FQ1.pdf`, "reports_Q1.pdf"],
+    [`attachment; filename*=UTF-8''reports%5CQ1.pdf`, "reports_Q1.pdf"],
+    [`attachment; filename*=UTF-8''reports%2F%2FQ1.pdf`, "reports__Q1.pdf"],
+  ])(
+    "keeps decoded content-disposition filename* separators inside the selected filename",
+    async (contentDisposition, fileName) => {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+            status: 200,
+            headers: {
+              "content-disposition": contentDisposition,
+              "content-type": "application/pdf",
+            },
+          }),
+      );
+
+      const saved = await saveRemoteMedia({
+        url: "https://example.com/download",
         fetchImpl,
         lookupFn: makeLookupFn(),
         maxBytes: 8,
@@ -1015,3 +1339,4 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,0 +1,22 @@
+schemaVersion: 1
+agent:
+  groupChat:
+    mentionPatterns:
+      - "@incident-response"
+  sandbox:
+    mode: all
+    scope: agent
+    workspaceAccess: rw
+  tools:
+    allow:
+      - read
+      - write
+      - web_fetch
+    deny:
+      - exec
+      - browser
+  heartbeat:
+    every: 30m
+    lightContext: true
+    isolatedSession: true
+    timeoutSeconds: 120

@@ -3,9 +3,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { applyPatch } from "diff";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
+import type { EditToolDetails } from "./tool-contracts.js";
 
 const testTheme = {
   bg: (_name: string, text: string) => text,
@@ -44,6 +48,23 @@ describe("edit tool", () => {
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
+  });
+
+  it("truncates exact-match mismatch hints without splitting UTF-16 surrogate pairs", async () => {
+    const boundaryEmoji = "🙂";
+    const filePath = await createTempFile(`${"a".repeat(799)}${boundaryEmoji}tail`);
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "replacement" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(`${"a".repeat(799)}\n... (truncated)`);
   });
 
   it("recovers success after a post-write throw when the edit already applied", async () => {
@@ -138,6 +159,99 @@ describe("edit tool", () => {
       type: "text",
       text: `Successfully replaced 2 block(s) in ${filePath}.`,
     });
+  });
+
+  it("preserves untouched lines during fuzzy multi-edits", async () => {
+    const original = [
+      "keep before  ",
+      "first target  ",
+      "first after",
+      "keep middle   ",
+      "second target  ",
+      "second after",
+      "keep after  ",
+      "",
+    ].join("\n");
+    const filePath = await createTempFile(original);
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-fuzzy",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "first target\nfirst after", newText: "FIRST\nFIRST2" },
+          { oldText: "second target\nsecond after", newText: "SECOND\nSECOND2" },
+        ],
+      },
+      undefined,
+    );
+
+    const expected = [
+      "keep before  ",
+      "FIRST",
+      "FIRST2",
+      "keep middle   ",
+      "SECOND",
+      "SECOND2",
+      "keep after  ",
+      "",
+    ].join("\n");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("expected changed edit details");
+    }
+    expect(applyPatch(original, details.patch)).toBe(expected);
+  });
+
+  it("preserves the correct duplicate line after a fuzzy replacement", async () => {
+    const original = "replace me   \nafter   \n";
+    const filePath = await createTempFile(original);
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-duplicate",
+      {
+        path: filePath,
+        edits: [{ oldText: "replace me\n", newText: "after\n" }],
+      },
+      undefined,
+    );
+
+    const expected = "after\nafter   \n";
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("expected changed edit details");
+    }
+    expect(applyPatch(original, details.patch)).toBe(expected);
+  });
+
+  it("accepts and strips model-added metadata while keeping required fields strict", async () => {
+    const filePath = await createTempFile("before\n");
+    const tool = createEditTool(tmpDir);
+    const raw = {
+      path: filePath,
+      reason: "model explanation",
+      edits: [{ oldText: "before", newText: "after", reason: "why" }],
+    };
+    const prepared = tool.prepareArguments?.(raw);
+
+    expect(Value.Check(tool.parameters, raw)).toBe(true);
+    expect(Value.Check(tool.parameters, { edits: raw.edits })).toBe(false);
+    expect(Value.Check(tool.parameters, { path: filePath, edits: [{ oldText: "before" }] })).toBe(
+      false,
+    );
+    expect(prepared).toEqual({
+      path: filePath,
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+    expect(Value.Check(tool.parameters, prepared)).toBe(true);
+    await tool.execute("call-metadata", prepared as never, undefined);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
   it("renders previews through custom edit operations", async () => {
@@ -270,9 +384,9 @@ describe("edit tool", () => {
       undefined,
     );
 
-    const tc0 = result.content[0];
+    const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-    expect((result as any).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
@@ -400,7 +514,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect((result as any).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
   });
 
@@ -496,9 +610,9 @@ describe("edit tool", () => {
       undefined,
     );
 
-    const tcText = result.content[0];
+    const tcText = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tcText ? tcText.text : "").toContain("Successfully replaced");
-    expect((result as any).terminate).toBeFalsy();
+    expect((result as { terminate?: boolean }).terminate).toBeFalsy();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha beta GAMMA\n");
   });
 
@@ -515,7 +629,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    const tc1 = result.content[0];
+    const tc1 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });

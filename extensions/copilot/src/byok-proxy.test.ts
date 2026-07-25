@@ -82,6 +82,50 @@ describe("createCopilotByokProxy", () => {
     }
   });
 
+  it("injects resolved bearer auth when the SDK request omits Authorization", async () => {
+    ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+    const resolvedProvider = resolveCopilotProvider({
+      model: {
+        provider: "tencent-tokenplan",
+        api: "openai-completions",
+        id: "hy3",
+        baseUrl: "https://tokenplan.example/v1",
+        authHeader: true,
+      },
+      resolvedApiKey: "tokenplan-secret",
+    });
+
+    const proxy = await createCopilotByokProxy(resolvedProvider);
+
+    try {
+      const response = await fetch(`${proxy?.provider.provider?.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ model: "hy3" }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(ssrfRuntimeMock.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://tokenplan.example/v1/chat/completions",
+          init: expect.objectContaining({
+            headers: expect.objectContaining({
+              authorization: "Bearer tokenplan-secret",
+              "content-type": "application/json",
+            }),
+          }),
+        }),
+      );
+    } finally {
+      await proxy?.close();
+    }
+  });
+
   it("aborts in-flight upstream fetches when the proxy closes", async () => {
     let upstreamSignal: AbortSignal | undefined;
     ssrfRuntimeMock.fetchWithSsrFGuard.mockImplementation(async ({ init }: any) => {
@@ -160,6 +204,40 @@ describe("createCopilotByokProxy", () => {
           }),
         }),
       );
+    } finally {
+      await proxy?.close();
+    }
+  });
+
+  it("does not inject bearer auth on nonce-less Azure SDK paths", async () => {
+    ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response("azure-ok", { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+    const resolvedProvider = resolveCopilotProvider({
+      model: {
+        provider: "custom-azure",
+        api: "azure-openai-responses",
+        id: "deployment-gpt",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+        authHeader: true,
+      },
+      resolvedApiKey: "azure-bearer",
+    });
+
+    const proxy = await createCopilotByokProxy(resolvedProvider);
+
+    try {
+      const response = await fetch(`${proxy?.provider.provider?.baseUrl}/openai/v1/responses`, {
+        method: "POST",
+        body: JSON.stringify({ model: "deployment-gpt" }),
+      });
+
+      expect(response.status).toBe(200);
+      const call = ssrfRuntimeMock.fetchWithSsrFGuard.mock.calls[0]?.[0] as
+        | { init?: { headers?: Record<string, string> } }
+        | undefined;
+      expect(call?.init?.headers).not.toHaveProperty("authorization");
     } finally {
       await proxy?.close();
     }

@@ -10,12 +10,39 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
-import { flushPendingCallRecordWritesForTest } from "./store.js";
+
+const logSpy = vi.hoisted(() => {
+  const logEntries: string[] = [];
+  return {
+    logEntries,
+    clearLogEntries: () => {
+      logEntries.length = 0;
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (_subsystem: string) => ({
+      info: (msg: string) => {
+        logSpy.logEntries.push(msg);
+      },
+      warn: (msg: string) => {
+        logSpy.logEntries.push(msg);
+      },
+      error: (msg: string) => {
+        logSpy.logEntries.push(msg);
+      },
+    }),
+  };
+});
 
 const contexts: CallManagerContext[] = [];
 
@@ -30,6 +57,9 @@ function installStateRuntime(): void {
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call event tests");
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call event tests");
       }) as never,
     },
   });
@@ -50,10 +80,8 @@ afterEach(async () => {
       clearTimeout(waiter.timeout);
     }
     ctx.transcriptWaiters.clear();
-    await flushPendingCallRecordWritesForTest();
     fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
-  clearVoiceCallStateRuntime();
   resetPluginStateStoreForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -370,6 +398,7 @@ describe("processEvent (functional)", () => {
     {
       name: "speaking",
       expectedState: "speaking",
+      expectedTranscript: [],
       createEvent: (timestamp: number): NormalizedEvent => ({
         id: "evt-live-speaking",
         type: "call.speaking",
@@ -380,8 +409,22 @@ describe("processEvent (functional)", () => {
       }),
     },
     {
+      name: "assistant speech",
+      expectedState: "speaking",
+      expectedTranscript: [{ speaker: "bot", text: "hello" }],
+      createEvent: (timestamp: number): NormalizedEvent => ({
+        id: "evt-live-assistant-speech",
+        type: "call.assistant-speech",
+        callId: "call-live",
+        providerCallId: "provider-live",
+        timestamp,
+        transcript: "hello",
+      }),
+    },
+    {
       name: "listening",
       expectedState: "listening",
+      expectedTranscript: [{ speaker: "user", text: "hello" }],
       createEvent: (timestamp: number): NormalizedEvent => ({
         id: "evt-live-listening",
         type: "call.speech",
@@ -394,7 +437,7 @@ describe("processEvent (functional)", () => {
     },
   ])(
     "starts max-duration enforcement when $name arrives before answered",
-    async ({ expectedState, createEvent }) => {
+    async ({ expectedState, expectedTranscript, createEvent }) => {
       const now = new Date("2026-03-22T12:00:00.000Z").getTime();
       vi.useFakeTimers();
       vi.setSystemTime(now);
@@ -436,6 +479,9 @@ describe("processEvent (functional)", () => {
       }
       expect(call.state).toBe(expectedState);
       expect(call.answeredAt).toBe(liveTimestamp);
+      expect(call.transcript.map(({ speaker, text }) => ({ speaker, text }))).toEqual(
+        expectedTranscript,
+      );
       expect(ctx.maxDurationTimers.has("call-live")).toBe(true);
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -646,6 +692,7 @@ describe("processEvent (functional)", () => {
         inboundGreeting: "Hello from global.",
         numbers: {
           "+15550002222": {
+            agentId: "cards",
             inboundGreeting: "Silver Fox Cards, how can I help?",
           },
         },
@@ -667,6 +714,7 @@ describe("processEvent (functional)", () => {
     const call = requireFirstActiveCall(ctx);
     expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
     expect(call.metadata?.numberRouteKey).toBe("+15550002222");
+    expect(call.agentId).toBe("cards");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
@@ -687,7 +735,7 @@ describe("processEvent (functional)", () => {
     });
     ctx.providerCallIdMap.set("provider-dedupe", "call-dedupe");
 
-    processEvent(ctx, {
+    const firstResult = processEvent(ctx, {
       id: "evt-1",
       dedupeKey: "stable-key-1",
       type: "call.speech",
@@ -698,7 +746,7 @@ describe("processEvent (functional)", () => {
       isFinal: true,
     });
 
-    processEvent(ctx, {
+    const replayResult = processEvent(ctx, {
       id: "evt-2",
       dedupeKey: "stable-key-1",
       type: "call.speech",
@@ -715,6 +763,12 @@ describe("processEvent (functional)", () => {
     }
     expect(call.transcript).toHaveLength(1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
+    expect(firstResult).toMatchObject({
+      kind: "final-speech",
+      transcript: "hello",
+      waiterResolved: false,
+    });
+    expect(replayResult).toEqual({ kind: "ignored" });
   });
 
   it("keeps retryable call.error events replayable", () => {
@@ -756,5 +810,104 @@ describe("processEvent (functional)", () => {
     expect(call.state).toBe("active");
     expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
     expect(call.processedEventIds).toStrictEqual([]);
+  });
+});
+
+describe("processEvent privacy assertions", () => {
+  beforeEach(() => {
+    logSpy.clearLogEntries();
+  });
+
+  function expectCallerRedacted(phone: string, ...expectedMetadata: string[]): void {
+    const logOutput = logSpy.logEntries.join(" ");
+    expect(logOutput).not.toContain(phone);
+    expect(logOutput).toContain("caller=sha256:");
+    for (const metadata of expectedMetadata) {
+      expect(logOutput).toContain(metadata);
+    }
+  }
+
+  it.each([
+    {
+      label: "acceptance",
+      phone: "+15551112222",
+      allowFrom: ["+15551112222"],
+      allowed: true,
+    },
+    {
+      label: "rejection",
+      phone: "+15559999999",
+      allowFrom: ["+15550001111"],
+      allowed: false,
+    },
+  ])("redacts caller phone numbers in allowlist $label logs", ({ phone, allowFrom, allowed }) => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "allowlist",
+        allowFrom,
+      }),
+      provider: createProvider(),
+    });
+
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: `evt-privacy-${allowed ? "accept" : "reject"}`,
+        providerCallId: `prov-privacy-${allowed ? "accept" : "reject"}`,
+        from: phone,
+      }),
+    );
+
+    expectCallerRedacted(phone, `allowlisted=${allowed}`);
+  });
+
+  it("redacts caller phone numbers in call record creation logs", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+    });
+    const phone = "+15554444444";
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-privacy-create",
+        providerCallId: "prov-privacy-create",
+        from: phone,
+      }),
+    );
+
+    const call = requireFirstActiveCall(ctx);
+    expectCallerRedacted(phone, call.callId);
+  });
+
+  it("redacts caller phone numbers when rejection cannot reach a provider", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "allowlist",
+        allowFrom: ["+15550001111"],
+      }),
+      provider: null,
+    });
+    const phone = "+15559999999";
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-privacy-no-provider",
+        providerCallId: "prov-privacy-no-provider",
+        from: phone,
+      }),
+    );
+
+    expectCallerRedacted(phone, "prov-privacy-no-provider");
   });
 });

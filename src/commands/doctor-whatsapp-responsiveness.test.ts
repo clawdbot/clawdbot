@@ -16,8 +16,10 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 
-const { listLocalTuiProcesses, noteWhatsappResponsivenessHealth, terminateLocalTuiProcesses } =
+const { collectWhatsappResponsivenessHealthFindings, noteWhatsappResponsivenessHealth } =
   await import("./doctor-whatsapp-responsiveness.js");
+const { listLocalTuiProcesses, terminateLocalTuiProcesses } =
+  await import("./doctor-whatsapp-responsiveness.test-support.js");
 
 describe("doctor WhatsApp responsiveness", () => {
   beforeEach(() => {
@@ -39,11 +41,21 @@ describe("doctor WhatsApp responsiveness", () => {
       ].join("\n"),
     });
 
-    expect(listLocalTuiProcesses()).toEqual([
-      { pid: 101, command: "openclaw-tui" },
-      { pid: 104, command: "openclaw tui --local" },
-      { pid: 105, command: "/usr/bin/openclaw chat" },
-    ]);
+    if (process.platform === "win32") {
+      expect(listLocalTuiProcesses()).toEqual([]);
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    } else {
+      expect(listLocalTuiProcesses()).toEqual([
+        { pid: 101, command: "openclaw-tui" },
+        { pid: 104, command: "openclaw tui --local" },
+        { pid: 105, command: "/usr/bin/openclaw chat" },
+      ]);
+      expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 1_000,
+      });
+    }
   });
 
   it("terminates stale local TUI processes with a kill fallback", async () => {
@@ -116,6 +128,93 @@ describe("doctor WhatsApp responsiveness", () => {
       ].join("\n"),
       "WhatsApp responsiveness",
     );
+  });
+
+  it("collects a warning finding for local TUI pressure when WhatsApp is enabled", () => {
+    const cfg = { channels: { whatsapp: { enabled: true } } } as OpenClawConfig;
+
+    const findings = collectWhatsappResponsivenessHealthFindings({
+      cfg,
+      status: {
+        eventLoop: {
+          degraded: true,
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          delayP99Ms: 42,
+          delayMaxMs: 12_000,
+          utilization: 0.3,
+          cpuCoreRatio: 0.4,
+        },
+      },
+      listLocalTuiProcesses: () => [{ pid: 101, command: "openclaw-tui" }],
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/whatsapp-responsiveness",
+        severity: "warning",
+        path: "channels.whatsapp",
+        target: "101",
+        requirement: "local-tui-event-loop-pressure",
+        fixHint: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    ]);
+  });
+
+  it("keeps WhatsApp responsiveness findings quiet without the exact pressure signal", () => {
+    const cfg = { channels: { whatsapp: { enabled: true } } } as OpenClawConfig;
+
+    expect(
+      collectWhatsappResponsivenessHealthFindings({
+        cfg,
+        status: {
+          eventLoop: {
+            degraded: false,
+            reasons: [],
+            intervalMs: 1,
+            delayP99Ms: 0,
+            delayMaxMs: 0,
+            utilization: 0,
+            cpuCoreRatio: 0,
+          },
+        },
+        listLocalTuiProcesses: () => [{ pid: 101, command: "openclaw-tui" }],
+      }),
+    ).toEqual([]);
+    expect(
+      collectWhatsappResponsivenessHealthFindings({
+        cfg,
+        status: {
+          eventLoop: {
+            degraded: true,
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            delayP99Ms: 42,
+            delayMaxMs: 12_000,
+            utilization: 0.3,
+            cpuCoreRatio: 0.4,
+          },
+        },
+        listLocalTuiProcesses: () => [],
+      }),
+    ).toEqual([]);
+    expect(
+      collectWhatsappResponsivenessHealthFindings({
+        cfg: { channels: { whatsapp: { enabled: false } } } as OpenClawConfig,
+        status: {
+          eventLoop: {
+            degraded: true,
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            delayP99Ms: 42,
+            delayMaxMs: 12_000,
+            utilization: 0.3,
+            cpuCoreRatio: 0.4,
+          },
+        },
+        listLocalTuiProcesses: () => [{ pid: 101, command: "openclaw-tui" }],
+      }),
+    ).toEqual([]);
   });
 
   it("does not treat generic model routing as a WhatsApp-only issue", async () => {

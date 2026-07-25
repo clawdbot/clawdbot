@@ -6,11 +6,9 @@ import type {
   ExecAuthorizationPlan,
 } from "./exec-authorization-plan.js";
 
-export type AuthorizedShellRenderMode = "safeBins" | "enforced";
+type AuthorizedShellRenderMode = "safeBins" | "enforced";
 
-export type AuthorizedShellRenderResult =
-  | { ok: true; command: string }
-  | { ok: false; reason: string };
+type AuthorizedShellRenderResult = { ok: true; command: string } | { ok: false; reason: string };
 
 type SourceReplacement = {
   startIndex: number;

@@ -254,10 +254,6 @@ extension CanvasSchemeHandler {
         return (response.mime, response.data)
     }
 
-    func _testResolveFileURL(sessionRoot: URL, requestPath: String) -> URL? {
-        self.resolveFileURL(sessionRoot: sessionRoot, requestPath: requestPath)
-    }
-
     func _testTextEncodingName(for mimeType: String) -> String? {
         self.textEncodingName(forMimeType: mimeType)
     }

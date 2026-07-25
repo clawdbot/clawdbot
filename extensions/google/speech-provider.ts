@@ -3,6 +3,7 @@ import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
+  readProviderJsonResponse,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -204,7 +205,7 @@ function normalizeGoogleTtsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.google.apiKey",
+      path: "tts.providers.google.apiKey",
     }),
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),
@@ -324,12 +325,6 @@ function normalizePromptSectionText(value: string | undefined): string | undefin
   return sanitized;
 }
 
-function normalizePromptList(values: readonly string[] | undefined): string[] {
-  return (values ?? [])
-    .map((value) => normalizePromptSectionText(value))
-    .filter((value): value is string => Boolean(value));
-}
-
 function isOpenClawGoogleAudioProfilePrompt(text: string): boolean {
   return (
     text.includes("# AUDIO PROFILE:") &&
@@ -343,27 +338,10 @@ function renderGoogleAudioProfilePrompt(params: {
   persona?: {
     id: string;
     label?: string;
-    prompt?: {
-      profile?: string;
-      scene?: string;
-      sampleContext?: string;
-      style?: string;
-      accent?: string;
-      pacing?: string;
-      constraints?: string[];
-    };
   };
   personaPrompt?: string;
 }): string {
   const transcript = params.text.replace(/\r\n?/g, "\n").trim();
-  const prompt = params.persona?.prompt;
-  const profile = normalizePromptSectionText(prompt?.profile);
-  const scene = normalizePromptSectionText(prompt?.scene);
-  const sampleContext = normalizePromptSectionText(prompt?.sampleContext);
-  const style = normalizePromptSectionText(prompt?.style);
-  const accent = normalizePromptSectionText(prompt?.accent);
-  const pacing = normalizePromptSectionText(prompt?.pacing);
-  const constraints = normalizePromptList(prompt?.constraints);
   const personaPrompt = normalizePromptSectionText(params.personaPrompt);
   const label =
     normalizePromptSectionText(params.persona?.label) ??
@@ -377,35 +355,16 @@ function renderGoogleAudioProfilePrompt(params: {
     ].join("\n"),
   ];
 
-  if (label || profile) {
-    sections.push([`# AUDIO PROFILE: ${label ?? "voice"}`, profile].filter(Boolean).join("\n"));
-  }
-  if (scene) {
-    sections.push(["## THE SCENE", scene].join("\n"));
+  if (label) {
+    sections.push(`# AUDIO PROFILE: ${label}`);
   }
 
   const directorNotes: string[] = [];
-  if (style) {
-    directorNotes.push(`Style: ${style}`);
-  }
-  if (accent) {
-    directorNotes.push(`Accent: ${accent}`);
-  }
-  if (pacing) {
-    directorNotes.push(`Pacing: ${pacing}`);
-  }
-  if (constraints.length > 0) {
-    directorNotes.push(["Constraints:", ...constraints.map((item) => `- ${item}`)].join("\n"));
-  }
   if (personaPrompt) {
     directorNotes.push(["Provider notes:", personaPrompt].join("\n"));
   }
   if (directorNotes.length > 0) {
     sections.push(["### DIRECTOR'S NOTES", ...directorNotes].join("\n"));
-  }
-
-  if (sampleContext) {
-    sections.push(["### SAMPLE CONTEXT", sampleContext].join("\n"));
   }
 
   sections.push(["### TRANSCRIPT", transcript].join("\n"));
@@ -503,7 +462,11 @@ async function synthesizeGoogleTtsPcmOnce(params: {
       }
     }
     try {
-      return extractGoogleSpeechPcm((await res.json()) as GoogleGenerateSpeechResponse);
+      const payload = await readProviderJsonResponse<GoogleGenerateSpeechResponse>(
+        res,
+        "Google TTS response",
+      );
+      return extractGoogleSpeechPcm(payload);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new GoogleTtsRetryableError(message);
@@ -658,15 +621,3 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     },
   };
 }
-
-export const testing = {
-  DEFAULT_GOOGLE_TTS_MODEL,
-  DEFAULT_GOOGLE_TTS_VOICE,
-  GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE,
-  GOOGLE_TTS_MODELS,
-  GOOGLE_TTS_SAMPLE_RATE,
-  normalizeGoogleTtsModel,
-  renderGoogleAudioProfilePrompt,
-  wrapPcm16MonoToWav,
-};
-export { testing as __testing };

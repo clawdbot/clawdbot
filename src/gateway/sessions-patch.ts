@@ -8,13 +8,12 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  normalizeSessionIconInput,
+  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  normalizeInheritedToolAllowlist,
-  normalizeInheritedToolDenylist,
-} from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -22,7 +21,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -38,23 +37,75 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
-  isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  isAgentHarnessSessionKeyOwnedBy,
+  resolveMissingAgentHarnessSessionError,
+} from "../sessions/agent-harness-session-key.js";
 import {
   applyTraceOverride,
   applyVerboseOverride,
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import {
+  isSessionAgentAttentionIconId,
+  resolveActiveSessionAgentStatus,
+  sanitizeSessionAgentStatusNote,
+  sessionAgentStatusExpiresAt,
+  SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
+} from "../sessions/session-agent-status.js";
+import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
+import {
+  isAgentSessionModelPatchOrigin,
+  shouldPreserveSessionAuthProfileOverride,
+  snapshotAgentModelFallback,
+} from "./session-model-patch-origin.js";
+import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
+}
+
+export function resolveSessionPatchModelSelection(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  raw: string;
+  defaultProvider: string;
+  defaultModel: string;
+  subagentModelHint?: string;
+}):
+  | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
+  | { ok: false; error: string } {
+  const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
+  const resolved = resolveAllowedModelRef({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    raw: modelWithoutProfile,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.subagentModelHint ?? params.defaultModel,
+  });
+  if ("error" in resolved) {
+    return { ok: false, error: resolved.error };
+  }
+  return {
+    ok: true,
+    provider: resolved.ref.provider,
+    model: resolved.ref.model,
+    ...(profile ? { profile } : {}),
+    isDefault:
+      resolved.ref.provider === params.defaultProvider &&
+      resolved.ref.model === params.defaultModel,
+  };
 }
 
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
@@ -73,63 +124,6 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
-function shouldPreserveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  currentProvider: string;
-  provider: string;
-}): boolean {
-  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
-  if (!profileOverride) {
-    return false;
-  }
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
-    const candidate = normalizeOptionalLowercaseString(rawProvider);
-    if (!candidate) {
-      return false;
-    }
-    return (
-      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
-      resolveProviderIdForAuth(provider, { config: params.cfg })
-    );
-  };
-  const delimiterIndex = profileOverride.indexOf(":");
-  if (delimiterIndex < 0) {
-    return resolvesToTargetProvider(params.currentProvider);
-  }
-  const profileProvider = normalizeOptionalLowercaseString(
-    profileOverride.slice(0, delimiterIndex),
-  );
-  if (!profileProvider) {
-    return false;
-  }
-  return resolvesToTargetProvider(profileProvider);
-}
-
-function supportsSpawnLineage(storeKey: string): boolean {
-  return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
-}
-
-function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "orchestrator" || normalized === "leaf") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "children" || normalized === "none") {
-    return normalized;
-  }
-  return undefined;
-}
-
 type SessionPatchProjectionEntry = {
   entry: SessionEntry;
   sessionKey: string;
@@ -143,9 +137,24 @@ export async function projectSessionsPatchEntry(params: {
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
+  archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  /** Exact harness owner authorized to project its new reserved session row. */
+  authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch } = params;
+  const authorizedHarnessCreation =
+    params.existingEntry === undefined &&
+    isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
+  const harnessSessionError = authorizedHarnessCreation
+    ? undefined
+    : resolveMissingAgentHarnessSessionError(storeKey, params.existingEntry);
+  if (harnessSessionError) {
+    return invalid(harnessSessionError);
+  }
+  if ("model" in patch && isModelSelectionLocked(params.existingEntry)) {
+    return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
+  }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
@@ -155,8 +164,28 @@ export async function projectSessionsPatchEntry(params: {
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
+  const resolveThinkingRuntime = (
+    provider: string,
+    model: string,
+    entry?: SessionEntry,
+  ): string => {
+    // ACP metadata can own canonical agent keys (for example agent:main:main),
+    // so key shape alone cannot identify the runtime that validates thinking.
+    const acpMeta = readAcpSessionMetaForEntry({ sessionKey: storeKey, entry });
+    return (
+      acpMeta?.backend ??
+      resolveEffectiveAgentRuntime({
+        cfg,
+        provider,
+        modelId: model,
+        agentId: sessionAgentId,
+        sessionKey: storeKey,
+        sessionEntry: entry,
+      })
+    );
+  };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadModelCatalogForPatch = async () => {
+  const loadPreparedModelCatalogForPatch = async () => {
     if (loadedModelCatalog) {
       return loadedModelCatalog;
     }
@@ -183,169 +212,18 @@ export async function projectSessionsPatchEntry(params: {
       };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.category;
     delete next.displayName;
   }
 
-  type PatchError = ReturnType<typeof invalid> | null;
-  const checkSpawnLineage = (field: string): PatchError =>
-    supportsSpawnLineage(storeKey)
-      ? null
-      : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
-  const applyImmutableString = (
-    field: "spawnedBy" | "spawnedWorkspaceDir" | "spawnedCwd",
-    checkLineageBeforeEmpty: boolean,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
-    if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
-    }
-    if (raw === undefined) {
-      return null;
-    }
-    const earlyLineage = checkLineageBeforeEmpty ? checkSpawnLineage(field) : null;
-    if (earlyLineage) {
-      return earlyLineage;
-    }
-    const trimmed = normalizeOptionalString(raw) ?? "";
-    if (!trimmed) {
-      return invalid(`invalid ${field}: empty`);
-    }
-    const lateLineage = checkLineageBeforeEmpty ? null : checkSpawnLineage(field);
-    if (lateLineage) {
-      return lateLineage;
-    }
-    if (existing?.[field] && existing[field] !== trimmed) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = trimmed;
-    return null;
-  };
-  const applyImmutableNormalized = <T extends "subagentRole" | "subagentControlScope">(
-    field: T,
-    normalize: (raw: string) => NonNullable<SessionEntry[T]> | undefined,
-    invalidMessage: string,
-  ): PatchError => {
-    if (!(field in patch)) {
-      return null;
-    }
-    const raw = patch[field];
-    if (raw === null) {
-      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
-    }
-    if (raw === undefined) {
-      return null;
-    }
-    const lineage = checkSpawnLineage(field);
-    if (lineage) {
-      return lineage;
-    }
-    const normalized = normalize(raw);
-    if (!normalized) {
-      return invalid(invalidMessage);
-    }
-    if (existing?.[field] && existing[field] !== normalized) {
-      return invalid(`${field} cannot be changed once set`);
-    }
-    next[field] = normalized;
-    return null;
-  };
-
-  for (const fieldParams of [
-    { field: "spawnedBy" as const, checkLineageBeforeEmpty: false },
-    { field: "spawnedWorkspaceDir" as const, checkLineageBeforeEmpty: true },
-    { field: "spawnedCwd" as const, checkLineageBeforeEmpty: true },
-  ]) {
-    const result = applyImmutableString(fieldParams.field, fieldParams.checkLineageBeforeEmpty);
-    if (result) {
-      return result;
-    }
-  }
-
-  if ("spawnDepth" in patch) {
-    const raw = patch.spawnDepth;
-    if (raw === null) {
-      if (typeof existing?.spawnDepth === "number") {
-        return invalid("spawnDepth cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnDepth is only supported for subagent:* or acp:* sessions");
-      }
-      const numeric = raw;
-      if (!Number.isInteger(numeric) || numeric < 0) {
-        return invalid("invalid spawnDepth (use an integer >= 0)");
-      }
-      const normalized = numeric;
-      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== normalized) {
-        return invalid("spawnDepth cannot be changed once set");
-      }
-      next.spawnDepth = normalized;
-    }
-  }
-
-  for (const fieldParams of [
-    {
-      field: "subagentRole" as const,
-      normalize: normalizeSubagentRole,
-      invalidMessage: 'invalid subagentRole (use "orchestrator" or "leaf")',
-    },
-    {
-      field: "subagentControlScope" as const,
-      normalize: normalizeSubagentControlScope,
-      invalidMessage: 'invalid subagentControlScope (use "children" or "none")',
-    },
-  ]) {
-    const result = applyImmutableNormalized(
-      fieldParams.field,
-      fieldParams.normalize,
-      fieldParams.invalidMessage,
-    );
-    if (result) {
-      return result;
-    }
-  }
-
-  if ("inheritedToolDeny" in patch) {
-    const raw = patch.inheritedToolDeny;
-    if (raw === null) {
-      delete next.inheritedToolDeny;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolDeny (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolDeny is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolDeny = normalizeInheritedToolDenylist(raw);
-      if (inheritedToolDeny.length > 0) {
-        next.inheritedToolDeny = inheritedToolDeny;
-      } else {
-        delete next.inheritedToolDeny;
-      }
-    }
-  }
-
-  if ("inheritedToolAllow" in patch) {
-    const raw = patch.inheritedToolAllow;
-    if (raw === null) {
-      delete next.inheritedToolAllow;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolAllow (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolAllow is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolAllow = normalizeInheritedToolAllowlist(raw);
-      if (inheritedToolAllow.length > 0) {
-        next.inheritedToolAllow = inheritedToolAllow;
-      } else {
-        delete next.inheritedToolAllow;
-      }
-    }
+  const subagentPolicyError = applySessionsPatchSubagentPolicy({
+    existing,
+    next,
+    patch,
+    storeKey,
+  });
+  if (subagentPolicyError) {
+    return invalid(subagentPolicyError);
   }
 
   if ("label" in patch) {
@@ -369,6 +247,113 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("category" in patch) {
+    const raw = patch.category;
+    if (raw === null) {
+      delete next.category;
+    } else if (raw !== undefined) {
+      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid category: empty");
+      }
+      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
+        return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
+      }
+      next.category = trimmed;
+    }
+  }
+
+  if ("icon" in patch) {
+    const raw = patch.icon;
+    if (raw === null) {
+      delete next.icon;
+    } else if (raw !== undefined) {
+      const normalized = normalizeSessionIconInput(raw);
+      if (!normalized.ok) {
+        return invalid(`invalid icon: ${normalized.reason}`);
+      }
+      next.icon = normalized.value;
+    }
+  }
+
+  if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {
+    const rawNote = patch.statusNote;
+    const rawAttention = patch.attention;
+    const ttlMinutes = patch.ttlMinutes;
+    if (
+      ttlMinutes !== undefined &&
+      (!Number.isInteger(ttlMinutes) ||
+        ttlMinutes < 1 ||
+        ttlMinutes > SESSION_AGENT_STATUS_MAX_TTL_MINUTES)
+    ) {
+      return invalid(`invalid ttlMinutes (use 1-${SESSION_AGENT_STATUS_MAX_TTL_MINUTES})`);
+    }
+    if (rawNote === null || rawAttention === null) {
+      if (
+        (rawNote !== undefined && rawNote !== null) ||
+        (rawAttention !== undefined && rawAttention !== null)
+      ) {
+        return invalid("cannot clear and set agent status in the same patch");
+      }
+      delete next.agentStatus;
+    } else {
+      const current = resolveActiveSessionAgentStatus(next.agentStatus, now);
+      const note = rawNote === undefined ? current?.note : sanitizeSessionAgentStatusNote(rawNote);
+      if (!note) {
+        return invalid("statusNote required before setting attention or ttlMinutes");
+      }
+      if (rawAttention !== undefined && !isSessionAgentAttentionIconId(rawAttention)) {
+        return invalid("invalid attention icon");
+      }
+      const attention = rawAttention ?? current?.attention;
+      next.agentStatus = {
+        note,
+        expiresAt: sessionAgentStatusExpiresAt(now, ttlMinutes),
+        ...(attention ? { attention } : {}),
+      };
+    }
+  }
+
+  if ("archived" in patch) {
+    if (patch.archived === true) {
+      // Archived sessions leave the active quick-access set in the same write.
+      if (next.archivedAt === undefined) {
+        next.archivedAt = now;
+        if (params.archivedBy) {
+          next.archivedBy = params.archivedBy;
+        } else {
+          delete next.archivedBy;
+        }
+      }
+      delete next.pinnedAt;
+    } else {
+      delete next.archivedAt;
+      delete next.archivedBy;
+    }
+  }
+
+  if ("pinned" in patch) {
+    if (patch.pinned === true) {
+      if (next.archivedAt !== undefined) {
+        return invalid("cannot pin an archived session; restore it first");
+      }
+      next.pinnedAt ??= now;
+    } else {
+      delete next.pinnedAt;
+    }
+  }
+
+  if ("unread" in patch) {
+    if (patch.unread === true) {
+      next.markedUnreadAt = now;
+    } else {
+      next.lastReadAt = now;
+      delete next.markedUnreadAt;
+      delete next.agentStatus;
+    }
+  }
+
   if ("thinkingLevel" in patch) {
     const raw = patch.thinkingLevel;
     if (raw === null) {
@@ -380,9 +365,10 @@ export async function projectSessionsPatchEntry(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadModelCatalogForPatch();
+        const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+        const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog)})`,
+          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
         );
       }
       next.thinkingLevel = normalized;
@@ -505,16 +491,26 @@ export async function projectSessionsPatchEntry(params: {
     const raw = patch.execNode;
     if (raw === null) {
       delete next.execNode;
+      delete next.execCwd;
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid execNode: empty");
       }
+      if (trimmed !== next.execNode) {
+        // A cwd belongs to one node's filesystem; never carry it across node bindings.
+        delete next.execCwd;
+      }
       next.execNode = trimmed;
     }
   }
-
   if ("model" in patch) {
+    const agentModelFallback = isAgentSessionModelPatchOrigin()
+      ? next.modelFallback?.source === "agent-patch"
+        ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
+        : snapshotAgentModelFallback(cfg, next, sessionAgentId, now)
+      : undefined;
+    delete next.modelFallback;
     const raw = patch.model;
     if (raw === null) {
       applyModelOverrideToSessionEntry({
@@ -543,74 +539,91 @@ export async function projectSessionsPatchEntry(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await loadModelCatalogForPatch();
+      const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const { model: modelWithoutProfile, profile: trailingProfile } =
-        splitTrailingAuthProfile(trimmed);
-      const resolved = resolveAllowedModelRef({
+      const resolved = resolveSessionPatchModelSelection({
         cfg,
         catalog,
-        raw: modelWithoutProfile,
+        raw: trimmed,
         defaultProvider: resolvedDefault.provider,
-        defaultModel: subagentModelHint ?? resolvedDefault.model,
+        defaultModel: resolvedDefault.model,
+        subagentModelHint,
       });
-      if ("error" in resolved) {
+      if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
       applyModelOverrideToSessionEntry({
         entry: next,
         selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
+          provider: resolved.provider,
+          model: resolved.model,
+          isDefault: resolved.isDefault,
         },
-        profileOverride: trailingProfile || undefined,
+        profileOverride: resolved.profile,
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
           cfg,
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
-          provider: resolved.ref.provider,
+          provider: resolved.provider,
         }),
         markLiveSwitchPending: true,
       });
     }
+    if (agentModelFallback) {
+      next.modelFallback = agentModelFallback;
+    }
   }
 
-  if (next.thinkingLevel) {
+  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadModelCatalogForPatch();
+    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
-    } else if (
-      !isThinkingLevelSupported({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      })
-    ) {
-      if ("thinkingLevel" in patch) {
-        return invalid(
-          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog)})`,
-        );
+    } else {
+      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      if (
+        !isThinkingLevelSupported({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          level: thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        })
+      ) {
+        if ("thinkingLevel" in patch) {
+          return invalid(
+            `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog, thinkingRuntime)})`,
+          );
+        }
+        next.thinkingLevel = resolveSupportedThinkingLevel({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          level: thinkingLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: thinkingRuntime,
+        });
       }
-      next.thinkingLevel = resolveSupportedThinkingLevel({
-        provider: effectiveProvider,
-        model: effectiveModel,
-        level: thinkingLevel,
-        catalog: thinkingCatalog,
-      });
     }
+  }
+
+  // A thinkingLevel change made on its own (no model switch) never touches the
+  // agent-patch revert marker, so realign its restore target with the user's
+  // newer choice; otherwise a later model-failure revert clobbers it.
+  if (
+    "thinkingLevel" in patch &&
+    !("model" in patch) &&
+    next.modelFallback?.source === "agent-patch"
+  ) {
+    next.modelFallback = next.thinkingLevel
+      ? { ...next.modelFallback, prevThinkingLevel: next.thinkingLevel }
+      : { ...next.modelFallback, prevThinkingLevel: undefined };
   }
 
   if ("sendPolicy" in patch) {
@@ -649,7 +662,10 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
+  archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  /** Exact harness owner authorized to project its new reserved session row. */
+  authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const projected = await projectSessionsPatchEntry({
     cfg: params.cfg,
@@ -658,7 +674,9 @@ export async function applySessionsPatchToStore(params: {
     storeKey: params.storeKey,
     agentId: params.agentId,
     patch: params.patch,
+    archivedBy: params.archivedBy,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    authorizedAgentHarnessId: params.authorizedAgentHarnessId,
   });
   if (projected.ok) {
     params.store[params.storeKey] = projected.entry;

@@ -5,6 +5,7 @@ import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   isDiscordAccountEnabledForRuntime,
@@ -37,19 +38,12 @@ import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
 
 const DISCORD_CHANNEL = "discord" as const;
-
-type DiscordDoctorModule = typeof import("./doctor.js");
 type DiscordConfigAccessorAccount = {
   allowFrom: string[] | undefined;
   defaultTo: string | undefined;
 };
 
-let discordDoctorModulePromise: Promise<DiscordDoctorModule> | undefined;
-
-async function loadDiscordDoctorModule(): Promise<DiscordDoctorModule> {
-  discordDoctorModulePromise ??= import("./doctor.js");
-  return await discordDoctorModulePromise;
-}
+const loadDiscordDoctorModule = createLazyRuntimeModule(() => import("./doctor.js"));
 
 const discordDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOnly",
@@ -101,6 +95,7 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<
 
 export function createDiscordPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setupContract"]>;
   setupWizard?: ChannelPlugin<ResolvedDiscordAccount>["setupWizard"];
 }): Pick<
   ChannelPlugin<ResolvedDiscordAccount>,
@@ -115,12 +110,14 @@ export function createDiscordPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "setupContract"
   | "messaging"
   | "security"
   | "secrets"
 > {
   return {
     id: DISCORD_CHANNEL,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     meta: { ...getChatChannelMeta(DISCORD_CHANNEL) },
     capabilities: {

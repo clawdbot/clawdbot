@@ -1,9 +1,11 @@
 // Attachment normalization converts message context media fields into typed
 // attachment records and classifies media kind from MIME or filename.
+import type { MediaKind } from "@openclaw/media-core/constants";
 import { getFileExtension, isAudioFileName, kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MsgContext } from "../auto-reply/templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
+import { resolveMediaFacts } from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
 /** Normalizes a local attachment path while rejecting remote file URLs and Windows UNC paths. */
@@ -27,73 +29,22 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
   return value;
 }
 
-/** Flattens legacy single-value and array media fields into indexed attachment records. */
+/** Converts ordered media facts into indexed attachment records. */
 export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  const urlsFromArray = Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : undefined;
-  const typesFromArray = Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : undefined;
-  const transcribedIndexes = new Set(
-    Array.isArray(ctx.MediaTranscribedIndexes)
-      ? ctx.MediaTranscribedIndexes.filter((index) => Number.isInteger(index) && index >= 0)
-      : [],
-  );
-  const resolveMime = (count: number, index: number) => {
-    const typeHint = normalizeOptionalString(typesFromArray?.[index]);
-    if (typeHint) {
-      return typeHint;
-    }
-    return count === 1 ? ctx.MediaType : undefined;
-  };
-
-  if (pathsFromArray && pathsFromArray.length > 0) {
-    // Array fields are authoritative for multi-attachment messages; the legacy
-    // single URL remains a per-item fallback for older channel payloads.
-    const count = pathsFromArray.length;
-    const urls = urlsFromArray && urlsFromArray.length > 0 ? urlsFromArray : undefined;
-    return pathsFromArray
-      .map((value, index) => ({
-        path: normalizeOptionalString(value),
-        url: urls?.[index] ?? ctx.MediaUrl,
-        mime: resolveMime(count, index),
-        index,
-        alreadyTranscribed: transcribedIndexes.has(index),
-      }))
-      .filter((entry) => Boolean(entry.path ?? normalizeOptionalString(entry.url)));
-  }
-
-  if (urlsFromArray && urlsFromArray.length > 0) {
-    const count = urlsFromArray.length;
-    return urlsFromArray
-      .map((value, index) => ({
-        path: undefined,
-        url: normalizeOptionalString(value),
-        mime: resolveMime(count, index),
-        index,
-        alreadyTranscribed: transcribedIndexes.has(index),
-      }))
-      .filter((entry) => Boolean(entry.url));
-  }
-
-  const pathValue = normalizeOptionalString(ctx.MediaPath);
-  const url = normalizeOptionalString(ctx.MediaUrl);
-  if (!pathValue && !url) {
-    return [];
-  }
-  return [
-    {
-      path: pathValue || undefined,
-      url: url || undefined,
-      mime: ctx.MediaType,
-      index: 0,
-      alreadyTranscribed: transcribedIndexes.has(0),
-    },
-  ];
+  return resolveMediaFacts(ctx)
+    .map((fact, index) => ({
+      path: normalizeOptionalString(fact.path),
+      url: normalizeOptionalString(fact.url),
+      mime: normalizeOptionalString(fact.contentType) ?? fact.kind,
+      workspaceDir: normalizeOptionalString(fact.workspaceDir),
+      index,
+      alreadyTranscribed: fact.transcribed === true,
+    }))
+    .filter((entry) => Boolean(entry.path ?? entry.url));
 }
 
 /** Classifies an attachment by MIME first, then by filename/URL extension fallback. */
-export function resolveAttachmentKind(
-  attachment: MediaAttachment,
-): "image" | "audio" | "video" | "document" | "unknown" {
+export function resolveAttachmentKind(attachment: MediaAttachment): Exclude<MediaKind, "sticker"> {
   const kind = kindFromMime(attachment.mime);
   if (kind === "image" || kind === "audio" || kind === "video") {
     return kind;

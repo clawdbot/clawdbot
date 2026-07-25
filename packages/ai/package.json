@@ -1,0 +1,115 @@
+{
+  "name": "@openclaw/ai",
+  "version": "2026.7.2",
+  "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
+  "keywords": [
+    "ai",
+    "anthropic",
+    "google",
+    "llm",
+    "mistral",
+    "openai",
+    "streaming"
+  ],
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "packages/ai"
+  },
+  "files": [
+    "dist",
+    "npm-shrinkwrap.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./providers": {
+      "types": "./dist/providers.d.mts",
+      "import": "./dist/providers.mjs",
+      "default": "./dist/providers.mjs"
+    },
+    "./transports": {
+      "types": "./dist/transports.d.mts",
+      "import": "./dist/transports.mjs",
+      "default": "./dist/transports.mjs"
+    },
+    "./diagnostics": {
+      "types": "./dist/diagnostics.d.mts",
+      "import": "./dist/diagnostics.mjs",
+      "default": "./dist/diagnostics.mjs"
+    },
+    "./event-stream": {
+      "types": "./dist/event-stream.d.mts",
+      "import": "./dist/event-stream.mjs",
+      "default": "./dist/event-stream.mjs"
+    },
+    "./types": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/types.mjs",
+      "default": "./dist/types.mjs"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.mts",
+      "import": "./dist/validation.mjs",
+      "default": "./dist/validation.mjs"
+    },
+    "./internal/anthropic": {
+      "types": "./dist/internal/anthropic.d.mts",
+      "import": "./dist/internal/anthropic.mjs",
+      "default": "./dist/internal/anthropic.mjs"
+    },
+    "./internal/openai": {
+      "types": "./dist/internal/openai.d.mts",
+      "import": "./dist/internal/openai.mjs",
+      "default": "./dist/internal/openai.mjs"
+    },
+    "./internal/retry-after": {
+      "types": "./dist/internal/retry-after.d.mts",
+      "import": "./dist/internal/retry-after.mjs",
+      "default": "./dist/internal/retry-after.mjs"
+    },
+    "./internal/runtime": {
+      "types": "./dist/internal/runtime.d.mts",
+      "import": "./dist/internal/runtime.mjs",
+      "default": "./dist/internal/runtime.mjs"
+    },
+    "./internal/shared": {
+      "types": "./dist/internal/shared.d.mts",
+      "import": "./dist/internal/shared.mjs",
+      "default": "./dist/internal/shared.mjs"
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.112.3",
+    "@google/genai": "2.12.0",
+    "@mistralai/mistralai": "2.5.0",
+    "openai": "6.48.0",
+    "partial-json": "0.1.7",
+    "typebox": "1.3.6"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "openclaw": {
+    "release": {
+      "publishToNpm": true
+    }
+  }
+}

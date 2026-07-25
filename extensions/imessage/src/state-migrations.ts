@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -53,14 +53,6 @@ type SentEchoEntry = {
 };
 
 const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-
-function fileExists(pathValue: string): boolean {
-  try {
-    return !statRegularFileSync(pathValue).missing;
-  } catch {
-    return false;
-  }
-}
 
 function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: string }): string {
   return params.stateDir ?? resolveStateDir(params.env);

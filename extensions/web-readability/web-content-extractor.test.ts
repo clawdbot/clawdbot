@@ -20,6 +20,7 @@ const SAMPLE_HTML = `<!doctype html>
         <h1>Example Article</h1>
         <p>Main content starts here with enough words to satisfy readability.</p>
         <p>Second paragraph for a bit more signal.</p>
+        <p><a href="../next">Continue reading</a></p>
       </article>
     </main>
     <footer>Footer text</footer>
@@ -59,6 +60,18 @@ describe("web readability extractor", () => {
     });
     const extracted = requireReadabilityResult(result);
     expect(extracted.text).toContain("Main content starts here");
+    expect(extracted.text).toContain("[Continue reading](https://example.com/next)");
     expect(extracted.title).toBe("Example Article");
+  });
+
+  it("does not count void tags toward the nesting limit", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const html = SAMPLE_HTML.replace("<article>", `<article>${"<BR>".repeat(3100)}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
 });

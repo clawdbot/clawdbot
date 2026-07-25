@@ -8,8 +8,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { testing, createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec.js";
 
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({
   processGatewayAllowlist: async () => ({ allowWithoutEnforcedCommand: true }),
@@ -29,10 +30,10 @@ const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
-const parseOpenClawChannelsLoginShellCommand = testing.parseOpenClawChannelsLoginShellCommand;
-const validateExecScriptPreflight = testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
+const runExecPreflight = (params: { command: string; workdir: string }) =>
+  createPreflightTool().execute("call-script-preflight", params);
 
 afterEach(() => {
   __setFsSafeTestHooksForTest();
@@ -63,26 +64,28 @@ async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
     });
 
     await expect(
-      validateExecScriptPreflight({
+      runExecPreflight({
         command: "node script.js",
         workdir,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
     expect(swapped).toBe(true);
   });
 }
 
 describe("exec interactive OpenClaw channel login guard", () => {
-  it("recognizes direct and package-runner channel login commands before execution", () => {
+  it("recognizes direct and package-runner channel login commands before execution", async () => {
+    await expect(
+      detectUnsafeExecControlShellCommand("openclaw channels login --channel whatsapp"),
+    ).resolves.toBe("channel-login");
     expect(
-      parseOpenClawChannelsLoginShellCommand("openclaw channels login --channel whatsapp"),
-    ).toBe(true);
-    expect(
-      parseOpenClawChannelsLoginShellCommand(
+      await detectUnsafeExecControlShellCommand(
         "pnpm exec openclaw channels login --channel whatsapp --verbose",
       ),
-    ).toBe(true);
-    expect(parseOpenClawChannelsLoginShellCommand("openclaw channels status --deep")).toBe(false);
+    ).toBe("channel-login");
+    await expect(
+      detectUnsafeExecControlShellCommand("openclaw channels status --deep"),
+    ).resolves.toBeNull();
   });
 
   it("blocks interactive channel login commands from exec", async () => {
@@ -451,11 +454,11 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
 
       await expect(
-        validateExecScriptPreflight({
+        runExecPreflight({
           command: "node ../outside.js",
           workdir,
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBeDefined();
     });
   });
 
@@ -487,11 +490,11 @@ describeNonWin("exec script preflight", () => {
       });
 
       await expect(
-        validateExecScriptPreflight({
+        runExecPreflight({
           command: "node script.js",
           workdir: tmp,
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBeDefined();
       expect(scriptOpenFlags).not.toStrictEqual([]);
       expect(scriptOpenFlags.every((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
     });
@@ -518,7 +521,7 @@ describeNonWin("exec script preflight", () => {
 
   it.each(failClosedCases)("fails closed for %s", async (_name, command) => {
     await expect(
-      validateExecScriptPreflight({
+      runExecPreflight({
         command,
         workdir: process.cwd(),
       }),
@@ -550,11 +553,11 @@ describeNonWin("exec script preflight", () => {
 
   it.each(passCases)("does not fail closed for %s", async (_name, command) => {
     await expect(
-      validateExecScriptPreflight({
+      runExecPreflight({
         command,
         workdir: process.cwd(),
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
   });
 });
 
@@ -621,13 +624,12 @@ describeWin("exec script preflight on windows path syntax", () => {
 
 describe("exec interpreter heuristics ReDoS guard", () => {
   it("does not hang on long commands with VAR=value assignments and whitespace-heavy text", async () => {
-    // Simulate a heredoc with HTML content after a VAR= assignment. Keep the
-    // command parser check direct so no shell process timing hides regex cost.
+    // Keep the workload side-effect free while exercising the full exec path.
     const htmlBlock = '<section style="padding: 30px 20px; font-family: Arial;">'.repeat(50);
-    const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\ncat > /tmp/out.html << 'EOF'\n${htmlBlock}\nEOF`;
+    const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\nprintf '%s' '${htmlBlock}' >/dev/null`;
 
     const start = Date.now();
-    await validateExecScriptPreflight({ command, workdir: process.cwd() });
+    await runExecPreflight({ command, workdir: process.cwd() });
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(5000);
   });

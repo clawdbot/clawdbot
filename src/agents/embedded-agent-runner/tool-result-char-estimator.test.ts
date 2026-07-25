@@ -67,4 +67,84 @@ describe("tool-result-char-estimator", () => {
     const chars = estimateMessageCharsCached(msg, cache);
     expect(chars).toBe(22);
   });
+
+  it("estimates a large bashExecution near its rendered size", () => {
+    const bigOutput = "build log line\n".repeat(60000);
+    const msg = {
+      role: "bashExecution",
+      command: "npm run build",
+      output: bigOutput,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    // bashExecutionToText wraps output with command + markers; must exceed 256
+    expect(chars).toBeGreaterThan(500_000);
+  });
+
+  it("returns 0 for bashExecution with excludeFromContext", () => {
+    const msg = {
+      role: "bashExecution",
+      command: "npm run build",
+      output: "huge output ".repeat(50000),
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      excludeFromContext: true,
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    expect(chars).toBe(0);
+  });
+
+  it("estimates compactionSummary with prefix/suffix", () => {
+    const summary = "recap ".repeat(20000);
+    const msg = {
+      role: "compactionSummary",
+      summary,
+      tokensBefore: 0,
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    // Must account for COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX
+    expect(chars).toBeGreaterThan(summary.length);
+    expect(chars).toBeGreaterThan(256);
+  });
+
+  it("estimates branchSummary with prefix/suffix", () => {
+    const summary = "branch recap ".repeat(10000);
+    const msg = {
+      role: "branchSummary",
+      summary,
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    expect(chars).toBeGreaterThan(summary.length);
+    expect(chars).toBeGreaterThan(256);
+  });
+
+  it("estimates custom message with string content", () => {
+    const text = "custom data ".repeat(5000);
+    const msg = {
+      role: "custom",
+      customType: "test",
+      content: text,
+      display: true,
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    const chars = estimateMessageCharsCached(msg, cache);
+    expect(chars).toBe(text.length);
+  });
 });

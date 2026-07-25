@@ -1,7 +1,6 @@
 // Doctor lint tests cover health-check registry integration and lint warning output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetCoreHealthChecksForTest } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 
@@ -24,7 +23,6 @@ describe("runDoctorLintCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearHealthChecksForTest();
-    resetCoreHealthChecksForTest();
   });
 
   it("bases exit code on the selected severity threshold", async () => {
@@ -219,7 +217,9 @@ describe("runDoctorLintCli", () => {
         ],
       });
       expect(payload.findings[0].message).toContain("Codex plugin is disabled by config");
-      expect(payload.findings[0].fixHint).toContain("openclaw doctor --fix");
+      // Explicit plugins.entries.codex.enabled=false blocks auto-repair, so the
+      // hint names the manual action instead of promising doctor --fix.
+      expect(payload.findings[0].fixHint).toContain("Enable plugins.entries.codex");
     } finally {
       stdout.mockRestore();
     }
@@ -242,6 +242,7 @@ describe("runDoctorLintCli", () => {
             checkId: "plugin/example/lint",
             severity: "info",
             message: "plugin finding",
+            fixHint: "Review the plugin finding.",
           },
         ];
       },
@@ -281,6 +282,7 @@ describe("runDoctorLintCli", () => {
             checkId: "plugin/example/lint",
             severity: "info",
             message: "plugin finding",
+            fixHint: "Review the plugin finding.",
           },
         ];
       },
@@ -302,6 +304,7 @@ describe("runDoctorLintCli", () => {
           checkId: "plugin/example/lint",
           severity: "info",
           message: "plugin finding",
+          fixHint: "Review the plugin finding.",
         },
       ]);
     } finally {

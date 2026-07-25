@@ -6,4 +6,5 @@ export {
   root,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
+export { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 export { basenameFromMediaSource, safeFileURLToPath } from "../infra/local-file-access.js";

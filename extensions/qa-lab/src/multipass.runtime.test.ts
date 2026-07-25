@@ -1,55 +1,110 @@
-// Qa Lab tests cover multipass plugin behavior.
+// Qa Lab tests cover Multipass behavior through the production runner.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
+const TEST_ENV_VALUE = "qa-fixture-value";
 
-function readRootPackageManager() {
-  const packageJson = JSON.parse(
-    fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
-  ) as {
-    packageManager?: string;
-  };
-  return packageJson.packageManager;
-}
-
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
-    execFile: execFileMock,
+    runExec: runExecMock,
   };
 });
 
-import {
-  createQaMultipassPlan,
-  renderQaMultipassGuestScript,
-  runQaMultipass,
-} from "./multipass.runtime.js";
+import { runQaMultipass } from "./multipass.runtime.js";
+
+const generatedPaths: string[] = [];
+
+function missingMultipassError() {
+  return Object.assign(new Error("spawn multipass ENOENT"), { code: "ENOENT" });
+}
+
+async function renderPersistedGuestScript(
+  params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
+    outputDirName: string;
+  },
+) {
+  const { outputDirName, ...runParams } = params;
+  const outputDir = path.join(process.cwd(), ".artifacts", "qa-e2e", outputDirName);
+  generatedPaths.push(outputDir);
+  await expect(
+    runQaMultipass({
+      repoRoot: process.cwd(),
+      outputDir,
+      ...runParams,
+    }),
+  ).rejects.toThrow("Multipass is not installed on this host.");
+  return fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8");
+}
+
+async function captureGuestScriptsAtTransfer(
+  params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
+    outputDirName: string;
+  },
+) {
+  const { outputDirName, ...runParams } = params;
+  const outputDir = path.join(process.cwd(), ".artifacts", "qa-e2e", outputDirName);
+  let executableScript = "";
+  generatedPaths.push(outputDir);
+  runExecMock.mockImplementation(async (_file: string, args: string[]) => {
+    const transferSourcePath = args[1];
+    if (
+      args[0] === "transfer" &&
+      transferSourcePath &&
+      path.basename(transferSourcePath) === "guest-run.sh"
+    ) {
+      executableScript = fs.readFileSync(transferSourcePath, "utf8");
+      throw new Error("stop after guest script transfer");
+    }
+    return { stdout: "", stderr: "" };
+  });
+
+  await expect(
+    runQaMultipass({
+      repoRoot: process.cwd(),
+      outputDir,
+      ...runParams,
+    }),
+  ).rejects.toThrow("stop after guest script transfer");
+
+  expect(executableScript).not.toBe("");
+  return {
+    executableScript,
+    persistedScript: fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8"),
+  };
+}
 
 describe("qa multipass runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runExecMock.mockRejectedValue(missingMultipassError());
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    for (const generatedPath of generatedPaths.splice(0)) {
+      fs.rmSync(generatedPath, { recursive: true, force: true });
+    }
   });
 
-  it("rejects output directories outside the mounted repo root", () => {
-    expect(() =>
-      createQaMultipassPlan({
+  it("rejects output directories outside the mounted repo root", async () => {
+    await expect(
+      runQaMultipass({
         repoRoot: process.cwd(),
         outputDir: "/tmp/qa-out",
       }),
-    ).toThrow("qa suite --runner multipass requires --output-dir to stay under the repo root");
+    ).rejects.toThrow(
+      "qa suite --runner multipass requires --output-dir to stay under the repo root",
+    );
   });
 
-  it("rejects repo-local symlink output directories that escape the repo root", () => {
+  it("rejects repo-local symlink output directories that escape the repo root", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-multipass-"));
     const repoRoot = path.join(tempRoot, "repo");
     const outsideRoot = path.join(tempRoot, "outside");
@@ -64,252 +119,160 @@ describe("qa multipass runtime", () => {
     fs.symlinkSync(outsideRoot, symlinkPath);
 
     try {
-      expect(() =>
-        createQaMultipassPlan({
+      await expect(
+        runQaMultipass({
           repoRoot,
           outputDir: path.join(symlinkPath, "qa-out"),
         }),
-      ).toThrow("qa suite --runner multipass requires --output-dir to stay under the repo root");
+      ).rejects.toThrow(
+        "qa suite --runner multipass requires --output-dir to stay under the repo root",
+      );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
-  it("reuses suite scenario semantics and resolves mounted artifact paths", () => {
-    const repoRoot = process.cwd();
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "multipass-test");
-    const plan = createQaMultipassPlan({
-      repoRoot,
-      outputDir,
-    });
-
-    expect(plan.outputDir).toBe(outputDir);
-    expect(plan.scenarioIds).toStrictEqual([]);
-    expect(plan.qaCommand).not.toContain("--scenario");
-    expect(plan.guestOutputDir).toBe("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-test");
-    expect(plan.reportPath).toBe(path.join(outputDir, "qa-suite-report.md"));
-    expect(plan.summaryPath).toBe(path.join(outputDir, "qa-suite-summary.json"));
-  });
-
-  it("renders a guest script that runs the live qa suite by default", () => {
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-test"),
+  it("persists the default live suite command and mounted artifact path", async () => {
+    const script = await renderPersistedGuestScript({
+      outputDirName: "multipass-default-test",
       scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
     });
 
-    const script = renderQaMultipassGuestScript(plan);
-
     expect(script).toContain("pnpm install --frozen-lockfile");
     expect(script).toContain("pnpm build");
-    expect(script).toContain(`corepack prepare '${readRootPackageManager()}' --activate`);
+    expect(script).toContain("corepack prepare 'pnpm@");
+    expect(script).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/SHASUMS256.txt" -o "${node_tmp_dir}/SHASUMS256.txt"',
+    );
+    expect(script).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/${tarball_name}" -o "${node_tmp_dir}/${tarball_name}"',
+    );
     expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
     expect(script).toContain("'--provider-mode' 'live-frontier'");
     expect(script).toContain("'--scenario' 'channel-chat-baseline'");
     expect(script).toContain("'--scenario' 'thread-follow-up'");
-    expect(script).toContain("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-test");
+    expect(script).toContain("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-default-test");
   });
 
-  it("carries live suite flags and forwarded auth env into the guest command", () => {
-    vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
+  it("redacts persisted credentials while forwarding them to the executable script", async () => {
+    vi.stubEnv("OPENAI_API_KEY", TEST_ENV_VALUE);
+    const { executableScript, persistedScript } = await captureGuestScriptsAtTransfer({
+      outputDirName: "multipass-live-test",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    const script = renderQaMultipassGuestScript(plan);
-
-    expect(plan.qaCommand).toContain("--provider-mode");
-    expect(plan.qaCommand).toContain("live-frontier");
-    expect(plan.qaCommand).toContain("--model");
-    expect(plan.qaCommand).toContain("openai/gpt-5.5");
-    expect(plan.qaCommand).toContain("--alt-model");
-    expect(plan.qaCommand).toContain("--fast");
-    expect(plan.forwardedEnv.OPENAI_API_KEY).toBe("test-openai-key");
-    expect(script).toContain("OPENAI_API_KEY='test-openai-key'");
-    expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
-    expect(script).toContain("'--provider-mode' 'live-frontier'");
-  });
-
-  it("forwards --allow-failures into the guest qa suite command when requested", () => {
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-allow-failures-test"),
       allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(plan.qaCommand).toContain("--allow-failures");
+    expect(persistedScript).toContain("OPENAI_API_KEY='<redacted>'");
+    expect(persistedScript).not.toContain(TEST_ENV_VALUE);
+    expect(executableScript).toContain(`OPENAI_API_KEY='${TEST_ENV_VALUE}'`);
+    expect(executableScript).not.toContain("<redacted>");
+    expect(persistedScript).toContain("'--model' 'openai/gpt-5.6-luna'");
+    expect(persistedScript).toContain("'--alt-model' 'openai/gpt-5.6-luna'");
+    expect(persistedScript).toContain("'--fast'");
+    expect(persistedScript).toContain("'--allow-failures'");
   });
 
-  it("forwards --runtime-pair into the guest qa suite command when requested", () => {
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-runtime-pair-test"),
+  it("persists runtime, channel-driver, and plugin selections", async () => {
+    const script = await renderPersistedGuestScript({
+      outputDirName: "multipass-selection-test",
       runtimePair: ["openclaw", "codex"],
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--runtime-pair", "openclaw,codex"]));
-  });
-
-  it("forwards channel-driver suite selection into the guest qa suite command", () => {
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "crabline-channel-driver-test"),
       channelDriverSelection: {
         capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
         smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    expect(plan.qaCommand).toEqual(
-      expect.arrayContaining(["--channel-driver", "crabline", "--channel", "telegram"]),
-    );
-  });
-
-  it("forwards suite plugin enablements into the guest qa suite command", () => {
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-enable-plugin-test"),
       enabledPluginIds: ["browser", "memory-core", "browser"],
-      scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(plan.qaCommand).toEqual(
-      expect.arrayContaining(["--enable-plugin", "browser", "--enable-plugin", "memory-core"]),
-    );
+    expect(script).toContain("'--runtime-pair' 'openclaw,codex'");
+    expect(script).toContain("'--channel-driver' 'crabline' '--channel' 'telegram'");
+    expect(script).toContain("'--enable-plugin' 'browser' '--enable-plugin' 'memory-core'");
   });
 
-  it("redacts forwarded live secrets in the persisted artifact script", () => {
-    vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
+  it("forwards supported live credential shapes only in redacted form", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_ANTHROPIC_KEYS", TEST_ENV_VALUE);
+    vi.stubEnv("OPENCLAW_LIVE_CODEX_API_KEY", TEST_ENV_VALUE);
+    vi.stubEnv("CODEX_API_KEY", TEST_ENV_VALUE);
+    vi.stubEnv("OPENAI_API_KEY_1", TEST_ENV_VALUE);
+    vi.stubEnv("GEMINI_API_KEY_2", TEST_ENV_VALUE);
+    const script = await renderPersistedGuestScript({
+      outputDirName: "multipass-env-test",
       providerMode: "live-frontier",
-      scenarioIds: ["channel-chat-baseline"],
     });
 
-    const redactedScript = renderQaMultipassGuestScript(plan, { redactSecrets: true });
-
-    expect(redactedScript).toContain("OPENAI_API_KEY='<redacted>'");
-    expect(redactedScript).not.toContain("OPENAI_API_KEY='test-openai-key'");
+    for (const key of [
+      "OPENCLAW_LIVE_ANTHROPIC_KEYS",
+      "OPENCLAW_LIVE_CODEX_API_KEY",
+      "CODEX_API_KEY",
+      "OPENAI_API_KEY_1",
+      "GEMINI_API_KEY_2",
+    ]) {
+      expect(script).toContain(`${key}='<redacted>'`);
+    }
+    expect(script).not.toContain(TEST_ENV_VALUE);
   });
 
-  it("forwards live key list and numbered key env shapes", () => {
-    vi.stubEnv("OPENCLAW_LIVE_ANTHROPIC_KEYS", "anthropic-a anthropic-b");
-    vi.stubEnv("OPENCLAW_LIVE_CODEX_API_KEY", "codex-live");
-    vi.stubEnv("CODEX_API_KEY", "codex-direct");
-    vi.stubEnv("OPENAI_API_KEY_1", "openai-one");
-    vi.stubEnv("GEMINI_API_KEY_2", "gemini-two");
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
-      providerMode: "live-frontier",
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    expect(plan.forwardedEnv.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBe("anthropic-a anthropic-b");
-    expect(plan.forwardedEnv.OPENCLAW_LIVE_CODEX_API_KEY).toBe("codex-live");
-    expect(plan.forwardedEnv.CODEX_API_KEY).toBe("codex-direct");
-    expect(plan.forwardedEnv.OPENAI_API_KEY_1).toBe("openai-one");
-    expect(plan.forwardedEnv.GEMINI_API_KEY_2).toBe("gemini-two");
-  });
-
-  it("skips stale CODEX_HOME values that do not exist on the host", () => {
+  it("omits stale CODEX_HOME values", async () => {
     vi.stubEnv("CODEX_HOME", "/tmp/does-not-exist-openclaw-codex-home");
-    const plan = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
+    const script = await renderPersistedGuestScript({
+      outputDirName: "multipass-stale-codex-home-test",
       providerMode: "live-frontier",
     });
 
-    expect(plan.forwardedEnv.CODEX_HOME).toBeUndefined();
-    expect(plan.hostCodexHomePath).toBeUndefined();
-    expect(plan.guestCodexHomePath).toBeUndefined();
+    expect(script).not.toContain("CODEX_HOME=");
   });
 
-  it("falls back to os.homedir() when HOME is unset for CODEX_HOME discovery", () => {
+  it("uses os.homedir() when HOME is unset for CODEX_HOME discovery", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-multipass-home-"));
     const fakeHome = path.join(tempRoot, "home");
-    const fakeCodexHome = path.join(fakeHome, ".codex");
-    fs.mkdirSync(fakeCodexHome, { recursive: true });
+    fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
     vi.stubEnv("HOME", "");
     vi.stubEnv("CODEX_HOME", "");
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
 
     try {
-      const plan = createQaMultipassPlan({
-        repoRoot: process.cwd(),
-        outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
+      const script = await renderPersistedGuestScript({
+        outputDirName: "multipass-home-test",
         providerMode: "live-frontier",
       });
-
-      expect(plan.forwardedEnv.CODEX_HOME).toBe(fakeCodexHome);
-      expect(plan.hostCodexHomePath).toBe(fakeCodexHome);
-      expect(plan.guestCodexHomePath).toBe("/workspace/openclaw-codex-home");
+      expect(script).toContain("CODEX_HOME='/workspace/openclaw-codex-home'");
+      expect(script).not.toContain(fakeHome);
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("does not leave a temp guest transfer script behind when multipass is missing", async () => {
-    const outputDir = path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-missing-test");
-    vi.spyOn(Date, "now").mockReturnValue(1_717_171_717_171);
-    vi.spyOn(Math, "random").mockReturnValue(0.123456789);
-    (execFileMock as unknown as Mock).mockImplementation((...args: unknown[]) => {
-      const callback = args[3] as (error: Error | null, stdout: string, stderr: string) => void;
-      const error = new Error("spawn multipass ENOENT") as NodeJS.ErrnoException;
-      error.code = "ENOENT";
-      callback(error, "", "");
-    });
-
-    const expectedVmName = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir,
+    const tempRoot = resolvePreferredOpenClawTmpDir();
+    const before = new Set(fs.readdirSync(tempRoot));
+    await renderPersistedGuestScript({
+      outputDirName: "multipass-missing-test",
       scenarioIds: ["channel-chat-baseline"],
-    }).vmName;
-    const expectedTransferDir = path.join(
-      resolvePreferredOpenClawTmpDir(),
-      `${expectedVmName}-qa-suite-`,
-    );
-
-    await expect(
-      runQaMultipass({
-        repoRoot: process.cwd(),
-        outputDir,
-        scenarioIds: ["channel-chat-baseline"],
-      }),
-    ).rejects.toThrow("Multipass is not installed on this host.");
-
-    const tempEntries = fs
-      .readdirSync(resolvePreferredOpenClawTmpDir())
-      .filter((entry) => entry.startsWith(path.basename(expectedTransferDir)));
-    expect(tempEntries).toStrictEqual([]);
-    fs.rmSync(outputDir, { recursive: true, force: true });
+    });
+    const added = fs.readdirSync(tempRoot).filter((entry) => !before.has(entry));
+    expect(added.filter((entry) => entry.includes("-qa-suite-"))).toStrictEqual([]);
   });
 
   it("preserves non-install multipass probe failures", async () => {
+    runExecMock.mockRejectedValueOnce(
+      Object.assign(new Error("multipassd is not running"), {
+        code: "EACCES",
+        stdout: "",
+        stderr: "multipassd is not running",
+      }),
+    );
     const outputDir = path.join(
       process.cwd(),
       ".artifacts",
       "qa-e2e",
       "multipass-probe-error-test",
     );
-    (execFileMock as unknown as Mock).mockImplementation((...args: unknown[]) => {
-      const callback = args[3] as (error: Error | null, stdout: string, stderr: string) => void;
-      const error = new Error("multipassd is not running") as NodeJS.ErrnoException;
-      error.code = "EACCES";
-      callback(error, "", "multipassd is not running");
-    });
+    generatedPaths.push(outputDir);
 
     await expect(
       runQaMultipass({
@@ -318,7 +281,5 @@ describe("qa multipass runtime", () => {
         scenarioIds: ["channel-chat-baseline"],
       }),
     ).rejects.toThrow("Unable to verify Multipass availability: multipassd is not running.");
-
-    fs.rmSync(outputDir, { recursive: true, force: true });
   });
 });

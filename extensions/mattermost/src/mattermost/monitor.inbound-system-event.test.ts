@@ -1,8 +1,10 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MattermostPost } from "./client.js";
+import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { monitorMattermostProvider } from "./monitor.js";
-import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 class FakeWebSocket {
   public readonly sent: string[] = [];
@@ -45,7 +47,9 @@ class FakeWebSocket {
 
   close(): void {}
 
-  terminate(): void {}
+  terminate(): void {
+    this.emitClose(1000);
+  }
 
   get openListenerCount(): number {
     return this.openListeners.length;
@@ -78,19 +82,38 @@ class FakeWebSocket {
 
 const mockState = vi.hoisted(() => ({
   abortController: undefined as AbortController | undefined,
+  createReplyDispatcherWithTyping: vi.fn(),
   createMattermostClient: vi.fn(),
   createMattermostDraftStream: vi.fn(),
-  dispatchReplyFromConfig: vi.fn(),
+  dispatchInboundMessage: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
+  recordMattermostThreadParticipation: vi.fn(),
   resolveChannelInfo: vi.fn(),
   resolveMattermostMedia: vi.fn(),
   resolveUserInfo: vi.fn(),
   runtimeCore: undefined as unknown,
+  sendMessageMattermost: vi.fn(),
   updateMattermostPost: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    createReplyDispatcherWithTyping: (...args: unknown[]) =>
+      mockState.createReplyDispatcherWithTyping(...args),
+    dispatchInboundMessage: async (params: Parameters<typeof actual.dispatchInboundMessage>[0]) => {
+      try {
+        return await mockState.dispatchInboundMessage(params);
+      } finally {
+        await params.onSettled?.();
+      }
+    },
+  };
+});
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
@@ -103,11 +126,17 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./draft-stream.js", () => ({
-  createMattermostDraftStream: mockState.createMattermostDraftStream,
-}));
+vi.mock("./draft-stream.js", async () => {
+  const actual = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+  return {
+    createMattermostDraftStream: mockState.createMattermostDraftStream,
+    createMattermostDraftPreviewBoundaryController:
+      actual.createMattermostDraftPreviewBoundaryController,
+  };
+});
 
-vi.mock("./monitor-resources.js", () => ({
+vi.mock("./monitor-resources.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor-resources.js")>()),
   createMattermostMonitorResources: () => ({
     resolveMattermostMedia: mockState.resolveMattermostMedia,
     sendTypingIndicator: vi.fn(async () => {}),
@@ -117,8 +146,43 @@ vi.mock("./monitor-resources.js", () => ({
   }),
 }));
 
+vi.mock("./monitor-ingress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor-ingress.js")>();
+  return {
+    ...actual,
+    createMattermostIngressMonitor: (
+      options: Parameters<typeof actual.createMattermostIngressMonitor>[0],
+    ) => ({
+      receive: async (rawEvent: string) => {
+        const payload = JSON.parse(rawEvent) as MattermostEventPayload;
+        const post =
+          typeof payload.data?.post === "string"
+            ? (JSON.parse(payload.data.post) as MattermostPost)
+            : (payload.data?.post as MattermostPost | undefined);
+        if (payload.event !== "posted" || !post) {
+          return;
+        }
+        await options.dispatch(post, payload, {
+          abortSignal: new AbortController().signal,
+          onAdopted: async () => {},
+          onDeferred: () => {},
+          onAdoptionFinalizing: () => {},
+          onAbandoned: async () => {},
+        });
+      },
+      stop: async () => {},
+      waitForIdle: async () => {},
+    }),
+  };
+});
+
 vi.mock("./monitor-slash.js", () => ({
   registerMattermostMonitorSlashCommands: mockState.registerMattermostMonitorSlashCommands,
+}));
+
+vi.mock("./thread-participation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./thread-participation.js")>()),
+  recordMattermostThreadParticipation: mockState.recordMattermostThreadParticipation,
 }));
 
 vi.mock("./runtime-api.js", async () => {
@@ -130,13 +194,22 @@ vi.mock("./runtime-api.js", async () => {
       readStoreForDmPolicy: vi.fn(async () => []),
       upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
     })),
-    createChannelMessageReplyPipeline: vi.fn(() => ({
+    createChannelMessageReplyPipeline: vi.fn((params: { cfg: OpenClawConfig }) => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
+      resolveResponsePrefix: () => params.cfg.channels?.mattermost?.responsePrefix,
     })),
     registerPluginHttpRoute: mockState.registerPluginHttpRoute,
     resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
     warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),
+  };
+});
+
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendMessageMattermost: mockState.sendMessageMattermost,
   };
 });
 
@@ -156,40 +229,96 @@ function createRuntimeCore(
     shouldHandleTextCommands?: () => boolean;
     textHasControlCommand?: (text?: string) => boolean;
     createInboundDebouncer?: typeof createInboundDebouncer;
+    verboseDebug?: (message: string) => void;
+    chunkMarkdownTextWithMode?: (
+      text: string,
+      limit: number,
+      mode: "length" | "newline",
+    ) => string[];
+    chunkMode?: "length" | "newline";
+    textChunkLimit?: number;
   } = {},
 ) {
-  const dispatchPreparedForTest = vi.fn(
+  type ReplyDispatcherOptions = {
+    deliver: (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
+  };
+  mockState.createReplyDispatcherWithTyping.mockImplementation(
+    (options: ReplyDispatcherOptions) => ({
+      dispatcher: {},
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+      options,
+    }),
+  );
+  type RecordInboundSessionInput = {
+    storePath: string;
+    sessionKey: string;
+    ctx: unknown;
+    createIfMissing?: boolean;
+    groupResolution?: unknown;
+    onRecordError?: (error: unknown) => void;
+    updateLastRoute?: {
+      accountId?: string;
+      channel?: string;
+      mainDmOwnerPin?: {
+        onSkip?: () => void;
+        ownerRecipient?: string;
+        senderRecipient?: string;
+      };
+      sessionKey?: string;
+      to?: string;
+    };
+  };
+  const recordInboundSession = vi.fn(async (_params: RecordInboundSessionInput) => {});
+  const dispatchPlanForTest = vi.fn(
     async (turn: {
-      storePath: string;
-      routeSessionKey: string;
+      cfg: OpenClawConfig;
+      channel: string;
+      route: { agentId: string; sessionKey: string };
       ctxPayload: { SessionKey?: string };
-      recordInboundSession: (params: unknown) => Promise<void>;
+      dispatcherOptions?: Record<string, unknown>;
+      delivery: {
+        deliver: (
+          payload: ReplyPayload,
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<unknown>;
+        onError?: unknown;
+      };
+      replyOptions?: Record<string, unknown>;
       record?: {
         groupResolution?: unknown;
         createIfMissing?: boolean;
-        updateLastRoute?: unknown;
+        updateLastRoute?: RecordInboundSessionInput["updateLastRoute"];
         onRecordError?: (err: unknown) => void;
       };
-      runDispatch: () => Promise<{
-        queuedFinal: boolean;
-        counts: { tool: number; block: number; final: number };
-      }>;
     }) => {
-      await turn.recordInboundSession({
-        storePath: turn.storePath,
-        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+      await recordInboundSession({
+        storePath: "/tmp/openclaw-test-sessions.json",
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.route.sessionKey,
         ctx: turn.ctxPayload,
         groupResolution: turn.record?.groupResolution,
         createIfMissing: turn.record?.createIfMissing,
         updateLastRoute: turn.record?.updateLastRoute,
         onRecordError: turn.record?.onRecordError ?? (() => undefined),
       });
-      const dispatchResult = await turn.runDispatch();
+      const prepared = mockState.createReplyDispatcherWithTyping({
+        ...turn.dispatcherOptions,
+        deliver: turn.delivery.deliver,
+        onError: turn.delivery.onError,
+      }) as { dispatcher: unknown; replyOptions?: Record<string, unknown> };
+      const dispatchResult = await mockState.dispatchInboundMessage({
+        ctx: turn.ctxPayload,
+        cfg: turn.cfg,
+        dispatcher: prepared.dispatcher,
+        replyOptions: { ...prepared.replyOptions, ...turn.replyOptions },
+        onSettled: turn.dispatcherOptions?.onSettled,
+      });
       return {
         admission: { kind: "dispatch" as const },
         dispatched: true,
         ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.routeSessionKey,
+        routeSessionKey: turn.route.sessionKey,
         dispatchResult,
       };
     },
@@ -203,7 +332,7 @@ function createRuntimeCore(
           input: unknown,
           eventClass: { kind: "message"; canStartAgentTurn: true },
           preflight: Record<string, never>,
-        ) => Parameters<typeof dispatchPreparedForTest>[0];
+        ) => Parameters<typeof dispatchPlanForTest>[0];
       };
     }) => {
       const input = params.adapter.ingest(params.raw);
@@ -212,7 +341,7 @@ function createRuntimeCore(
         { kind: "message", canStartAgentTurn: true },
         {},
       );
-      return await dispatchPreparedForTest(turn);
+      return await dispatchPlanForTest(turn);
     },
   );
   return {
@@ -220,9 +349,9 @@ function createRuntimeCore(
       current: () => cfg,
     },
     logging: {
-      shouldLogVerbose: () => false,
+      shouldLogVerbose: () => Boolean(overrides.verboseDebug),
       getChildLogger: () => ({
-        debug: vi.fn(),
+        debug: overrides.verboseDebug ?? vi.fn(),
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
@@ -269,24 +398,7 @@ function createRuntimeCore(
         buildPairingReply: () => "pairing required",
       },
       reply: {
-        createReplyDispatcherWithTyping: vi.fn(() => ({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-          markRunComplete: vi.fn(),
-        })),
-        dispatchReplyFromConfig: mockState.dispatchReplyFromConfig,
-        finalizeInboundContext: (context: unknown) => context,
-        formatInboundEnvelope: (params: { channel: string; from: string; body: string }) =>
-          `${params.channel} ${params.from}\n${params.body}`,
-        resolveHumanDelayConfig: () => ({}),
-        withReplyDispatcher: async (params: { run: () => unknown; onSettled?: () => void }) => {
-          try {
-            return await params.run();
-          } finally {
-            params.onSettled?.();
-          }
-        },
+        settleReplyDispatcher: vi.fn(async ({ onSettled }) => onSettled?.()),
       },
       routing: {
         resolveAgentRoute: () => ({
@@ -299,38 +411,20 @@ function createRuntimeCore(
       },
       session: {
         resolveStorePath: () => "/tmp/openclaw-test-sessions.json",
-        recordInboundSession: vi.fn(
-          async (_params: {
-            createIfMissing?: unknown;
-            groupResolution?: unknown;
-            onRecordError?: unknown;
-            sessionKey?: string;
-            storePath?: string;
-            updateLastRoute?: {
-              accountId?: string;
-              channel?: string;
-              mainDmOwnerPin?: {
-                onSkip?: unknown;
-                ownerRecipient?: string;
-                senderRecipient?: string;
-              };
-              sessionKey?: string;
-              to?: string;
-            };
-          }) => {},
-        ),
+        recordInboundSession,
         updateLastRoute: vi.fn(async () => {}),
       },
       inbound: {
         run,
       },
       text: {
-        chunkMarkdownTextWithMode: (text: string) => [text],
+        chunkMarkdownTextWithMode:
+          overrides.chunkMarkdownTextWithMode ?? ((text: string) => [text]),
         convertMarkdownTables: (text: string) => text,
         hasControlCommand: overrides.textHasControlCommand ?? (() => false),
-        resolveChunkMode: () => "off",
+        resolveChunkMode: () => overrides.chunkMode ?? "length",
         resolveMarkdownTableMode: () => "off",
-        resolveTextChunkLimit: () => 4000,
+        resolveTextChunkLimit: () => overrides.textChunkLimit ?? 4000,
       },
     },
   };
@@ -362,6 +456,33 @@ const testRuntime = (): RuntimeEnv =>
     }) as RuntimeEnv["exit"],
   }) satisfies RuntimeEnv;
 
+async function emitMattermostChannelPost(
+  socket: FakeWebSocket,
+  params: { id: string; message: string; rootId?: string },
+) {
+  await socket.emitMessage({
+    event: "posted",
+    data: {
+      channel_id: "chan-1",
+      channel_name: "town-square",
+      channel_display_name: "Town Square",
+      sender_name: "alice",
+      post: JSON.stringify({
+        id: params.id,
+        channel_id: "chan-1",
+        user_id: "user-1",
+        message: params.message,
+        root_id: params.rootId,
+        create_at: 1_714_000_000_000,
+      }),
+    },
+    broadcast: {
+      channel_id: "chan-1",
+      user_id: "user-1",
+    },
+  });
+}
+
 describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -370,8 +491,11 @@ describe("mattermost inbound user posts", () => {
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostDraftStream.mockReturnValue({
       update: vi.fn(),
+      updateAssistantText: vi.fn(),
       flush: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text }),
     });
     mockState.fetchMattermostMe.mockResolvedValue({
       id: "bot-user",
@@ -389,7 +513,8 @@ describe("mattermost inbound user posts", () => {
     });
     mockState.resolveMattermostMedia.mockResolvedValue([]);
     mockState.resolveUserInfo.mockResolvedValue({ id: "user-1", username: "alice" });
-    mockState.dispatchReplyFromConfig.mockImplementation(async () => {
+    mockState.sendMessageMattermost.mockResolvedValue({});
+    mockState.dispatchInboundMessage.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
   });
@@ -419,7 +544,7 @@ describe("mattermost inbound user posts", () => {
         channel_display_name: "Town Square",
         sender_name: "alice",
         post: JSON.stringify({
-          id: "post-1",
+          id: "post-inbound-system-event-regular",
           channel_id: "chan-1",
           user_id: "user-1",
           message: "hello from mattermost",
@@ -435,13 +560,60 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello from mattermost");
     expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
-    expect(ctx?.MessageSid).toBe("post-1");
+    expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("keeps verbose inbound previews on complete UTF-16 boundaries", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    const verboseDebug = vi.fn();
+    mockState.abortController = abortController;
+    mockState.runtimeCore = createRuntimeCore(testConfig, undefined, { verboseDebug });
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-verbose-preview",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: `${"a".repeat(199)}😀tail`,
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(verboseDebug).toHaveBeenCalledWith(
+      `mattermost inbound: from=mattermost:channel:chan-1 len=205 preview="${"a".repeat(199)}"`,
+    );
   });
 
   it("dispatches a bare bot mention whose body is empty after normalization as a wake event", async () => {
@@ -484,8 +656,8 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
-    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("@openclaw");
     expect(ctx?.MessageSid).toBe("post-bare-mention");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
@@ -523,7 +695,7 @@ describe("mattermost inbound user posts", () => {
       },
     };
     mockState.runtimeCore = createRuntimeCore(progressConfig);
-    mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
       await params.replyOptions?.onToolStart?.({
         toolCallId: "read-1",
         name: "read",
@@ -592,7 +764,7 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
-    const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
@@ -608,7 +780,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const inlineCommandConfig: OpenClawConfig = {
-      commands: { useAccessGroups: true },
       channels: {
         mattermost: {
           enabled: true,
@@ -664,8 +835,8 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", inlineCommandConfig);
-    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello /status");
     expect(ctx?.CommandAuthorized).toBe(false);
     // Inline non-control text must not be tagged as an explicit text-slash command turn —
@@ -746,8 +917,8 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
-    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("/reset");
     expect(ctx?.CommandBody).toBe("/reset");
     expect(ctx?.CommandAuthorized).toBe(true);
@@ -798,8 +969,8 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
-    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello with websocket kind");
     expect(ctx?.ChatType).toBe("channel");
     expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
@@ -861,7 +1032,7 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
-    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
     expect(runtimeCore.channel.session.recordInboundSession).not.toHaveBeenCalled();
   });
 
@@ -870,7 +1041,6 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     const mentionConfig: OpenClawConfig = {
-      commands: { useAccessGroups: false },
       messages: { inbound: { debounceMs: 60_000 } },
       channels: {
         mattermost: {
@@ -880,6 +1050,7 @@ describe("mattermost inbound user posts", () => {
           chatmode: "oncall",
           dmPolicy: "open",
           groupPolicy: "open",
+          groupAllowFrom: ["user-1"],
         },
       },
     };
@@ -926,7 +1097,7 @@ describe("mattermost inbound user posts", () => {
         user_id: "user-1",
       },
     });
-    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
 
     await socket.emitMessage({
       event: "posted",
@@ -951,8 +1122,8 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
-    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("abort");
     expect(ctx?.CommandAuthorized).toBe(true);
   });
@@ -1111,4 +1282,435 @@ describe("mattermost inbound user posts", () => {
     expect(updateLastRoute?.accountId).toBe("default");
     expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
+
+  it("keeps core block streaming enabled when preview streaming is off", async () => {
+    const offConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: "off",
+          blockStreaming: true,
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(offConfig);
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: offConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-streaming-off",
+      message: "stream this in blocks",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBe(false);
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
+  });
+
+  it("preserves text-tool-text boundaries while grouping interleaved tool updates", async () => {
+    const blockConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "block", preview: { toolProgress: true } },
+        },
+      },
+    };
+    const chunkMarkdownTextWithMode = vi.fn((text: string) => [text]);
+    const runtimeCore = createRuntimeCore(blockConfig, undefined, {
+      chunkMarkdownTextWithMode,
+      chunkMode: "newline",
+      textChunkLimit: 1234,
+    });
+    mockState.runtimeCore = runtimeCore;
+    const draftUpdate = vi.fn();
+    const forceNewMessage = vi.fn(async () => {});
+    let releaseToolBoundary: (() => void) | undefined;
+    let releaseAssistantBoundary: (() => void) | undefined;
+    let releaseFinalBoundary: (() => void) | undefined;
+    let assistantBoundarySettled = false;
+    const toolBoundaryPending = new Promise<void>((resolve) => {
+      releaseToolBoundary = resolve;
+    });
+    const assistantBoundaryPending = new Promise<void>((resolve) => {
+      releaseAssistantBoundary = resolve;
+    });
+    const finalBoundaryPending = new Promise<void>((resolve) => {
+      releaseFinalBoundary = resolve;
+    });
+    forceNewMessage.mockImplementation(async () => {
+      const callNumber = forceNewMessage.mock.calls.length;
+      if (callNumber === 1) {
+        await toolBoundaryPending;
+        return;
+      }
+      if (callNumber === 2) {
+        await assistantBoundaryPending;
+        assistantBoundarySettled = true;
+        return;
+      }
+      if (callNumber === 5) {
+        await finalBoundaryPending;
+      }
+    });
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: draftUpdate,
+      updateAssistantText: draftUpdate,
+      forceNewMessage,
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => undefined),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text }),
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    let sameToolUpdateBoundaryCount = -1;
+    let hiddenReasoningBoundaryCount = -1;
+    let consecutiveToolBoundaryCount = -1;
+    let reasoningStartBoundaryCount = -1;
+    let secondReasoningBoundaryCount = -1;
+    let reasoningTextBoundaryCount = -1;
+    let toolBeforeFinalBoundaryCount = -1;
+    let finalOnlyBoundaryCount = -1;
+    let interleavedToolDraft = "";
+    let reasoningDraft = "";
+    let finalToolDraft = "";
+    let secondPartialArrivedBeforeBoundarySettled = false;
+    let finalDeliveryWaitedForBoundary = false;
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      params.replyOptions?.onPartialReply?.({ text: "A much longer first block" });
+      const firstToolStart = params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-1",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "ls" },
+      });
+      const secondToolStart = params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-2",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "pwd" },
+      });
+      const firstToolUpdate = params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-1",
+        name: "bash",
+        phase: "update",
+        detailMode: "raw",
+        args: { command: "ls -alh" },
+      });
+      sameToolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onReasoningEnd?.();
+      hiddenReasoningBoundaryCount = forceNewMessage.mock.calls.length;
+      const consecutiveToolStart = params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-3",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "whoami" },
+      });
+      consecutiveToolBoundaryCount = forceNewMessage.mock.calls.length;
+      interleavedToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
+
+      params.replyOptions?.onAssistantMessageStart?.();
+      const assistantBoundary = params.replyOptions?.onPartialReply?.({ text: "Done." });
+      secondPartialArrivedBeforeBoundarySettled =
+        !assistantBoundarySettled && draftUpdate.mock.calls.at(-1)?.[0] === "Done.";
+      releaseToolBoundary?.();
+      releaseAssistantBoundary?.();
+      await Promise.all([
+        firstToolStart,
+        secondToolStart,
+        firstToolUpdate,
+        consecutiveToolStart,
+        assistantBoundary,
+      ]);
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onReasoningStream?.({ text: "Private chain of thought" });
+      reasoningStartBoundaryCount = forceNewMessage.mock.calls.length;
+      reasoningDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
+      await params.replyOptions?.onReasoningEnd?.();
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onReasoningStream?.({ text: "Second reasoning item" });
+      secondReasoningBoundaryCount = forceNewMessage.mock.calls.length;
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "Answer after reasoning" });
+      reasoningTextBoundaryCount = forceNewMessage.mock.calls.length;
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-final",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "date" },
+      });
+      toolBeforeFinalBoundaryCount = forceNewMessage.mock.calls.length;
+      finalToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      const finalDelivery = dispatcherOptions?.deliver(
+        { text: "Final without a partial" },
+        { kind: "final" },
+      );
+      finalOnlyBoundaryCount = forceNewMessage.mock.calls.length;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      finalDeliveryWaitedForBoundary = mockState.sendMessageMattermost.mock.calls.length === 0;
+      releaseFinalBoundary?.();
+      await finalDelivery;
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: blockConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-tool-progress",
+      message: "run a tool",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    const draftStreamOptions = mockState.createMattermostDraftStream.mock.calls.at(0)?.[0] as
+      | { chunkText?: (text: string) => string[] }
+      | undefined;
+    chunkMarkdownTextWithMode.mockClear();
+    expect(draftStreamOptions?.chunkText?.("first\n\nsecond")).toEqual(["first\n\nsecond"]);
+    expect(chunkMarkdownTextWithMode).toHaveBeenCalledWith("first\n\nsecond", 1234, "newline");
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBe(true);
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBe(true);
+    expect(sameToolUpdateBoundaryCount).toBe(1);
+    expect(hiddenReasoningBoundaryCount).toBe(1);
+    expect(consecutiveToolBoundaryCount).toBe(1);
+    expect(reasoningStartBoundaryCount).toBe(3);
+    expect(secondReasoningBoundaryCount).toBe(3);
+    expect(reasoningTextBoundaryCount).toBe(3);
+    expect(toolBeforeFinalBoundaryCount).toBe(4);
+    expect(interleavedToolDraft).toContain("pwd");
+    expect(interleavedToolDraft).toContain("ls -alh");
+    expect(interleavedToolDraft).toContain("whoami");
+    expect(reasoningDraft).toBe("Thinking…");
+    expect(finalToolDraft).toContain("date");
+    expect(finalOnlyBoundaryCount).toBe(5);
+    expect(forceNewMessage).toHaveBeenCalledTimes(5);
+    expect(finalDeliveryWaitedForBoundary).toBe(true);
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+      "channel:chan-1",
+      "Final without a partial",
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(secondPartialArrivedBeforeBoundarySettled).toBe(true);
+    expect(draftUpdate).toHaveBeenNthCalledWith(1, "A much longer first block");
+    expect(draftUpdate).toHaveBeenCalledWith("Done.");
+    expect(draftUpdate).toHaveBeenCalledWith("Answer after reasoning");
+  });
+
+  it("finalizes only the current block when the terminal reply is cumulative", async () => {
+    const blockConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "block" },
+          responsePrefix: "[bot]",
+        },
+      },
+    };
+    const runtimeCore = createRuntimeCore(blockConfig);
+    mockState.runtimeCore = runtimeCore;
+    mockState.updateMattermostPost.mockRejectedValueOnce(new Error("edit failed"));
+    const forceNewMessage = vi.fn(async () => {});
+    const updateAssistantText = vi.fn();
+    const resolveFinalText = vi.fn((text: string) =>
+      text === "[bot] First block\n\nSecond block"
+        ? { kind: "remaining" as const, text: "Second block" }
+        : { kind: "full" as const, text },
+    );
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText,
+      forceNewMessage,
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => "preview-current"),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText,
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "First block" });
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "Second block" });
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver(
+        { text: "[bot] First block\n\nSecond block" },
+        { kind: "final" },
+      );
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: blockConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-cumulative-final",
+      message: "stream two blocks",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(updateAssistantText).toHaveBeenNthCalledWith(1, "[bot] First block");
+    expect(updateAssistantText).toHaveBeenNthCalledWith(2, "Second block");
+    expect(resolveFinalText).toHaveBeenCalledWith("[bot] First block\n\nSecond block");
+    expect(mockState.updateMattermostPost).toHaveBeenCalledWith({}, "preview-current", {
+      message: "Second block",
+    });
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+      "channel:chan-1",
+      "Second block",
+      expect.objectContaining({ accountId: "default" }),
+    );
+  });
+
+  it("records participation when the confirmed preview already contains the final", async () => {
+    const blockConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "block" },
+        },
+      },
+    };
+    const runtimeCore = createRuntimeCore(blockConfig);
+    mockState.runtimeCore = runtimeCore;
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      forceNewMessage: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => undefined),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: vi.fn(() => ({ kind: "already-delivered" as const })),
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "Only block" });
+      await params.replyOptions?.onAssistantMessageStart?.();
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver({ text: "Only block" }, { kind: "final" });
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: blockConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-confirmed-preview-final",
+      message: "stream one block",
+      rootId: "thread-root-confirmed-preview",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
+    expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledWith(
+      "default",
+      "chan-1",
+      "thread-root-confirmed-preview",
+      { agentId: "main" },
+    );
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

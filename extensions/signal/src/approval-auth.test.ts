@@ -1,6 +1,6 @@
 // Signal tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
-import { signalApprovalAuth } from "./approval-auth.js";
+import { getSignalApprovalApprovers, signalApprovalAuth } from "./approval-auth.js";
 
 describe("signalApprovalAuth", () => {
   it("authorizes phone and uuid approvers with stable sender ids", () => {
@@ -29,5 +29,45 @@ describe("signalApprovalAuth", () => {
         approvalKind: "exec",
       }),
     ).toEqual({ authorized: true });
+  });
+
+  it("authorizes defaultTo aliases with the canonical Signal target", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: [],
+          defaultTo: "signal:me",
+          aliases: {
+            me: "+15551230000",
+          },
+        },
+      },
+    };
+
+    expect(
+      signalApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "+15551230000",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({ authorized: true });
+  });
+
+  it("ignores recursive defaultTo aliases when resolving approvers", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: [],
+          defaultTo: "signal:home",
+          aliases: {
+            home: "signal:me",
+            me: "home",
+          },
+        },
+      },
+    };
+
+    expect(getSignalApprovalApprovers({ cfg })).toEqual([]);
   });
 });

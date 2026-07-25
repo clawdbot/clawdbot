@@ -1,18 +1,43 @@
 // Browser tests cover config plugin behavior.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
-  OPENCLAW_BROWSER_HEADLESS_ENV,
   resolveBrowserConfig,
   resolveManagedBrowserHeadlessMode,
   resolveProfile,
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+
+const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
+
+// Isolate the extension relay secret (read from stateDir/credentials) so the
+// extension-token assertions do not pick up a developer's real secret file.
+let isolatedStateDir = "";
+const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+beforeEach(() => {
+  isolatedStateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cfg-")));
+  process.env.OPENCLAW_STATE_DIR = isolatedStateDir;
+});
+afterEach(() => {
+  if (prevStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = prevStateDir;
+  }
+  fs.rmSync(isolatedStateDir, { recursive: true, force: true });
+});
+
+/** Write a relay secret into the isolated state dir's credentials directory. */
+function writeRelaySecret(token: string): void {
+  const dir = path.join(isolatedStateDir, "credentials");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "browser-extension-relay.secret"), `${token}\n`);
+}
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
   const snapshot = new Map<string, string | undefined>();
@@ -21,7 +46,8 @@ function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
   }
 
   try {
-    for (const [key, value] of Object.entries(env)) {
+    for (const key of Object.keys(env)) {
+      const value = env[key];
       if (value === undefined) {
         delete process.env[key];
       } else {
@@ -76,6 +102,58 @@ describe("browser config", () => {
     });
   });
 
+  it("provides a built-in chrome extension-relay profile with a derived loopback port", () => {
+    const resolved = resolveBrowserConfig(undefined);
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.driver).toBe("extension");
+    expect(chrome?.attachOnly).toBe(true);
+    // Relay port sits just below the CDP allocation range (controlPort + 8).
+    expect(chrome?.cdpPort).toBe(resolved.extensionRelayDefaultPort);
+    expect(resolved.extensionRelayDefaultPort).toBe(resolved.controlPort + 8);
+    // No host-local relay secret exists yet (isolated state dir), so the relay
+    // cdpUrl carries no Basic credentials until pairing/startup creates one.
+    expect(chrome?.cdpUrl).toBe(`http://127.0.0.1:${resolved.extensionRelayDefaultPort}`);
+    expect(chrome?.cdpIsLoopback).toBe(true);
+  });
+
+  it("assigns distinct relay ports to multiple extension profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { driver: "extension", color: "#00AA00" },
+      },
+    });
+    const chrome = resolveProfile(resolved, "chrome");
+    const work = resolveProfile(resolved, "work");
+    // Both are extension profiles without an explicit cdpPort; they must not
+    // collide on one relay port (the second would fail to bind).
+    expect(chrome?.cdpPort).not.toBe(work?.cdpPort);
+    expect(new Set([chrome?.cdpPort, work?.cdpPort]).size).toBe(2);
+    // Ports count down from the default, staying below the CDP allocation band.
+    expect(Math.max(chrome?.cdpPort ?? 0, work?.cdpPort ?? 0)).toBe(
+      resolved.extensionRelayDefaultPort,
+    );
+  });
+
+  it("honors an explicit cdpPort on an extension profile", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { driver: "extension", cdpPort: 20123, color: "#00AA00" },
+      },
+    });
+    expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
+  });
+
+  it("embeds the host-local relay secret as Basic auth in the extension cdpUrl", () => {
+    const token = "a".repeat(64);
+    writeRelaySecret(token);
+    const resolved = resolveBrowserConfig(undefined);
+    expect(resolved.extensionRelayToken).toBe(token);
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.cdpUrl).toBe(
+      `http://openclaw:${token}@127.0.0.1:${resolved.extensionRelayDefaultPort}`,
+    );
+  });
+
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
     withEnv({ OPENCLAW_GATEWAY_PORT: "19001" }, () => {
       const resolved = resolveBrowserConfig(undefined);
@@ -100,68 +178,11 @@ describe("browser config", () => {
     });
   });
 
-  it("supports overriding the local CDP auto-allocation range start", () => {
-    const resolved = resolveBrowserConfig({
-      cdpPortRangeStart: 19000,
-    });
-    const openclaw = resolveProfile(resolved, "openclaw");
-    expect(resolved.cdpPortRangeStart).toBe(19000);
-    expect(openclaw?.cdpPort).toBe(19000);
-    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19000");
-  });
-
-  it("rejects cdpPortRangeStart values that overflow the CDP range window", () => {
-    expect(() => resolveBrowserConfig({ cdpPortRangeStart: 65535 })).toThrow(
-      /cdpPortRangeStart .* too high/i,
-    );
-  });
-
   it("normalizes hex colors", () => {
     const resolved = resolveBrowserConfig({
       color: "ff4500",
     });
     expect(resolved.color).toBe("#FF4500");
-  });
-
-  it("supports custom remote CDP timeouts", () => {
-    const resolved = resolveBrowserConfig({
-      remoteCdpTimeoutMs: 2200,
-      remoteCdpHandshakeTimeoutMs: 5000,
-      actionTimeoutMs: 45_000,
-    });
-    expect(resolved.remoteCdpTimeoutMs).toBe(2200);
-    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
-    expect(resolved.actionTimeoutMs).toBe(45_000);
-  });
-
-  it("supports custom browser tab cleanup policy", () => {
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        enabled: false,
-        idleMinutes: 0,
-        maxTabsPerSession: 0,
-        sweepMinutes: 15,
-      },
-    });
-    expect(resolved.tabCleanup).toEqual({
-      enabled: false,
-      idleMinutes: 0,
-      maxTabsPerSession: 0,
-      sweepMinutes: 15,
-    });
-  });
-
-  it("caps browser tab cleanup timer minutes before converting to milliseconds", () => {
-    const maxTimerMinutes = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        idleMinutes: Number.MAX_SAFE_INTEGER,
-        sweepMinutes: Number.MAX_SAFE_INTEGER,
-      },
-    });
-
-    expect(resolved.tabCleanup.idleMinutes).toBe(maxTimerMinutes);
-    expect(resolved.tabCleanup.sweepMinutes).toBe(maxTimerMinutes);
   });
 
   it("expands tilde-prefixed executablePath with the OS home directory", () => {
@@ -219,22 +240,6 @@ describe("browser config", () => {
     });
 
     expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
-  });
-
-  it("normalizes invalid browser tab cleanup numbers to defaults", () => {
-    const resolved = resolveBrowserConfig({
-      tabCleanup: {
-        idleMinutes: -1,
-        maxTabsPerSession: -2,
-        sweepMinutes: 0,
-      },
-    });
-    expect(resolved.tabCleanup).toEqual({
-      enabled: true,
-      idleMinutes: 120,
-      maxTabsPerSession: 8,
-      sweepMinutes: 5,
-    });
   });
 
   it("falls back to default color for invalid hex", () => {
@@ -339,7 +344,7 @@ describe("browser config", () => {
     const noDisplayEnv = {
       DISPLAY: undefined,
       WAYLAND_DISPLAY: undefined,
-      [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+      [BROWSER_HEADLESS_ENV_KEY]: undefined,
     };
 
     it("falls back to headless for local managed Linux profiles without display", () => {
@@ -410,7 +415,7 @@ describe("browser config", () => {
       expect(
         resolveManagedBrowserHeadlessMode(resolved, profile, {
           platform: "linux",
-          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "1" },
+          env: { ...noDisplayEnv, [BROWSER_HEADLESS_ENV_KEY]: "1" },
         }),
       ).toEqual({ headless: true, source: "env" });
     });
@@ -428,7 +433,7 @@ describe("browser config", () => {
         resolveManagedBrowserHeadlessMode(resolved, profile, {
           headlessOverride: true,
           platform: "linux",
-          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "0" },
+          env: { ...noDisplayEnv, [BROWSER_HEADLESS_ENV_KEY]: "0" },
         }),
       ).toEqual({ headless: true, source: "request" });
     });
@@ -454,7 +459,21 @@ describe("browser config", () => {
           platform: "linux",
           env: noDisplayEnv,
         }),
-      ).toContain("browser.profiles.openclaw.headless=false");
+      ).toMatchObject({
+        message: expect.stringContaining("browser.profiles.openclaw.headless=false"),
+        headlessSource: "profile",
+      });
+
+      expect(
+        getManagedBrowserMissingDisplayError(defaultResolved, defaultProfile, {
+          headlessOverride: false,
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toMatchObject({
+        message: expect.stringContaining("request override"),
+        headlessSource: "request",
+      });
     });
   });
 
@@ -464,26 +483,6 @@ describe("browser config", () => {
 
       expect(resolved.localLaunchTimeoutMs).toBe(15_000);
       expect(resolved.localCdpReadyTimeoutMs).toBe(8_000);
-    });
-
-    it("accepts custom local startup timeout values", () => {
-      const resolved = resolveBrowserConfig({
-        localLaunchTimeoutMs: 45_000,
-        localCdpReadyTimeoutMs: 30_000,
-      });
-
-      expect(resolved.localLaunchTimeoutMs).toBe(45_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(30_000);
-    });
-
-    it("clamps oversized local startup timeout values", () => {
-      const resolved = resolveBrowserConfig({
-        localLaunchTimeoutMs: 999_999,
-        localCdpReadyTimeoutMs: 999_999,
-      });
-
-      expect(resolved.localLaunchTimeoutMs).toBe(120_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(120_000);
     });
   });
 
@@ -842,14 +841,12 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowPrivateNetwork: true,
-        allowedHostnames: [" localhost ", ""],
-        hostnameAllowlist: [" *.trusted.example ", " "],
+        allowedHostnames: [" localhost ", " *.trusted.example ", ""],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
-      allowedHostnames: ["localhost"],
-      hostnameAllowlist: ["*.trusted.example"],
+      allowedHostnames: ["localhost", "*.trusted.example"],
     });
   });
 
@@ -879,13 +876,11 @@ describe("browser config", () => {
   it("keeps allowlist-only browser SSRF policy strict by default", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
-        allowedHostnames: ["example.com"],
-        hostnameAllowlist: ["*.example.com"],
+        allowedHostnames: ["example.com", "*.example.com"],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
-      allowedHostnames: ["example.com"],
-      hostnameAllowlist: ["*.example.com"],
+      allowedHostnames: ["example.com", "*.example.com"],
     });
   });
 
@@ -907,7 +902,6 @@ describe("browser config", () => {
         "chrome-live": {
           driver: "existing-session",
           attachOnly: true,
-          color: "#00AA00",
         },
       },
     });
@@ -920,7 +914,7 @@ describe("browser config", () => {
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
-      color: "#00AA00",
+      color: "#FF4500",
       executablePath: undefined,
       headless: false,
       headlessSource: "default",

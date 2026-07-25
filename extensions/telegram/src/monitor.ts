@@ -3,6 +3,7 @@ import type { RunOptions } from "@grammyjs/runner";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/model-session-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -28,9 +29,7 @@ import type {
   TelegramUpdateOffsetRotationInfo,
 } from "./update-offset-store.js";
 
-export type { MonitorTelegramOpts } from "./monitor.types.js";
-
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
+function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
     sink: {
       concurrency: resolveAgentMaxConcurrent(cfg),
@@ -90,23 +89,13 @@ type TelegramPollingSessionInstance = InstanceType<
   TelegramMonitorPollingRuntime["TelegramPollingSession"]
 >;
 
-let telegramMonitorPollingRuntimePromise:
-  | Promise<typeof import("./monitor-polling.runtime.js")>
-  | undefined;
+const loadTelegramMonitorPollingRuntime = createLazyRuntimeModule(
+  () => import("./monitor-polling.runtime.js"),
+);
 
-async function loadTelegramMonitorPollingRuntime() {
-  telegramMonitorPollingRuntimePromise ??= import("./monitor-polling.runtime.js");
-  return await telegramMonitorPollingRuntimePromise;
-}
-
-let telegramMonitorWebhookRuntimePromise:
-  | Promise<typeof import("./monitor-webhook.runtime.js")>
-  | undefined;
-
-async function loadTelegramMonitorWebhookRuntime() {
-  telegramMonitorWebhookRuntimePromise ??= import("./monitor-webhook.runtime.js");
-  return await telegramMonitorWebhookRuntimePromise;
-}
+const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
+  () => import("./monitor-webhook.runtime.js"),
+);
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
@@ -296,12 +285,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         log,
         telegramTransport,
         createTelegramTransport: createTelegramTransportForPolling,
-        stallThresholdMs: account.config.pollingStallThresholdMs,
         setStatus: opts.setStatus,
         isolatedIngress: {
           enabled: opts.isolatedIngress?.enabled ?? true,
           apiRoot: account.config.apiRoot,
-          timeoutSeconds: account.config.timeoutSeconds,
           proxy: account.config.proxy,
           network: account.config.network,
         },

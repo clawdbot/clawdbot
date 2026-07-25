@@ -45,9 +45,9 @@ const config = {
   },
   agents: {
     defaults: {
-      model: { primary: "codex/gpt-5.5", fallbacks: [] },
+      model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
       models: {
-        "codex/gpt-5.5": {
+        "openai/gpt-5.6-luna": {
           agentRuntime: { id: "codex" },
         },
       },
@@ -56,19 +56,18 @@ const config = {
       timeoutSeconds,
       sandbox: { mode: "off" },
     },
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
-        model: { primary: "codex/gpt-5.5", fallbacks: [] },
+        model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
         models: {
-          "codex/gpt-5.5": {
+          "openai/gpt-5.6-luna": {
             agentRuntime: { id: "codex" },
           },
         },
         workspace: workspaceDir,
       },
-    ],
+    },
   },
   skills: { allowBundled: [] },
 };

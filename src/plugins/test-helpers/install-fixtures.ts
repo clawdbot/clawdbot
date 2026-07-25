@@ -83,7 +83,10 @@ export function createDualFormatInstallFixtureFactory(makeTempDir: MakeTempDir) 
       "utf-8",
     );
     fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
-    fs.writeFileSync(path.join(pluginDir, "skills", "SKILL.md"), "---\ndescription: fixture\n---\n");
+    fs.writeFileSync(
+      path.join(pluginDir, "skills", "SKILL.md"),
+      "---\ndescription: fixture\n---\n",
+    );
     fs.writeFileSync(
       path.join(manifestDir, "plugin.json"),
       JSON.stringify({

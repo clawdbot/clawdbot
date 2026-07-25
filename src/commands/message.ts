@@ -15,6 +15,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
+import { parsePositiveIntOrUndefined } from "../cli/program/helpers.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
@@ -105,6 +106,7 @@ export async function messageCommand(
       deps: outboundDeps,
       agentId: resolveDefaultAgentId(cfg),
       senderIsOwner: opts.senderIsOwner !== false,
+      conversationReadOrigin: "direct-operator",
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
@@ -132,7 +134,8 @@ export async function messageCommand(
   }
 
   const { formatMessageCliText } = await import("./message-format.js");
-  for (const line of formatMessageCliText(result)) {
+  const displayLimit = parsePositiveIntOrUndefined(opts.limit);
+  for (const line of formatMessageCliText(result, { displayLimit })) {
     runtime.log(line);
   }
 }

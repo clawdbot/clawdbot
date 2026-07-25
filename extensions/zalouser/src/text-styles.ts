@@ -1,8 +1,11 @@
-// Zalouser plugin module implements text styles behavior.
+import { randomUUID } from "node:crypto";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  FormatCapabilityProfile,
+  markdownToIR,
+  renderMarkdownWithAttributedRanges,
+} from "openclaw/plugin-sdk/text-chunking";
 import { TextStyle, type Style } from "./zca-constants.js";
-
-const ESCAPE_SENTINEL_START = "\u0001";
-const ESCAPE_SENTINEL_END = "\u0002";
 
 type InlineStyle = (typeof TextStyle)[keyof typeof TextStyle];
 
@@ -10,26 +13,6 @@ type LineStyle = {
   lineIndex: number;
   style: InlineStyle;
   indentSize?: number;
-};
-
-type Segment = {
-  text: string;
-  styles: InlineStyle[];
-};
-
-type InlineMarker = {
-  pattern: RegExp;
-  extractText: (match: RegExpExecArray) => string;
-  resolveStyles?: (match: RegExpExecArray) => InlineStyle[];
-  literal?: boolean;
-};
-
-type ResolvedInlineMatch = {
-  match: RegExpExecArray;
-  marker: InlineMarker;
-  styles: InlineStyle[];
-  text: string;
-  priority: number;
 };
 
 type FenceMarker = {
@@ -52,68 +35,59 @@ const TAG_STYLE_MAP: Record<string, InlineStyle | null> = {
   underline: TextStyle.Underline,
 };
 
-const INLINE_MARKERS: InlineMarker[] = [
-  {
-    pattern: /`([^`\n]+)`/g,
-    extractText: (match) => match[0],
-    literal: true,
-  },
-  {
-    pattern: /\\([*_~#\\{}>+\-`])/g,
-    extractText: (match) => match[1],
-    literal: true,
-  },
-  {
-    pattern: new RegExp(`\\{(${Object.keys(TAG_STYLE_MAP).join("|")})\\}(.+?)\\{/\\1\\}`, "g"),
-    extractText: (match) => match[2],
-    resolveStyles: (match) => {
-      const style = TAG_STYLE_MAP[match[1]];
-      return style ? [style] : [];
-    },
-  },
-  {
-    pattern: /(?<!\*)\*\*\*(?=\S)([^\n]*?\S)(?<!\*)\*\*\*(?!\*)/g,
-    extractText: (match) => match[1],
-    resolveStyles: () => [TextStyle.Bold, TextStyle.Italic],
-  },
-  {
-    pattern: /(?<!\*)\*\*(?![\s*])([^\n]*?\S)(?<!\*)\*\*(?!\*)/g,
-    extractText: (match) => match[1],
-    resolveStyles: () => [TextStyle.Bold],
-  },
-  {
-    pattern: /(?<![\w_])__(?![\s_])([^\n]*?\S)(?<!_)__(?![\w_])/g,
-    extractText: (match) => match[1],
-    resolveStyles: () => [TextStyle.Bold],
-  },
-  {
-    pattern: /(?<!~)~~(?=\S)([^\n]*?\S)(?<!~)~~(?!~)/g,
-    extractText: (match) => match[1],
-    resolveStyles: () => [TextStyle.StrikeThrough],
-  },
-  {
-    pattern: /(?<!\*)\*(?![\s*])([^\n]*?\S)(?<!\*)\*(?!\*)/g,
-    extractText: (match) => match[1],
-    resolveStyles: () => [TextStyle.Italic],
-  },
-  {
-    pattern: /(?<![\w_])_(?![\s_])([^\n]*?\S)(?<!_)_(?![\w_])/g,
-    extractText: (match) => match[1],
-    resolveStyles: () => [TextStyle.Italic],
-  },
-];
+type LocalToken =
+  | { kind: "literal"; text: string }
+  | { kind: "tag-open"; id: number; style: InlineStyle | null }
+  | { kind: "tag-close"; id: number }
+  | { kind: "line-prefix" };
 
+type TokenRegistry = {
+  nextId: number;
+  prefix: string;
+  tokens: Map<string, LocalToken>;
+};
+
+type OrderedStyle = Style & { rawStart: number; rawEnd: number };
+
+const ZALOUSER_FORMAT_PROFILE = FormatCapabilityProfile.define({
+  mechanism: "ranges",
+  constructs: {
+    spoiler: "strip",
+    codeInline: "fallback",
+    codeBlock: "fallback",
+    codeLanguage: "strip",
+    linkLabel: "fallback",
+    taskList: "fallback",
+    table: "fallback",
+    image: "strip",
+    mention: "strip",
+  },
+  chunk: { limit: 2_000, unit: "utf16" },
+});
+
+const ZALOUSER_STYLE_MAP = {
+  bold: TextStyle.Bold,
+  italic: TextStyle.Italic,
+  underline: TextStyle.Underline,
+  strikethrough: TextStyle.StrikeThrough,
+} as const;
+
+const LOCAL_TAG_PATTERN = new RegExp(
+  `\\{(${Object.keys(TAG_STYLE_MAP).join("|")})\\}(.+?)\\{/\\1\\}`,
+  "g",
+);
 export function parseZalouserTextStyles(input: string): { text: string; styles: Style[] } {
-  const allStyles: Style[] = [];
-
-  const escapeMap: string[] = [];
+  const registry: TokenRegistry = {
+    nextId: 0,
+    prefix: `<zalouser-${randomUUID()}-`,
+    tokens: new Map(),
+  };
   const lines = input.replace(/\r\n?/g, "\n").split("\n");
   const lineStyles: LineStyle[] = [];
   const processedLines: string[] = [];
   let activeFence: ActiveFence | null = null;
 
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const rawLine = lines[lineIndex];
+  for (const [lineIndex, rawLine] of lines.entries()) {
     const { text: unquotedLine, indent: baseIndent } = stripQuotePrefix(rawLine);
 
     if (activeFence) {
@@ -126,9 +100,9 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
         continue;
       }
       processedLines.push(
-        escapeLiteralText(
+        protectLiteral(
+          registry,
           normalizeCodeBlockLeadingWhitespace(stripCodeFenceIndent(codeLine, activeFence.indent)),
-          escapeMap,
         ),
       );
       continue;
@@ -139,7 +113,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     if (openingFence) {
       const fenceLine = openingFence.quoteIndent > 0 ? unquotedLine : rawLine;
       if (!hasClosingFence(lines, lineIndex + 1, openingFence)) {
-        processedLines.push(escapeLiteralText(fenceLine, escapeMap));
+        processedLines.push(protectLiteral(registry, fenceLine));
         activeFence = openingFence;
         continue;
       }
@@ -148,35 +122,24 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     }
 
     const outputLineIndex = processedLines.length;
-    if (isIndentedCodeBlockLine(line)) {
-      if (baseIndent > 0) {
-        lineStyles.push({
-          lineIndex: outputLineIndex,
-          style: TextStyle.Indent,
-          indentSize: baseIndent,
-        });
-      }
-      processedLines.push(escapeLiteralText(normalizeCodeBlockLeadingWhitespace(line), escapeMap));
+    if (/^(?: {4,}|\t)/.test(line)) {
+      addIndentStyle(lineStyles, outputLineIndex, baseIndent);
+      processedLines.push(protectLiteral(registry, normalizeCodeBlockLeadingWhitespace(line)));
       continue;
     }
 
-    const { text: markdownLine, size: markdownPadding } = stripOptionalMarkdownPadding(line);
+    const markdownPadding = line.match(/^( {1,3})(?=\S)/)?.[1]?.length ?? 0;
+    const markdownLine = line.slice(markdownPadding);
 
     const headingMatch = markdownLine.match(/^(#{1,4})\s(.*)$/);
     if (headingMatch) {
-      const depth = headingMatch[1].length;
+      const depth = expectDefined(headingMatch[1], "heading marker capture").length;
       lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.Bold });
       if (depth === 1) {
         lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.Big });
       }
-      if (baseIndent > 0) {
-        lineStyles.push({
-          lineIndex: outputLineIndex,
-          style: TextStyle.Indent,
-          indentSize: baseIndent,
-        });
-      }
-      processedLines.push(headingMatch[2]);
+      addIndentStyle(lineStyles, outputLineIndex, baseIndent);
+      processedLines.push(expectDefined(headingMatch[2], "heading body capture"));
       continue;
     }
 
@@ -184,69 +147,39 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     let indentLevel = 0;
     let content = markdownLine;
     if (indentMatch) {
-      indentLevel = clampIndent(indentMatch[1].length);
-      content = indentMatch[2];
+      indentLevel = Math.min(
+        5,
+        Math.max(1, Math.floor(expectDefined(indentMatch[1], "indent capture").length / 2)),
+      );
+      content = expectDefined(indentMatch[2], "indented content capture");
     }
     const totalIndent = Math.min(5, baseIndent + indentLevel);
 
     if (/^[-*+]\s\[[ xX]\]\s/.test(content)) {
-      if (totalIndent > 0) {
-        lineStyles.push({
-          lineIndex: outputLineIndex,
-          style: TextStyle.Indent,
-          indentSize: totalIndent,
-        });
-      }
+      addIndentStyle(lineStyles, outputLineIndex, totalIndent);
       processedLines.push(content);
       continue;
     }
 
-    const orderedListMatch = content.match(/^(\d+)\.\s(.*)$/);
-    if (orderedListMatch) {
-      if (totalIndent > 0) {
-        lineStyles.push({
-          lineIndex: outputLineIndex,
-          style: TextStyle.Indent,
-          indentSize: totalIndent,
-        });
-      }
-      lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.OrderedList });
-      processedLines.push(orderedListMatch[2]);
-      continue;
-    }
-
-    const unorderedListMatch = content.match(/^[-*+]\s(.*)$/);
-    if (unorderedListMatch) {
-      if (totalIndent > 0) {
-        lineStyles.push({
-          lineIndex: outputLineIndex,
-          style: TextStyle.Indent,
-          indentSize: totalIndent,
-        });
-      }
-      lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.UnorderedList });
-      processedLines.push(unorderedListMatch[1]);
+    const listMatch = content.match(/^(?:(\d+)\.|[-*+])\s(.*)$/);
+    if (listMatch) {
+      addIndentStyle(lineStyles, outputLineIndex, totalIndent);
+      lineStyles.push({
+        lineIndex: outputLineIndex,
+        style: listMatch[1] ? TextStyle.OrderedList : TextStyle.UnorderedList,
+      });
+      processedLines.push(expectDefined(listMatch[2], "list body capture"));
       continue;
     }
 
     if (markdownPadding > 0) {
-      if (baseIndent > 0) {
-        lineStyles.push({
-          lineIndex: outputLineIndex,
-          style: TextStyle.Indent,
-          indentSize: baseIndent,
-        });
-      }
+      addIndentStyle(lineStyles, outputLineIndex, baseIndent);
       processedLines.push(line);
       continue;
     }
 
     if (totalIndent > 0) {
-      lineStyles.push({
-        lineIndex: outputLineIndex,
-        style: TextStyle.Indent,
-        indentSize: totalIndent,
-      });
+      addIndentStyle(lineStyles, outputLineIndex, totalIndent);
       processedLines.push(content);
       continue;
     }
@@ -254,97 +187,51 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     processedLines.push(line);
   }
 
-  const segments = parseInlineSegments(processedLines.join("\n"));
+  const linePrefix = addToken(registry, { kind: "line-prefix" });
+  const renderedLines = processedLines.map((line) => renderInlineLine(line, linePrefix, registry));
+  const allStyles: Style[] = [];
 
-  let plainText = "";
-  for (const segment of segments) {
-    const start = plainText.length;
-    plainText += segment.text;
-    for (const style of segment.styles) {
-      allStyles.push({ start, len: segment.text.length, st: style } as Style);
-    }
-  }
-
-  if (escapeMap.length > 0) {
-    const escapeRegex = new RegExp(`${ESCAPE_SENTINEL_START}(\\d+)${ESCAPE_SENTINEL_END}`, "g");
-    const shifts: Array<{ pos: number; delta: number }> = [];
-    let cumulativeDelta = 0;
-
-    for (const match of plainText.matchAll(escapeRegex)) {
-      const escapeIndex = Number.parseInt(match[1], 10);
-      cumulativeDelta += match[0].length - escapeMap[escapeIndex].length;
-      shifts.push({ pos: (match.index ?? 0) + match[0].length, delta: cumulativeDelta });
-    }
-
-    for (const style of allStyles) {
-      let startDelta = 0;
-      let endDelta = 0;
-      const end = style.start + style.len;
-      for (const shift of shifts) {
-        if (shift.pos <= style.start) {
-          startDelta = shift.delta;
-        }
-        if (shift.pos <= end) {
-          endDelta = shift.delta;
-        }
-      }
-      style.start -= startDelta;
-      style.len -= endDelta - startDelta;
-    }
-
-    plainText = plainText.replace(
-      escapeRegex,
-      (_match, index) => escapeMap[Number.parseInt(index, 10)],
-    );
-  }
-
-  const finalLines = plainText.split("\n");
   let offset = 0;
-  for (let lineIndex = 0; lineIndex < finalLines.length; lineIndex += 1) {
-    const lineLength = finalLines[lineIndex].length;
+  for (const [lineIndex, line] of renderedLines.entries()) {
+    const lineLength = line.text.length;
+    for (const style of line.styles) {
+      style.start += offset;
+      allStyles.push(style);
+    }
     if (lineLength > 0) {
       for (const lineStyle of lineStyles) {
         if (lineStyle.lineIndex !== lineIndex) {
           continue;
         }
 
-        if (lineStyle.style === TextStyle.Indent) {
-          allStyles.push({
-            start: offset,
-            len: lineLength,
-            st: TextStyle.Indent,
-            indentSize: lineStyle.indentSize,
-          });
-        } else {
-          allStyles.push({ start: offset, len: lineLength, st: lineStyle.style } as Style);
-        }
+        allStyles.push(
+          lineStyle.style === TextStyle.Indent
+            ? {
+                start: offset,
+                len: lineLength,
+                st: TextStyle.Indent,
+                indentSize: lineStyle.indentSize,
+              }
+            : ({ start: offset, len: lineLength, st: lineStyle.style } as Style),
+        );
       }
     }
     offset += lineLength + 1;
   }
 
-  return { text: plainText, styles: allStyles };
+  return { text: renderedLines.map((line) => line.text).join("\n"), styles: allStyles };
 }
 
-function clampIndent(spaceCount: number): number {
-  return Math.min(5, Math.max(1, Math.floor(spaceCount / 2)));
-}
-
-function stripOptionalMarkdownPadding(line: string): { text: string; size: number } {
-  const match = line.match(/^( {1,3})(?=\S)/);
-  if (!match) {
-    return { text: line, size: 0 };
+function addIndentStyle(styles: LineStyle[], lineIndex: number, indentSize: number): void {
+  if (indentSize > 0) {
+    styles.push({ lineIndex, style: TextStyle.Indent, indentSize });
   }
-  return {
-    text: line.slice(match[1].length),
-    size: match[1].length,
-  };
 }
 
 function hasClosingFence(lines: string[], startIndex: number, fence: ActiveFence): boolean {
   for (let index = startIndex; index < lines.length; index += 1) {
-    const candidate =
-      fence.quoteIndent > 0 ? stripQuotePrefix(lines[index], fence.quoteIndent).text : lines[index];
+    const line = expectDefined(lines[index], "closing fence scan index is in bounds");
+    const candidate = fence.quoteIndent > 0 ? stripQuotePrefix(line, fence.quoteIndent).text : line;
     if (isClosingFence(candidate, fence)) {
       return true;
     }
@@ -409,8 +296,8 @@ function parseFenceMarker(line: string): FenceMarker | null {
     return null;
   }
 
-  const marker = match[2];
-  const char = marker[0];
+  const marker = expectDefined(match[2], "fence marker capture");
+  const char = marker.charAt(0);
   if (char !== "`" && char !== "~") {
     return null;
   }
@@ -418,7 +305,7 @@ function parseFenceMarker(line: string): FenceMarker | null {
   return {
     char,
     length: marker.length,
-    indent: match[1].length,
+    indent: expectDefined(match[1], "fence indent capture").length,
   };
 }
 
@@ -427,105 +314,209 @@ function isClosingFence(line: string, fence: FenceMarker): boolean {
   if (!match) {
     return false;
   }
-  return match[2][0] === fence.char && match[2].length >= fence.length;
+  const marker = expectDefined(match[2], "closing fence marker capture");
+  return marker.charAt(0) === fence.char && marker.length >= fence.length;
 }
 
-function escapeLiteralText(input: string, escapeMap: string[]): string {
-  return input.replace(/[\\*_~{}`]/g, (ch) => {
-    const index = escapeMap.length;
-    escapeMap.push(ch);
-    return `\x01${index}\x02`;
+function protectLocalInlineSyntax(text: string, registry: TokenRegistry): string {
+  const codeProtected = replaceValidMatches(text, /`([^`\n]+)`/g, (match) =>
+    protectLiteral(registry, match[0]),
+  );
+  const escapesProtected = codeProtected
+    .replace(/\\([!-/:-@[-`{-~])/g, (match, character: string) =>
+      "*_~#\\{}>+-`".includes(character) ? match : protectLiteral(registry, match),
+    )
+    .replace(/\\[ \t]+(?=\n|$)/g, (match) => protectLiteral(registry, match))
+    .replace(/\\(?=\n|$)/g, (match) => protectLiteral(registry, match));
+  const authoredUnderlineProtected = escapesProtected.replace(/<\/?(?:u|ins)\b[^>]*>/gi, (tag) =>
+    protectLiteral(registry, tag),
+  );
+  const entitiesProtected = authoredUnderlineProtected.replace(
+    /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/gi,
+    (entity) => protectLiteral(registry, entity),
+  );
+  const punctuationProtected = entitiesProtected
+    .replace(/\[/g, (character) => protectLiteral(registry, character))
+    .replace(/[ \t]+(?=\n|$)/g, (whitespace) => protectLiteral(registry, whitespace));
+  const remainingBackticksEscaped = punctuationProtected.replace(/`/g, (marker, index, source) =>
+    isEscaped(source, index) ? marker : `\\${marker}`,
+  );
+  return replaceValidMatches(remainingBackticksEscaped, LOCAL_TAG_PATTERN, (match) => {
+    const tag = expectDefined(match[1], "tag name capture");
+    const body = protectLocalInlineSyntax(expectDefined(match[2], "tag body capture"), registry);
+    const style = TAG_STYLE_MAP[tag] ?? null;
+    if (style === TextStyle.Underline) {
+      return `<u>${body}</u>`;
+    }
+    const id = registry.tokens.size;
+    return `${addToken(registry, { kind: "tag-open", id, style })} ${body} ${addToken(registry, {
+      kind: "tag-close",
+      id,
+    })}`;
   });
 }
 
-function parseInlineSegments(text: string, inheritedStyles: InlineStyle[] = []): Segment[] {
-  const segments: Segment[] = [];
+function replaceValidMatches(
+  text: string,
+  pattern: RegExp,
+  replace: (match: RegExpExecArray) => string,
+): string {
+  const regex = new RegExp(pattern.source, pattern.flags);
+  let output = "";
   let cursor = 0;
-
-  while (cursor < text.length) {
-    const nextMatch = findNextInlineMatch(text, cursor);
-    if (!nextMatch) {
-      pushSegment(segments, text.slice(cursor), inheritedStyles);
-      break;
-    }
-
-    if (nextMatch.match.index > cursor) {
-      pushSegment(segments, text.slice(cursor, nextMatch.match.index), inheritedStyles);
-    }
-
-    const combinedStyles = [...inheritedStyles, ...nextMatch.styles];
-    if (nextMatch.marker.literal) {
-      pushSegment(segments, nextMatch.text, combinedStyles);
-    } else {
-      segments.push(...parseInlineSegments(nextMatch.text, combinedStyles));
-    }
-
-    cursor = nextMatch.match.index + nextMatch.match[0].length;
-  }
-
-  return segments;
-}
-
-function findNextInlineMatch(text: string, startIndex: number): ResolvedInlineMatch | null {
-  let bestMatch: ResolvedInlineMatch | null = null;
-
-  for (const [priority, marker] of INLINE_MARKERS.entries()) {
-    const regex = new RegExp(marker.pattern.source, marker.pattern.flags);
-    regex.lastIndex = startIndex;
-    const match = regex.exec(text);
-    if (!match) {
+  for (let match = regex.exec(text); match; match = regex.exec(text)) {
+    if (isEscaped(text, match.index)) {
+      regex.lastIndex = match.index + 1;
       continue;
     }
-
-    if (
-      bestMatch &&
-      (match.index > bestMatch.match.index ||
-        (match.index === bestMatch.match.index && priority > bestMatch.priority))
-    ) {
-      continue;
-    }
-
-    bestMatch = {
-      match,
-      marker,
-      text: marker.extractText(match),
-      styles: marker.resolveStyles?.(match) ?? [],
-      priority,
-    };
+    output += text.slice(cursor, match.index) + replace(match);
+    cursor = match.index + match[0].length;
   }
-
-  return bestMatch;
+  return output + text.slice(cursor);
 }
 
-function pushSegment(segments: Segment[], text: string, styles: InlineStyle[]): void {
-  if (!text) {
-    return;
+function isEscaped(text: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
   }
+  return backslashes % 2 === 1;
+}
 
-  const lastSegment = segments.at(-1);
-  if (lastSegment && sameStyles(lastSegment.styles, styles)) {
-    lastSegment.text += text;
-    return;
+function protectLiteral(registry: TokenRegistry, text: string): string {
+  return addToken(registry, { kind: "literal", text });
+}
+
+function addToken(registry: TokenRegistry, token: LocalToken): string {
+  const value = `${registry.prefix}${registry.nextId}>`;
+  registry.nextId += 1;
+  registry.tokens.set(value, token);
+  return value;
+}
+
+function renderInlineLine(
+  line: string,
+  linePrefix: string,
+  registry: TokenRegistry,
+): { text: string; styles: Style[] } {
+  if (!line) {
+    return { text: "", styles: [] };
   }
-
-  segments.push({
-    text,
-    styles: [...styles],
+  const ir = markdownToIR(`${linePrefix} ${protectLocalInlineSyntax(line, registry)}`, {
+    autolink: false,
+    enableHtmlUnderline: true,
+    headingStyle: "none",
+    linkify: false,
+    tableMode: "off",
   });
+  const rendered = renderMarkdownWithAttributedRanges(
+    ir,
+    { styleMap: ZALOUSER_STYLE_MAP },
+    ZALOUSER_FORMAT_PROFILE,
+  );
+  return projectLocalTokens(rendered, registry);
 }
 
-function sameStyles(left: InlineStyle[], right: InlineStyle[]): boolean {
-  return left.length === right.length && left.every((style, index) => style === right[index]);
+function projectLocalTokens(
+  rendered: ReturnType<typeof renderMarkdownWithAttributedRanges<InlineStyle>>,
+  registry: TokenRegistry,
+): { text: string; styles: Style[] } {
+  const offsets = Array.from({ length: rendered.text.length + 1 }, () => 0);
+  const openTags = new Map<
+    number,
+    { start: number; rawStart: number; style: InlineStyle | null }
+  >();
+  const orderedStyles: OrderedStyle[] = [];
+  let text = "";
+
+  for (let index = 0; index < rendered.text.length; index += 1) {
+    offsets[index] = text.length;
+    const character = rendered.text[index] ?? "";
+    const match = findLocalToken(rendered.text, index, registry);
+    const nextMatch = character === " " ? findLocalToken(rendered.text, index + 1, registry) : null;
+    if (nextMatch?.token.kind === "tag-close") {
+      offsets[index + 1] = text.length;
+      continue;
+    }
+    if (!match) {
+      text += character;
+      offsets[index + 1] = text.length;
+      continue;
+    }
+    const { token } = match;
+    const tokenStart = text.length;
+    for (let cursor = index + 1; cursor < match.end; cursor += 1) {
+      offsets[cursor] = tokenStart;
+    }
+    if (token.kind === "literal") {
+      text += token.text;
+    } else if (token.kind === "tag-open") {
+      openTags.set(token.id, { start: text.length, rawStart: index, style: token.style });
+    } else if (token.kind === "tag-close") {
+      const open = openTags.get(token.id);
+      if (open?.style && text.length > open.start) {
+        orderedStyles.push({
+          start: open.start,
+          len: text.length - open.start,
+          st: open.style,
+          rawStart: open.rawStart,
+          rawEnd: index,
+        } as OrderedStyle);
+      }
+      openTags.delete(token.id);
+    }
+    let consumedEnd = match.end;
+    if (
+      (token.kind === "line-prefix" || token.kind === "tag-open") &&
+      rendered.text[consumedEnd] === " "
+    ) {
+      offsets[consumedEnd] = text.length;
+      consumedEnd += 1;
+    }
+    offsets[consumedEnd] = text.length;
+    index = consumedEnd - 1;
+  }
+
+  orderedStyles.push(
+    ...rendered.ranges.map((range) => ({
+      start: offsets[range.start] ?? text.length,
+      len:
+        (offsets[range.start + range.length] ?? text.length) -
+        (offsets[range.start] ?? text.length),
+      st: range.style,
+      rawStart: range.start,
+      rawEnd: range.start + range.length,
+    })),
+  );
+  return {
+    text,
+    styles: orderedStyles
+      .filter((style) => style.len > 0)
+      .toSorted((left, right) => left.rawStart - right.rawStart || right.rawEnd - left.rawEnd)
+      .map(({ rawStart: _rawStart, rawEnd: _rawEnd, ...style }) => style),
+  };
+}
+
+function findLocalToken(
+  text: string,
+  index: number,
+  registry: TokenRegistry,
+): { end: number; token: LocalToken } | null {
+  if (!text.startsWith(registry.prefix, index)) {
+    return null;
+  }
+  const end = text.indexOf(">", index + registry.prefix.length);
+  if (end === -1) {
+    return null;
+  }
+  const token = registry.tokens.get(text.slice(index, end + 1));
+  return token ? { end: end + 1, token } : null;
 }
 
 function normalizeCodeBlockLeadingWhitespace(line: string): string {
   return line.replace(/^[ \t]+/, (leadingWhitespace) =>
     leadingWhitespace.replace(/\t/g, "\u00A0\u00A0\u00A0\u00A0").replace(/ /g, "\u00A0"),
   );
-}
-
-function isIndentedCodeBlockLine(line: string): boolean {
-  return /^(?: {4,}|\t)/.test(line);
 }
 
 function stripCodeFenceIndent(line: string, indent: number): string {

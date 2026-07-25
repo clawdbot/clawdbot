@@ -9,6 +9,21 @@ import {
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
+import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+
+function richMessagePlainTextForTest(richMessage: {
+  blocks?: InputRichBlock[];
+  markdown?: string;
+  html?: string;
+}): string {
+  if (richMessage.blocks) {
+    return inputRichBlocksToPlainText(richMessage.blocks);
+  }
+  if (richMessage.markdown !== undefined) {
+    return markdownToTelegramHtml(richMessage.markdown);
+  }
+  return richMessage.html ?? "";
+}
 
 const { botApi, botRawApi, botConfigUseSpy, botCtorSpy } = vi.hoisted(() => ({
   botConfigUseSpy: vi.fn(),
@@ -250,10 +265,7 @@ export function installTelegramSendTestHooks() {
           sendParams.allow_sending_without_reply = true;
           delete sendParams.reply_parameters;
         }
-        const text =
-          rich_message.markdown !== undefined
-            ? markdownToTelegramHtml(rich_message.markdown)
-            : (rich_message.html ?? "");
+        const text = richMessagePlainTextForTest(rich_message);
         const options = Object.keys(sendParams).length > 0 ? sendParams : undefined;
         return await botApi.sendMessage(chat_id, text, options);
       },
@@ -262,16 +274,17 @@ export function installTelegramSendTestHooks() {
       async (params: {
         chat_id?: string | number;
         message_id?: number;
-        rich_message: { markdown?: string; html?: string; skip_entity_detection?: boolean };
+        rich_message: {
+          blocks?: InputRichBlock[];
+          markdown?: string;
+          html?: string;
+          skip_entity_detection?: boolean;
+        };
         [key: string]: unknown;
       }) => {
         const { chat_id, message_id, rich_message, ...editParams } = params;
-        const text =
-          rich_message.markdown !== undefined
-            ? markdownToTelegramHtml(rich_message.markdown)
-            : (rich_message.html ?? "");
+        const text = richMessagePlainTextForTest(rich_message);
         const options = {
-          parse_mode: "HTML",
           ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
           ...editParams,
         };

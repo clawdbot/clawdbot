@@ -4,12 +4,17 @@ import type {
   MiscMessageGenerationOptions,
   proto,
   GroupMetadata,
+  ReachoutTimelockState,
   WAMessage,
   WAMessageKey,
   WASocket,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  formatInboundMediaUnavailableText,
+  formatLocationText,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -19,12 +24,12 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
-import { getRegisteredWhatsAppConnectionController } from "../connection-controller-registry.js";
+import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
+import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -38,7 +43,12 @@ import {
   type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
-import { resolveEquivalentWhatsAppDirectChatJids, resolveJidToE164 } from "../text-runtime.js";
+import {
+  resolveEquivalentWhatsAppDirectChatJids,
+  resolveJidToE164,
+  toWhatsappJid,
+  toWhatsappJidWithLid,
+} from "../text-runtime.js";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -47,21 +57,15 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
-import {
-  claimRecentInboundMessageDelivery,
-  commitRecentInboundMessage,
-  isRecentOutboundMessage,
-  releaseRecentInboundMessage,
-  rememberRecentOutboundMessage,
-  WhatsAppRetryableInboundError,
-} from "./dedupe.js";
+import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
-  createWhatsAppDurableInboundReceiveJournal,
-  deserializeWhatsAppDurableInboundMessage,
-  serializeWhatsAppDurableInboundMessage,
-  type WhatsAppDurableInboundMetadata,
+  createWhatsAppDurableInboundQueue,
+  createWhatsAppIngressMonitor,
+  enqueueWhatsAppDurableInbound,
   type WhatsAppDurableInboundPayload,
+  type WhatsAppDurableInboundQueue,
+  type WhatsAppIngressLifecycle,
   type WhatsAppReadReceiptTarget,
 } from "./durable-receive.js";
 import {
@@ -69,12 +73,14 @@ import {
   extractExternalAdReplyContext,
   extractLocationData,
   extractContactContext,
-  extractMediaPlaceholder,
+  extractMediaKind,
   extractMentionedJids,
   extractText,
   hasInboundUserContent,
 } from "./extract.js";
+import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
+import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 import {
   normalizeWebInboundMessage,
@@ -96,19 +102,21 @@ import type {
   WebListenerCloseReason,
 } from "./types.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = DisconnectReason.loggedOut;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
-export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
+const WHATSAPP_INGRESS_DRAIN_INTERVAL_MS = 1_000;
+const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
   expires: number;
 };
+
 export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
-export type WhatsAppBaileysCacheEntry<T> = {
+type WhatsAppBaileysCacheEntry<T> = {
   expiresAt: number;
   value: T;
 };
@@ -231,8 +239,31 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   defaultRuntime.log(message);
 }
 
-function isGroupJid(jid: string): boolean {
-  return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
+function isDirectUserJid(jid: string): boolean {
+  return /^(\d+)(?::\d+)?@(s\.whatsapp\.net|c\.us|lid|hosted|hosted\.lid)$/i.test(jid.trim());
+}
+
+function getActiveReachoutTimelock(
+  state: ReachoutTimelockState | undefined,
+): ReachoutTimelockState | undefined {
+  if (state?.isActive !== true) {
+    return undefined;
+  }
+  const endsAt = state.timeEnforcementEnds?.getTime();
+  return endsAt === undefined || !Number.isFinite(endsAt) || endsAt > Date.now()
+    ? state
+    : undefined;
+}
+
+function formatReachoutTimelockError(state: ReachoutTimelockState): string {
+  const details = [
+    state.enforcementType ? `type=${state.enforcementType}` : undefined,
+    state.timeEnforcementEnds instanceof Date &&
+    Number.isFinite(state.timeEnforcementEnds.getTime())
+      ? `until=${state.timeEnforcementEnds.toISOString()}`
+      : undefined,
+  ].filter(Boolean);
+  return `WhatsApp reachout timelock is active; direct messages are temporarily blocked${details.length ? ` (${details.join(", ")})` : ""}`;
 }
 
 function recordAcceptedInboundActivity(accountId: string): void {
@@ -254,12 +285,14 @@ function shouldClearSocketRefAfterSendFailure(err: unknown): boolean {
   return /closed|reset|disconnect|no active socket/i.test(formatError(err));
 }
 
-function isNonEmptyString(value: string | undefined): value is string {
-  return Boolean(value);
-}
-
 type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
   admission: AdmittedWebInboundMessage["admission"];
+};
+
+type AppendReplyWindow = {
+  afterMs: number;
+  untilMs: number;
+  maxAgeMs: number;
 };
 
 type MonitorWebInboxOptions = {
@@ -277,6 +310,8 @@ type MonitorWebInboxOptions = {
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Bounded reconnect window for offline append auto-replies. */
+  appendReplyWindow?: AppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
@@ -297,6 +332,8 @@ type MonitorWebInboxOptions = {
   groupMetadataCache?: WhatsAppGroupMetadataCache;
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
+  onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
+  durableInboundQueue?: WhatsAppDurableInboundQueue;
 };
 
 type AttachWebInboxToSocketOptions = Omit<
@@ -380,7 +417,7 @@ export async function attachWebInboxToSocket(
     if (!self.e164 && !self.jid && !self.lid) {
       return null;
     }
-    const successor = getRegisteredWhatsAppConnectionController(options.accountId);
+    const successor = getWhatsAppConnectionController(options.accountId);
     if (!successor) {
       return null;
     }
@@ -392,17 +429,58 @@ export async function attachWebInboxToSocket(
   };
   type QueuedInboundMessageMetadata = {
     admission: AdmittedWebInboundCallbackMessage["admission"];
-    dedupeKey?: string;
     debounceKey?: string;
-    durableId?: string;
+    turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     readReceipt?: WhatsAppReadReceiptTarget;
     receiveOrder?: number;
   };
   type QueuedInboundMessage = AdmittedWebInboundCallbackMessage & QueuedInboundMessageMetadata;
-  const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
+  const durableInboundQueue =
+    options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
+  const pendingMessageHandlers = new Set<Promise<void>>();
+  let durableIngressActive = false;
+  // Close-path coordination: resolve waiters when debounce work appears so
+  // shutdown can force-flush without timer-driven polling (fake-timer safe).
+  const debounceWorkWaiters = new Set<() => void>();
+  const notifyDebounceWork = () => {
+    if (debounceWorkWaiters.size === 0) {
+      return;
+    }
+    const waiters = [...debounceWorkWaiters];
+    debounceWorkWaiters.clear();
+    for (const resolve of waiters) {
+      resolve();
+    }
+  };
+  const waitForDebounceWorkOrIdle = (handlers: ReadonlyArray<Promise<void>>) => {
+    if (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
+      return Promise.resolve();
+    }
+    if (pendingMessageHandlers.size === 0) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const finish = () => {
+        debounceWorkWaiters.delete(finish);
+        resolve();
+      };
+      debounceWorkWaiters.add(finish);
+      void Promise.allSettled(handlers).then(finish);
+    });
+  };
+  let nextReceiveOrder = 0;
+  const publishPendingWorkState = (at = Date.now()) => {
+    options.onPendingWorkChanged?.(
+      pendingMessageHandlers.size +
+        pendingDebounceKeys.size +
+        activeInboundFlushes.size +
+        (durableIngressActive ? 1 : 0),
+      at,
+    );
+  };
   const buildInboundDebounceKey = (msg: QueuedInboundMessage): string | null => {
     const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
@@ -430,42 +508,67 @@ export async function attachWebInboxToSocket(
       return (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
 
-  const finalizeInboundDelivery = async (
-    entries: QueuedInboundMessage[],
-    error?: unknown,
-  ): Promise<void> => {
-    const dedupeKeys = uniqueStrings(
-      entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString),
-    );
-    const durableEntries = entries.filter(
-      (entry): entry is QueuedInboundMessage & { durableId: string } =>
-        isNonEmptyString(entry.durableId),
-    );
-    const readReceiptEntries = entries.filter(
-      (entry): entry is QueuedInboundMessage & { readReceipt: WhatsAppReadReceiptTarget } =>
-        Boolean(entry.readReceipt),
-    );
-    if (error instanceof WhatsAppRetryableInboundError) {
-      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
-      await Promise.all(
-        durableEntries.map((entry) =>
-          durableInboundJournal.release(entry.durableId, {
-            lastError: formatError(error),
-          }),
-        ),
-      );
-      return;
+  const buildFlushIngressLifecycle = (entries: QueuedInboundMessage[]) => {
+    const lifecycles = entries
+      .map((entry) => entry.turnAdoptionLifecycle)
+      .filter((lifecycle) => lifecycle !== undefined);
+    const [firstLifecycle] = lifecycles;
+    if (!firstLifecycle) {
+      return {
+        lifecycle: undefined,
+        settle: async () => {},
+        abandon: async () => {},
+      };
     }
-    await Promise.all([
-      ...dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)),
-      ...durableEntries.map((entry) =>
-        durableInboundJournal.complete(
-          entry.durableId,
-          entry.readReceipt ? { metadata: { readReceipt: entry.readReceipt } } : undefined,
-        ),
-      ),
-    ]);
-    await Promise.all(readReceiptEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)));
+    let handedOff = false;
+    const adoptAll = async () => {
+      for (const lifecycle of lifecycles) {
+        await lifecycle.onAdopted();
+      }
+    };
+    return {
+      lifecycle: {
+        abortSignal:
+          lifecycles.length === 1
+            ? firstLifecycle.abortSignal
+            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+        onAdopted: async () => {
+          handedOff = true;
+          await adoptAll();
+        },
+        onDeferred: () => {
+          handedOff = true;
+          for (const lifecycle of lifecycles) {
+            lifecycle.onDeferred();
+          }
+        },
+        onAdoptionFinalizing: () => {
+          for (const lifecycle of lifecycles) {
+            lifecycle.onAdoptionFinalizing();
+          }
+        },
+        onAbandoned: async () => {
+          handedOff = true;
+          await Promise.all(
+            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
+          );
+        },
+      } satisfies WhatsAppIngressLifecycle,
+      // Gated or otherwise terminal no-dispatch turns still own every merged claim.
+      settle: async () => {
+        if (!handedOff) {
+          await adoptAll();
+        }
+      },
+      abandon: async () => {
+        if (!handedOff) {
+          handedOff = true;
+          await Promise.all(
+            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
+          );
+        }
+      },
+    };
   };
 
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
@@ -478,16 +581,22 @@ export async function attachWebInboxToSocket(
         finishFlush = resolve;
       });
       activeInboundFlushes.add(flushTask);
+      publishPendingWorkState();
+      notifyDebounceWork();
       try {
         const orderedEntries = orderDebouncedInboundEntries(entries);
         const last = orderedEntries.at(-1);
         if (!last) {
           return;
         }
+        const { lifecycle, settle, abandon } = buildFlushIngressLifecycle(orderedEntries);
         try {
           if (orderedEntries.length === 1) {
-            await options.onMessage(last);
-            await finalizeInboundDelivery(orderedEntries);
+            await options.onMessage(attachWhatsAppIngressLifecycle(last, lifecycle));
+            await settle();
+            await Promise.all(
+              orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
+            );
             return;
           }
           const mentioned = new Set<string>();
@@ -498,6 +607,10 @@ export async function attachWebInboxToSocket(
           }
           const combinedBody = orderedEntries
             .map((entry) => entry.payload.body)
+            .filter(Boolean)
+            .join("\n");
+          const combinedCommandBody = orderedEntries
+            .map((entry) => entry.payload.commandBody ?? entry.payload.body)
             .filter(Boolean)
             .join("\n");
           const combinedMentions =
@@ -514,22 +627,30 @@ export async function attachWebInboxToSocket(
                   mentions: combinedMentions,
                 }
               : undefined;
-          const combinedMessage: QueuedInboundMessage = withDeprecatedWebInboundMessageFlatAliases({
-            ...last,
-            payload: {
-              ...last.payload,
-              body: combinedBody,
-            },
-            group: combinedGroup,
-            event: {
-              ...last.event,
-              isBatched: true,
-            },
-          });
+          const combinedMessage: QueuedInboundMessage = attachWhatsAppIngressLifecycle(
+            withDeprecatedWebInboundMessageFlatAliases({
+              ...last,
+              ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
+              payload: {
+                ...last.payload,
+                body: combinedBody,
+                commandBody: combinedCommandBody,
+              },
+              group: combinedGroup,
+              event: {
+                ...last.event,
+                isBatched: true,
+              },
+            }),
+            lifecycle,
+          );
           await options.onMessage(combinedMessage);
-          await finalizeInboundDelivery(orderedEntries);
+          await settle();
+          await Promise.all(
+            orderedEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)),
+          );
         } catch (error) {
-          await finalizeInboundDelivery(orderedEntries, error);
+          await abandon();
           throw error;
         }
       } finally {
@@ -540,6 +661,7 @@ export async function attachWebInboxToSocket(
         }
         activeInboundFlushes.delete(flushTask);
         finishFlush();
+        publishPendingWorkState();
       }
     },
     onError: (err) => {
@@ -593,6 +715,12 @@ export async function attachWebInboxToSocket(
         ? (result as { message?: proto.IMessage }).message
         : undefined;
     rememberBaileysMessage(remoteJid, messageId, message);
+    // Baileys derives the participant for fromMe quotes from its own userJid.
+    // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
+    cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
+      fromMe: true,
+      body: extractText(message ?? undefined),
+    });
   };
   const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
     // The local send has failed terminally, but Baileys may still deliver it.
@@ -603,6 +731,95 @@ export async function attachWebInboxToSocket(
       },
       () => {},
     );
+  };
+  let reachoutTimeLock: ReachoutTimelockState | undefined;
+  let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
+  let reachoutTimeLockVersion = 0;
+  let verifiedSendReady:
+    | { jid: string; sock: WASocket; reachoutTimeLockVersion: number }
+    | undefined;
+  const rememberReachoutTimeLock = (state: ReachoutTimelockState | undefined) => {
+    reachoutTimeLock = state;
+    reachoutTimeLockVersion += 1;
+    verifiedSendReady = undefined;
+  };
+  const fetchReachoutTimeLock = async (
+    currentSock: WASocket,
+  ): Promise<ReachoutTimelockState | undefined> => {
+    if (typeof currentSock.fetchAccountReachoutTimelock !== "function") {
+      return undefined;
+    }
+    if (!reachoutTimeLockFetch) {
+      reachoutTimeLockFetch = currentSock
+        .fetchAccountReachoutTimelock()
+        .then((state) => {
+          rememberReachoutTimeLock(state);
+          return state;
+        })
+        .catch((err: unknown) => {
+          logWhatsAppVerbose(
+            options.verbose,
+            `Failed fetching WhatsApp reachout timelock before send: ${formatError(err)}`,
+          );
+          return undefined;
+        })
+        .finally(() => {
+          reachoutTimeLockFetch = undefined;
+        });
+    }
+    return await reachoutTimeLockFetch;
+  };
+  const rememberVerifiedSendReady = (jid: string, currentSock: WASocket) => {
+    verifiedSendReady = {
+      jid,
+      sock: currentSock,
+      reachoutTimeLockVersion,
+    };
+  };
+  const consumeVerifiedSendReady = (jid: string, currentSock: WASocket): boolean => {
+    if (
+      verifiedSendReady?.jid !== jid ||
+      verifiedSendReady.sock !== currentSock ||
+      verifiedSendReady.reachoutTimeLockVersion !== reachoutTimeLockVersion
+    ) {
+      return false;
+    }
+    verifiedSendReady = undefined;
+    return true;
+  };
+  const assertCanSendToJid = async (
+    jid: string,
+    currentSock: WASocket,
+    readinessOptions?: { rememberReady?: boolean; useVerifiedReady?: boolean },
+  ) => {
+    if (!isDirectUserJid(jid)) {
+      return;
+    }
+    if (readinessOptions?.useVerifiedReady && consumeVerifiedSendReady(jid, currentSock)) {
+      return;
+    }
+    const state =
+      getActiveReachoutTimelock(reachoutTimeLock) ?? (await fetchReachoutTimeLock(currentSock));
+    const activeState = getActiveReachoutTimelock(state);
+    if (activeState) {
+      throw new Error(formatReachoutTimelockError(activeState));
+    }
+    if (readinessOptions?.rememberReady && state) {
+      // The top-level direct send checks readiness before typing; consume this
+      // same socket/JID/version proof at the native send so inactive accounts
+      // are not queried twice for one outbound action.
+      rememberVerifiedSendReady(jid, currentSock);
+    }
+  };
+  const assertCanSendTo = async (to: string) => {
+    const currentSock = getCurrentSock();
+    if (!currentSock) {
+      throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+    }
+    const jid = options.authDir
+      ? toWhatsappJidWithLid(to, { authDir: options.authDir })
+      : toWhatsappJid(to);
+    await assertCanSendToJid(jid, currentSock, { rememberReady: true });
   };
 
   const sendTrackedMessage = async (
@@ -615,6 +832,7 @@ export async function attachWebInboxToSocket(
       const currentSock = getCurrentSock();
       if (currentSock) {
         try {
+          await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
           const result = await createWhatsAppSocketOperationTimeoutAdapter(
             currentSock,
             sendOperationTimeoutMs,
@@ -746,7 +964,7 @@ export async function attachWebInboxToSocket(
     jid: string,
     text: string,
   ): Promise<{ text: string; mentionedJids: string[] }> => {
-    if (!isGroupJid(jid) || !mayContainWhatsAppOutboundMention(text)) {
+    if (isJidGroup(jid) !== true || !mayContainWhatsAppOutboundMention(text)) {
       return { text, mentionedJids: [] };
     }
     const meta = await getGroupMeta(jid);
@@ -792,6 +1010,28 @@ export async function attachWebInboxToSocket(
     access: AcceptedInboundAccessControlResult;
   };
 
+  const shouldSkipRecentOutboundEcho = (msg: WAMessage): boolean => {
+    const id = msg.key?.id ?? undefined;
+    const remoteJid = msg.key?.remoteJid;
+    if (
+      !msg.key?.fromMe ||
+      !id ||
+      !remoteJid ||
+      !isRecentOutboundMessage({
+        accountId: options.accountId,
+        remoteJid,
+        messageId: id,
+      })
+    ) {
+      return false;
+    }
+    logWhatsAppVerbose(
+      options.verbose,
+      `Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`,
+    );
+    return true;
+  };
+
   const normalizeInboundMessage = async (
     msg: WAMessage,
   ): Promise<NormalizedInboundMessage | null> => {
@@ -804,23 +1044,11 @@ export async function attachWebInboxToSocket(
       return null;
     }
 
-    const group = isGroupJid(remoteJid);
+    const group = isJidGroup(remoteJid) === true;
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
     // Applies to both groups and DMs/self-chat — without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.
-    if (
-      Boolean(msg.key?.fromMe) &&
-      id &&
-      isRecentOutboundMessage({
-        accountId: options.accountId,
-        remoteJid,
-        messageId: id,
-      })
-    ) {
-      logWhatsAppVerbose(
-        options.verbose,
-        `Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`,
-      );
+    if (shouldSkipRecentOutboundEcho(msg)) {
       return null;
     }
     // Gate pairing access-control on extractable inbound user content. Baileys
@@ -944,28 +1172,6 @@ export async function attachWebInboxToSocket(
     await maybeMarkInboundAsRead(target);
   };
 
-  const completeUndeliverableDurableInbound = async (
-    durableId: string | undefined,
-    metadata: WhatsAppDurableInboundMetadata | undefined,
-  ) => {
-    if (!durableId) {
-      return;
-    }
-    await durableInboundJournal.complete(
-      durableId,
-      metadata?.readReceipt ? { metadata: { readReceipt: metadata.readReceipt } } : undefined,
-    );
-  };
-
-  const buildDurableInboundPayload = (
-    msg: WAMessage,
-    upsertType: string | undefined,
-  ): WhatsAppDurableInboundPayload => ({
-    message: serializeWhatsAppDurableInboundMessage(msg),
-    ...(upsertType ? { upsertType } : {}),
-    receivedAt: Date.now(),
-  });
-
   const shouldSkipStaleAppend = (msg: WAMessage, upsertType: string | undefined): boolean => {
     if (upsertType !== "append") {
       return false;
@@ -973,123 +1179,24 @@ export async function attachWebInboxToSocket(
     const APPEND_RECENT_GRACE_MS = 60_000;
     const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
     const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
-    return msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS;
+    // Reconnect catch-up is temporary; after it expires, preserve steady-state
+    // handling for fresh appends instead of rejecting every later append.
+    const nowMs = Date.now();
+    const appendAfterMs =
+      options.appendReplyWindow && nowMs <= options.appendReplyWindow.untilMs
+        ? Math.max(options.appendReplyWindow.afterMs, nowMs - options.appendReplyWindow.maxAgeMs)
+        : connectedAtMs - APPEND_RECENT_GRACE_MS;
+    return msgTsMs < appendAfterMs;
   };
 
-  const processDurableInboundMessage = async (
-    msg: WAMessage,
-    upsertType: string | undefined,
-    receiveOrder: number | undefined,
-    stored?: {
-      id: string;
-      payload: WhatsAppDurableInboundPayload;
-      metadata?: WhatsAppDurableInboundMetadata;
-    },
-  ) => {
-    const inbound = await normalizeInboundMessage(msg);
-    if (!inbound) {
-      if (stored) {
-        await completeUndeliverableDurableInbound(stored.id, stored.metadata);
-      }
-      return;
-    }
-
-    const readReceipt = stored?.metadata?.readReceipt ?? buildReadReceiptTarget(inbound);
-    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
-
-    if (!stored && shouldSkipStaleAppend(msg, upsertType)) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
-      return;
-    }
-
-    let durableId =
-      stored?.id ??
-      (inbound.id
-        ? createWhatsAppDurableInboundMessageId({
-            remoteJid: inbound.remoteJid,
-            id: inbound.id,
-          })
-        : undefined);
-    const durableMetadata: WhatsAppDurableInboundMetadata | undefined = deliveryReadReceipt
-      ? { readReceipt: deliveryReadReceipt }
-      : undefined;
-
-    if (durableId && !stored) {
-      try {
-        const accepted = await durableInboundJournal.accept(
-          durableId,
-          buildDurableInboundPayload(msg, upsertType),
-          {
-            metadata: durableMetadata,
-            receivedAt: inbound.messageTimestampMs,
-          },
-        );
-        if (accepted.kind === "completed") {
-          await maybeMarkNonSelfChatReadReceipt(
-            inbound,
-            accepted.record.metadata?.readReceipt ?? deliveryReadReceipt,
-          );
-          return;
-        }
-        if (accepted.kind === "pending" && accepted.record.attempts === 0) {
-          return;
-        }
-      } catch (err) {
-        durableId = undefined;
-        const error = formatError(err);
-        inboundLogger.warn(
-          { error },
-          "failed persisting durable WhatsApp inbound; delivering live",
-        );
-        inboundConsoleLog.warn(
-          `Failed persisting durable WhatsApp inbound; delivering live: ${error}`,
-        );
-      }
-    }
-
-    const enriched = await enrichInboundMessage(msg);
-    if (!enriched) {
-      await completeUndeliverableDurableInbound(durableId, durableMetadata);
-      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      return;
-    }
-
-    const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
-    const dedupeClaim = dedupeKey ? await claimRecentInboundMessageDelivery(dedupeKey) : "claimed";
-    if (dedupeClaim !== "claimed") {
-      if (dedupeClaim === "duplicate") {
-        await completeUndeliverableDurableInbound(durableId, durableMetadata);
-        await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      }
-      return;
-    }
-
-    recordAcceptedInboundActivity(options.accountId);
-    await enqueueInboundMessage(msg, inbound, enriched, {
-      durableId,
-      readReceipt: deliveryReadReceipt,
-      receiveOrder,
-    });
-  };
-
-  const replayPendingDurableInboundMessages = async () => {
-    const pending = await durableInboundJournal.pending();
-    for (const record of pending) {
-      await processDurableInboundMessage(
-        deserializeWhatsAppDurableInboundMessage(record.payload.message),
-        record.payload.upsertType,
-        record.payload.receivedAt,
-        {
-          id: record.id,
-          payload: record.payload,
-          metadata: record.metadata,
-        },
-      );
-    }
-  };
+  // Live rows keep receive-time identity facts until their first drain attempt.
+  // Restart replay has no entry and re-normalizes from the persisted payload.
+  type PreparedInbound = NonNullable<Awaited<ReturnType<typeof normalizeInboundMessage>>>;
+  const preparedInboundByDurableId = new Map<string, Promise<PreparedInbound | null | undefined>>();
 
   type EnrichedInboundMessage = {
     body: string;
+    commandBody: string;
     location?: ReturnType<typeof extractLocationData>;
     contactContext?: ReturnType<typeof extractContactContext>;
     externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
@@ -1097,6 +1204,8 @@ export async function attachWebInboxToSocket(
     mediaPath?: string;
     mediaType?: string;
     mediaFileName?: string;
+    mediaKind?: NonNullable<ReturnType<typeof extractMediaKind>>;
+    nativeMedia?: MediaPlaceholderTextFact;
   };
 
   const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
@@ -1104,20 +1213,23 @@ export async function attachWebInboxToSocket(
     const locationText = location ? formatLocationText(location) : undefined;
     const contactContext = extractContactContext(msg.message ?? undefined);
     const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
+    let mediaKind = extractMediaKind(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
       body = [body, locationText].filter(Boolean).join("\n").trim();
     }
-    if (!body) {
-      body = extractMediaPlaceholder(msg.message ?? undefined);
-      if (!body) {
-        return null;
-      }
+    if (!body && !mediaKind) {
+      return null;
     }
+    body = body ?? "";
+    const commandBody = body;
     const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
 
     let mediaPath: string | undefined;
-    let mediaType: string | undefined;
+    let mediaType = mediaKind
+      ? resolveInboundMediaMimetype(msg.message as proto.IMessage)
+      : undefined;
+    const nativeMedia = mediaKind ? { contentType: mediaType, kind: mediaKind } : undefined;
     let mediaFileName: string | undefined;
     const maxMb =
       typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
@@ -1135,17 +1247,32 @@ export async function attachWebInboxToSocket(
     try {
       const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes);
       await saveInboundMedia(inboundMedia);
-      if (!mediaPath && replyContext) {
+    } catch (err) {
+      logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
+      body = formatInboundMediaUnavailableText({
+        body,
+        notice: "[whatsapp attachment unavailable]",
+      });
+    }
+    if (!mediaPath && !mediaKind && replyContext?.media) {
+      try {
         await saveInboundMedia(
           await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
         );
+        mediaKind = replyContext.media.kind ?? undefined;
+        mediaType = mediaType ?? replyContext.media.contentType ?? undefined;
+      } catch (err) {
+        logWhatsAppVerbose(options.verbose, `Quoted media download failed: ${String(err)}`);
+        body = formatInboundMediaUnavailableText({
+          body,
+          notice: "[whatsapp quoted attachment unavailable]",
+        });
       }
-    } catch (err) {
-      logWhatsAppVerbose(options.verbose, `Inbound media download failed: ${String(err)}`);
     }
 
     return {
       body,
+      commandBody,
       location: location ?? undefined,
       contactContext,
       externalAdReplyContext,
@@ -1153,6 +1280,8 @@ export async function attachWebInboxToSocket(
       mediaPath,
       mediaType,
       mediaFileName,
+      mediaKind,
+      nativeMedia,
     };
   };
 
@@ -1161,17 +1290,19 @@ export async function attachWebInboxToSocket(
     inbound: NormalizedInboundMessage,
     enriched: EnrichedInboundMessage,
     durable: {
-      durableId?: string;
       readReceipt?: WhatsAppReadReceiptTarget;
       receiveOrder?: number;
+      turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     },
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
-      if (!getCurrentSock()) {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
         return;
       }
       try {
+        await assertCanSendToJid(chatJid, currentSock);
         await sendApiSocketOperations.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Presence update failed: ${String(err)}`);
@@ -1215,11 +1346,12 @@ export async function attachWebInboxToSocket(
       "inbound message",
     );
     const media =
-      enriched.mediaPath || enriched.mediaType || enriched.mediaFileName
+      enriched.mediaPath || enriched.mediaType || enriched.mediaFileName || enriched.mediaKind
         ? {
             path: enriched.mediaPath,
             type: enriched.mediaType,
             fileName: enriched.mediaFileName,
+            kind: enriched.mediaKind,
           }
         : undefined;
     const groupMentions = mentionedJids ? { jids: mentionedJids } : undefined;
@@ -1232,6 +1364,16 @@ export async function attachWebInboxToSocket(
           }
         : undefined;
     const untrustedStructuredContext = [
+      ...(enriched.nativeMedia
+        ? [
+            {
+              label: "WhatsApp media",
+              source: "whatsapp",
+              type: "media",
+              payload: enriched.nativeMedia,
+            },
+          ]
+        : []),
       ...(enriched.contactContext
         ? [
             {
@@ -1261,6 +1403,7 @@ export async function attachWebInboxToSocket(
       },
       payload: {
         body: enriched.body,
+        commandBody: enriched.commandBody,
         location: enriched.location ?? undefined,
         untrustedStructuredContext:
           untrustedStructuredContext.length > 0 ? untrustedStructuredContext : undefined,
@@ -1292,6 +1435,7 @@ export async function attachWebInboxToSocket(
             context: enriched.replyContext,
             id: enriched.replyContext.id,
             body: enriched.replyContext.body,
+            media: enriched.replyContext.media,
             sender: {
               displayName: enriched.replyContext.sender?.label ?? undefined,
               jid: enriched.replyContext.sender?.jid ?? undefined,
@@ -1300,8 +1444,7 @@ export async function attachWebInboxToSocket(
           }
         : undefined,
       group,
-      dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
-      durableId: durable.durableId,
+      turnAdoptionLifecycle: durable.turnAdoptionLifecycle,
       readReceipt: durable.readReceipt,
       receiveOrder: durable.receiveOrder,
     });
@@ -1310,6 +1453,8 @@ export async function attachWebInboxToSocket(
       inboundMessage.debounceKey = debounceKey;
       if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
         pendingDebounceKeys.add(debounceKey);
+        publishPendingWorkState();
+        notifyDebounceWork();
       }
     }
     if (inboundMessage.event.id) {
@@ -1325,24 +1470,101 @@ export async function attachWebInboxToSocket(
               ? inboundMessage.platform.senderE164
               : undefined,
           body: inboundMessage.payload.body,
+          media: enriched.nativeMedia,
           fromMe: inboundMessage.platform.fromMe,
         },
       );
     }
-    try {
-      const task = Promise.resolve(debouncer.enqueue(inboundMessage));
-      void task.catch((err: unknown) => {
-        inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
-        inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
-      });
-    } catch (err) {
-      inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
-      inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
-    }
+    await debouncer.enqueue(inboundMessage);
   };
 
-  const pendingMessageHandlers = new Set<Promise<void>>();
-  let nextReceiveOrder = 0;
+  const processDurableInboundMessage = async (
+    msg: WAMessage,
+    context: Pick<
+      WhatsAppDurableInboundPayload,
+      "upsertType" | "skipStaleAppend" | "skipRecentOutboundEcho" | "receivedAt" | "receiveOrder"
+    > & {
+      eventId?: string;
+      lifecycle?: WhatsAppIngressLifecycle;
+    },
+  ): Promise<"completed" | "deferred"> => {
+    rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+    if (context.skipRecentOutboundEcho === true) {
+      return "completed";
+    }
+    const preparation = context.eventId
+      ? preparedInboundByDurableId.get(context.eventId)
+      : undefined;
+    if (context.eventId) {
+      preparedInboundByDurableId.delete(context.eventId);
+    }
+    const prepared = await preparation;
+    if (prepared === null) {
+      return "completed";
+    }
+    const inbound = prepared ?? (await normalizeInboundMessage(msg));
+    if (!inbound) {
+      return "completed";
+    }
+    if (
+      await maybeResolveWhatsAppQuestionReaction({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        accountId: options.accountId,
+        msg,
+        senderId: inbound.senderE164 ?? inbound.from,
+        resolveReactionTargetJids,
+        logDebug: (message) => logWhatsAppVerbose(options.verbose, message),
+      })
+    ) {
+      return "completed";
+    }
+    const readReceipt = buildReadReceiptTarget(inbound);
+    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
+    if (context.skipStaleAppend === true) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
+      return "completed";
+    }
+
+    const enriched = await enrichInboundMessage(msg);
+    if (!enriched) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+      return "completed";
+    }
+
+    recordAcceptedInboundActivity(options.accountId);
+    await enqueueInboundMessage(msg, inbound, enriched, {
+      readReceipt: deliveryReadReceipt,
+      receiveOrder: context.receiveOrder ?? context.receivedAt,
+      turnAdoptionLifecycle: context.lifecycle,
+    });
+    return "deferred";
+  };
+
+  const durableInboundMonitor = createWhatsAppIngressMonitor({
+    queue: durableInboundQueue,
+    dispatch: async (msg, payload, lifecycle) => {
+      const remoteJid = msg.key?.remoteJid;
+      const id = msg.key?.id;
+      return {
+        kind: await processDurableInboundMessage(msg, {
+          ...payload,
+          ...(remoteJid && id
+            ? { eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }) }
+            : {}),
+          lifecycle,
+        }),
+      };
+    },
+    pollIntervalMs: WHATSAPP_INGRESS_DRAIN_INTERVAL_MS,
+    onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
+    onError: (error) =>
+      inboundLogger.error({ error: formatError(error) }, "whatsapp durable inbound drain failed"),
+    onActivityChange: (active) => {
+      durableIngressActive = active;
+      publishPendingWorkState();
+    },
+  });
+
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
@@ -1366,7 +1588,108 @@ export async function attachWebInboxToSocket(
         continue;
       }
 
-      await processDurableInboundMessage(msg, upsert.type, receiveOrder);
+      const receivedAt = Date.now();
+      const skipStaleAppend = shouldSkipStaleAppend(msg, upsert.type);
+      const skipRecentOutboundEcho = shouldSkipRecentOutboundEcho(msg);
+      const remoteJid = msg.key?.remoteJid;
+      const id = msg.key?.id;
+      const durableId =
+        remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
+      let resolvePrepared: ((inbound: PreparedInbound | null | undefined) => void) | undefined;
+      // A redelivery must not clobber the first delivery's in-flight
+      // preparation: the drain consumes exactly one entry per durable id.
+      if (durableId && !preparedInboundByDurableId.has(durableId)) {
+        // Queue pruning caps pending rows, but evicted rows' entries would
+        // linger here forever on a blocked lane; evict oldest-first well above
+        // the queue's own pending cap. Dispatch falls back to re-normalizing
+        // the journaled payload when its entry is gone.
+        if (preparedInboundByDurableId.size >= 1000) {
+          const oldest = preparedInboundByDurableId.keys().next().value;
+          if (oldest !== undefined) {
+            preparedInboundByDurableId.delete(oldest);
+          }
+        }
+        preparedInboundByDurableId.set(
+          durableId,
+          new Promise((resolve) => {
+            resolvePrepared = resolve;
+          }),
+        );
+      }
+      const finishPreparation = (
+        inbound: PreparedInbound | null | undefined,
+        keepForDrain = false,
+      ) => {
+        resolvePrepared?.(inbound);
+        // Only the delivery that installed the entry may remove it; a
+        // duplicate pending delivery (resolvePrepared undefined) must not
+        // delete the first delivery's kept preparation.
+        if (!keepForDrain && durableId && resolvePrepared) {
+          preparedInboundByDurableId.delete(durableId);
+        }
+      };
+      let result: { kind: string } | undefined;
+      let appendError: unknown;
+      // Admission stays local because the prepared-context map needs enqueue's
+      // atomic accepted/pending/completed result; the shared monitor hides it.
+      for (const delayMs of [0, 100, 300]) {
+        if (delayMs > 0) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
+        }
+        try {
+          result = await enqueueWhatsAppDurableInbound({
+            queue: durableInboundQueue,
+            message: msg,
+            upsertType: upsert.type,
+            skipStaleAppend,
+            skipRecentOutboundEcho,
+            receivedAt,
+            receiveOrder,
+          });
+          appendError = undefined;
+          break;
+        } catch (error) {
+          appendError = error;
+        }
+      }
+      if (result === undefined) {
+        finishPreparation(undefined);
+        const formattedError = formatError(appendError);
+        inboundLogger.error(
+          { error: formattedError },
+          "failed persisting durable WhatsApp inbound after retries; message dropped",
+        );
+        inboundConsoleLog.error(
+          `Failed persisting durable WhatsApp inbound after retries; message dropped: ${formattedError}`,
+        );
+        continue;
+      }
+      if (result.kind === "completed") {
+        finishPreparation(undefined);
+        const inbound = await normalizeInboundMessage(msg);
+        if (inbound) {
+          await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
+        }
+      } else {
+        if (result.kind === "accepted") {
+          try {
+            finishPreparation(
+              skipRecentOutboundEcho ? null : await normalizeInboundMessage(msg),
+              true,
+            );
+          } catch (error) {
+            finishPreparation(undefined);
+            throw error;
+          }
+        } else {
+          // "pending": the first delivery owns preparation; resolving without
+          // keepForDrain avoids orphaning a second map entry forever.
+          finishPreparation(undefined);
+        }
+        durableInboundMonitor.requestDrain();
+      }
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
@@ -1375,14 +1698,11 @@ export async function attachWebInboxToSocket(
       inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
     });
     pendingMessageHandlers.add(task);
+    publishPendingWorkState();
     void task.finally(() => {
       pendingMessageHandlers.delete(task);
+      publishPendingWorkState();
     });
-  };
-  const waitForPendingMessageHandlers = async () => {
-    while (pendingMessageHandlers.size > 0) {
-      await Promise.all(Array.from(pendingMessageHandlers));
-    }
   };
   const drainDebouncedInboundMessages = async () => {
     while (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
@@ -1401,8 +1721,34 @@ export async function attachWebInboxToSocket(
   };
   const drainInboundBeforeSocketClose = async () => {
     groupMetadataCacheClosed = true;
-    await waitForPendingMessageHandlers();
+    // Interleave force-flush with event-driven wait for drain dispatch so close
+    // cannot deadlock inside the debounce window. Debounce semantics stay intact.
+    for (;;) {
+      await drainDebouncedInboundMessages();
+      if (pendingMessageHandlers.size === 0) {
+        break;
+      }
+      const handlers = Array.from(pendingMessageHandlers);
+      await Promise.race([Promise.allSettled(handlers), waitForDebounceWorkOrIdle(handlers)]);
+      if (
+        pendingMessageHandlers.size === 0 &&
+        pendingDebounceKeys.size === 0 &&
+        activeInboundFlushes.size === 0
+      ) {
+        break;
+      }
+    }
     await drainDebouncedInboundMessages();
+    // A flush can adopt one claim and wake the next row in the same lane.
+    // Alternate until neither the monitor nor debounce layer can create more work.
+    for (;;) {
+      await durableInboundMonitor.waitForIdle();
+      if (pendingDebounceKeys.size === 0 && activeInboundFlushes.size === 0) {
+        break;
+      }
+      await drainDebouncedInboundMessages();
+    }
+    await durableInboundMonitor.stop();
   };
   const drainInboundBeforeSocketCloseWithTimeout = async () => {
     let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -1424,10 +1770,16 @@ export async function attachWebInboxToSocket(
       if (timeout) {
         clearTimeout(timeout);
       }
+      // Start abort/dispose even when channel work ignored the graceful bound;
+      // a successor must not share this account queue with a live owner.
+      void durableInboundMonitor.stop();
     }
   };
   const handleConnectionUpdate = (update: Partial<import("baileys").ConnectionState>) => {
     try {
+      if ("reachoutTimeLock" in update) {
+        rememberReachoutTimeLock(update.reachoutTimeLock);
+      }
       if (update.connection === "close") {
         if (options.socketRef?.current === sock) {
           options.socketRef.current = null;
@@ -1520,14 +1872,7 @@ export async function attachWebInboxToSocket(
     forgetFullGroupMetadata(update.id);
   }) as unknown as (...args: unknown[]) => void);
 
-  const replayTask = replayPendingDurableInboundMessages().catch((err: unknown) => {
-    inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
-    inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
-  });
-  pendingMessageHandlers.add(replayTask);
-  void replayTask.finally(() => {
-    pendingMessageHandlers.delete(replayTask);
-  });
+  durableInboundMonitor.start();
 
   const groupHydrationTask = (async () => {
     try {
@@ -1600,6 +1945,7 @@ export async function attachWebInboxToSocket(
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    assertSendReady: assertCanSendTo,
     sendComposingTo: sendApi.sendComposingTo,
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,
@@ -1608,7 +1954,7 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
-  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming(options.cfg);
+  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming();
   const recentMessageKeys: WhatsAppBaileysMessageCache = options.recentMessageKeys ?? new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache =
     options.baileysGroupMetaCache ?? new Map();
@@ -1652,3 +1998,4 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     baileysGroupMetaCache,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -416,6 +416,10 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
 
 export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
   describe("openai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+    const codexProviderConfig = {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as const;
     const requireProviderContractProvider = installRuntimeHooks([
       { providerIds: ["openai", "openai"], pluginId: "openai", name: "OpenAI", load },
     ]);
@@ -557,6 +561,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai",
         modelId: "gpt-5.4",
         authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
@@ -585,6 +590,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai",
         modelId: "gpt-5.5",
         authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.5"
@@ -618,6 +624,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai",
         modelId: "gpt-5.4-mini",
         authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.4"
@@ -742,9 +749,9 @@ export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContr
       const provider = requireProviderContractProvider("venice");
       const model = provider.normalizeResolvedModel?.({
         provider: "venice",
-        modelId: "grok-41-fast",
+        modelId: "grok-4-3",
         model: createModel({
-          id: "grok-41-fast",
+          id: "grok-4-3",
           provider: "venice",
           api: "openai-completions",
           baseUrl: "https://api.venice.ai/api/v1",
@@ -752,7 +759,6 @@ export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContr
       });
       const compat = requireRecord(model?.compat, "compat");
       expect(compat.toolSchemaProfile).toBe("xai");
-      expect(compat.nativeWebSearchTool).toBe(true);
       expect(compat.toolCallArgumentsEncoding).toBe("html-entities");
     });
   });
@@ -791,6 +797,26 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
         api: "openai-completions",
         reasoning: true,
       });
+    });
+
+    it("owns Z.AI token-limit overflow classification", () => {
+      const provider = requireProviderContractProvider("zai");
+
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: tokens in request more than max tokens allowed",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1261: Prompt exceeds max length",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: invalid request parameters",
+        }),
+      ).toBe(false);
     });
 
     it("owns usage auth resolution", async () => {
@@ -852,3 +878,4 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

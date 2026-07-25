@@ -1,25 +1,29 @@
 // Provider stream shared helpers implement reusable stream wrappers and payload policies.
-import { randomUUID } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
+import { resolveOpenAIReasoningEffortMap } from "@openclaw/ai/transports";
 import {
-  extractStandalonePlainTextToolCallText,
+  createPromotedPlainTextToolCallBlock,
+  createPromotedPlainTextToolCallEvents,
   normalizePlainTextToolCallStreamEvents,
-  promoteStandalonePlainTextToolCallMessage,
-  scrubOverCapPlainTextToolCallMessage,
+  projectScrubbedPlainTextToolCallMessage,
+  projectStandalonePlainTextToolCallMessage,
+  type PlainTextToolCallMessageProjection,
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
-import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
-import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
+import {
+  sanitizeGoogleThinkingPayload,
+  type GoogleThinkingInputLevel,
+} from "../llm/providers/stream-wrappers/google-thinking-payload.js";
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
-export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
-export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
+export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
+export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 
 type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 
@@ -59,27 +63,10 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   return new Set(names);
 }
 
-function createSyntheticToolCallId(): string {
-  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-}
-
-function createPlainTextToolCallBlock(parsed: {
-  arguments: Record<string, unknown>;
-  name: string;
-}): Record<string, unknown> {
-  return {
-    type: "toolCall",
-    id: createSyntheticToolCallId(),
-    name: parsed.name,
-    arguments: parsed.arguments,
-    partialArgs: JSON.stringify(parsed.arguments),
-  };
-}
-
 function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
-): Record<string, unknown> | undefined {
+): PlainTextToolCallMessageProjection | undefined {
   const messageRecord = toRecord(message);
   if (
     Array.isArray(messageRecord?.content) &&
@@ -87,37 +74,10 @@ function promotePlainTextToolCalls(
   ) {
     return undefined;
   }
-  return promoteStandalonePlainTextToolCallMessage({
+  return projectStandalonePlainTextToolCallMessage({
     allowedToolNames: toolNames,
-    createToolCallBlock: (block, name) => createPlainTextToolCallBlock({ ...block, name }),
+    createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
-    message,
-  });
-}
-
-function emitPromotedToolCallEvents(
-  stream: { push(event: unknown): void },
-  message: Record<string, unknown>,
-): void {
-  const content = Array.isArray(message.content) ? message.content : [];
-  content.forEach((block, contentIndex) => {
-    const record = toRecord(block);
-    if (record?.type !== "toolCall") {
-      return;
-    }
-    stream.push({ type: "toolcall_start", contentIndex, partial: message });
-    stream.push({
-      type: "toolcall_delta",
-      contentIndex,
-      delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
-      partial: message,
-    });
-  });
-}
-
-function extractPlainTextToolCallCandidate(message: unknown): string | undefined {
-  return extractStandalonePlainTextToolCallText({
-    allowOtherNonTextBlocks: true,
     message,
   });
 }
@@ -138,25 +98,36 @@ function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCal
 
 function normalizeProviderDoneMessage(
   message: unknown,
-  reason: unknown,
+  allowPromotion: boolean,
   toolNames: Set<string>,
   matcher: PlainTextToolCallNameMatcher,
+  preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
-  const scrubbedMessage = scrubOverCapPlainTextToolCallMessage({
-    candidateText: extractPlainTextToolCallCandidate(message),
-    matcher,
-    message,
-  });
+  const scrubbedMessage = scrubProviderTerminalMessage(message, matcher, preserveEmptyTextBlocks);
   if (scrubbedMessage) {
-    return { kind: "scrubbed", message: scrubbedMessage };
+    return { kind: "scrubbed", ...scrubbedMessage };
   }
   // Token-limit and error terminals can leave complete-looking tool syntax.
   // Only normal completion or explicit tool use may promote it into an executable call.
-  if (reason !== "stop" && reason !== "toolUse") {
+  if (!allowPromotion) {
     return undefined;
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
-  return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
+  return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
+}
+
+function scrubProviderTerminalMessage(
+  message: unknown,
+  matcher: PlainTextToolCallNameMatcher,
+  preserveEmptyTextBlocks = false,
+  forceKnownCandidates = false,
+): PlainTextToolCallMessageProjection | undefined {
+  return projectScrubbedPlainTextToolCallMessage({
+    forceKnownCandidates,
+    matcher,
+    message,
+    preserveEmptyTextBlocks,
+  });
 }
 
 function wrapPlainTextToolCallStream(
@@ -184,14 +155,16 @@ function wrapPlainTextToolCallStream(
       const normalizedEvents = normalizePlainTextToolCallStreamEvents(
         source as AsyncIterable<unknown>,
         {
-          createPromotedToolCallEvents: (message) => {
-            const events: unknown[] = [];
-            emitPromotedToolCallEvents({ push: (event: unknown) => events.push(event) }, message);
-            return events;
-          },
+          createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
           matcher,
-          normalizeDoneMessage: ({ message, reason }) =>
-            normalizeProviderDoneMessage(message, reason, toolNames, matcher),
+          normalizeTerminalMessage: ({ allowPromotion, message, preserveEmptyTextBlocks }) =>
+            normalizeProviderDoneMessage(
+              message,
+              allowPromotion,
+              toolNames,
+              matcher,
+              preserveEmptyTextBlocks,
+            ),
           stopAfterDone: true,
         },
       );
@@ -677,314 +650,18 @@ export function createThinkingOnlyFinalTextWrapper(params: {
   };
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export type GoogleThinkingInputLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "adaptive"
-  | "high"
-  | "max"
-  | "xhigh";
-
-// Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
-// "Budget 0 is invalid. This model only works in thinking mode."
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleThinkingRequiredModel(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
-  return /(?:^|\/)gemini-2\.5-/.test(normalizeLowercaseStringOrEmpty(modelId));
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3ProModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|\/)gemini-(?:3(?:\.\d+)?-pro|pro-latest)(?:-|$)/.test(normalized);
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3FlashModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return /(?:^|\/)gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)(?:-|$)/.test(normalized);
-}
-
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
-  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
-}
-
-/**
- * Maps legacy numeric/semantic thinking input onto Gemini 3's provider enum.
- * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
- */
-export function resolveGoogleGemini3ThinkingLevel(params: {
-  modelId?: string;
-  thinkingLevel?: GoogleThinkingInputLevel;
-  thinkingBudget?: number;
-}): GoogleThinkingLevel | undefined {
-  if (typeof params.modelId !== "string") {
-    return undefined;
-  }
-  if (isGoogleGemini3ProModel(params.modelId)) {
-    switch (params.thinkingLevel) {
-      case "off":
-      case "minimal":
-      case "low":
-        return "LOW";
-      case "medium":
-      case "high":
-      case "max":
-      case "xhigh":
-        return "HIGH";
-      case "adaptive":
-        return undefined;
-      case undefined:
-        break;
-    }
-    if (typeof params.thinkingBudget === "number") {
-      if (params.thinkingBudget < 0) {
-        return undefined;
-      }
-      return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
-    }
-    return undefined;
-  }
-  if (!isGoogleGemini3FlashModel(params.modelId)) {
-    return undefined;
-  }
-  switch (params.thinkingLevel) {
-    case "off":
-    case "minimal":
-      return "MINIMAL";
-    case "low":
-      return "LOW";
-    case "medium":
-      return "MEDIUM";
-    case "high":
-    case "max":
-    case "xhigh":
-      return "HIGH";
-    case "adaptive":
-      return undefined;
-    case undefined:
-      break;
-  }
-  if (typeof params.thinkingBudget !== "number") {
-    return undefined;
-  }
-  if (params.thinkingBudget < 0) {
-    return undefined;
-  }
-  if (params.thinkingBudget <= 0) {
-    return "MINIMAL";
-  }
-  if (params.thinkingBudget <= 2048) {
-    return "LOW";
-  }
-  if (params.thinkingBudget <= 8192) {
-    return "MEDIUM";
-  }
-  return "HIGH";
-}
-
-/**
- * Removes `thinkingBudget=0` only for Gemini models that reject disabled thinking.
- * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
- */
-export function stripInvalidGoogleThinkingBudget(params: {
-  thinkingConfig: Record<string, unknown>;
-  modelId?: string;
-}): boolean {
-  if (
-    params.thinkingConfig.thinkingBudget !== 0 ||
-    typeof params.modelId !== "string" ||
-    !isGoogleThinkingRequiredModel(params.modelId)
-  ) {
-    return false;
-  }
-  delete params.thinkingConfig.thinkingBudget;
-  return true;
-}
-
-function isGemma4Model(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
-}
-
-function mapThinkLevelToGemma4ThinkingLevel(
-  thinkingLevel?: GoogleThinkingInputLevel,
-): "MINIMAL" | "HIGH" | undefined {
-  switch (thinkingLevel) {
-    case "off":
-      return undefined;
-    case "minimal":
-    case "low":
-      return "MINIMAL";
-    case "medium":
-    case "adaptive":
-    case "high":
-    case "max":
-    case "xhigh":
-      return "HIGH";
-    default:
-      return undefined;
-  }
-}
-
-function normalizeGemma4ThinkingLevel(value: unknown): "MINIMAL" | "HIGH" | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  switch (value.trim().toUpperCase()) {
-    case "MINIMAL":
-    case "LOW":
-      return "MINIMAL";
-    case "MEDIUM":
-    case "HIGH":
-      return "HIGH";
-    default:
-      return undefined;
-  }
-}
-
-/**
- * Normalizes Google thinking config across SDK payload shapes before provider transport.
- * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
- */
-export function sanitizeGoogleThinkingPayload(params: {
-  payload: unknown;
-  modelId?: string;
-  thinkingLevel?: GoogleThinkingInputLevel;
-}): void {
-  if (!params.payload || typeof params.payload !== "object") {
-    return;
-  }
-  const payloadObj = params.payload as Record<string, unknown>;
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.config,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.generationConfig,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
-}
-
-function sanitizeGoogleThinkingConfigContainer(params: {
-  container: unknown;
-  modelId?: string;
-  thinkingLevel?: GoogleThinkingInputLevel;
-}): void {
-  if (!params.container || typeof params.container !== "object") {
-    return;
-  }
-  const configObj = params.container as Record<string, unknown>;
-  const thinkingConfig = configObj.thinkingConfig;
-  if (!thinkingConfig || typeof thinkingConfig !== "object") {
-    return;
-  }
-  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
-
-  if (typeof params.modelId === "string" && isGemma4Model(params.modelId)) {
-    // Gemma 4 accepts thinkingLevel but not thinkingBudget; map legacy budget
-    // inputs before deleting the unsupported numeric field.
-    const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
-    const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel);
-    const disabledViaBudget =
-      typeof thinkingConfigObj.thinkingBudget === "number" && thinkingConfigObj.thinkingBudget <= 0;
-    const hadThinkingBudget = thinkingConfigObj.thinkingBudget !== undefined;
-    delete thinkingConfigObj.thinkingBudget;
-
-    if (
-      params.thinkingLevel === "off" ||
-      (disabledViaBudget && explicitMappedLevel === undefined && !normalizedThinkingLevel)
-    ) {
-      delete thinkingConfigObj.thinkingLevel;
-      if (Object.keys(thinkingConfigObj).length === 0) {
-        delete configObj.thinkingConfig;
-      }
-      return;
-    }
-
-    const mappedLevel =
-      explicitMappedLevel ?? normalizedThinkingLevel ?? (hadThinkingBudget ? "MINIMAL" : undefined);
-
-    if (mappedLevel) {
-      thinkingConfigObj.thinkingLevel = mappedLevel;
-    }
-    return;
-  }
-
-  const thinkingBudget = thinkingConfigObj.thinkingBudget;
-
-  if (
-    params.thinkingLevel === "adaptive" &&
-    typeof params.modelId === "string" &&
-    isGoogleGemini25ThinkingBudgetModel(params.modelId)
-  ) {
-    delete thinkingConfigObj.thinkingLevel;
-    thinkingConfigObj.thinkingBudget = -1;
-    return;
-  }
-
-  if (
-    params.thinkingLevel === "adaptive" &&
-    typeof params.modelId === "string" &&
-    isGoogleGemini3ThinkingLevelModel(params.modelId)
-  ) {
-    // Gemini 3 adaptive mode means omit both controls so the provider chooses.
-    delete thinkingConfigObj.thinkingBudget;
-    delete thinkingConfigObj.thinkingLevel;
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
-  if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
-    const mappedLevel = resolveGoogleGemini3ThinkingLevel({
-      modelId: params.modelId,
-      thinkingLevel: params.thinkingLevel,
-      thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
-    });
-    delete thinkingConfigObj.thinkingBudget;
-    if (mappedLevel) {
-      // Gemini 3 uses thinkingLevel; leaving thinkingBudget would make mixed-mode payloads.
-      thinkingConfigObj.thinkingLevel = mappedLevel;
-    }
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
-  if (
-    stripInvalidGoogleThinkingBudget({ thinkingConfig: thinkingConfigObj, modelId: params.modelId })
-  ) {
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
-    return;
-  }
-
-  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
-    return;
-  }
-
-  // shared model runtime can emit thinkingBudget=-1 for some Google model IDs; a negative budget
-  // is invalid for Google-compatible backends and can lead to malformed handling.
-  delete thinkingConfigObj.thinkingBudget;
-  if (Object.keys(thinkingConfigObj).length === 0) {
-    delete configObj.thinkingConfig;
-  }
-}
+export {
+  isGoogleGemini25ThinkingBudgetModel,
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+  isGoogleThinkingRequiredModel,
+  resolveGoogleGemini3ThinkingLevel,
+  sanitizeGoogleThinkingPayload,
+  stripInvalidGoogleThinkingBudget,
+  type GoogleThinkingInputLevel,
+  type GoogleThinkingLevel,
+} from "../llm/providers/stream-wrappers/google-thinking-payload.js";
 
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function createGoogleThinkingPayloadWrapper(
@@ -1012,14 +689,11 @@ export function createGoogleThinkingStreamWrapper(
 export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
-} from "../agents/anthropic-payload-policy.js";
+} from "@openclaw/ai/transports";
 export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
-export {
-  createToolStreamWrapper,
-  createZaiToolStreamWrapper,
-} from "../llm/providers/stream-wrappers/zai.js";
+export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";

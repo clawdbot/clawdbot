@@ -6,6 +6,8 @@ import {
   buildRelayWebSocketOptions,
   buildRelayWebSocketUrl,
   monitorSlackRelaySource,
+  parseRelayFrame,
+  SlackRelayMalformedFrameError,
   SLACK_RELAY_MAX_PAYLOAD_BYTES,
   type SlackRelayIdentity,
 } from "./relay-source.js";
@@ -18,6 +20,10 @@ function deferred<T>() {
     reject = nextReject;
   });
   return { promise, reject, resolve };
+}
+
+function relayFrame(text: string): Buffer {
+  return Buffer.from(text, "utf8");
 }
 
 describe("Slack relay source", () => {
@@ -52,15 +58,15 @@ describe("Slack relay source", () => {
     });
   });
 
-  it("applies hello identity, dispatches a routed event, and acknowledges its delivery", async () => {
+  it("applies hello identity and acks a routed event only after durable accept", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise<void>((resolve) => {
       server.once("listening", resolve);
     });
     const port = (server.address() as AddressInfo).port;
     const ack = deferred<Record<string, unknown>>();
-    const dispatchStarted = deferred<void>();
-    const dispatchDone = deferred<void>();
+    const acceptStarted = deferred<void>();
+    const acceptDone = deferred<void>();
     const receivedAcks: Array<Record<string, unknown>> = [];
     const requestHeaders = deferred<{ authorization?: string; url?: string }>();
     server.once("connection", (socket, request) => {
@@ -126,13 +132,15 @@ describe("Slack relay source", () => {
     });
 
     const abortController = new AbortController();
-    const handleSlackMessage = vi.fn(async (event: { text?: string }) => {
-      if (event.text === "fail-handler") {
-        throw new Error("handler failed");
-      }
-      dispatchStarted.resolve();
-      await dispatchDone.promise;
-    });
+    const acceptRelayEvent = vi.fn(
+      async (event: { deliveryId: string; message: { text?: string } }) => {
+        if (event.message.text === "fail-handler") {
+          throw new Error("durable accept failed");
+        }
+        acceptStarted.resolve();
+        await acceptDone.promise;
+      },
+    );
     const runtimeError = vi.fn();
     const identities: Array<SlackRelayIdentity | undefined> = [];
     const statuses: Array<Record<string, unknown>> = [];
@@ -142,7 +150,7 @@ describe("Slack relay source", () => {
         authToken: "relay-secret",
         gatewayId: "pash",
       },
-      handleSlackMessage,
+      acceptRelayEvent,
       runtime: { error: runtimeError, log: vi.fn() } as unknown as RuntimeEnv,
       abortSignal: abortController.signal,
       setIdentity: (identity) => identities.push(identity),
@@ -153,27 +161,21 @@ describe("Slack relay source", () => {
       authorization: "Bearer relay-secret",
       url: "/gateway/ws?gateway_id=pash",
     });
-    await dispatchStarted.promise;
+    await acceptStarted.promise;
     expect(receivedAcks).toEqual([]);
-    dispatchDone.resolve();
+    acceptDone.resolve();
     await expect(ack.promise).resolves.toEqual({
       type: "ack",
       delivery_id: "delivery-1",
     });
     expect(receivedAcks).toEqual([{ type: "ack", delivery_id: "delivery-1" }]);
     expect(runtimeError).toHaveBeenCalledTimes(2);
-    expect(handleSlackMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "C1", text: "hello" }),
-      {
-        source: "message",
-        wasMentioned: true,
-        awaitDispatch: true,
-        relayIdentity: {
-          username: "Nik Team Claw",
-          iconUrl: "https://example.com/nik.png",
-        },
-      },
-    );
+    expect(acceptRelayEvent).toHaveBeenCalledWith({
+      deliveryId: "delivery-1",
+      message: expect.objectContaining({ channel: "C1", text: "hello" }),
+    });
+    // The failed durable accept must never ack: the router redelivers it.
+    expect(receivedAcks).not.toContainEqual({ type: "ack", delivery_id: "delivery-failed" });
     expect(identities).toContainEqual({
       username: "Nik Team Claw",
       iconUrl: "https://example.com/nik.png",
@@ -196,6 +198,41 @@ describe("Slack relay source", () => {
         }
         resolve();
       });
+    });
+  });
+
+  describe("parseRelayFrame", () => {
+    it("parses valid JSON frames", () => {
+      const frame = parseRelayFrame(
+        relayFrame(JSON.stringify({ type: "slack_event", data: { text: "hello" } })),
+      );
+      expect(frame).toEqual({ type: "slack_event", data: { text: "hello" } });
+    });
+
+    it("throws SlackRelayMalformedFrameError for malformed JSON", () => {
+      expect(() => parseRelayFrame(relayFrame("NOT JSON {{{"))).toThrow(
+        SlackRelayMalformedFrameError,
+      );
+    });
+
+    it("wraps the original SyntaxError as the cause", () => {
+      let error: unknown;
+      try {
+        parseRelayFrame(relayFrame("NOT JSON {{{"));
+      } catch (err: unknown) {
+        error = err;
+      }
+      expect(error).toBeInstanceOf(SlackRelayMalformedFrameError);
+      expect((error as SlackRelayMalformedFrameError).message).toContain("malformed JSON frame");
+      expect((error as SlackRelayMalformedFrameError).cause).toBeDefined();
+    });
+
+    it("parses empty object frames", () => {
+      expect(parseRelayFrame(relayFrame("{}"))).toEqual({});
+    });
+
+    it("parses array frames", () => {
+      expect(parseRelayFrame(relayFrame("[1, 2, 3]"))).toEqual([1, 2, 3]);
     });
   });
 });

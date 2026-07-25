@@ -1,10 +1,11 @@
 // Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
@@ -28,6 +29,16 @@ const RTL_ISOLATE_END = "\u2069";
 const FENCED_CODE_RE = /(```|~~~)[^\n]*\n[\s\S]*?\n\1[^\n]*/g;
 // Inline code spans with balanced backtick run (`code`, ``co`de``, ...).
 const INLINE_CODE_RE = /(`+)(?:(?!\1).)+?\1/g;
+
+/** Keep routing/provider/profile details in session state, not the compact footer. */
+export function formatModelFooter(params: {
+  model?: string | null;
+  thinkingLevel?: string | null;
+}): string {
+  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
+  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
+}
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -55,17 +66,6 @@ function stripControlChars(text: string): string {
     }
   }
   return sanitized;
-}
-
-function chunkToken(token: string, maxChars: number): string[] {
-  if (token.length <= maxChars) {
-    return [token];
-  }
-  const chunks: string[] = [];
-  for (let i = 0; i < token.length; i += maxChars) {
-    chunks.push(token.slice(i, i + maxChars));
-  }
-  return chunks;
 }
 
 function isCopySensitiveToken(token: string): boolean {
@@ -122,7 +122,7 @@ function normalizeLongTokenForDisplay(token: string): string {
   if (!ALPHANUMERIC_RE.test(token)) {
     return token;
   }
-  return chunkToken(token, MAX_TOKEN_CHARS).join(" ");
+  return chunkTextByBreakResolver(token, MAX_TOKEN_CHARS, () => MAX_TOKEN_CHARS).join(" ");
 }
 
 type Segment = { kind: "prose" | "code"; text: string };
@@ -194,7 +194,7 @@ export function sanitizeRenderableText(text: string): string {
     return text;
   }
 
-  const hasAnsi = text.includes("\u001b");
+  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
   const hasReplacementChars = text.includes("\uFFFD");
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const hasControls = hasControlChars(text);
@@ -364,10 +364,36 @@ export function extractContentFromMessage(message: unknown): string {
 
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
   const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
-  if (visible) {
-    return visible;
+  const pairingQr = extractPairingQrTerminalText(record);
+  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
+  if (content) {
+    return content;
   }
   return formatAssistantErrorFromRecord(record);
+}
+
+function extractPairingQrTerminalText(record: Record<string, unknown>): string {
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const blockRecord = block as Record<string, unknown>;
+    if (
+      blockRecord.type === "openclaw_pairing_qr" &&
+      typeof blockRecord.terminalText === "string"
+    ) {
+      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
+      if (text) {
+        parts.push(text);
+      }
+    }
+  }
+  return parts.join("\n\n").trim();
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
@@ -449,15 +475,6 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
-}
-
-export function formatRemoteConnectionHostFooter(connectionUrl: string): string | null {
-  try {
-    const hostname = new URL(connectionUrl.trim()).hostname.trim();
-    return hostname && !isLoopbackHost(hostname) ? `host ${hostname}` : null;
-  } catch {
-    return null;
-  }
 }
 
 function formatGoalUsage(goal: SessionGoal): string | null {

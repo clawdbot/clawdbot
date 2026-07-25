@@ -1,4 +1,5 @@
 /** Prepares queued follow-up payloads for source-channel delivery. */
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,14 +24,7 @@ import {
 } from "./reply-payloads.js";
 import { createReplyDeliveryContext, resolveReplyToMode } from "./reply-threading.js";
 
-function hasReplyPayloadMedia(payload: ReplyPayload): boolean {
-  if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim().length > 0) {
-    return true;
-  }
-  return Array.isArray(payload.mediaUrls) && payload.mediaUrls.some((url) => url.trim().length > 0);
-}
-
-/** Strips heartbeat tokens, applies threading, and dedupes message-tool sends. */
+/** Strips empty/heartbeat payloads, applies threading, and dedupes message-tool sends. */
 export function resolveFollowupDeliveryPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
@@ -41,6 +35,8 @@ export function resolveFollowupDeliveryPayloads(params: {
   originatingReplyToMode?: ReplyToMode;
   originatingTo?: string;
   originatingThreadId?: string | number;
+  reasoningPayloadsEnabled?: boolean;
+  commentaryPayloadsEnabled?: boolean;
   sentMediaUrls?: string[];
   sentTargets?: MessagingToolSend[];
   sentTexts?: string[];
@@ -68,19 +64,26 @@ export function resolveFollowupDeliveryPayloads(params: {
         ...(accountId ? { accountId } : {}),
       }
     : undefined;
+  const deliverablePayloads = params.payloads.filter(
+    (payload) =>
+      !(payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) &&
+      !(payload.isCommentary === true && params.commentaryPayloadsEnabled !== true),
+  );
   const sanitizedPayloads: ReplyPayload[] = [];
-  for (const payload of params.payloads) {
+  for (const payload of deliverablePayloads) {
     const text = payload.text;
-    if (!text || !text.includes("HEARTBEAT_OK")) {
-      sanitizedPayloads.push(payload);
-      continue;
+    const sanitized =
+      text?.includes("HEARTBEAT_OK") === true
+        ? copyReplyPayloadMetadata(payload, {
+            ...payload,
+            text: stripHeartbeatToken(text, { mode: "message" }).text,
+          })
+        : payload;
+    // Normalize before callers decide whether the run was empty. Otherwise a
+    // whitespace-only model payload can suppress the interactive fallback.
+    if (hasOutboundReplyContent(sanitized, { trimText: true })) {
+      sanitizedPayloads.push(sanitized);
     }
-    const stripped = stripHeartbeatToken(text, { mode: "message" });
-    const hasMedia = hasReplyPayloadMedia(payload);
-    if (stripped.shouldSkip && !hasMedia) {
-      continue;
-    }
-    sanitizedPayloads.push(copyReplyPayloadMetadata(payload, { ...payload, text: stripped.text }));
   }
   const replyTaggedPayloads = applyReplyThreading({
     payloads: sanitizedPayloads,

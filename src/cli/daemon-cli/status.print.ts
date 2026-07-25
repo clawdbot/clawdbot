@@ -5,11 +5,13 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
+import { formatGatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
 import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
+import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -127,6 +129,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`${label("Service env:")} ${daemonEnvLines.join(" ")}`);
   }
+  if (service.gatewayHeap) {
+    defaultRuntime.log(
+      `${label("Gateway heap:")} ${infoText(formatGatewayHeapLimitReport(service.gatewayHeap))}`,
+    );
+  }
   spacer();
 
   if (service.configAudit?.issues.length) {
@@ -208,17 +215,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (!controlUiEnabled) {
       defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
     } else {
-      const links = resolveControlUiLinks({
-        port: status.gateway.port,
-        bind: status.gateway.bindMode,
-        customBindHost: status.gateway.customBindHost,
-        basePath: status.config?.daemon?.controlUi?.basePath,
-        tlsEnabled: status.gateway.tlsEnabled === true,
-      });
+      const links =
+        status.gateway.controlUiLinks ??
+        resolveControlUiLinks({
+          port: status.gateway.port,
+          bind: status.gateway.bindMode,
+          customBindHost: status.gateway.customBindHost,
+          basePath: status.config?.daemon?.controlUi?.basePath,
+          tlsEnabled: status.gateway.tlsEnabled === true,
+        });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
     }
     if (status.gateway.probeNote) {
       defaultRuntime.log(`${label("Probe note:")} ${infoText(status.gateway.probeNote)}`);
+    }
+    if (status.gateway.windowsFirewall?.severity === "warning") {
+      defaultRuntime.error(warnText(`Windows firewall: ${status.gateway.windowsFirewall.message}`));
+      for (const detail of status.gateway.windowsFirewall.details) {
+        defaultRuntime.error(warnText(`  ${detail}`));
+      }
     }
     spacer();
   }
@@ -255,9 +270,30 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
-    defaultRuntime.log(
-      warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
-    );
+    // The RPC probe failed while the service is loaded and running. Only the case where
+    // the gateway process is up and owns the listening port (health.healthy === true with
+    // no stale gateway PIDs, deep status only) is an unambiguous "not warm-up" signal, so it
+    // gets recovery guidance. `healthy` can also be set from bare reachability after
+    // ownership failed (see restart-health.ts), which can coexist with a non-empty
+    // staleGatewayPids; treat that combination as ambiguous rather than owns-port so it
+    // doesn't contradict the dedicated stale-PID diagnostic below. Every other
+    // health.healthy === false sub-case — a just-started gateway that has not bound the port
+    // yet, a foreign process holding the port, or a stale gateway PID — is either a normal
+    // warm-up window or is already covered by the dedicated stale-PID / port-not-listening /
+    // port-conflict diagnostics below, so it keeps the warm-up hint (as does unknown health
+    // from shallow status). A wedged gateway that owns the port is reported as healthy ===
+    // true with no stale gateway PIDs, so it is steered by the first branch.
+    if (status.health?.healthy === true && status.health.staleGatewayPids.length === 0) {
+      defaultRuntime.log(
+        warnText(
+          "Gateway process is running and owns the gateway port, so this is not a warm-up delay. Check the probe credentials/config, or restart the gateway and inspect its logs if it stays unresponsive.",
+        ),
+      );
+    } else {
+      defaultRuntime.log(
+        warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
+      );
+    }
   }
   if (rpc) {
     const probeLabel = formatProbeKindLabel(rpc.kind);
@@ -274,6 +310,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
+      }
+      if (status.port?.status === "busy" && status.lastError) {
+        defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
       }
     }
     const capability = formatCapabilityLabel(rpc.capability);
@@ -366,8 +405,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
+    const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
     defaultRuntime.error(
-      errorText("Service is loaded but not running (likely exited immediately)."),
+      errorText(
+        startLimitHit
+          ? // systemd gave up restarting after repeated crashes; sending the operator
+            // to restart (which now clears the failed latch) beats "exited immediately".
+            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+              "openclaw gateway restart",
+            )} or inspect logs.`
+          : "Service is loaded but not running (likely exited immediately).",
+      ),
     );
     for (const hint of renderRuntimeHints(
       service.runtime,

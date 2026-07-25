@@ -35,7 +35,18 @@
   --input: #1e2028;
   --ring: #ff5c5c;
 
-  /* Accent - Punchy signature red */
+  /*
+   * Accent - Punchy signature red
+   *
+   * WCAG 2.1 AA audit (bg = #0e1015, relative luminance ≈ 0.005):
+   *   --accent #ff5c5c on bg: 6.3:1 AA text ✓
+   *   --primary-foreground #ffffff on #d13c3c button: 4.75:1 AA ✓
+   *   --primary-foreground #ffffff on #c22e2e hover: 5.64:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
+   *   --card/--popover/--secondary foreground pairs: 15.4:1 / 14.9:1 / 15.4:1 ✓
+   *   --selection-fg #ffffff on --selection-bg #005fcc: 6.0:1 AA ✓
+   */
   --accent: #ff5c5c;
   --accent-hover: #ff7070;
   --accent-muted: #ff5c5c;
@@ -44,7 +55,8 @@
   --accent-glow: rgba(255, 92, 92, 0.2);
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
-  --primary: #ff5c5c;
+  --primary: #d13c3c;
+  --primary-hover: #c22e2e;
   --primary-foreground: #ffffff;
 
   /* Secondary */
@@ -100,6 +112,21 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
+  /* Spacing scale - use these instead of hardcoded px for padding/gap */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* One inset shared by every widget frame (chat preview panel, board card)
+     so agent-authored widget documents meet identical breathing room on all
+     surfaces. Board layout math mirrors this value numerically. */
+  --widget-frame-inset: var(--space-3);
+
   /* Radii - Slightly larger for modern feel */
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -126,50 +153,65 @@
   color-scheme: dark;
 }
 
+/* The claw family deepens only the text-bearing destructive fill. */
+:root[data-theme="dark"] {
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+}
+
 /* Light theme tokens apply to every light-mode family. */
 :root[data-theme-mode="light"] {
-  --bg: #f8f9fa;
-  --bg-accent: #f1f3f5;
+  /*
+   * Warm paper light mode - terracotta accent on ivory
+   *
+   * WCAG 2.1 AA audit (bg = #faf9f7, relative luminance ≈ 0.941):
+   *   --accent #bd4531  contrast ≈ 4.9:1  AA text ✓
+   *   --primary-foreground #ffffff on #bd4531 button: 5.2:1 AA ✓
+   *   --text #403c35 ≈ 10.4:1 AAA ✓, --muted #6e6960 ≈ 5.2:1 AA ✓
+   */
+  --bg: #faf9f7;
+  --bg-accent: #f4f1ec;
   --bg-elevated: #ffffff;
-  --bg-hover: #eceef0;
-  --bg-muted: #eceef0;
-  --bg-content: #f1f3f5;
+  --bg-hover: #efebe4;
+  --bg-muted: #efebe4;
+  --bg-content: #f4f1ec;
 
   --card: #ffffff;
-  --card-foreground: #1a1a1e;
-  --card-highlight: rgba(0, 0, 0, 0.02);
+  --card-foreground: #211e1a;
+  --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;
-  --popover-foreground: #1a1a1e;
+  --popover-foreground: #211e1a;
 
-  --panel: #f8f9fa;
-  --panel-strong: #f1f3f5;
-  --panel-hover: #e6e8eb;
-  --chrome: rgba(248, 249, 250, 0.96);
-  --chrome-strong: rgba(248, 249, 250, 0.98);
+  --panel: #faf9f7;
+  --panel-strong: #f4f1ec;
+  --panel-hover: #e9e4dc;
+  --chrome: rgba(250, 249, 247, 0.96);
+  --chrome-strong: rgba(250, 249, 247, 0.98);
 
-  --text: #3c3c43;
-  --text-strong: #1a1a1e;
-  --chat-text: #3c3c43;
-  --muted: #6a6a6f;
-  --muted-strong: #545458;
-  --muted-foreground: #6a6a6f;
+  --text: #403c35;
+  --text-strong: #211e1a;
+  --chat-text: #403c35;
+  --muted: #6e6960;
+  --muted-strong: #56524a;
+  --muted-foreground: #6e6960;
 
-  --border: #e5e5ea;
-  --border-strong: #d1d1d6;
-  --border-hover: #aeaeb2;
-  --input: #e5e5ea;
+  --border: #e8e4dc;
+  --border-strong: #d6d0c5;
+  --border-hover: #b4ac9e;
+  --input: #e8e4dc;
+  --ring: #bd4531;
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.08);
+  --accent: #bd4531;
+  --accent-hover: #a83c29;
+  --accent-muted: #bd4531;
+  --accent-subtle: rgba(189, 69, 49, 0.08);
   --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.1);
-  --primary: #dc2626;
+  --accent-glow: rgba(189, 69, 49, 0.12);
+  --primary: #bd4531;
   --primary-foreground: #ffffff;
 
-  --secondary: #f1f3f5;
-  --secondary-foreground: #3c3c43;
+  --secondary: #f4f1ec;
+  --secondary-foreground: #403c35;
   --accent-2: #0d9488;
   --accent-2-muted: rgba(13, 148, 136, 0.75);
   --accent-2-subtle: rgba(13, 148, 136, 0.08);
@@ -187,17 +229,17 @@
   --danger-subtle: rgba(220, 38, 38, 0.08);
   --info: #2563eb;
 
-  --focus: rgba(220, 38, 38, 0.15);
+  --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
-  --grid-line: rgba(0, 0, 0, 0.04);
+  --grid-line: rgba(60, 42, 24, 0.05);
 
-  /* Light shadows - Subtle, clean */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.1);
+  /* Light shadows - Subtle, warm-tinted */
+  --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
+  --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
+  --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
+  --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
   --shadow-glow: 0 0 20px var(--accent-glow);
 
   color-scheme: light;
@@ -222,7 +264,10 @@
    * WCAG 2.1 AA audit (bg = #080808, relative luminance ≈ 0.003):
    *   --accent #e5243b  L ≈ 0.118  contrast ≈ 5.8:1  AA text ✓
    *   --accent-hover #f03e52  L ≈ 0.163  contrast ≈ 7.2:1  ✓
-   *   --primary-foreground #fafafa on #e5243b button: 4.6:1 AA ✓
+   *   --primary-foreground #fafafa on #d92a3f button: 4.62:1 AA ✓
+   *   --primary-foreground #fafafa on #c22537 hover: 5.57:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   focus-ring at 70% opacity: ≈ 3.4:1 against bg ✓ (non-text 3:1 required)
    */
   --ring: #e5243b;
@@ -231,8 +276,13 @@
   --accent-muted: #e5243b;
   --accent-subtle: rgba(229, 36, 59, 0.12);
   --accent-glow: rgba(229, 36, 59, 0.24);
-  --primary: #e5243b;
+  --primary: #d92a3f;
+  --primary-hover: #c22537;
   --primary-foreground: #fafafa;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 
   /* Focus — crimson ring */
   --focus: rgba(229, 36, 59, 0.2);
@@ -359,6 +409,9 @@
    *   --accent #b47840  L ≈ 0.235  contrast ≈ 5.0:1  AA text ✓  (floor: #a8703c → 4.4:1, fails)
    *   --accent-hover #c8885a  L ≈ 0.306  contrast ≈ 6.3:1  ✓
    *   --primary-foreground #1a1210 on #b47840 button: 5.0:1 AA ✓
+   *   --primary-foreground #1a1210 on #c8885a hover: 6.26:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   focus-ring at 80% opacity: ≈ 3.5:1 against bg ✓ (non-text 3:1 required)
    */
   --ring: #b47840;
@@ -369,6 +422,10 @@
   --accent-glow: rgba(180, 120, 64, 0.24);
   --primary: #b47840;
   --primary-foreground: #1a1210;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
 
   /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
   --focus: rgba(180, 120, 64, 0.2);
@@ -490,6 +547,18 @@
 html,
 body {
   height: 100%;
+  /* App shell: inner panes scroll, the root never does — in every host
+     (browser tab, PWA, Mac app WKWebView). WKWebView drag/rubber-band scrolls
+     the document even when nothing overflows, dragging the whole shell with
+     it; `clip` also blocks programmatic root scrolls (focus/scrollIntoView)
+     that `hidden` would let strand the shell off-screen. */
+  overflow: clip;
+  overscroll-behavior: none;
+  /* iOS WKWebView font boosting inflates rendered text without re-running
+     layout, so labels spill out of fixed-size chrome (welcome chips, badges).
+     Locking text-size-adjust keeps rendered metrics equal to layout metrics. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -498,6 +567,10 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
+  /* App chrome behaves like native controls: dragging across labels, tiles,
+     and navigation must not create accidental text selections. Text-entry
+     surfaces and document-like content opt back in below or in route CSS. */
+  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -545,18 +618,10 @@ openclaw-app {
   display: block;
   position: relative;
   z-index: 1;
-  min-height: 100vh;
+  height: 100%;
 }
 
 @media (display-mode: standalone) {
-  html,
-  body {
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    overscroll-behavior: none;
-  }
-
   @supports (height: 100dvh) {
     html,
     body {
@@ -572,16 +637,12 @@ openclaw-app {
     padding-bottom: var(--safe-area-bottom);
     padding-left: var(--safe-area-left);
   }
-
-  openclaw-app {
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
-  }
 }
 
+/* Cursor convention: app chrome (buttons, menus, tabs, rails, controls) uses
+   the default arrow cursor; the pointer hand is reserved for real hyperlinks
+   (UA default on a[href]). Do not add `cursor: pointer` to controls; anchors
+   that act as chrome override to `cursor: default` instead. */
 a {
   color: var(--accent);
   text-decoration: underline;
@@ -592,6 +653,17 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
+/* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
+   Document rules beat `:host`, so restore the chrome arrow here — and re-add
+   the disabled cue this override would otherwise clobber. */
+wa-dropdown-item {
+  cursor: default;
+}
+
+wa-dropdown-item[disabled] {
+  cursor: not-allowed;
+}
+
 button,
 input,
 textarea,
@@ -600,15 +672,29 @@ select {
   color: inherit;
 }
 
+/* One accent for every native check control; without this, surfaces that
+   forget a local override render the browser's stock blue. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]) {
+  user-select: text;
+}
+
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
 
-/* Scrollbar styling - Minimal, barely visible */
+/* Main/document surfaces keep a normal scrollbar hit target. Dense sidebars
+   override this inherited size locally so their row actions retain room. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size, 12px);
+  height: var(--scrollbar-size, 12px);
 }
 
 ::-webkit-scrollbar-track {

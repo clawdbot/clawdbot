@@ -50,13 +50,13 @@ function isProxyReasoningUnsupported(modelId: string): boolean {
 }
 
 function resolveKilocodeThinkingLevel(ctx: ProviderWrapStreamFnContext): ThinkLevel | undefined {
-  if (ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)) {
+  if (ctx.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupported(ctx.modelId)) {
     return undefined;
   }
   return ctx.thinkingLevel;
 }
 
-export function createKilocodeStreamWrapper(
+function createKilocodeStreamWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel?: ThinkLevel,
 ): ProviderWrapStreamFnContext["streamFn"] {

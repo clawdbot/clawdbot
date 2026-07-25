@@ -1,4 +1,4 @@
-import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -59,13 +59,25 @@ describe("sessions_spawn context modes", () => {
       async (params: {
         agentId: string;
         fallbackEntry?: Record<string, unknown>;
+        parentSessionKey: string;
         parentStoreKeys?: string[];
         sessionKey: string;
-        sessionsDir?: string;
+        storePath: string;
       }) => {
         const parentEntry = params.parentStoreKeys
           ?.map((key) => store[key])
-          .find((entry): entry is Record<string, unknown> => Boolean(entry));
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+          .reduce<Record<string, unknown> | undefined>((freshest, entry) => {
+            const entryUpdatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
+            const freshestUpdatedAt =
+              typeof freshest?.updatedAt === "number" ? freshest.updatedAt : 0;
+            return !freshest || entryUpdatedAt > freshestUpdatedAt ? entry : freshest;
+          }, undefined);
+        if (parentEntry?.modelSelectionLocked === true) {
+          throw new Error(
+            "Model-selection-locked sessions cannot create child sessions from parent context.",
+          );
+        }
         const maxTokens = 100_000;
         const parentTokens = parentEntry?.totalTokens;
         if (
@@ -94,7 +106,9 @@ describe("sessions_spawn context modes", () => {
         const fork = await forkSessionFromParentMock({
           parentEntry,
           agentId: params.agentId,
-          sessionsDir: params.sessionsDir,
+          parentSessionKey: params.parentSessionKey,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
         });
         if (!fork) {
           return { status: "failed" };
@@ -188,12 +202,14 @@ describe("sessions_spawn context modes", () => {
 
     const accepted = requireAcceptedResult(result);
     expect(accepted.runId).toBe("run-1");
+    const childSessionKey = requireChildSessionKey(accepted);
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
-      sessionsDir: path.dirname(storePath),
+      parentSessionKey: "main",
+      sessionKey: childSessionKey,
+      storePath,
     });
-    const childSessionKey = requireChildSessionKey(accepted);
     const childEntry = requireStoreEntry(store, childSessionKey);
     expect(childEntry.sessionId).toBe("forked-session-id");
     expect(childEntry.sessionFile).toBe("/tmp/forked-session.jsonl");
@@ -298,6 +314,37 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionId).toBe("parent-session-id");
   });
 
+  it("rejects fork context when the freshest requester alias is model-locked", async () => {
+    const store: SessionStore = {
+      "agent:main:main": {
+        sessionId: "stale-canonical-parent",
+        updatedAt: 1,
+      },
+      main: {
+        sessionId: "fresh-locked-parent",
+        modelSelectionLocked: true,
+        updatedAt: 2,
+      },
+    };
+    usePersistentStoreMock(store);
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect the current thread", context: "fork" },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain(
+      "Model-selection-locked sessions cannot create child sessions from parent context.",
+    );
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    expect(
+      callGatewayMock.mock.calls.some(
+        ([request]) => (request as GatewayRequest).method === "agent",
+      ),
+    ).toBe(false);
+  });
+
   it("forks by default for thread-bound subagent sessions", async () => {
     const store: SessionStore = {
       main: {
@@ -329,7 +376,9 @@ describe("sessions_spawn context modes", () => {
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
-      sessionsDir: path.dirname(storePath),
+      parentSessionKey: "main",
+      sessionKey: result.childSessionKey,
+      storePath,
     });
     const cleanupRequest = requireGatewayRequest("sessions.delete");
     expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
@@ -357,7 +406,10 @@ describe("sessions_spawn context modes", () => {
     expect(ensureContextEnginesInitializedMock).toHaveBeenCalledTimes(1);
     expect(resolveContextEngineMock).toHaveBeenCalledTimes(1);
     expect(ensureContextEnginesInitializedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      resolveContextEngineMock.mock.invocationCallOrder[0],
+      expectDefined(
+        resolveContextEngineMock.mock.invocationCallOrder[0],
+        "resolveContextEngineMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import {
@@ -26,6 +27,26 @@ async function createStorePath(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-command-"));
   tempRoots.push(root);
   return path.join(root, "sessions.json");
+}
+
+// Seed and read session entries through the sqlite accessor so the goal handler,
+// which reads/writes via the same accessor, observes fixtures written here.
+async function upsertSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+}): Promise<void> {
+  await replaceSessionEntry(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    params.entry,
+  );
+}
+
+function getSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+}): SessionEntry | undefined {
+  return loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
 }
 
 function buildGoalParams(commandBodyNormalized: string, storePath: string): HandleCommandsParams {
@@ -80,6 +101,10 @@ describe("goal commands", () => {
     expect(parseGoalCommand("/goal pause waiting on CI")).toEqual({
       action: "pause",
       text: "waiting on CI",
+    });
+    expect(parseGoalCommand("/goal edit ship the fix and docs")).toEqual({
+      action: "edit",
+      text: "ship the fix and docs",
     });
   });
 
@@ -219,6 +244,60 @@ describe("goal commands", () => {
     expect(directives.cleaned).toBe(prompt);
     expect(directives.hasFastDirective).toBe(false);
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("active");
+  });
+
+  it("edits the objective in place and replies without continuing", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "finish the migration",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+    });
+
+    const params = buildGoalParams("/goal edit finish the migration and update docs", storePath);
+    const result = await handleGoalCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("Goal updated: finish the migration and update docs");
+    const goal = getSessionEntry({ storePath, sessionKey })?.goal;
+    expect(goal?.objective).toBe("finish the migration and update docs");
+    expect(goal?.status).toBe("active");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
+  });
+
+  it("rejects goal edit without a goal or new objective", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "sess-main", updatedAt: 1 },
+    });
+
+    const usage = await handleGoalCommand(buildGoalParams("/goal edit", storePath), true);
+    expect(usage?.reply?.text).toBe("Usage: /goal edit <objective>");
+
+    const missing = await handleGoalCommand(
+      buildGoalParams("/goal edit new target", storePath),
+      true,
+    );
+    expect(missing?.reply?.text).toBe("Goal error: goal not found");
   });
 
   it("renders status without persisting derived budget state", async () => {

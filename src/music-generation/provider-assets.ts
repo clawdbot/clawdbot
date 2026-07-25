@@ -1,10 +1,14 @@
 // Validates and normalizes provider asset attachments for music generation.
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { fetchProviderDownloadResponse } from "../media-understanding/shared.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
+import {
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  fetchProviderDownloadResponse,
+} from "../media-understanding/shared.js";
 import type { GeneratedMusicAsset } from "./types.js";
 
 /**
@@ -98,10 +102,18 @@ export async function downloadGeneratedMusicAsset(params: {
   index?: number;
   maxBytes?: number;
 }): Promise<GeneratedMusicAsset> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: `${params.provider} generated music download`,
+  });
+  const timeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: params.timeoutMs,
+  });
   const response = await fetchProviderDownloadResponse({
     url: params.candidate.url,
     init: { method: "GET" },
-    timeoutMs: params.timeoutMs,
+    deadline,
     fetchFn: params.fetchFn,
     provider: params.provider,
     requestFailedMessage: params.requestFailedMessage,
@@ -114,6 +126,11 @@ export async function downloadGeneratedMusicAsset(params: {
   const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
   return {
     buffer: await readResponseWithLimit(response, maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `${params.provider} generated music download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes: maxBytesLocal }) =>
         new Error(`${params.provider} generated music download exceeds ${maxBytesLocal} bytes`),
     }),

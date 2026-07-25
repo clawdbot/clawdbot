@@ -2,6 +2,7 @@
 // runtime override handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createAgentsListTool } from "./agents-list-tool.js";
 
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
@@ -56,10 +57,15 @@ describe("agents_list tool", () => {
       },
     } as unknown as OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
+    const tool = createAgentsListTool({ agentSessionKey: "agent:main:main" });
+    expect(tool.outputSchema).toMatchObject({
+      type: "object",
+      required: ["requester", "allowAny", "agents"],
+    });
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ agents: Array<{ configured: boolean; id: string; agentRuntime?: { id: string; source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key" }; model?: string; name?: string }>; allowAny: boolean; requester: string }',
     );
+    const result = await tool.execute("call", {});
     const details = result.details as AgentListDetails;
 
     expect(details).toStrictEqual({

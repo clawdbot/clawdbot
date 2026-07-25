@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Imessage tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -157,11 +158,43 @@ describe("imessage targets", () => {
     expect(looksLikeIMessageExplicitTargetId("sms:+15552223333")).toBe(true);
     expect(looksLikeIMessageExplicitTargetId("+15552223333")).toBe(false);
     expect(looksLikeIMessageExplicitTargetId("user@example.com")).toBe(false);
+    expect(looksLikeIMessageExplicitTargetId("7d5297154d5f436d83dbbdf03fcc8fdd")).toBe(true);
   });
 
   it("infers direct and group chat types from normalized targets", () => {
     expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
     expect(inferIMessageTargetChatType("chat_id:42")).toBe("group");
+  });
+
+  it("treats bare 32-char hex strings as chat identifiers, not phone numbers", () => {
+    const hex = "7d5297154d5f436d83dbbdf03fcc8fdd";
+    expect(normalizeIMessageHandle(hex)).toBe(`chat_identifier:${hex}`);
+    expect(normalizeIMessageHandle(hex.toUpperCase())).toBe(`chat_identifier:${hex}`);
+    expect(parseIMessageTarget(hex)).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: hex,
+    });
+    expect(parseIMessageTarget(`imessage:${hex.toUpperCase()}`)).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: hex,
+    });
+    expect(inferIMessageTargetChatType(hex)).toBe("group");
+  });
+
+  it.each(["7d5297154d5f436d83dbbdf03fcc8fd", "7d5297154d5f436d83dbbdf03fcc8fdg"])(
+    "keeps non-hex or wrong-length value %s on the handle path",
+    (value) => {
+      expect(normalizeIMessageHandle(value)).not.toMatch(/^chat_identifier:/);
+      expect(parseIMessageTarget(value)).toEqual({ kind: "handle", to: value, service: "auto" });
+    },
+  );
+
+  it("accepts the all-digit edge of the 32-hex identifier contract", () => {
+    const identifier = "1".repeat(32);
+    expect(parseIMessageTarget(identifier)).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: identifier,
+    });
   });
 });
 
@@ -182,7 +215,7 @@ describe("imessage group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:family" })).toBe(false);
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:other" })).toBe(true);

@@ -2,15 +2,18 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
+  collectPluginReleaseDependencyFreshnessErrors,
+  collectPluginReleasePlan,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
   collectPublishablePluginPackageErrors,
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
   parsePluginReleaseArgs,
+  parsePluginNpmReleaseArgs,
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
   resolveChangedPublishablePluginPackages,
@@ -19,9 +22,27 @@ import {
 } from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
+type ExecFileSync = typeof import("node:child_process").execFileSync;
+
+const childProcessMock = vi.hoisted(() => ({
+  execFileSyncOverride: undefined as ExecFileSync | undefined,
+}));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const execFileSync = ((...args: unknown[]) => {
+    const implementation = (childProcessMock.execFileSyncOverride ?? actual.execFileSync) as (
+      ...args: unknown[]
+    ) => unknown;
+    return implementation(...args);
+  }) as ExecFileSync;
+  return { ...actual, execFileSync };
+});
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  childProcessMock.execFileSyncOverride = undefined;
   cleanupTempDirs(tempDirs);
 });
 
@@ -104,6 +125,36 @@ describe("parsePluginReleaseArgs", () => {
       selection: [],
       pluginsFlagProvided: false,
     });
+  });
+
+  it("accepts only the closed extended-stable npm tag override", () => {
+    expect(
+      parsePluginNpmReleaseArgs([
+        "--selection-mode",
+        "all-publishable",
+        "--npm-dist-tag",
+        "extended-stable",
+      ]),
+    ).toMatchObject({ npmDistTag: "extended-stable" });
+    expect(() => parsePluginNpmReleaseArgs(["--npm-dist-tag", "latest"])).toThrow(
+      'Unknown npm dist-tag override: latest. Expected "extended-stable".',
+    );
+  });
+
+  it("requires extended-stable publication to use all-publishable without a plugin list", () => {
+    expect(() => parsePluginNpmReleaseArgs(["--npm-dist-tag", "extended-stable"])).toThrow(
+      "extended-stable requires --selection-mode all-publishable",
+    );
+    expect(() =>
+      parsePluginNpmReleaseArgs([
+        "--selection-mode",
+        "selected",
+        "--plugins",
+        "@openclaw/slack",
+        "--npm-dist-tag",
+        "extended-stable",
+      ]),
+    ).toThrow("extended-stable requires --selection-mode all-publishable");
   });
 });
 
@@ -299,6 +350,42 @@ describe("collectPublishablePluginPackageErrors", () => {
       }),
     ).toEqual(["README.md must exist and contain package documentation."]);
   });
+
+  it("requires latest-release dependencies to name exact runtime dependencies", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "codex",
+        packageDir: bundledPluginRoot("codex"),
+        readmeText: "# Codex\n",
+        packageJson: {
+          name: "@openclaw/codex",
+          version: "2026.6.11",
+          type: "module",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          dependencies: {
+            "@openai/codex": "0.142.5",
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            ...externalPluginContract("2026.6.11"),
+            install: {
+              npmSpec: "@openclaw/codex",
+            },
+            release: {
+              publishToNpm: true,
+              requireLatestDependencies: ["@openai/codex", "@openai/codex", "missing"],
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      'openclaw.release.requireLatestDependencies must not contain duplicate package names; found "@openai/codex".',
+      'openclaw.release.requireLatestDependencies must reference package.json dependencies or optionalDependencies; "missing" is not a runtime dependency.',
+    ]);
+  });
 });
 
 describe("collectPluginReleaseVersionFloorErrors", () => {
@@ -328,6 +415,127 @@ describe("collectPluginReleaseVersionFloorErrors", () => {
         },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("collectPluginReleaseDependencyFreshnessErrors", () => {
+  const plugin: PublishablePluginPackage = {
+    extensionId: "codex",
+    packageDir: "extensions/codex",
+    packageName: "@openclaw/codex",
+    version: "2026.6.11",
+    channel: "stable",
+    publishTag: "latest",
+    requiredLatestDependencies: [
+      {
+        packageName: "@openai/codex",
+        version: "0.139.0",
+      },
+    ],
+  };
+
+  it("rejects release dependencies older than the npm latest dist-tag", () => {
+    expect(collectPluginReleaseDependencyFreshnessErrors([plugin], () => "0.142.5")).toEqual([
+      '@openclaw/codex@2026.6.11: @openai/codex must match npm latest for release; found "0.139.0", latest is "0.142.5".',
+    ]);
+  });
+
+  it("accepts release dependencies matching the npm latest dist-tag", () => {
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors(
+        [
+          {
+            ...plugin,
+            requiredLatestDependencies: [
+              {
+                packageName: "@openai/codex",
+                version: "0.142.5",
+              },
+            ],
+          },
+        ],
+        () => "0.142.5",
+      ),
+    ).toEqual([]);
+  });
+
+  it("fails closed when npm latest cannot be resolved", () => {
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([plugin], () => {
+        throw new Error("registry unavailable");
+      }),
+    ).toEqual([
+      "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: registry unavailable",
+    ]);
+  });
+
+  it("fails closed when the npm latest lookup times out", () => {
+    childProcessMock.execFileSyncOverride = ((
+      command: string,
+      args?: readonly string[],
+      options?: unknown,
+    ) => {
+      expect(command).toBe("npm");
+      expect(args).toEqual([
+        "view",
+        "@openai/codex",
+        "dist-tags.latest",
+        "--json",
+        "--userconfig",
+        expect.stringContaining("openclaw-plugin-npm-view-"),
+      ]);
+      expect(options).toMatchObject({
+        killSignal: "SIGKILL",
+        timeout: 60_000,
+      });
+      throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }) as unknown as ExecFileSync;
+
+    expect(collectPluginReleaseDependencyFreshnessErrors([plugin])).toEqual([
+      "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: npm view timed out after 60000ms.",
+    ]);
+  });
+});
+
+describe("collectPluginReleasePlan", () => {
+  it("fails closed when the published-version lookup times out", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10",
+      type: "module",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10"),
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    childProcessMock.execFileSyncOverride = ((command: string, args?: readonly string[]) => {
+      expect(command).toBe("npm");
+      expect(args).toEqual([
+        "view",
+        "@openclaw/demo-plugin@2026.4.10",
+        "version",
+        "--userconfig",
+        expect.stringContaining("openclaw-plugin-npm-view-"),
+      ]);
+      throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }) as unknown as ExecFileSync;
+
+    expect(() => collectPluginReleasePlan({ rootDir: repoDir })).toThrow(
+      "npm view timed out after 60000ms.",
+    );
   });
 });
 
@@ -400,6 +608,97 @@ describe("collectPublishablePluginPackages", () => {
         channel: "stable",
         publishTag: "latest",
         installNpmSpec: "@openclaw/demo-plugin",
+      },
+    ]);
+  });
+
+  it("uses extended-stable for every publishable plugin at the exact root version", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    writeJsonFile(join(repoDir, "package.json"), { version: "2026.7.33" });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.7.33",
+      type: "module",
+      repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.7.33"),
+        install: { npmSpec: "@openclaw/demo-plugin" },
+        release: { publishToNpm: true },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, { npmDistTag: "extended-stable" }),
+    ).toMatchObject([{ version: "2026.7.33", publishTag: "extended-stable" }]);
+  });
+
+  it("rejects extended-stable plugins whose version differs from core", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    writeJsonFile(join(repoDir, "package.json"), { version: "2026.7.34" });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.7.33",
+      type: "module",
+      repository: { type: "git", url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.7.33"),
+        install: { npmSpec: "@openclaw/demo-plugin" },
+        release: { publishToNpm: true },
+      },
+    });
+
+    expect(() =>
+      collectPublishablePluginPackages(repoDir, { npmDistTag: "extended-stable" }),
+    ).toThrow("must match root package version 2026.7.34");
+  });
+
+  it("collects exact release dependencies that must match npm latest", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10",
+      type: "module",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      dependencies: {
+        "demo-runtime": "1.2.3",
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10"),
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+          requireLatestDependencies: ["demo-runtime"],
+        },
+      },
+    });
+
+    expect(collectPublishablePluginPackages(repoDir)).toEqual([
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        version: "2026.4.10",
+        channel: "stable",
+        publishTag: "latest",
+        installNpmSpec: "@openclaw/demo-plugin",
+        requiredLatestDependencies: [
+          {
+            packageName: "demo-runtime",
+            version: "1.2.3",
+          },
+        ],
       },
     ]);
   });

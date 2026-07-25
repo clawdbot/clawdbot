@@ -16,7 +16,7 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
-  dispatchBufferedReplyMock: vi.fn(async () => ({
+  dispatchBufferedReplyMock: vi.fn(async (_params?: unknown) => ({
     queuedFinal: false,
     counts: { tool: 0, block: 0, final: 0 },
   })),
@@ -39,7 +39,17 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   return {
     ...actual,
     buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
+    createWhatsAppReplyPlan: (...args: unknown[]) => {
+      const params = args[0] as { replyResolver?: unknown };
+      void dispatchBufferedReplyMock(params);
+      return {
+        dispatcherOptions: {},
+        delivery: { deliver: async () => {} },
+        replyOptions: {},
+        replyResolver: params.replyResolver,
+        finalize: () => true,
+      };
+    },
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -95,7 +105,7 @@ vi.mock("./inbound-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-context.js")>();
   return {
     ...actual,
-    resolveVisibleWhatsAppGroupHistory: () => [],
+    resolveVisibleWhatsAppGroupHistory: (params: { history: unknown[] }) => params.history,
     resolveVisibleWhatsAppReplyContext: () => null,
   };
 });
@@ -173,7 +183,7 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
 
 const GROUP_JID = "123@g.us";
 
-function makeBaseMsg(overrides: { body?: string } = {}) {
+function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
   const body = overrides.body ?? "hi";
   return createTestWebInboundMessage({
     event: {
@@ -182,6 +192,7 @@ function makeBaseMsg(overrides: { body?: string } = {}) {
     },
     payload: {
       body,
+      commandBody: overrides.commandBody,
     },
     platform: {
       chatJid: GROUP_JID,
@@ -222,13 +233,19 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown } = {}) {
+function callProcessMessage(
+  overrides: {
+    cfg?: unknown;
+    groupHistories?: Map<string, unknown[]>;
+    msg?: unknown;
+  } = {},
+) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
-    groupHistories: new Map(),
+    groupHistories: (overrides.groupHistories ?? new Map()) as never,
     groupMemberNames: new Map(),
     connectionId: "conn-1",
     verbose: false,
@@ -309,16 +326,38 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "/status",
-      commandAuthorized: true,
-      commandTurn: {
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      command: {
         kind: "text-slash",
-        source: "text",
         authorized: true,
         body: "/status",
       },
       rawBody: "/status",
+    });
+  });
+
+  it("keeps generated media notices out of command input", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    isControlCommandMessageMock.mockReturnValue(true);
+    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
+
+    await callProcessMessage({
+      msg: makeBaseMsg({
+        body: "/reset\n\n[whatsapp attachment unavailable]",
+        commandBody: "/reset",
+      }),
+    });
+
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+      command: {
+        kind: "text-slash",
+        authorized: true,
+        body: "/reset",
+      },
+      rawBody: "/reset",
     });
   });
 
@@ -331,18 +370,46 @@ describe("processMessage group system prompt wiring", () => {
       msg: makeBaseMsg({ body: "please inspect `/tmp/foo`" }),
     });
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "please inspect `/tmp/foo`",
-      commandAuthorized: true,
-      commandTurn: {
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      command: {
         kind: "normal",
-        source: "message",
-        authorized: false,
+        authorized: true,
         body: "please inspect `/tmp/foo`",
       },
       rawBody: "please inspect `/tmp/foo`",
     });
-    expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
+  });
+
+  it("passes pending group history from the history window into inbound context", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    const groupHistories = new Map<string, unknown[]>([
+      [
+        "whatsapp:default:group:123@g.us",
+        [
+          {
+            sender: "Alice (+15550002222)",
+            body: "quiet pending context",
+            timestamp: 1710000000,
+            id: "quiet-msg-1",
+            senderJid: "15550002222@s.whatsapp.net",
+          },
+        ],
+      ],
+    ]);
+
+    await callProcessMessage({ groupHistories });
+
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      groupHistory: [
+        {
+          sender: "Alice (+15550002222)",
+          body: "quiet pending context",
+          timestamp: 1710000000,
+          id: "quiet-msg-1",
+          senderJid: "15550002222@s.whatsapp.net",
+        },
+      ],
+    });
   });
 
   it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {
@@ -365,6 +432,7 @@ describe("processMessage group system prompt wiring", () => {
       Timestamp: 1710000000,
       Provider: "whatsapp",
       Surface: "whatsapp",
+      SuppressMessageReceivedHooks: true,
       OriginatingChannel: "whatsapp",
       OriginatingTo: GROUP_JID,
       GroupSubject: "Test Group",

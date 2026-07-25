@@ -1,0 +1,6 @@
+{"seq":1,"at":0,"dir":"out","kind":"sendChatAction","data":{"payload":{"action":"typing"},"result":true,"target":"4242"}}
+{"seq":2,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":3,"at":0,"dir":"out","kind":"sendChatAction","data":{"payload":{"action":"typing"},"result":true,"target":"4242"}}
+{"seq":4,"at":0,"dir":"in","kind":"final","data":{"text":"All checks passed."}}
+{"seq":5,"at":0,"dir":"out","kind":"sendMessage","data":{"payload":{"parse_mode":"HTML","reply_parameters":{"allow_sending_without_reply":true,"message_id":1},"text":"All checks passed."},"result":{"message_id":1001},"target":"4242"}}
+{"seq":6,"at":0,"dir":"in","kind":"idle"}

@@ -4,23 +4,30 @@ scenario:
   id: plugin-lifecycle-probe
   surface: plugins
   coverage:
-    primary:
-      - plugins.lifecycle
     secondary:
-      - cli.plugin-validation-repair
-      - plugins.setup-flows
-  objective: Exercise strict plugin load/uninstall proof parsing through QA Lab evidence.
+      - cli.plugin-validation-and-repair
+      - plugins.plugin-setup
+      - plugins.smoke-tests-lifecycle
+  objective: Exercise packaged plugin install, inspect, disable, enable, update, downgrade, and uninstall behavior in a clean Docker runtime.
   successCriteria:
-    - Enabled loaded plugin inspect JSON is accepted as proof.
-    - Pending or missing inspect JSON is rejected instead of treated as loaded.
-    - Malformed config during uninstall proof fails with a bounded diagnostic.
+    - A clean container installs the candidate OpenClaw package and fixture plugin package.
+    - Runtime inspect reports the installed plugin as enabled and loaded.
+    - Disable and enable commands persist the expected plugin state.
+    - Update and downgrade commands replace the installed plugin version while preserving the npm project root.
+    - Forced uninstall succeeds after installed plugin code is removed and emits a bounded resource summary.
   docsRefs:
     - docs/plugins/manifest.md
     - docs/cli/plugins.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
+    - scripts/e2e/plugin-lifecycle-matrix-docker.sh
+    - test/e2e/qa-lab/plugins/plugin-lifecycle-probe-runtime.ts
+    - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     - test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts
-    summary: Vitest coverage for plugin lifecycle proof parsing.
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the packaged plugin lifecycle matrix in a clean Docker runtime and asserts each emitted lifecycle phase.
+    args:
+      - --lane
+      - plugin-lifecycle-matrix

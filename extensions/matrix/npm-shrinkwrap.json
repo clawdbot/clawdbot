@@ -1,24 +1,24 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.6.10",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/matrix",
-      "version": "2026.6.10",
+      "version": "2026.7.2",
       "dependencies": {
-        "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.0",
-        "@matrix-org/matrix-sdk-crypto-wasm": "18.3.0",
+        "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.1",
+        "@matrix-org/matrix-sdk-crypto-wasm": "18.3.1",
         "fake-indexeddb": "6.2.5",
-        "markdown-it": "14.2.0",
-        "matrix-js-sdk": "41.6.0",
-        "music-metadata": "11.12.3",
-        "typebox": "1.1.39",
+        "markdown-it": "14.3.0",
+        "matrix-js-sdk": "41.9.0-rc.0",
+        "music-metadata": "11.14.0",
+        "typebox": "1.3.6",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.10"
+        "openclaw": ">=2026.7.2"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -27,13 +27,10 @@
       }
     },
     "node_modules/@babel/runtime": {
-      "version": "7.29.7",
-      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz",
-      "integrity": "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=6.9.0"
-      }
+      "version": "8.0.0",
+      "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-8.0.0.tgz",
+      "integrity": "sha512-sL6cvO2IfkSu/iU+zs2S/w01B7A8V7suXSIKEN4hPFFdZoiPGxrj5pAG0lCaqLWiEIrjKzdznIWuaLcxPR53qw==",
+      "license": "MIT"
     },
     "node_modules/@borewit/text-codec": {
       "version": "0.2.2",
@@ -46,9 +43,9 @@
       }
     },
     "node_modules/@matrix-org/matrix-sdk-crypto-nodejs": {
-      "version": "0.6.0",
-      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-nodejs/-/matrix-sdk-crypto-nodejs-0.6.0.tgz",
-      "integrity": "sha512-AndGryzkDtFbaDyPBAQ2B4pUhaA/q4HJf3wgiGpPa/70DsdY1Z3R5Wn9yp+56CeHOpk61mNHz/8WDPlzrZDSJw==",
+      "version": "0.6.1",
+      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-nodejs/-/matrix-sdk-crypto-nodejs-0.6.1.tgz",
+      "integrity": "sha512-xDulwTJfgHtA0rx/bi8JPc0m/hvImiuixfOoomUQYicBAi59xe8Cqc04K2GLQA+yc6JuqXfg6vLsNSgrStpLhw==",
       "hasInstallScript": true,
       "license": "Apache-2.0",
       "dependencies": {
@@ -60,9 +57,9 @@
       }
     },
     "node_modules/@matrix-org/matrix-sdk-crypto-wasm": {
-      "version": "18.3.0",
-      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-wasm/-/matrix-sdk-crypto-wasm-18.3.0.tgz",
-      "integrity": "sha512-9a4feyt8QLysARu7PHKaRWT+wcCd+IYH074LXp9QK5WqfN4zUXueRhiSSMNT18Bm+8q3sBR/4zxDxOSDR0M8Kg==",
+      "version": "18.3.1",
+      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-wasm/-/matrix-sdk-crypto-wasm-18.3.1.tgz",
+      "integrity": "sha512-VRjWhE1UgHnPpJ3b9B5+8z71ZC/HICFngPPFIN6ktzmUBKI5RusPujzbAQUoB3CgZ0yU58L99AfSQS4YTztSWw==",
       "license": "Apache-2.0",
       "engines": {
         "node": ">= 18"
@@ -134,12 +131,16 @@
       }
     },
     "node_modules/content-type": {
-      "version": "1.0.5",
-      "resolved": "https://registry.npmjs.org/content-type/-/content-type-1.0.5.tgz",
-      "integrity": "sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA==",
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/content-type/-/content-type-2.0.0.tgz",
+      "integrity": "sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ==",
       "license": "MIT",
       "engines": {
-        "node": ">= 0.6"
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
       }
     },
     "node_modules/debug": {
@@ -262,9 +263,9 @@
       }
     },
     "node_modules/linkify-it": {
-      "version": "5.0.1",
-      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.1.tgz",
-      "integrity": "sha512-wVoTjP4Q6R0NW5hiZkVJaFZPWgtXfoGF+6LucL3/FtiNjmcHhYjEr5f1Kqjirc1nBW07J/ZuRFumqr2oqccEWg==",
+      "version": "5.0.2",
+      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.2.tgz",
+      "integrity": "sha512-ONTm2jCMAVZjgQa/Fy1kScXsuOoF5NPTsoFBdE1KVIZ2vAh/r9+Bqo+0jINCBYnavTPQZz38QzFTme79ENoN3Q==",
       "funding": [
         {
           "type": "github",
@@ -294,9 +295,9 @@
       }
     },
     "node_modules/markdown-it": {
-      "version": "14.2.0",
-      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.2.0.tgz",
-      "integrity": "sha512-1TGiQiJVRQ3NPmZH6sx5Cfnmg6GQm9jvC1ch4TK511NjSJvjzKLzn5pPfZRNZkRPZP0HqCioSndqH8v2nRaWVQ==",
+      "version": "14.3.0",
+      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.0.tgz",
+      "integrity": "sha512-RCEsPjR+sr0x+AuYp601tKTkgFG4YEPLCzHST3cQ/fhlJkqAkz1L2/Qbp1j9qw5SBwQHFBoW8+hoN5xssOF0Tw==",
       "funding": [
         {
           "type": "github",
@@ -310,8 +311,8 @@
       "license": "MIT",
       "dependencies": {
         "argparse": "^2.0.1",
-        "entities": "^4.4.0",
-        "linkify-it": "^5.0.1",
+        "entities": "^4.5.0",
+        "linkify-it": "^5.0.2",
         "mdurl": "^2.0.0",
         "punycode.js": "^2.3.1",
         "uc.micro": "^2.1.0"
@@ -327,16 +328,16 @@
       "license": "Apache-2.0"
     },
     "node_modules/matrix-js-sdk": {
-      "version": "41.6.0",
-      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-41.6.0.tgz",
-      "integrity": "sha512-FOEQBE9i3I+yRymMzKdDO5ptonawqrbtwxSqlkkpqaiFRnsA5zplaPZozdukt+IjBTuE2KceFY+bjFXiNi/+Eg==",
+      "version": "41.9.0-rc.0",
+      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-41.9.0-rc.0.tgz",
+      "integrity": "sha512-W3KPvaRhmvZxsnOrpsnpyboirfjQDaIZ8K0aJrw5wdkD9YSK02NutaFRG9UFAEOolG0ythj6dQIeUS/icZKzCQ==",
       "license": "Apache-2.0",
       "dependencies": {
-        "@babel/runtime": "^7.12.5",
-        "@matrix-org/matrix-sdk-crypto-wasm": "^18.2.0",
+        "@babel/runtime": "^8.0.0",
+        "@matrix-org/matrix-sdk-crypto-wasm": "^18.3.1",
         "another-json": "^0.2.0",
         "bs58": "^6.0.0",
-        "content-type": "^1.0.4",
+        "content-type": "^2.0.0",
         "jwt-decode": "^4.0.0",
         "loglevel": "^1.9.2",
         "matrix-events-sdk": "0.0.1",
@@ -367,12 +368,16 @@
       "license": "MIT"
     },
     "node_modules/media-typer": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/media-typer/-/media-typer-1.1.0.tgz",
-      "integrity": "sha512-aisnrDP4GNe06UcKFnV5bfMNPBUw4jsLGaWwWfnH3v02GnBuXX2MCVn5RbrWo0j3pczUilYblq7fQ7Nw2t5XKw==",
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/media-typer/-/media-typer-2.0.0.tgz",
+      "integrity": "sha512-kOy3OxT2HH39N70UnKgu4NWDZjLOz8W/mfyvniHjRH/DrL3f2pOfvWQ4p60offbbtDAnXWp0v9LfMIqMec269Q==",
       "license": "MIT",
       "engines": {
-        "node": ">= 0.8"
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
       }
     },
     "node_modules/ms": {
@@ -382,9 +387,9 @@
       "license": "MIT"
     },
     "node_modules/music-metadata": {
-      "version": "11.12.3",
-      "resolved": "https://registry.npmjs.org/music-metadata/-/music-metadata-11.12.3.tgz",
-      "integrity": "sha512-n6hSTZkuD59qWgHh6IP5dtDlDZQXoxk/bcA85Jywg8Z1iFrlNgl2+GTFgjZyn52W5UgQpV42V4XqrQZZAMbZTQ==",
+      "version": "11.14.0",
+      "resolved": "https://registry.npmjs.org/music-metadata/-/music-metadata-11.14.0.tgz",
+      "integrity": "sha512-RyOSq98kuVfXB1emJ+NjBF0av8Ph3oBuqNy+Z5sFFfLhjYrkBQEB53V8u+U0RNTVwNo20WoPUwNkfKwZfrOqmQ==",
       "funding": [
         {
           "type": "github",
@@ -399,11 +404,11 @@
       "dependencies": {
         "@borewit/text-codec": "^0.2.2",
         "@tokenizer/token": "^0.3.0",
-        "content-type": "^1.0.5",
+        "content-type": "^2.0.0",
         "debug": "^4.4.3",
-        "file-type": "^21.3.1",
-        "media-typer": "^1.1.0",
-        "strtok3": "^10.3.4",
+        "file-type": "^21.3.4",
+        "media-typer": "^2.0.0",
+        "strtok3": "^10.3.5",
         "token-types": "^6.1.2",
         "uint8array-extras": "^1.5.0",
         "win-guid": "^0.2.1"
@@ -504,9 +509,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.39",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
-      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
+      "version": "1.3.6",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.6.tgz",
+      "integrity": "sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==",
       "license": "MIT"
     },
     "node_modules/uc.micro": {

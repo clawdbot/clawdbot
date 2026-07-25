@@ -1,17 +1,11 @@
 // Feishu plugin module implements tool result behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-
-export function jsonToolResult(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 
 export function unknownToolActionResult(action: unknown) {
-  return jsonToolResult({ error: `Unknown action: ${String(action)}` });
+  return jsonResult({ error: `Unknown action: ${String(action)}` });
 }
 
 export function toolExecutionErrorResult(error: unknown) {
-  return jsonToolResult({ error: formatErrorMessage(error) });
+  return jsonResult({ error: formatErrorMessage(error) });
 }

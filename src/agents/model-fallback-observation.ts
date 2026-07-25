@@ -47,10 +47,6 @@ type AuthDecisionLogCoalesceEntry = {
 
 const authDecisionLogCoalesceEntries = new Map<string, AuthDecisionLogCoalesceEntry>();
 
-export function resetModelFallbackDecisionLogCoalescingForTest(): void {
-  authDecisionLogCoalesceEntries.clear();
-}
-
 type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
 
 /** Structured fields that describe one fallback-chain transition. */

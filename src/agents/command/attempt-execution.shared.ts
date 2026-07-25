@@ -3,7 +3,8 @@
  * execution paths.
  */
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
-import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
+import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   formatAgentInternalEventsForPlainPrompt,
   formatAgentInternalEventsForPrompt,
@@ -19,18 +20,12 @@ type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;
+  initialEntry: SessionEntry;
   entry: SessionEntry;
-  clearedFields?: string[];
-  preserveTranscriptMarkerUpdatedAt?: boolean;
   shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
 /** Persists one session entry while keeping the caller's in-memory store aligned. */
-
-function normalizeTranscriptMarkerUpdatedAt(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
 export async function persistSessionEntry(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
@@ -38,28 +33,28 @@ export async function persistSessionEntry(
   const persisted = await patchSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
-      if (params.shouldPersist && !params.shouldPersist(context.existingEntry)) {
+      const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);
+      if (!context.existingEntry && shouldPersistCurrent !== true) {
+        rejectedMissingEntry = true;
+        return null;
+      }
+      if (shouldPersistCurrent === false) {
         rejectedMissingEntry = !context.existingEntry;
         return null;
       }
-      const merged = mergeSessionEntry(context.existingEntry, params.entry);
-      if (params.preserveTranscriptMarkerUpdatedAt) {
-        const currentUpdatedAt = normalizeTranscriptMarkerUpdatedAt(
-          context.existingEntry?.updatedAt,
-        );
-        const markerUpdatedAt = normalizeTranscriptMarkerUpdatedAt(params.entry.updatedAt);
-        if (markerUpdatedAt !== undefined) {
-          merged.updatedAt = Math.max(currentUpdatedAt ?? 0, markerUpdatedAt);
-        }
+      if (!context.existingEntry) {
+        return params.entry;
       }
-      for (const field of params.clearedFields ?? []) {
-        // Cleared fields only apply when the replacement entry did not set the
-        // field again; this preserves explicit false/null updates.
-        if (!Object.hasOwn(params.entry, field)) {
-          Reflect.deleteProperty(merged, field);
-        }
+      if (context.existingEntry.sessionId !== params.initialEntry.sessionId) {
+        return null;
       }
-      return merged;
+      // Agent turns persist broad snapshots. Project only this turn's changes
+      // so a stale snapshot cannot restore fields changed or cleared meanwhile.
+      return mergeSessionSnapshotChanges({
+        initial: params.initialEntry,
+        next: params.entry,
+        current: context.existingEntry,
+      });
     },
     {
       fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,

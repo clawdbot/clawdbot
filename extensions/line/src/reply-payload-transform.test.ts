@@ -231,6 +231,65 @@ describe("parseLineDirectives", () => {
     });
   });
 
+  describe("blank required template fields", () => {
+    // A blank required field produces a template that LINE rejects with HTTP 400,
+    // dropping the whole message. The template must be skipped.
+    const noTemplate = (text: string) => {
+      expect(getLineData(parseLineDirectives({ text })).templateMessage, text).toBeUndefined();
+    };
+
+    it("skips confirm when the question or a label is blank", () => {
+      noTemplate("[[confirm:  | Yes | No]]");
+      noTemplate("[[confirm: Delete? |  | No]]");
+      noTemplate("[[confirm: Delete? | Yes | ]]");
+    });
+
+    it("omits a blank optional buttons title", () => {
+      expect(
+        getLineData(parseLineDirectives({ text: "[[buttons:  | Choose | Opt1:d1]]" }))
+          .templateMessage,
+      ).toEqual({
+        type: "buttons",
+        text: "Choose",
+        actions: [{ type: "message", label: "Opt1", data: "d1" }],
+        altText: "Choose",
+      });
+    });
+
+    it("skips buttons when the required text is blank", () => {
+      noTemplate("[[buttons: Menu |  | Opt1:d1]]");
+    });
+
+    it("drops blank actions and requires at least one labeled action", () => {
+      noTemplate("[[buttons: Menu | Choose | :d1]]");
+      expect(
+        getLineData(parseLineDirectives({ text: "[[buttons: Menu | Choose | :d1, Opt2:d2]]" }))
+          .templateMessage,
+      ).toMatchObject({
+        actions: [{ label: "Opt2", data: "d2" }],
+      });
+    });
+
+    it("still builds confirm/buttons when all required fields are present", () => {
+      expect(
+        getLineData(parseLineDirectives({ text: "[[confirm: Delete? | Yes | No]]" }))
+          .templateMessage,
+      ).toMatchObject({ type: "confirm" });
+      expect(
+        getLineData(parseLineDirectives({ text: "[[buttons: Menu | Choose | Opt1:d1]]" }))
+          .templateMessage,
+      ).toMatchObject({ type: "buttons" });
+    });
+
+    it("keeps the rest of the reply when a blank directive is skipped", () => {
+      // The invalid template would 400 and drop the whole message, including any text
+      // sent alongside it; skipping the template must leave that text intact.
+      const result = parseLineDirectives({ text: "Please decide: [[confirm:  | Yes | No]]" });
+      expect(getLineData(result).templateMessage).toBeUndefined();
+      expect(result.text).toBe("Please decide:");
+    });
+  });
+
   describe("media_player", () => {
     it("parses media_player directives across full/minimal/paused variants", () => {
       const cases = [
@@ -319,6 +378,54 @@ describe("parseLineDirectives", () => {
         const flexMessage = requireFlexMessage(getLineData(result).flexMessage, testCase.text);
         expect(flexMessage.altText).toBe(testCase.altText);
       }
+    });
+  });
+
+  describe("blank comma-separated entries", () => {
+    // A trailing or doubled comma in agent output must not emit empty Flex text
+    // components (agenda) or empty action labels (device); LINE rejects those with
+    // HTTP 400 "May not be empty".
+    const collectRenderedStrings = (node: unknown, out: string[]): string[] => {
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          collectRenderedStrings(item, out);
+        }
+      } else if (node && typeof node === "object") {
+        const record = node as Record<string, unknown>;
+        if (record.type === "text" && typeof record.text === "string") {
+          out.push(record.text);
+        }
+        if (typeof record.label === "string") {
+          out.push(record.label);
+        }
+        for (const value of Object.values(record)) {
+          collectRenderedStrings(value, out);
+        }
+      }
+      return out;
+    };
+
+    it("drops trailing commas in agenda events", () => {
+      const result = parseLineDirectives({ text: "[[agenda: Today | Standup:9am, Lunch:12pm,]]" });
+      const flexMessage = requireFlexMessage(
+        getLineData(result).flexMessage,
+        "agenda trailing comma",
+      );
+      expect(flexMessage.altText).toBe("📋 Today (2 events)");
+      expect(collectRenderedStrings(flexMessage.contents, [])).not.toContain("");
+    });
+
+    it("drops doubled commas and blank labels in device controls", () => {
+      const result = parseLineDirectives({
+        text: "[[device: TV | Box | Playing | Play:toggle,, :ignored, Menu:menu]]",
+      });
+      const flexMessage = requireFlexMessage(
+        getLineData(result).flexMessage,
+        "device blank controls",
+      );
+      const renderedStrings = collectRenderedStrings(flexMessage.contents, []);
+      expect(renderedStrings).toEqual(expect.arrayContaining(["Play", "Menu"]));
+      expect(renderedStrings).not.toContain("");
     });
   });
 

@@ -1,11 +1,41 @@
 {
   "id": "llama-cpp",
   "name": "llama.cpp Provider",
-  "description": "Local GGUF embeddings through node-llama-cpp.",
+  "description": "Local GGUF text inference and embeddings through node-llama-cpp.",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
+  "providers": ["llama-cpp"],
+  "providerRequest": {
+    "providers": {
+      "llama-cpp": {
+        "family": "llama-cpp"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "llama-cpp": {
+        "external": false
+      }
+    }
+  },
+  "syntheticAuthRefs": ["llama-cpp"],
+  "nonSecretAuthMarkers": ["llama-cpp-local"],
+  "providerAuthChoices": [
+    {
+      "provider": "llama-cpp",
+      "method": "local",
+      "choiceId": "llama-cpp",
+      "appGuidedDiscovery": true,
+      "choiceLabel": "Local model (llama.cpp)",
+      "choiceHint": "Downloads an approximately 5.0 GB local model; requires 16 GB RAM",
+      "groupId": "llama-cpp",
+      "groupLabel": "Local llama.cpp",
+      "groupHint": "No API key required"
+    }
+  ],
   "contracts": {
     "embeddingProviders": ["local"]
   },

@@ -67,7 +67,7 @@ async function postHook(
 
 function setMainAndHooksAgents(): void {
   testState.agentsConfig = {
-    list: [{ id: "main", default: true }, { id: "hooks" }],
+    entries: { main: { default: true }, hooks: {} },
   };
 }
 
@@ -100,6 +100,7 @@ type HookCronRunCall = {
     createdAtMs?: number;
     payload?: {
       externalContentSource?: string;
+      allowUnsafeExternalContent?: boolean;
       model?: string;
     };
     schedule?: {
@@ -321,6 +322,41 @@ describe("gateway server hooks", () => {
       const call = cronRunCall();
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("does not let mapped hook payload source claim gmail provenance", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:"],
+      gmail: { allowUnsafeExternalContent: true },
+      mappings: [
+        {
+          match: { path: "github" },
+          action: "agent",
+          messageTemplate: "Issue: {{payload.title}}",
+          sessionKey: "hook:webhook:github",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/github", {
+        source: "gmail",
+        id: "issue-1",
+        title: "Bug report",
+      });
+      expect(response.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+
+      const call = cronRunCall();
+      expect(call?.sessionKey).toBe("hook:webhook:github");
+      expect(call?.job?.payload?.externalContentSource).toBe("webhook");
+      expect(call?.job?.payload?.allowUnsafeExternalContent).toBeUndefined();
       drainSystemEvents(resolveMainKey());
     });
   });
@@ -943,7 +979,7 @@ describe("gateway server hooks", () => {
       allowedAgentIds: [],
     };
     testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "hooks" }],
+      entries: { main: { default: true }, hooks: {} },
     };
     await withGatewayServer(async ({ port }) => {
       const resNoAgent = await postHook(port, "/hooks/agent", {

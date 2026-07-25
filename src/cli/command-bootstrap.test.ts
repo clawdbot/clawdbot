@@ -44,6 +44,25 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
+  it("forwards prepared pristine migration facts to the config guard", async () => {
+    const runtime = {} as never;
+
+    await ensureCliCommandBootstrap({
+      runtime,
+      commandPath: ["gateway"],
+      loadPlugins: false,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime,
+      commandPath: ["gateway"],
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
+    });
+  });
+
   it("skips config guard without skipping plugin loading", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,

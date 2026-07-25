@@ -42,9 +42,7 @@ type ProviderBlockStreamingConfig = {
 function resolveScopedBlockStreamingCoalesce(
   config: ProviderBlockStreamingConfig | undefined,
 ): BlockStreamingCoalesceConfig | undefined {
-  return config
-    ? (resolveChannelStreamingBlockCoalesce(config) ?? config.blockStreamingCoalesce)
-    : undefined;
+  return config ? resolveChannelStreamingBlockCoalesce(config) : undefined;
 }
 
 function resolveProviderBlockStreamingCoalesce(params: {
@@ -89,7 +87,7 @@ type BlockStreamingChunking = {
   flushOnParagraph?: boolean;
 };
 
-export function clampPositiveInteger(
+function clampPositiveInteger(
   value: unknown,
   fallback: number,
   bounds: { min: number; max: number },

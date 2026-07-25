@@ -9,9 +9,9 @@ extension AgentProTab {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(self.activeAgentName)
-                            .font(.headline)
+                            .font(OpenClawType.headline)
                         Text(self.skillPolicySummary)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -21,18 +21,27 @@ extension AgentProTab {
                 }
 
                 HStack(spacing: 8) {
-                    Button("Enable All") {
+                    Button {
                         Task { await self.enableAllSkills() }
+                    } label: {
+                        Text("Enable All")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(self.skillMutationBusy)
 
-                    Button("Disable All", role: .destructive) {
+                    Button(role: .destructive) {
                         Task { await self.disableAllSkills() }
+                    } label: {
+                        Text("Disable All")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(self.skillMutationBusy)
 
-                    Button("Reset") {
+                    Button {
                         Task { await self.resetSkillPolicy() }
+                    } label: {
+                        Text("Reset")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(self.skillMutationBusy || self.agentSkillFilter == nil)
                 }
@@ -41,12 +50,12 @@ extension AgentProTab {
 
                 if let skillMutationStatusText {
                     Text(skillMutationStatusText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let skillMutationErrorText {
                     Text(skillMutationErrorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -59,12 +68,12 @@ extension AgentProTab {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(.secondary)
                     TextField("Search skills", text: self.$skillFilter)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .font(.subheadline)
+                        .font(OpenClawType.subhead)
                     if !self.skillFilter.isEmpty {
                         Button {
                             self.skillFilter = ""
@@ -75,10 +84,15 @@ extension AgentProTab {
                         .buttonStyle(.plain)
                     }
                 }
-                Picker("Status", selection: self.$skillStatusFilter) {
+                Picker(selection: self.$skillStatusFilter) {
                     ForEach(SkillStatusFilter.allCases) { filter in
-                        Text(filter.title).tag(filter)
+                        Text(filter.title)
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -94,9 +108,9 @@ extension AgentProTab {
                     ProIconBadge(systemName: "square.and.arrow.down", color: OpenClawBrand.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Install Skills")
-                            .font(.headline)
+                            .font(OpenClawType.headline)
                         Text("Search ClawHub and install into this workspace.")
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -114,7 +128,7 @@ extension AgentProTab {
                 TextField("Search ClawHub", text: self.$clawHubQuery)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .submitLabel(.search)
                     .onSubmit {
                         Task { await self.searchClawHubSkills() }
@@ -126,7 +140,7 @@ extension AgentProTab {
                 }
                 if let clawHubErrorText {
                     Text(clawHubErrorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
                 if !self.clawHubResults.isEmpty {
@@ -146,15 +160,15 @@ extension AgentProTab {
     }
 
     func clawHubResultRow(_ result: ClawHubSearchResultLite) -> some View {
-        let installing = self.clawHubInstallSlug == result.slug
+        let installing = clawHubInstallSlug == result.slug
         return HStack(alignment: .top, spacing: 10) {
             ProIconBadge(systemName: "sparkles", color: OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 3) {
                 Text(result.displayName)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(result.summary ?? result.slug)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -167,7 +181,10 @@ extension AgentProTab {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(installing || !self.skillConfigBusyKeys.isEmpty)
-            .accessibilityLabel("Install \(result.displayName)")
+            .accessibilityLabel(
+                String(
+                    format: String(localized: "Install %@"),
+                    result.displayName))
         }
         .padding(.vertical, 10)
     }
@@ -201,20 +218,20 @@ extension AgentProTab {
     }
 
     var activeAgentName: String {
-        if let agent = self.appModel.gatewayAgents.first(where: { $0.id == self.activeAgentID }) {
-            return self.agentName(for: agent)
+        if let agent = appModel.gatewayAgents.first(where: { $0.id == self.activeAgentID }) {
+            return agentName(for: agent)
         }
-        return self.activeAgentID
+        return activeAgentID
     }
 
     var agentSkillFilter: Set<String>? {
-        self.overview?.agentSkillFilter.map { Set($0) }
+        overview?.agentSkillFilter.map { Set($0) }
     }
 
     var skillPolicySummary: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode keeps live skill changes disabled." }
-        guard self.gatewayConnected else { return "Connect a gateway to edit skills." }
-        guard let filter = self.agentSkillFilter else {
+        if appModel.isAppleReviewDemoModeEnabled { return "Demo mode keeps live skill changes disabled." }
+        guard gatewayConnected else { return "Connect a gateway to edit skills." }
+        guard let filter = agentSkillFilter else {
             return "All available skills are allowed for this agent."
         }
         if filter.isEmpty {
@@ -224,12 +241,12 @@ extension AgentProTab {
     }
 
     var skillMutationBusy: Bool {
-        !self.skillMutationBusyKeys.isEmpty
+        !skillMutationBusyKeys.isEmpty
     }
 
     var filteredSkills: [SkillStatusEntryLite] {
-        let skills = self.overview?.skills?.skills ?? []
-        let filter = self.skillFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let skills = overview?.skills?.skills ?? []
+        let filter = skillFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return skills
             .filter { skill in
                 self.matchesSkillStatusFilter(skill)
@@ -249,7 +266,7 @@ extension AgentProTab {
     }
 
     func matchesSkillStatusFilter(_ skill: SkillStatusEntryLite) -> Bool {
-        switch self.skillStatusFilter {
+        switch skillStatusFilter {
         case .all:
             true
         case .enabled:
@@ -272,33 +289,39 @@ extension AgentProTab {
 
     func skillRow(_ skill: SkillStatusEntryLite) -> some View {
         let status = self.skillStatus(skill)
-        let busy = self.skillMutationBusyKeys.contains(skill.name)
+        let busy = skillMutationBusyKeys.contains(skill.name)
         return HStack(alignment: .top, spacing: 12) {
             ProIconBadge(systemName: self.isSkillAllowed(skill) ? "checkmark.circle" : "nosign", color: status.color)
             VStack(alignment: .leading, spacing: 4) {
                 Text(skill.displayName)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
-                Text(self.normalized(skill.description) ?? self.normalized(skill.source) ?? "Workspace skill")
-                    .font(.caption)
+                Text(verbatim: self.normalized(skill.description)
+                    ?? self.normalized(skill.source)
+                    ?? String(localized: "Workspace skill"))
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 if let missing = skill.missingSummary {
-                    Text("Missing: \(missing)")
-                        .font(.caption2)
+                    Text(verbatim: String(
+                        format: String(localized: "Missing: %@"),
+                        missing))
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                         .lineLimit(1)
                 }
                 if let install = skill.installSummary {
-                    Text("Setup: \(install)")
-                        .font(.caption2)
+                    Text(verbatim: String(
+                        format: String(localized: "Setup: %@"),
+                        install))
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
-                self.skillToggle(skill, title: status.text)
+                self.skillToggle(skill, title: self.localizedSkillStatus(status.text))
                 HStack(spacing: 6) {
                     if self.canInstallSkillRequirements(skill) {
                         Button {
@@ -309,7 +332,10 @@ extension AgentProTab {
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
                         .disabled(self.isSkillConfigBusy(skill))
-                        .accessibilityLabel("Set up \(skill.displayName)")
+                        .accessibilityLabel(
+                            String(
+                                format: String(localized: "Set up %@"),
+                                skill.displayName))
                     }
                     Button {
                         self.openSkillEditor(skill)
@@ -318,10 +344,15 @@ extension AgentProTab {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
-                    .accessibilityLabel("Edit \(skill.displayName)")
+                    .accessibilityLabel(
+                        String(
+                            format: String(localized: "Edit %@"),
+                            skill.displayName))
                 }
-                Text(busy ? "saving" : status.text)
-                    .font(.caption2.weight(.semibold))
+                Text(verbatim: busy
+                    ? String(localized: "saving")
+                    : self.localizedSkillStatus(status.text))
+                    .font(OpenClawType.caption2SemiBold)
                     .foregroundStyle(status.color)
                     .lineLimit(1)
             }
@@ -331,27 +362,28 @@ extension AgentProTab {
     }
 
     func skillToggle(_ skill: SkillStatusEntryLite, title: String) -> some View {
-        Toggle(
-            title,
-            isOn: Binding(
-                get: { self.isSkillAllowed(skill) },
-                set: { enabled in
-                    Task { await self.setSkillAllowed(skill, enabled: enabled) }
-                }))
-                .labelsHidden()
+        Toggle(isOn: Binding(
+            get: { self.isSkillAllowed(skill) },
+            set: { enabled in
+                Task { await self.setSkillAllowed(skill, enabled: enabled) }
+            })) {
+                Text(title)
+                    .font(OpenClawType.body)
+            }
+            .labelsHidden()
                 .disabled(self.skillMutationBusy)
                 .toggleStyle(.switch)
                 .controlSize(.mini)
     }
 
     func isSkillAllowed(_ skill: SkillStatusEntryLite) -> Bool {
-        guard let filter = self.agentSkillFilter else { return true }
+        guard let filter = agentSkillFilter else { return true }
         return filter.contains(skill.name)
     }
 
     func isSkillConfigBusy(_ skill: SkillStatusEntryLite) -> Bool {
-        self.skillConfigBusyKeys.contains(skill.effectiveSkillKey)
-            || self.clawHubInstallSlug != nil
+        skillConfigBusyKeys.contains(skill.effectiveSkillKey)
+            || clawHubInstallSlug != nil
     }
 
     func canInstallSkillRequirements(_ skill: SkillStatusEntryLite) -> Bool {
@@ -360,13 +392,13 @@ extension AgentProTab {
     }
 
     func skillByKey(_ key: String) -> SkillStatusEntryLite? {
-        (self.overview?.skills?.skills ?? []).first { skill in
+        (overview?.skills?.skills ?? []).first { skill in
             skill.effectiveSkillKey == key || skill.name == key
         }
     }
 
     func openSkillEditor(_ skill: SkillStatusEntryLite) {
-        self.skillEditorSelection = SkillEditorSelection(id: skill.effectiveSkillKey)
+        skillEditorSelection = SkillEditorSelection(id: skill.effectiveSkillKey)
     }
 
     func skillAPIKeyBinding(for skill: SkillStatusEntryLite) -> Binding<String> {
@@ -377,15 +409,30 @@ extension AgentProTab {
 
     var missingSkillEditorSheet: some View {
         NavigationStack {
-            ContentUnavailableView("Skill unavailable", systemImage: "sparkles")
-                .navigationTitle("Skill")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") {
-                            self.skillEditorSelection = nil
-                        }
+            ZStack {
+                OpenClawProBackground()
+                VStack(spacing: 12) {
+                    ProIconBadge(systemName: "sparkles", color: .secondary)
+                    Text("Skill unavailable")
+                        .font(OpenClawType.headline)
+                    Text("Return to the skills list and choose another skill.")
+                        .font(OpenClawType.subhead)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(OpenClawSpacing.space6)
+            }
+            .navigationTitle("Skill")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        self.skillEditorSelection = nil
+                    } label: {
+                        Text("Close")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
+            }
         }
     }
 
@@ -407,8 +454,11 @@ extension AgentProTab {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
+                    Button {
                         self.skillEditorSelection = nil
+                    } label: {
+                        Text("Close")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }
@@ -424,14 +474,16 @@ extension AgentProTab {
                     color: status.color)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(skill.displayName)
-                        .font(.headline)
-                    Text(self.normalized(skill.description) ?? self.normalized(skill.source) ?? "Workspace skill")
-                        .font(.caption)
+                        .font(OpenClawType.headline)
+                    Text(verbatim: self.normalized(skill.description)
+                        ?? self.normalized(skill.source)
+                        ?? String(localized: "Workspace skill"))
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                 }
                 Spacer(minLength: 8)
-                ProValuePill(value: status.text, color: status.color)
+                ProValuePill(value: self.localizedSkillStatus(status.text), color: status.color)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -451,33 +503,50 @@ extension AgentProTab {
                 if let primaryEnv = skill.primaryEnv, !primaryEnv.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("API key")
-                            .font(.subheadline.weight(.semibold))
-                        SecureField(primaryEnv, text: self.skillAPIKeyBinding(for: skill))
+                            .font(OpenClawType.subheadSemiBold)
+                        self.skillSecureField(primaryEnv, text: self.skillAPIKeyBinding(for: skill))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Button {
                             Task { await self.saveSkillAPIKey(skill) }
                         } label: {
                             Label("Save key", systemImage: "key")
+                                .font(OpenClawType.captionSemiBold)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .disabled(self.isSkillConfigBusy(skill))
                         if let homepage = skill.homepageURL {
                             Link("Get key", destination: homepage)
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                         }
                     }
                 }
 
                 if let message = self.skillConfigMessages[skill.effectiveSkillKey] {
                     Text(message.text)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(message.kind == .success ? OpenClawBrand.accent : OpenClawBrand.warn)
                 }
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func skillSecureField(_ placeholder: String, text: Binding<String>) -> some View {
+        ZStack(alignment: .leading) {
+            SecureField("", text: text)
+                .font(OpenClawType.subhead)
+                .accessibilityLabel(placeholder)
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(.tertiary)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(OpenClawType.subhead)
     }
 
     func skillEditorToggleRow(
@@ -493,8 +562,9 @@ extension AgentProTab {
         } label: {
             HStack {
                 Text(title)
+                    .font(OpenClawType.subhead)
                 Spacer(minLength: 8)
-                self.skillEditorSwitchIndicator(isOn: isOn)
+                OpenClawToggleIndicator(isOn: isOn)
             }
             .contentShape(Rectangle())
         }
@@ -504,31 +574,20 @@ extension AgentProTab {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 
-    func skillEditorSwitchIndicator(isOn: Bool) -> some View {
-        Capsule()
-            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
-            .frame(width: 52, height: 32)
-            .overlay(alignment: isOn ? .trailing : .leading) {
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 28, height: 28)
-                    .padding(2)
-                    .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
-            }
-    }
-
     func skillEditorSetup(_ skill: SkillStatusEntryLite) -> some View {
         ProCard(radius: AgentLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Setup")
-                    .font(.headline)
+                    .font(OpenClawType.headline)
                 if let missing = skill.missingSummary {
-                    Text("Missing: \(missing)")
-                        .font(.caption)
+                    Text(verbatim: String(
+                        format: String(localized: "Missing: %@"),
+                        missing))
+                        .font(OpenClawType.caption)
                         .foregroundStyle(OpenClawBrand.warn)
                 } else {
                     Text("No missing requirements reported.")
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
                 if let install = skill.install?.first {
@@ -536,6 +595,7 @@ extension AgentProTab {
                         Task { await self.installSkillRequirements(skill) }
                     } label: {
                         Label(install.label, systemImage: "wrench.and.screwdriver")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -553,7 +613,7 @@ extension AgentProTab {
                 self.detailMetric(label: "Source", value: self.normalized(skill.source) ?? "unknown")
                 if let filePath = self.normalized(skill.filePath) {
                     Text(filePath)
-                        .font(.caption2.monospaced())
+                        .font(OpenClawType.monoCaption2)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -594,7 +654,7 @@ extension AgentProTab {
     }
 
     var allSkillNames: [String] {
-        (self.overview?.skills?.skills ?? [])
+        (overview?.skills?.skills ?? [])
             .map(\.name)
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .sorted()
@@ -602,25 +662,25 @@ extension AgentProTab {
 
     @MainActor
     func patchAgentSkills(_ skills: [String]?, busyKey: String) async {
-        guard self.liveGatewayConnected else { return }
-        self.skillMutationBusyKeys.insert(busyKey)
-        self.skillMutationErrorText = nil
-        self.skillMutationStatusText = nil
+        guard liveGatewayConnected else { return }
+        skillMutationBusyKeys.insert(busyKey)
+        skillMutationErrorText = nil
+        skillMutationStatusText = nil
         defer { self.skillMutationBusyKeys.remove(busyKey) }
 
         do {
-            let config = try await self.requestConfigSnapshot()
-            guard let baseHash = self.normalized(config.hash) else {
+            let config = try await requestConfigSnapshot()
+            guard let baseHash = normalized(config.hash) else {
                 throw SkillMutationError.missingConfigHash
             }
             if skills == nil,
-               config.agentConfig(id: self.activeAgentID) == nil
+               config.agentConfig(id: activeAgentID) == nil
             {
-                self.skillMutationStatusText = "This agent already inherits the default skill policy."
+                skillMutationStatusText = "This agent already inherits the default skill policy."
                 return
             }
 
-            let raw = try Self.agentSkillsPatchRaw(agentId: self.activeAgentID, skills: skills)
+            let raw = try Self.agentSkillsPatchRaw(agentId: activeAgentID, skills: skills)
             let params = ConfigPatchParams(
                 raw: raw,
                 baseHash: baseHash,
@@ -629,15 +689,15 @@ extension AgentProTab {
             guard let json = String(data: data, encoding: .utf8) else {
                 throw SkillMutationError.invalidPatchPayload
             }
-            _ = try await self.appModel.operatorSession.request(
+            _ = try await appModel.operatorSession.request(
                 method: "config.patch",
                 paramsJSON: json,
                 timeoutSeconds: 20)
-            self.skillMutationStatusText = skills == nil ? "Skill policy reset." : "Skill policy saved."
-            await self.appModel.refreshGatewayOverviewIfConnected()
-            await self.refreshOverview(force: true)
+            skillMutationStatusText = skills == nil ? "Skill policy reset." : "Skill policy saved."
+            await appModel.refreshGatewayOverviewIfConnected()
+            await refreshOverview(force: true)
         } catch {
-            self.skillMutationErrorText = Self.skillMutationMessage(error)
+            skillMutationErrorText = Self.skillMutationMessage(error)
         }
     }
 
@@ -680,33 +740,33 @@ extension AgentProTab {
 
     @MainActor
     func installClawHubSkill(_ result: ClawHubSearchResultLite) async {
-        guard self.liveGatewayConnected else { return }
-        self.clawHubInstallSlug = result.slug
-        self.clawHubErrorText = nil
+        guard liveGatewayConnected else { return }
+        clawHubInstallSlug = result.slug
+        clawHubErrorText = nil
         defer { self.clawHubInstallSlug = nil }
         do {
             let params = ClawHubInstallParams(slug: result.slug)
             _ = try await self.requestGateway(method: "skills.install", params: params, timeoutSeconds: 125)
-            await self.appModel.refreshGatewayOverviewIfConnected()
-            await self.refreshOverview(force: true)
+            await appModel.refreshGatewayOverviewIfConnected()
+            await refreshOverview(force: true)
         } catch {
-            self.clawHubErrorText = Self.skillMutationMessage(error)
+            clawHubErrorText = Self.skillMutationMessage(error)
         }
     }
 
     @MainActor
     func searchClawHubSkills() async {
-        guard self.liveGatewayConnected else { return }
-        self.clawHubLoading = true
-        self.clawHubErrorText = nil
+        guard liveGatewayConnected else { return }
+        clawHubLoading = true
+        clawHubErrorText = nil
         defer { self.clawHubLoading = false }
         do {
-            let query = self.clawHubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            let query = clawHubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             let params = ClawHubSearchParams(query: query.isEmpty ? nil : query, limit: 20)
-            let data = try await self.requestGateway(method: "skills.search", params: params, timeoutSeconds: 20)
-            self.clawHubResults = try JSONDecoder().decode(ClawHubSearchResponseLite.self, from: data).results
+            let data = try await requestGateway(method: "skills.search", params: params, timeoutSeconds: 20)
+            clawHubResults = try JSONDecoder().decode(ClawHubSearchResponseLite.self, from: data).results
         } catch {
-            self.clawHubErrorText = Self.skillMutationMessage(error)
+            clawHubErrorText = Self.skillMutationMessage(error)
         }
     }
 
@@ -715,19 +775,19 @@ extension AgentProTab {
         _ skill: SkillStatusEntryLite,
         action: () async throws -> String) async
     {
-        guard self.liveGatewayConnected else { return }
+        guard liveGatewayConnected else { return }
         let key = skill.effectiveSkillKey
-        self.skillConfigBusyKeys.insert(key)
-        self.skillConfigMessages[key] = nil
+        skillConfigBusyKeys.insert(key)
+        skillConfigMessages[key] = nil
         defer { self.skillConfigBusyKeys.remove(key) }
 
         do {
             let message = try await action()
-            self.skillConfigMessages[key] = SkillEditorMessage(kind: .success, text: message)
-            await self.appModel.refreshGatewayOverviewIfConnected()
-            await self.refreshOverview(force: true)
+            skillConfigMessages[key] = SkillEditorMessage(kind: .success, text: message)
+            await appModel.refreshGatewayOverviewIfConnected()
+            await refreshOverview(force: true)
         } catch {
-            self.skillConfigMessages[key] = SkillEditorMessage(
+            skillConfigMessages[key] = SkillEditorMessage(
                 kind: .error,
                 text: Self.skillMutationMessage(error))
         }
@@ -738,24 +798,24 @@ extension AgentProTab {
         params: some Encodable,
         timeoutSeconds: Int) async throws -> Data
     {
-        guard self.liveGatewayConnected else {
+        guard liveGatewayConnected else {
             throw SkillMutationError.liveGatewayUnavailable
         }
         let data = try JSONEncoder().encode(params)
         guard let json = String(data: data, encoding: .utf8) else {
             throw SkillMutationError.invalidPatchPayload
         }
-        return try await self.appModel.operatorSession.request(
+        return try await appModel.operatorSession.request(
             method: method,
             paramsJSON: json,
             timeoutSeconds: timeoutSeconds)
     }
 
     func requestConfigSnapshot() async throws -> ConfigSnapshotLite {
-        guard self.liveGatewayConnected else {
+        guard liveGatewayConnected else {
             throw SkillMutationError.liveGatewayUnavailable
         }
-        let data = try await self.appModel.operatorSession.request(
+        let data = try await appModel.operatorSession.request(
             method: "config.get",
             paramsJSON: "{}",
             timeoutSeconds: 12)
@@ -809,5 +869,22 @@ extension AgentProTab {
             return ("setup", OpenClawBrand.warn)
         }
         return ("enabled", OpenClawBrand.accent)
+    }
+
+    func localizedSkillStatus(_ status: String) -> String {
+        switch status {
+        case "off":
+            String(localized: "off")
+        case "blocked":
+            String(localized: "blocked")
+        case "disabled":
+            String(localized: "disabled")
+        case "setup":
+            String(localized: "setup")
+        case "enabled":
+            String(localized: "enabled")
+        default:
+            status
+        }
     }
 }

@@ -34,7 +34,7 @@ function isValidReasoningReplayId(id: unknown): id is string {
   return typeof id === "string" && id.length > 0 && id.length <= 64;
 }
 
-export function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
+function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
   if (!Array.isArray(input)) {
     return false;
   }
@@ -45,12 +45,15 @@ export function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
       continue;
     }
     const id = item.id;
-    // Reasoning items with replay IDs reference server-side encrypted state
-    // bound to that ID. Drop unsafe IDs, but keep the store-disabled idless
-    // replay form produced by core Responses conversion.
+    // Reasoning encrypted_content is tied to the Copilot connection token,
+    // which rotates per request. Drop items with unsafe IDs; strip
+    // encrypted_content from kept items so summary-only replay is sent.
     if (item.type === "reasoning") {
       if (id !== undefined && !isValidReasoningReplayId(id)) {
         input.splice(index, 1);
+        rewrote = true;
+      } else if ("encrypted_content" in item) {
+        delete item.encrypted_content;
         rewrote = true;
       }
       continue;
@@ -66,17 +69,9 @@ export function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
   return rewrote;
 }
 
-export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolean {
-  return sanitizeCopilotReplayResponseIds(input);
-}
-
-export function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
+export function sanitizeCopilotReplayResponsePayload(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") {
     return false;
   }
   return sanitizeCopilotReplayResponseIds((payload as { input?: unknown }).input);
-}
-
-export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
-  return sanitizeCopilotReplayResponsePayloadIds(payload);
 }

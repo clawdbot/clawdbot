@@ -1,4 +1,5 @@
 // Venice tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -118,7 +119,7 @@ describe("venice-models", () => {
   });
 
   it("buildVeniceModelDefinition returns config with required fields", () => {
-    const entry = VENICE_MODEL_CATALOG[0];
+    const entry = expectDefined(VENICE_MODEL_CATALOG[0], "first Venice catalog model");
     const def = buildVeniceModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
@@ -127,6 +128,22 @@ describe("venice-models", () => {
     expect(def.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
     expect(def.contextWindow).toBe(entry.contextWindow);
     expect(def.maxTokens).toBe(entry.maxTokens);
+  });
+
+  it("excludes retired models from the static fallback catalog", () => {
+    const catalogIds = new Set(VENICE_MODEL_CATALOG.map((model) => model.id));
+    for (const retiredId of [
+      "gemini-3-pro-preview",
+      "grok-41-fast",
+      "kimi-k2-thinking",
+      "minimax-m21",
+      "mistral-31-24b",
+      "qwen3-4b",
+      "qwen3-coder-480b-a35b-instruct",
+      "venice-uncensored",
+    ]) {
+      expect(catalogIds.has(retiredId)).toBe(false);
+    }
   });
 
   it("retries transient fetch failures before succeeding", async () => {

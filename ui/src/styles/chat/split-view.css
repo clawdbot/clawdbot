@@ -1,0 +1,422 @@
+openclaw-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-split-view__drop-container {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view {
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-split-view__column {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 0;
+}
+
+/* One cell = pane header + pane; the header lives in-flow with its pane, so
+   split geometry needs no mirrored toolbar layer. */
+.chat-split-view__cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.chat-split-view__cell--active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.chat-split-view__pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__cell {
+  min-height: 0;
+}
+
+/* Narrow mode shows only the active pane; a focus ring is pure noise there. */
+.chat-split-view--narrow .chat-split-view__cell--active {
+  box-shadow: none;
+}
+
+.chat-split-view__drop-indicator {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.chat-split-view__drop-indicator--center {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.chat-split-view__drop-indicator-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-split-view__drop-indicator {
+    animation: chat-drop-indicator-in 0.12s ease;
+    transition:
+      left 0.14s ease,
+      top 0.14s ease,
+      width 0.14s ease,
+      height 0.14s ease,
+      opacity 0.12s ease;
+  }
+
+  @keyframes chat-drop-indicator-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+.chat-pane__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  /* 48px centers the 28px actions on the app's shared 24px chrome
+     centerline (sidebar brand row, floating toggles), so split headers
+     line up with the sidebar across the top of the shell. */
+  min-height: 48px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  /* Chrome row, not content: a selectable title would fight the native
+     window drag the macOS app starts from this row. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The title hugs its text so the workspace chip sits right after it (the
+   header's shared 8px gap provides the spacing); it may shrink with ellipsis
+   when space runs out, and the action row pushes itself to the right edge. */
+.chat-pane__session-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__session-title-button {
+  display: block;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: text;
+}
+
+.chat-pane__session-title-button:hover,
+.chat-pane__session-title-button:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  outline: none;
+}
+
+.chat-pane__session-title-input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Where supported, the rename input hugs its text too, so the workspace chip
+   tracks the title while typing; elsewhere editing falls back to full width. */
+@supports (field-sizing: content) {
+  .chat-pane__session-title-input {
+    flex: 0 1 auto;
+    field-sizing: content;
+    max-width: min(60ch, 100%);
+  }
+}
+
+.chat-pane__cloud,
+.chat-pane__incognito {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-pane__cloud svg,
+.chat-pane__incognito svg,
+.chat-pane__workspace-chip svg {
+  width: 14px;
+  height: 14px;
+  /* Lucide outline icons: without this the paths render browser-default
+     black fill, which reads as a solid dark blob on the chip. */
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-pane__workspace-menu {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__branches-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__branches-trigger svg,
+.chat-pane__branch-active svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-pane__branch-item {
+  min-width: 260px;
+  max-width: 360px;
+}
+
+.chat-pane__branch-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-pane__branch-headline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__branch-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-pane__branch-active {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.chat-pane__workspace-chip {
+  display: inline-flex;
+  max-width: 180px;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-pane__workspace-chip:hover,
+.chat-pane__workspace-chip:focus-visible {
+  border-color: var(--muted-strong);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-pane__workspace-chip span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__presence {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.chat-pane__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  /* With the title text-hugging, this claims the leftover width so the
+     action cluster stays pinned to the right edge (and doubles as the
+     native window-drag surface between chip and actions). */
+  margin-left: auto;
+}
+
+.chat-pane__sharing-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__sharing-title,
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__sharing-status--error {
+  max-width: 260px;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.chat-pane__draft-indicator {
+  font-size: 13px;
+}
+
+@media (max-width: 480px) {
+  .chat-pane__workspace-chip {
+    width: 28px;
+    padding: 0 6px;
+    justify-content: center;
+  }
+
+  .chat-pane__workspace-chip span {
+    display: none;
+  }
+
+  .chat-pane__presence {
+    display: none;
+  }
+}
+
+/* Plain web shell chrome overlays the first pane header. Expanded navigation
+   shows toggle + search; collapsed navigation adds new-thread between them. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 88px;
+}
+
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 124px;
+}
+
+/* Native macOS desktop shells: the pane header is the window's top surface,
+   so it adopts the app titlebar height (52px injected by
+   DashboardWindowController; the 50px fallback mirrors
+   .macos-titlebar-controls for older app builds). The web 48px default would
+   center the session title/actions 2px above the traffic-light/hosted-button
+   centerline. Drawer layouts instead fold titlebar clearance into their 58px
+   topbar row (layout.mobile.css). */
+html.openclaw-native-macos .shell:not(.shell--mobile-nav) .chat-pane__header {
+  min-height: var(--openclaw-native-titlebar-height, 50px);
+}
+
+/* Native macOS: with the nav column collapsed the top-left pane header is the
+   window's top surface, so its content shifts right of the floating window
+   chrome (Safari-style) instead of hiding under it. Traffic lights end at
+   x=78; newer apps (openclaw-native-nav) also float the titlebar accessory
+   (sidebar toggle + back/forward, DashboardWindowController) ending ~x=194.
+   Drawer layouts reserve a 58px topbar row instead (layout.mobile.css). The
+   first column's min-width grows by the extra inset
+   (90/204 minus the 12px base padding): the header's action row cannot
+   shrink, and the cell's overflow:hidden would clip the close/split buttons
+   at the 320px column minimum otherwise. */
+html.openclaw-native-macos
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child {
+  min-width: 398px;
+}
+
+html.openclaw-native-macos
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 90px;
+}
+
+html.openclaw-native-nav
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child {
+  min-width: 512px;
+}
+
+html.openclaw-native-nav
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 204px;
+}
+
+/* 246px = 78px traffic lights + (5 * 28px buttons + 4 * 4px gaps) + 12px.
+     The 554px minimum adds the 234px inset delta to the 320px base column. */
+html.openclaw-native-web-chrome
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child {
+  min-width: 554px;
+}
+
+html.openclaw-native-web-chrome
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 246px;
+}

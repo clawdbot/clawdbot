@@ -5,7 +5,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { validateSupportedA2UIJsonl } from "./src/a2ui-jsonl.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
 import { CanvasToolSchema } from "./src/tool-schema.js";
@@ -24,17 +27,17 @@ const CANVAS_NODE_COMMANDS = [
 function createLazyCanvasTool(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentSessionKey?: string;
 }): AnyAgentTool {
-  let toolPromise: Promise<AnyAgentTool> | undefined;
-  const loadTool = async () => {
-    toolPromise ??= import("./src/tool.js").then(({ createCanvasTool }) =>
+  const loadTool = createLazyRuntimeModule(() =>
+    import("./src/tool.js").then(({ createCanvasTool }) =>
       createCanvasTool({
         config: params.config,
         workspaceDir: params.workspaceDir,
+        agentSessionKey: params.agentSessionKey,
       }),
-    );
-    return await toolPromise;
-  };
+    ),
+  );
   return {
     label: "Canvas",
     name: "canvas",
@@ -56,28 +59,22 @@ export default definePluginEntry({
   },
   register(api) {
     if (isCanvasHostEnabled(api.config)) {
-      let httpRouteHandlerPromise:
-        | Promise<
-            ReturnType<(typeof import("./src/http-route.js"))["createCanvasHttpRouteHandler"]>
-          >
-        | undefined;
-      const loadHttpRouteHandler = async () => {
-        httpRouteHandlerPromise ??= import("./src/http-route.js").then(
-          ({ createCanvasHttpRouteHandler }) =>
-            createCanvasHttpRouteHandler({
-              config: api.config,
-              pluginConfig: api.pluginConfig,
-              runtime: {
-                log: (...args) => api.logger.info(args.map(String).join(" ")),
-                error: (...args) => api.logger.error(args.map(String).join(" ")),
-                exit: (code) => {
-                  throw new Error(`canvas host requested process exit ${code}`);
-                },
+      const httpRouteHandlerLoader = createLazyRuntimeModule(() =>
+        import("./src/http-route.js").then(({ createCanvasHttpRouteHandler }) =>
+          createCanvasHttpRouteHandler({
+            config: api.config,
+            pluginConfig: api.pluginConfig,
+            runtime: {
+              log: (...args) => api.logger.info(args.map(String).join(" ")),
+              error: (...args) => api.logger.error(args.map(String).join(" ")),
+              exit: (code) => {
+                throw new Error(`canvas host requested process exit ${code}`);
               },
-            }),
-        );
-        return await httpRouteHandlerPromise;
-      };
+            },
+          }),
+        ),
+      );
+      const loadHttpRouteHandler = httpRouteHandlerLoader;
       const handleHttpRequest = async (req: IncomingMessage, res: ServerResponse) =>
         await (await loadHttpRouteHandler()).handleHttpRequest(req, res);
       const handleUpgrade = async (req: IncomingMessage, socket: Duplex, head: Buffer) =>
@@ -109,30 +106,47 @@ export default definePluginEntry({
         id: "canvas-host",
         start: () => {},
         stop: async () => {
-          const httpRouteHandler = httpRouteHandlerPromise ? await httpRouteHandlerPromise : null;
+          const httpRouteHandler = await httpRouteHandlerLoader.peek();
           await httpRouteHandler?.close();
         },
-      });
-      let resolveCanvasHttpPathToLocalPathPromise:
-        | Promise<(typeof import("./src/documents.js"))["resolveCanvasHttpPathToLocalPath"]>
-        | undefined;
-      api.registerHostedMediaResolver(async (mediaUrl) => {
-        resolveCanvasHttpPathToLocalPathPromise ??= import("./src/documents.js").then(
-          ({ resolveCanvasHttpPathToLocalPath }) => resolveCanvasHttpPathToLocalPath,
-        );
-        return (await resolveCanvasHttpPathToLocalPathPromise)(mediaUrl);
       });
     }
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,
-      defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+      defaultPlatforms: ["ios", "android", "macos", "windows", "linux", "unknown"],
       foregroundRestrictedOnIos: true,
-      handle: (ctx) => ctx.invokeNode(),
+      handle: async (ctx) => {
+        const params =
+          ctx.params && typeof ctx.params === "object" && !Array.isArray(ctx.params)
+            ? (ctx.params as Record<string, unknown>)
+            : {};
+        // Native nodes also accept JSONL under `push` when messages[] is absent.
+        // Validate that fallback here so callers cannot bypass the JSONL policy.
+        const usesJsonl =
+          ctx.command === "canvas.a2ui.pushJSONL" ||
+          (ctx.command === "canvas.a2ui.push" &&
+            !Array.isArray(params.messages) &&
+            Object.hasOwn(params, "jsonl"));
+        if (usesJsonl) {
+          const jsonl = typeof params.jsonl === "string" ? params.jsonl : "";
+          try {
+            validateSupportedA2UIJsonl(jsonl);
+          } catch (error) {
+            return {
+              ok: false,
+              code: "INVALID_A2UI_JSONL",
+              message: formatErrorMessage(error),
+            };
+          }
+        }
+        return await ctx.invokeNode();
+      },
     });
     api.registerTool((ctx) =>
       createLazyCanvasTool({
         config: ctx.runtimeConfig ?? ctx.config,
         workspaceDir: ctx.workspaceDir,
+        agentSessionKey: ctx.sessionKey,
       }),
     );
     api.registerNodeCliFeature(

@@ -3,7 +3,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -133,15 +132,9 @@ function resolveOpenAiChatCompletionsLimits(
 ): ResolvedOpenAiChatCompletionsLimits {
   const imageConfig = config?.images;
   return {
-    maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts: resolveIntegerOption(config?.maxImageParts, DEFAULT_OPENAI_MAX_IMAGE_PARTS, {
-      min: 0,
-    }),
-    maxTotalImageBytes: resolveIntegerOption(
-      config?.maxTotalImageBytes,
-      DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
-      { min: 1 },
-    ),
+    maxBodyBytes: DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
+    maxImageParts: DEFAULT_OPENAI_MAX_IMAGE_PARTS,
+    maxTotalImageBytes: DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
     images: {
       allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
       urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
@@ -1435,3 +1428,4 @@ export async function handleOpenAiHttpRequest(
 
   return true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

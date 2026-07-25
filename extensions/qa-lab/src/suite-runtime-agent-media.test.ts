@@ -93,6 +93,9 @@ describe("qa suite runtime agent media helpers", () => {
         timeoutMs: 2_000,
       }),
     ).resolves.toBe("/tmp/generated.png");
+    expect(fetchJsonMock).toHaveBeenCalledOnce();
+    expect(fetchJsonMock).toHaveBeenCalledWith(expect.any(String), expect.any(Number));
+    expect(fetchJsonMock.mock.calls[0]?.[1]).toBeLessThanOrEqual(2_000);
   });
 
   it("falls back to generated image files under the gateway temp root", async () => {

@@ -1,19 +1,26 @@
 // Verifies session status output across scoped stores, tasks, and runtime hooks.
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
-const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
 );
@@ -31,6 +38,20 @@ const resolveEnvApiKeyMock = vi.hoisted(() =>
 );
 const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
   vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
+);
+const getSessionStateVersionMock = vi.hoisted(() =>
+  vi.fn((_sessionKey: string, _agentId: string) => 0),
+);
+const listAmbientGroupWatchTargetsMock = vi.hoisted(() =>
+  vi.fn((_watcherSessionKey: string) => new Set<string>()),
+);
+const listSessionStateEventsSinceMock = vi.hoisted(() =>
+  vi.fn((_sessionKey: string, _agentId: string, _after: number, _limit: number) => ({
+    events: [] as Array<Record<string, unknown>>,
+    truncated: false,
+    earliestAvailableSequence: 0,
+    historyGap: false,
+  })),
 );
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "session-status-test-empty-plugin-metadata",
@@ -55,7 +76,7 @@ let mockConfig: Record<string, unknown> = createMockConfig();
 const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
-  // Two stores simulate per-agent session files merged by gateway status paths.
+  // Two stores simulate per-agent session files selected by scoped status lookups.
   return new Map<string, Record<string, unknown>>([
     [
       "/tmp/main/sessions.json",
@@ -78,12 +99,7 @@ function installScopedSessionStores(syncUpdates = false) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionStoreForGatewayMock.mockClear();
   loadSessionStoreMock.mockImplementation((storePath: string) => stores.get(storePath) ?? {});
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(multiple)",
-    store: Object.fromEntries([...stores.values()].flatMap((store) => Object.entries(store))),
-  });
   if (syncUpdates) {
     updateSessionStoreMock.mockImplementation(
       (storePath: string, store: Record<string, unknown>) => {
@@ -96,15 +112,11 @@ function installScopedSessionStores(syncUpdates = false) {
   return stores;
 }
 
-async function createSessionsModuleMock() {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+function createSessionsModuleMock() {
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
     opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json";
   const cloneEntry = (entry: SessionEntry): SessionEntry => structuredClone(entry);
   return {
-    ...actual,
-    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
     patchSessionEntryWithKey: async (
       scope: { agentId?: string; sessionKey: string; storePath?: string },
       update: (
@@ -116,7 +128,7 @@ async function createSessionsModuleMock() {
       const storePath =
         scope.storePath ?? resolveMockStorePath(undefined, { agentId: scope.agentId });
       const store = loadSessionStoreMock(storePath) as Record<string, SessionEntry>;
-      const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
       const existing = resolved.existing ?? options?.fallbackEntry;
       if (!existing) {
         return null;
@@ -129,7 +141,7 @@ async function createSessionsModuleMock() {
       }
       const next = options?.replaceEntry
         ? cloneEntry(patch as SessionEntry)
-        : actual.mergeSessionEntry(existing, patch);
+        : mergeSessionEntry(existing, patch);
       store[resolved.normalizedKey] = next;
       updateSessionStoreMock(storePath, store);
       return { sessionKey: resolved.normalizedKey, entry: cloneEntry(next) };
@@ -147,7 +159,7 @@ async function createSessionsModuleMock() {
         if (!candidateKey) {
           continue;
         }
-        const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: candidateKey });
+        const resolved = resolveSessionStoreEntry({ store, sessionKey: candidateKey });
         if (!resolved.existing) {
           continue;
         }
@@ -170,15 +182,6 @@ async function createSessionsModuleMock() {
           }
         : null;
     },
-    updateSessionStore: async (
-      storePath: string,
-      mutator: (store: Record<string, unknown>) => Promise<void> | void,
-    ) => {
-      const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
-      await mutator(store);
-      updateSessionStoreMock(storePath, store);
-      return store;
-    },
     resolveStorePath: resolveMockStorePath,
   };
 }
@@ -189,28 +192,15 @@ function createGatewayCallModuleMock() {
   };
 }
 
-async function createGatewaySessionUtilsModuleMock() {
-  const actual = await vi.importActual<typeof import("../gateway/session-utils.js")>(
-    "../gateway/session-utils.js",
-  );
+function createConfigModuleMock() {
   return {
-    ...actual,
-    loadCombinedSessionStoreForGateway: (cfg: unknown) =>
-      loadCombinedSessionStoreForGatewayMock(cfg),
-  };
-}
-
-async function createConfigModuleMock() {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
     getRuntimeConfig: () => mockConfig,
   };
 }
 
 function createModelCatalogModuleMock() {
   return {
-    loadModelCatalog: async () => [
+    loadPreparedModelCatalog: async () => [
       {
         provider: "anthropic",
         id: "claude-sonnet-4-6",
@@ -324,14 +314,24 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
-vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
+vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  isPluginMetadataSnapshotCompatible: () => true,
+  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveProviderBinaryThinking: () => undefined,
+  resolveProviderDefaultThinkingLevel: () => undefined,
+  resolveProviderThinkingProfile: () => undefined,
+  resolveProviderXHighThinking: () => undefined,
 }));
 // Keep provider-runtime/plugin activation out of this focused tool test. The
 // session_status surface only needs model selection semantics here, not real
@@ -366,14 +366,42 @@ vi.mock("../tasks/task-owner-access.js", () => ({
       now: TASK_STATUS_SNAPSHOT_NOW,
     }),
 }));
+vi.mock("../sessions/session-state-events.js", () => ({
+  getSessionStateVersion: (sessionKey: string, agentId: string) =>
+    getSessionStateVersionMock(sessionKey, agentId),
+  listAmbientGroupWatchTargets: (watcherSessionKey: string) =>
+    listAmbientGroupWatchTargetsMock(watcherSessionKey),
+  listSessionStateEventsSince: (
+    sessionKey: string,
+    agentId: string,
+    after: number,
+    limit: number,
+  ) => listSessionStateEventsSinceMock(sessionKey, agentId, after, limit),
+}));
 
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
 beforeAll(async () => {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
+  resetSessionStore({
+    "agent:main:spawned": {
+      sessionId: "spawned-status-warmup",
+      updatedAt: 1,
+      spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    },
+  });
+  await getSessionStatusTool("agent:main:spawned").execute("warm-spawned-workspace-status", {});
 });
 
-function resetSessionStore(store: Record<string, SessionEntry>) {
+function resetSessionStore(inputStore: Record<string, SessionEntry>) {
+  const store = Object.fromEntries(
+    Object.entries(inputStore).map(([key, entry]) => [
+      key,
+      normalizeLegacySessionEntryDelivery(entry),
+    ]),
+  ) as Record<string, SessionEntry>;
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
@@ -384,14 +412,20 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionStoreForGatewayMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
-  loadSessionStoreMock.mockReturnValue(store);
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(multiple)",
-    store,
+  getSessionStateVersionMock.mockReset();
+  getSessionStateVersionMock.mockReturnValue(0);
+  listAmbientGroupWatchTargetsMock.mockReset();
+  listAmbientGroupWatchTargetsMock.mockReturnValue(new Set());
+  listSessionStateEventsSinceMock.mockReset();
+  listSessionStateEventsSinceMock.mockReturnValue({
+    events: [],
+    truncated: false,
+    earliestAvailableSequence: 0,
+    historyGap: false,
   });
+  loadSessionStoreMock.mockReturnValue(store);
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const request = opts as { method?: string; params?: Record<string, unknown> };
     if (request.method === "sessions.resolve") {
@@ -527,6 +561,107 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ changedModel: boolean; ok: true; sessionKey: string; stateVersion: number; statusText: string; active?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; deliveryContext?: { accountId?: string; channel?: string; threadId?: string | number; to?: string }; model?: string; modelOverride?: string | null; modelProvider?: string; origin?: { accountId?: string; provider?: string; threadId?: string | number }; stateChanges?: { earliestAvailableSequence: number; events: Array<{ actorType: "human" | "agent" | "system"; kind: string; occurredAt: number; sequence: number; summary: string; actorId?: string; payload?: { channel?: string; outcome?: "error" | "timeout" | "cancelled"; turns?: number }; runId?: string }>; historyGap: boolean; truncated: boolean } }',
+    );
+  });
+
+  it("returns read-only state changes and the signal-log head", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    getSessionStateVersionMock.mockReturnValue(12);
+    listSessionStateEventsSinceMock.mockReturnValue({
+      events: [
+        {
+          sequence: 12,
+          sessionKey: "main",
+          sessionId: "s1",
+          agentId: "main",
+          kind: "upstream_missing",
+          actorType: "system",
+          occurredAt: 100,
+          summary: "upstream missing via codex",
+          payload: { channel: "codex", catalogId: "internal-catalog", nested: { drop: true } },
+        },
+      ],
+      truncated: false,
+      earliestAvailableSequence: 12,
+      historyGap: true,
+    });
+
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-state", { changesSince: 3 });
+    const details = result.details as Record<string, unknown>;
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+
+    expect(getSessionStateVersionMock).toHaveBeenCalledWith("main", "main");
+    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith("main", "main", 3, 200);
+    expect(details.stateVersion).toBe(12);
+    expect(details.stateChanges).toMatchObject({
+      historyGap: true,
+      events: [
+        {
+          sequence: 12,
+          kind: "upstream_missing",
+          actorType: "system",
+          occurredAt: 100,
+          summary: "upstream missing via codex",
+          payload: { channel: "codex" },
+        },
+      ],
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(JSON.stringify(details.stateChanges)).not.toContain("internal-catalog");
+    expect(text).toContain("Session state changes:");
+    expect(text).toContain('"kind": "upstream_missing"');
+  });
+
+  it("returns watched group changesSince under tree visibility", async () => {
+    const groupSessionKey = "agent:main:telegram:group:watched";
+    resetSessionStore({
+      "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
+      [groupSessionKey]: {
+        sessionId: "s-group",
+        updatedAt: 20,
+        chatType: "group",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      tools: {
+        sessions: { visibility: "tree" },
+        agentToAgent: { enabled: false },
+      },
+    };
+    listAmbientGroupWatchTargetsMock.mockReturnValue(new Set([groupSessionKey]));
+    getSessionStateVersionMock.mockReturnValue(9);
+    listSessionStateEventsSinceMock.mockReturnValue({
+      events: [
+        { sequence: 9, kind: "human_direct_message", summary: "human message via telegram" },
+      ],
+      truncated: false,
+      earliestAvailableSequence: 9,
+      historyGap: false,
+    });
+
+    const result = await getSessionStatusTool("agent:main:main").execute("call-group-state", {
+      sessionKey: groupSessionKey,
+      changesSince: 4,
+    });
+
+    expect(listAmbientGroupWatchTargetsMock).toHaveBeenCalledWith("agent:main:main");
+    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupSessionKey, "main", 4, 200);
+    expect(result.details).toMatchObject({
+      ok: true,
+      sessionKey: groupSessionKey,
+      stateVersion: 9,
+    });
   });
 
   it("enables transcript usage fallback for session_status", async () => {
@@ -787,13 +922,15 @@ describe("session_status tool", () => {
       [sessionKey]: {
         sessionId: "s-discord-origin-webchat-active",
         updatedAt: 10,
-        origin: { provider: "discord", accountId: "bot-primary" },
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:1489550370136129537",
-          accountId: "bot-primary",
-          threadId: "thread-origin",
-        },
+        delivery: normalizeSessionDeliveryState({
+          origin: { provider: "discord", accountId: "bot-primary" },
+          context: {
+            channel: "discord",
+            to: "channel:1489550370136129537",
+            accountId: "bot-primary",
+            threadId: "thread-origin",
+          },
+        }),
       },
     });
 
@@ -825,7 +962,11 @@ describe("session_status tool", () => {
     };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe(sessionKey);
-    expect(details.origin).toEqual({ provider: "discord", accountId: "bot-primary" });
+    expect(details.origin).toEqual({
+      provider: "discord",
+      accountId: "bot-primary",
+      threadId: "thread-origin",
+    });
     expect(details.active).toEqual({
       channel: "webchat",
       to: "control-ui-conversation",
@@ -859,10 +1000,12 @@ describe("session_status tool", () => {
       [targetKey]: {
         sessionId: "s-target",
         updatedAt: 10,
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:1489550370136129537",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "discord",
+            to: "channel:1489550370136129537",
+          },
+        }),
       },
     });
     mockConfig = {
@@ -903,10 +1046,12 @@ describe("session_status tool", () => {
       [policyKey]: {
         sessionId: "s-policy",
         updatedAt: 5,
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:direct:1234",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "telegram:direct:1234",
+          },
+        }),
       },
       [runKey]: {
         sessionId: "s-run",
@@ -1249,7 +1394,10 @@ describe("session_status tool", () => {
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -1258,13 +1406,13 @@ describe("session_status tool", () => {
     expect(saved.sessionId).toMatch(UUID_RE);
   });
 
-  it("preserves an existing legacy main row when implicit fallback mutates model state", async () => {
+  it("preserves an existing canonical main row when implicit fallback mutates model state", async () => {
     resetSessionStore({
       main: {
         sessionId: "legacy-main-session",
         updatedAt: 10,
         label: "Legacy Main",
-        lastChannel: "telegram",
+        delivery: { kind: "none" },
       },
     });
 
@@ -1286,7 +1434,7 @@ describe("session_status tool", () => {
     expect(savedStore.main).toMatchObject({
       sessionId: "legacy-main-session",
       label: "Legacy Main",
-      lastChannel: "telegram",
+      delivery: { kind: "none" },
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
@@ -1312,7 +1460,7 @@ describe("session_status tool", () => {
     });
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
-    const event = events[0];
+    const event = expectDefined(events[0], "events[0] test invariant");
     expect(event.type).toBe("session");
     expect(event.action).toBe("patch");
     expect(event.sessionKey).toBe("main");
@@ -1325,6 +1473,33 @@ describe("session_status tool", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
+    });
+  });
+
+  it("rejects model changes for model-locked sessions", async () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelSelectionLocked: true,
+      },
+    };
+    resetSessionStore(store);
+
+    const tool = getSessionStatusTool();
+    await expect(
+      tool.execute("call-session-status-model-locked", {
+        model: "anthropic/claude-sonnet-4-6",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(store.main).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelSelectionLocked: true,
     });
   });
 
@@ -1341,7 +1516,10 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -1826,12 +2004,15 @@ describe("session_status tool", () => {
     }
   });
 
-  it("falls back to origin.provider when resolving queue settings", async () => {
+  it("uses canonical delivery state when resolving queue settings", async () => {
     resetSessionStore({
       main: {
         sessionId: "status-origin-provider",
         updatedAt: 10,
-        origin: { provider: "quietchat" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "quietchat", to: "quietchat:status" },
+          origin: { provider: "quietchat" },
+        }),
       },
     });
 
@@ -1841,7 +2022,9 @@ describe("session_status tool", () => {
 
     const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
     expect(queueArg.channel).toBe("quietchat");
-    expectRecordFields(queueArg.sessionEntry, { origin: { provider: "quietchat" } });
+    expect(queueArg.sessionEntry).toMatchObject({
+      delivery: { kind: "external", origin: { provider: "quietchat" } },
+    });
   });
 
   it("resolves sessionId inputs", async () => {
@@ -2418,3 +2601,4 @@ describe("session_status tool", () => {
     expect(saved.liveModelSwitchPending).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

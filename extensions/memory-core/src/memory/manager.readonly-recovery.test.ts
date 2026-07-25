@@ -13,7 +13,7 @@ import {
 
 type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   syncing: Promise<void> | null;
-  queuedSessionFiles: Set<string>;
+  queuedArchiveFiles: Set<string>;
   queuedSessions: Map<string, unknown>;
   queuedSessionSync: Promise<void> | null;
   vectorDegradedWriteWarningShown: boolean;
@@ -32,12 +32,12 @@ describe("memory manager readonly recovery", () => {
   let indexPath = "";
 
   function createQueuedSyncHarness(syncing: Promise<void>) {
-    const queuedSessionFiles = new Set<string>();
+    const queuedArchiveFiles = new Set<string>();
     const queuedSessions = new Map<string, never>();
     let queuedSessionSync: Promise<void> | null = null;
     const sync = vi.fn(async () => {});
     return {
-      queuedSessionFiles,
+      queuedArchiveFiles,
       queuedSessions,
       get queuedSessionSync() {
         return queuedSessionSync;
@@ -46,7 +46,7 @@ describe("memory manager readonly recovery", () => {
       state: {
         isClosed: () => false,
         getSyncing: () => syncing,
-        getQueuedSessionFiles: () => queuedSessionFiles,
+        getQueuedArchiveFiles: () => queuedArchiveFiles,
         getQueuedSessions: () => queuedSessions,
         getQueuedSessionSync: () => queuedSessionSync,
         setQueuedSessionSync: (value: Promise<void> | null) => {
@@ -64,7 +64,7 @@ describe("memory manager readonly recovery", () => {
     const harness: ReadonlyRecoveryHarness = {
       closed: false,
       syncing: null,
-      queuedSessionFiles: new Set<string>(),
+      queuedArchiveFiles: new Set<string>(),
       queuedSessions: new Map<string, never>(),
       queuedSessionSync: null,
       db: initialDb,
@@ -101,7 +101,7 @@ describe("memory manager readonly recovery", () => {
 
   async function runSyncWithReadonlyRecovery(
     harness: ReadonlyRecoveryHarness,
-    params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
+    params?: { reason?: string; force?: boolean; archiveFiles?: string[] },
   ) {
     return await runMemorySyncWithReadonlyRecovery(harness, params);
   }
@@ -230,7 +230,7 @@ describe("memory manager readonly recovery", () => {
     const harness = createQueuedSyncHarness(pendingSync);
 
     const queued = enqueueMemoryTargetedSessionSync(harness.state, {
-      sessionFiles: ["  /tmp/first.jsonl ", "", "/tmp/second.jsonl"],
+      archiveFiles: ["  /tmp/first.jsonl ", "", "/tmp/second.jsonl"],
     });
 
     expect(harness.sync).not.toHaveBeenCalled();
@@ -242,7 +242,7 @@ describe("memory manager readonly recovery", () => {
     expect(harness.sync).toHaveBeenCalledWith({
       reason: "queued-sessions",
       sessions: [],
-      sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
     });
     expect(harness.queuedSessionSync).toBeNull();
   });
@@ -255,10 +255,10 @@ describe("memory manager readonly recovery", () => {
     const harness = createQueuedSyncHarness(pendingSync);
 
     const first = enqueueMemoryTargetedSessionSync(harness.state, {
-      sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
     });
     const second = enqueueMemoryTargetedSessionSync(harness.state, {
-      sessionFiles: ["/tmp/second.jsonl", "/tmp/third.jsonl"],
+      archiveFiles: ["/tmp/second.jsonl", "/tmp/third.jsonl"],
     });
 
     expect(first).toBe(second);
@@ -270,7 +270,7 @@ describe("memory manager readonly recovery", () => {
     expect(harness.sync).toHaveBeenCalledWith({
       reason: "queued-sessions",
       sessions: [],
-      sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
+      archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
     });
   });
 
@@ -282,7 +282,7 @@ describe("memory manager readonly recovery", () => {
     const harness = createQueuedSyncHarness(pendingSync);
 
     const queued = enqueueMemoryTargetedSessionSync(harness.state, {
-      sessionFiles: ["", "   "],
+      archiveFiles: ["", "   "],
     });
 
     expect(queued).toBe(pendingSync);

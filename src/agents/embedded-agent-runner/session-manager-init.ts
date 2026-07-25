@@ -2,6 +2,7 @@
  * Prepares session managers and transcript state before embedded runs.
  */
 import fs from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
@@ -14,9 +15,63 @@ type SessionHeaderEntry = {
 };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
+const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
+
+async function readFirstSessionFileLine(sessionFile: string): Promise<string | undefined> {
+  const handle = await fs.open(sessionFile, "r");
+  try {
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.alloc(SESSION_HEADER_READ_CHUNK_BYTES);
+    let line = "";
+    let lineHasContent = false;
+
+    const scanText = (text: string): string | undefined => {
+      let start = 0;
+      while (start <= text.length) {
+        const newlineIndex = text.indexOf("\n", start);
+        const segment = newlineIndex === -1 ? text.slice(start) : text.slice(start, newlineIndex);
+        if (lineHasContent) {
+          line += segment;
+        } else {
+          const trimmedStart = segment.trimStart();
+          if (trimmedStart.length > 0) {
+            lineHasContent = true;
+            line = trimmedStart;
+          }
+        }
+        if (newlineIndex === -1) {
+          break;
+        }
+        if (lineHasContent) {
+          return line.trim();
+        }
+        start = newlineIndex + 1;
+      }
+      return undefined;
+    };
+
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      const firstLine = scanText(decoder.write(buffer.subarray(0, bytesRead)));
+      if (firstLine) {
+        return firstLine;
+      }
+    }
+    const trailingLine = scanText(decoder.end());
+    if (trailingLine) {
+      return trailingLine;
+    }
+    return lineHasContent ? line.trim() : undefined;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
 async function assertExistingHeaderIsReadable(sessionFile: string): Promise<void> {
-  const content = await fs.readFile(sessionFile, "utf-8");
-  const firstLine = content.split("\n").find((line) => line.trim());
+  const firstLine = await readFirstSessionFileLine(sessionFile);
   if (!firstLine) {
     return;
   }
@@ -58,6 +113,7 @@ export async function prepareSessionManagerForRun(params: {
     fileEntries: Array<SessionHeaderEntry | SessionMessageEntry | { type: string }>;
     byId?: Map<string, unknown>;
     labelsById?: Map<string, unknown>;
+    labelTimestampsById?: Map<string, unknown>;
     leafId?: string | null;
     wasRecoveredFromCorruptHeader?: () => boolean;
     clearPreservedOpaqueFileEntries?: () => void;
@@ -111,7 +167,9 @@ export async function prepareSessionManagerForRun(params: {
     sm.fileEntries = [header];
     sm.clearPreservedOpaqueFileEntries?.();
     sm.byId?.clear?.();
+    // Labels and timestamps form one index; neither half may survive this reset.
     sm.labelsById?.clear?.();
+    sm.labelTimestampsById?.clear?.();
     sm.leafId = null;
     sm.flushed = false;
     return;

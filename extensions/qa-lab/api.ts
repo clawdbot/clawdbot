@@ -27,6 +27,15 @@ export {
 export { isQaLabCliAvailable, registerQaLabCli } from "./src/cli.js";
 export { createQaRunnerRuntime } from "./src/harness-runtime.js";
 export {
+  buildScriptEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+  type QaEvidencePackageSource,
+  type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
+  validateQaEvidenceSummaryJson,
+} from "./src/evidence-summary.js";
+export type { QaProviderMode } from "./src/providers/index.js";
+export {
   type QaLabLatestReport,
   type QaLabScenarioOutcome,
   type QaLabScenarioRun,
@@ -48,11 +57,7 @@ export {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   type QaThinkingLevel,
 } from "./src/qa-gateway-config.js";
-export {
-  renderQaMarkdownReport,
-  type QaReportCheck,
-  type QaReportScenario,
-} from "openclaw/plugin-sdk/qa-runtime";
+export { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./src/report.js";
 export {
   type QaScenarioDefinition,
   type QaScenarioResult,
@@ -92,6 +97,7 @@ export {
   testing as __testing,
   buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
+  type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
   resolveQaControlUiRoot,

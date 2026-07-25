@@ -5,10 +5,20 @@
 import fsPromises from "node:fs/promises";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  assertBrowserProxyFileCountWithinLimit,
+  assertBrowserProxyFileBytesWithinLimits,
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  createBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+  visitBrowserProxyFilePaths,
+} from "../browser-proxy-envelope.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import {
+  isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
   normalizeBrowserRequestPath,
   resolveRequestedBrowserProfile,
@@ -28,22 +38,13 @@ type BrowserProxyParams = {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  errorEnvelope?: unknown;
 };
 
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
-};
-
-const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
+// Leave one MiB for the fixed node.invoke.result frame around payloadJSON.
+const BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES = 24 * 1024 * 1024;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {
   return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
@@ -58,13 +59,6 @@ function resolveBrowserProxyConfig() {
 }
 
 let browserControlReady: Promise<void> | null = null;
-
-// Keep the production singleton but give tests a cheap reset seam so they do
-// not need to reload the entire module graph between cases.
-/** Resets the cached Browser control startup promise for tests. */
-export function resetBrowserProxyCommandStateForTests(): void {
-  browserControlReady = null;
-}
 
 async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
@@ -97,40 +91,36 @@ function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | 
 
 function collectBrowserProxyPaths(payload: unknown): string[] {
   const paths = new Set<string>();
-  const obj =
-    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : null;
-  if (!obj) {
-    return [];
-  }
-  if (typeof obj.path === "string" && obj.path.trim()) {
-    paths.add(obj.path.trim());
-  }
-  if (typeof obj.imagePath === "string" && obj.imagePath.trim()) {
-    paths.add(obj.imagePath.trim());
-  }
-  const download = obj.download;
-  if (download && typeof download === "object") {
-    const dlPath = (download as Record<string, unknown>).path;
-    if (typeof dlPath === "string" && dlPath.trim()) {
-      paths.add(dlPath.trim());
-    }
-  }
+  visitBrowserProxyFilePaths(payload, (filePath) => {
+    paths.add(filePath.trim());
+    assertBrowserProxyFileCountWithinLimit(paths.size);
+  });
   return [...paths];
 }
 
-async function readBrowserProxyFile(filePath: string): Promise<BrowserProxyFile | null> {
-  const stat = await fsPromises.stat(filePath).catch(() => null);
-  if (!stat || !stat.isFile()) {
-    return null;
+async function readBrowserProxyFiles(filePaths: string[]): Promise<BrowserProxyFile[]> {
+  const files: BrowserProxyFile[] = [];
+  let totalBytes = 0;
+  for (const filePath of filePaths) {
+    try {
+      const stat = await fsPromises.stat(filePath).catch(() => null);
+      if (!stat || !stat.isFile()) {
+        throw new Error("file not found");
+      }
+      assertBrowserProxyFileBytesWithinLimits(stat.size, totalBytes + stat.size);
+
+      const buffer = await fsPromises.readFile(filePath);
+      assertBrowserProxyFileBytesWithinLimits(buffer.byteLength, totalBytes + buffer.byteLength);
+      totalBytes += buffer.byteLength;
+      const mimeType = await detectMime({ buffer, filePath });
+      files.push({ path: filePath, base64: buffer.toString("base64"), mimeType });
+    } catch (err) {
+      throw new Error(`browser proxy file read failed for ${filePath}: ${String(err)}`, {
+        cause: err,
+      });
+    }
   }
-  if (stat.size > BROWSER_PROXY_MAX_FILE_BYTES) {
-    throw new Error(
-      `browser proxy file exceeds ${Math.round(BROWSER_PROXY_MAX_FILE_BYTES / (1024 * 1024))}MB`,
-    );
-  }
-  const buffer = await fsPromises.readFile(filePath);
-  const mimeType = await detectMime({ buffer, filePath });
-  return { path: filePath, base64: buffer.toString("base64"), mimeType };
+  return files;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
@@ -152,10 +142,12 @@ function isBrowserProxyTimeoutError(err: unknown): boolean {
 function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
+    path === "/download" ||
     path === "/navigate" ||
     path === "/pdf" ||
     path === "/screenshot" ||
-    path === "/snapshot"
+    path === "/snapshot" ||
+    path === "/wait/download"
   );
 }
 
@@ -252,6 +244,12 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   if (isPersistentBrowserProfileMutation(method, path)) {
     throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
   }
+  // System-profile listing and import read the local Keychain/Chrome; they are
+  // host-local by contract and must never run on a browser node, which would
+  // leak that node's local profile metadata.
+  if (isBrowserHostLocalRoute(method, path)) {
+    throw new Error("INVALID_REQUEST: browser.proxy cannot run host-local browser routes");
+  }
   if (allowedProfiles.length > 0) {
     if (path !== "/profiles") {
       const profileToCheck = requestedProfile || resolved.defaultProfile;
@@ -315,11 +313,16 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     );
   }
   if (response.status >= 400) {
-    const message =
+    if (params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE) {
+      // New callers opt into the closed envelope; older Gateways retain the
+      // shipped status-prefixed node error during rolling upgrades.
+      return JSON.stringify(createBrowserProxyFailure(response.status, response.body));
+    }
+    const detail =
       response.body && typeof response.body === "object" && "error" in response.body
-        ? String((response.body as { error?: unknown }).error)
-        : `HTTP ${response.status}`;
-    throw new Error(message);
+        ? String((response.body as { error?: unknown }).error).trim()
+        : "";
+    throw new Error(detail ? `${response.status}: ${detail}` : `HTTP ${response.status}`);
   }
 
   const result = response.body;
@@ -336,29 +339,14 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     });
   }
 
-  let files: BrowserProxyFile[] | undefined;
   const paths = collectBrowserProxyPaths(result);
-  if (paths.length > 0) {
-    const loaded = await Promise.all(
-      paths.map(async (p) => {
-        try {
-          const file = await readBrowserProxyFile(p);
-          if (!file) {
-            throw new Error("file not found");
-          }
-          return file;
-        } catch (err) {
-          throw new Error(`browser proxy file read failed for ${p}: ${String(err)}`, {
-            cause: err,
-          });
-        }
-      }),
-    );
-    if (loaded.length > 0) {
-      files = loaded;
-    }
-  }
+  const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
 
-  const payload: BrowserProxyResult = files ? { result, files } : { result };
-  return JSON.stringify(payload);
+  const payload: BrowserProxyEnvelope = files ? { result, files } : { result };
+  const serialized = JSON.stringify(payload);
+  // Node results carry this JSON as a string inside a second JSON frame.
+  if (Buffer.byteLength(JSON.stringify(serialized)) > BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES) {
+    throw new Error("browser proxy payload exceeds 24 MiB encoded limit");
+  }
+  return serialized;
 }

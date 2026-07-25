@@ -32,7 +32,7 @@ const cdpMocks = vi.hoisted(() => ({
 
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
-  assertBrowserNavigationResultAllowed: vi.fn(async () => {
+  assertBrowserNavigationResultAllowed: vi.fn(async (): Promise<void> => {
     throw new Error("browser navigation blocked by policy");
   }),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
@@ -101,6 +101,7 @@ function getSnapshotGetHandler() {
   registerBrowserAgentSnapshotRoutes(app, {
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         extraArgs: [],
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       },
@@ -130,6 +131,8 @@ describe("local-managed browser snapshot routes", () => {
     expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
     expect(routeState.profileCtx.ensureTabAvailable).toHaveBeenCalledWith(undefined, {
       allowPlaywrightFallback: false,
+      signal: expect.any(AbortSignal),
+      timeoutMs: undefined,
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
       url: "http://127.0.0.1:8080/admin",
@@ -151,5 +154,21 @@ describe("local-managed browser snapshot routes", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
     });
     expect(cdpMocks.snapshotRoleViaCdp).not.toHaveBeenCalled();
+  });
+
+  it("forwards the resolved snapshot budget to raw CDP role snapshots", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      { params: {}, query: { format: "ai", interactive: "true", maxChars: "123" } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
+      expect.objectContaining({ maxChars: 123 }),
+    );
   });
 });

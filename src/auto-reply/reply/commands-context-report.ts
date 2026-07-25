@@ -7,6 +7,10 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
+import {
+  createMessageCharEstimateCache,
+  estimateMessageCharsCached,
+} from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import {
@@ -182,12 +186,55 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ].join("\n"),
       };
     }
+    const sessionId = targetSessionEntry?.sessionId?.trim();
+    const messages = sessionId
+      ? (readSessionMessages(
+          sessionId,
+          params.storePath,
+          targetSessionEntry?.sessionFile,
+        ) as AgentMessage[])
+      : [];
+    const estimateCache = createMessageCharEstimateCache();
+    const conversationTotals = messages.reduce(
+      (totals, message) => {
+        const chars = estimateMessageCharsCached(message, estimateCache);
+        if (chars === 0) {
+          return totals;
+        }
+        if (message.role === "user") {
+          totals.user += chars;
+        } else if (message.role === "assistant") {
+          totals.assistant += chars;
+        } else if (message.role === "toolResult") {
+          totals.toolResults += chars;
+        } else if (message.role === "branchSummary" || message.role === "compactionSummary") {
+          totals.summaries += chars;
+        } else {
+          totals.other += chars;
+        }
+        return totals;
+      },
+      { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 },
+    );
+    const conversation = [
+      { name: "User", value: conversationTotals.user },
+      { name: "Assistant", value: conversationTotals.assistant },
+      { name: "Tool results", value: conversationTotals.toolResults },
+      { name: "Summaries", value: conversationTotals.summaries },
+      { name: "Other", value: conversationTotals.other },
+      // Runtime context and hook prompt additions reach only the model, never
+      // the transcript; without these leaves the map undercounts model-visible
+      // context. The persisted turn prompt is already counted above.
+      { name: "Runtime context", value: report.currentTurn?.runtimeContextChars ?? 0 },
+      { name: "Model-only prompt", value: report.currentTurn?.modelOnlyPromptChars ?? 0 },
+    ].filter((leaf) => leaf.value > 0);
     const treemap = await renderContextTreemapPng({
       report,
       session: {
         cachedContextTokens: cachedContextUsageTokens ?? null,
         contextWindowTokens: session.contextTokens,
       },
+      conversation,
     });
     return {
       text: treemap.caption,

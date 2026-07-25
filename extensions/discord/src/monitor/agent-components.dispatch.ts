@@ -6,6 +6,7 @@ import {
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -36,18 +37,11 @@ import {
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 
-let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
-let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("./agent-components.runtime.js"),
+);
 
-async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("./agent-components.runtime.js");
-  return await conversationRuntimePromise;
-}
-
-async function loadTypingRuntime() {
-  typingRuntimePromise ??= import("./typing.js");
-  return await typingRuntimePromise;
-}
+const loadTypingRuntime = createLazyRuntimeModule(() => import("./typing.js"));
 
 function buildDiscordComponentConversationLabel(params: {
   interactionCtx: ComponentInteractionContext;
@@ -77,7 +71,7 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
   return "channel";
 }
 
-export function resolveDiscordComponentOriginatingTo(
+function resolveDiscordComponentOriginatingTo(
   interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
 ) {
   return resolveDiscordConversationIdentity({
@@ -184,11 +178,9 @@ export async function dispatchDiscordComponentEvent(params: {
 
   const {
     createReplyReferencePlanner,
-    dispatchReplyWithBufferedBlockDispatcher,
     finalizeInboundContext,
     resolveChunkMode,
     resolveTextChunkLimit,
-    recordInboundSession,
   } = await (async () => {
     const conversationRuntime = await loadConversationRuntime();
     return {
@@ -279,12 +271,8 @@ export async function dispatchDiscordComponentEvent(params: {
         cfg: ctx.cfg,
         channel: "discord",
         accountId,
-        agentId,
-        routeSessionKey: sessionKey,
-        storePath,
+        route: { agentId, sessionKey },
         ctxPayload,
-        recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher,
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {
@@ -313,9 +301,9 @@ export async function dispatchDiscordComponentEvent(params: {
           },
         },
         delivery: {
-          deliver: async (payload, info) => {
+          deliverWithProviderMessageSending: async (payload, info) => {
             const replyToId = replyReference.use();
-            await deliverDiscordReply({
+            const result = await deliverDiscordReply({
               cfg: ctx.cfg,
               replies: [payload],
               target: deliverTarget,
@@ -336,7 +324,10 @@ export async function dispatchDiscordComponentEvent(params: {
               mediaLocalRoots,
               kind: info.kind,
             });
-            replyReference.markSent();
+            if (result.visibleReplySent) {
+              replyReference.markSent();
+            }
+            return result;
           },
           onError: (err) => {
             logError(`discord component dispatch failed: ${String(err)}`);

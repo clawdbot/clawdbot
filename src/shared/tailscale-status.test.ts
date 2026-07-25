@@ -1,6 +1,9 @@
 // Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
-import { resolveTailnetHostWithRunner } from "./tailscale-status.js";
+import {
+  resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
+} from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
   it("returns null when no runner is provided", async () => {
@@ -82,5 +85,78 @@ describe("shared/tailscale-status", () => {
       stdout: "not-json",
     });
     await expect(resolveTailnetHostWithRunner(invalid)).resolves.toBeNull();
+  });
+
+  it("finds persistent HTTPS Serve routes that proxy the gateway root", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+          },
+          "mac.tail.ts.net:8443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([
+      "wss://mac.tail.ts.net:8443",
+    ]);
+    expect(run).toHaveBeenCalledWith(["tailscale", "serve", "status", "--json"], {
+      timeoutMs: 5000,
+    });
+  });
+
+  it("ignores non-root, non-HTTPS, and non-loopback Serve handlers", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "80": { HTTP: true }, "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:80": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+          },
+          "mac.tail.ts.net:443": {
+            Handlers: { "/openclaw": { Proxy: "http://127.0.0.1:18789" } },
+          },
+          "other.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://192.168.1.20:18789" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
+  });
+
+  it("ignores load-balanced Tailscale Services and public Funnel routes", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "127.0.0.1:18789" } },
+          },
+        },
+        AllowFunnel: { "mac.tail.ts.net:443": true },
+        Services: {
+          "svc:openclaw": {
+            TCP: { "443": { HTTPS: true } },
+            Web: {
+              "openclaw.tail.ts.net:443": {
+                Handlers: { "/": { Proxy: "127.0.0.1:18789" } },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
   });
 });

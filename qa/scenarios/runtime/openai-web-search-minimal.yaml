@@ -4,26 +4,38 @@ scenario:
   id: openai-web-search-minimal
   surface: model-provider
   coverage:
-    primary:
-      - runtime.reasoning-and-cache-controls
     secondary:
+      - plugins.web-search-and-fetch
+      - agent-runtime.reasoning-and-cache-controls
       - web-search.openai-native-web-search
-      - tools.web-search
+      - web-search.model-and-filter-routing
+      - web-search.web-search-exposure
   objective: Verify the OpenAI web_search minimal-reasoning E2E client distinguishes successful grounded turns from provider schema rejection.
   successCriteria:
     - Reject mode accepts the expected raw OpenAI schema rejection and the gateway schema wrapper.
     - Reject mode fails if the agent run unexpectedly succeeds or fails for unrelated transport reasons.
     - Success mode requires an `ok` agent result with the expected marker in visible reply payloads.
     - Gateway ports are parsed strictly before connecting.
+    - A successful request must hit `/v1/responses` with native `web_search` and non-minimal reasoning.
+    - Large request logs are scanned without missing later success requests.
+    - Failure diagnostics are bounded and do not dump stale or oversized request bodies.
+    - Function-shaped `web_search` is rejected as native Responses proof.
   docsRefs:
     - docs/tools/web.md
     - docs/help/testing.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
+    - scripts/e2e/lib/openai-web-search-minimal/assertions.mjs
     - scripts/e2e/lib/openai-web-search-minimal/client.mjs
+    - scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs
     - scripts/e2e/openai-web-search-minimal-docker.sh
+    - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    - test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts
     - test/e2e/qa-lab/runtime/openai-web-search-minimal.e2e.test.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/runtime/openai-web-search-minimal.e2e.test.ts
-    summary: Vitest coverage for OpenAI web_search minimal-reasoning success and rejection validation.
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the OpenAI web_search Docker E2E lane through a real Gateway with a container-local OpenAI Responses mock.
+    args:
+      - --lane
+      - openai-web-search-minimal

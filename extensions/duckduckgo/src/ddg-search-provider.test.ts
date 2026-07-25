@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
-import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
+import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
 const { runDuckDuckGoSearch } = vi.hoisted(() => ({
   runDuckDuckGoSearch: vi.fn(async (params: Record<string, unknown>) => params),
@@ -158,7 +158,7 @@ describe("duckduckgo web search provider", () => {
   });
 
   it("defaults safeSearch to moderate and accepts strict and off", () => {
-    expect(resolveDdgSafeSearch(undefined)).toBe(DEFAULT_DDG_SAFE_SEARCH);
+    expect(resolveDdgSafeSearch(undefined)).toBe("moderate");
 
     expect(
       resolveDdgSafeSearch({
@@ -205,6 +205,20 @@ describe("duckduckgo web search provider", () => {
     );
   });
 
+  it("leaves out-of-range numeric html entities intact instead of throwing", () => {
+    expect(() => ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).not.toThrow();
+    expect(ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).toBe(
+      "Result &#99999999; end",
+    );
+    expect(ddgClientTesting.decodeHtmlEntities("Hex &#x110000; tail")).toBe("Hex &#x110000; tail");
+    // Surrogate-range entities would decode to lone UTF-16 surrogates; keep them intact.
+    expect(ddgClientTesting.decodeHtmlEntities("Bad &#55296; end")).toBe("Bad &#55296; end");
+    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xD800; end")).toBe("Bad &#xD800; end");
+    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xDFFF; end")).toBe("Bad &#xDFFF; end");
+    // A valid supplementary-plane entity still decodes.
+    expect(ddgClientTesting.decodeHtmlEntities("Smile &#128512;")).toBe("Smile 😀");
+  });
+
   it("does not double-decode escaped entities (decodes &amp; last)", () => {
     // A result whose text literally shows "&lt;" arrives double-encoded as
     // "&amp;lt;". Decoding &amp; first would re-decode it into "<", corrupting
@@ -236,6 +250,21 @@ describe("duckduckgo web search provider", () => {
         title: "Direct result",
         url: "https://example.org/direct",
         snippet: "Second snippet",
+      },
+    ]);
+  });
+
+  it("keeps inline result markup from splitting words", () => {
+    const html = `
+      <a class="result__a" href="https://example.com/cafe">Caf<b>é</b> guide</a>
+      <a class="result__snippet">Find the best caf<b>é</b> near you.</a>
+    `;
+
+    expect(ddgClientTesting.parseDuckDuckGoHtml(html)).toEqual([
+      {
+        title: "Café guide",
+        url: "https://example.com/cafe",
+        snippet: "Find the best café near you.",
       },
     ]);
   });

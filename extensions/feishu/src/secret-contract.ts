@@ -1,83 +1,21 @@
 // Feishu plugin module implements secret contract behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
-  collectSimpleChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
+  hasConfiguredSecretInputValue,
   hasOwnProperty,
   normalizeSecretStringValue,
   type ResolverContext,
   type SecretDefaults,
-  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
-  {
-    id: "channels.feishu.accounts.*.appSecret",
-    targetType: "channels.feishu.accounts.*.appSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.accounts.*.appSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.accounts.*.encryptKey",
-    targetType: "channels.feishu.accounts.*.encryptKey",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.accounts.*.encryptKey",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.accounts.*.verificationToken",
-    targetType: "channels.feishu.accounts.*.verificationToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.accounts.*.verificationToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.appSecret",
-    targetType: "channels.feishu.appSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.appSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.encryptKey",
-    targetType: "channels.feishu.encryptKey",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.encryptKey",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.verificationToken",
-    targetType: "channels.feishu.verificationToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.verificationToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "feishu",
+  account: ["appSecret", "encryptKey", "verificationToken"],
+  channel: ["appSecret", "encryptKey", "verificationToken"],
+});
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
@@ -89,13 +27,33 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: feishu, surface } = resolved;
-  collectSimpleChannelFieldAssignments({
+  // Feishu account listing starts an implicit default account from top-level
+  // appId+appSecret even when every named account overrides appSecret.  The
+  // shared helper's isBaseFieldActiveForChannelSurface only checks whether any
+  // explicit account inherits the field, so top-level appSecret refs would be
+  // skipped when all accounts override.  Account for the implicit default here.
+  const hasImplicitDefaultAccount =
+    surface.channelEnabled &&
+    hasConfiguredSecretInputValue(feishu.appId, params.defaults) &&
+    hasConfiguredSecretInputValue(feishu.appSecret, params.defaults);
+  if (
+    hasImplicitDefaultAccount &&
+    surface.hasExplicitAccounts &&
+    !surface.accounts.some(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+  ) {
+    surface.accounts.push({ accountId: "default", account: {}, enabled: true });
+  }
+  collectConditionalChannelFieldAssignments({
     channelKey: "feishu",
     field: "appSecret",
     channel: feishu,
     surface,
     defaults: params.defaults,
     context: params.context,
+    topLevelActiveWithoutAccounts: surface.channelEnabled,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, "appSecret"),
+    accountActive: ({ enabled }) => enabled,
     topInactiveReason: "no enabled account inherits this top-level Feishu appSecret.",
     accountInactiveReason: "Feishu account is disabled.",
   });

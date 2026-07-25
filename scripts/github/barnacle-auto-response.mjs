@@ -1,5 +1,6 @@
 // Barnacle owns deterministic GitHub triage and auto-response behavior.
 
+import { escapeRegExp } from "../lib/regexp.mjs";
 import {
   NEEDS_PR_CONTEXT_LABEL,
   PROOF_SUFFICIENT_LABEL,
@@ -294,7 +295,7 @@ function extractIssueFormValue(body, field) {
   if (!body) {
     return "";
   }
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedField = escapeRegExp(field);
   const regex = new RegExp(
     `(?:^|\\n)###\\s+${escapedField}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|$)`,
     "i",
@@ -317,7 +318,7 @@ function hasLinkedReference(text) {
 }
 
 function hasFilledTemplateLine(body, field) {
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedField = escapeRegExp(field);
   const regex = new RegExp(`^\\s*-\\s*${escapedField}:\\s*\\S`, "im");
   return regex.test(body);
 }
@@ -334,7 +335,7 @@ function hasMostlyBlankTemplate(body) {
     "Root cause",
     "Target test or file",
   ].filter((field) => {
-    const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedField = escapeRegExp(field);
     const regex = new RegExp(`^\\s*-\\s*${escapedField}(?: \\([^)]*\\))?:\\s*$`, "im");
     return regex.test(body);
   }).length;

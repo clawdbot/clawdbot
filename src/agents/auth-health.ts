@@ -142,6 +142,21 @@ function buildProfileHealth(params: {
   const provider = normalizeProviderId(healthCredential.provider);
 
   if (healthCredential.type === "api_key") {
+    const eligibility = evaluateStoredCredentialEligibility({
+      credential: healthCredential,
+      now,
+    });
+    if (!eligibility.eligible) {
+      return {
+        profileId,
+        provider,
+        type: "api_key",
+        status: "missing",
+        reasonCode: eligibility.reasonCode,
+        source,
+        label,
+      };
+    }
     return {
       profileId,
       provider,
@@ -217,6 +232,7 @@ function buildProfileHealth(params: {
   }
 
   const effectiveCredential = resolveEffectiveOAuthCredential({
+    store,
     profileId,
     credential: healthCredential,
     allowKeychainPrompt,
@@ -377,7 +393,11 @@ export function buildAuthHealthSummary(params: {
     let earliestExpiry: number | undefined;
     for (const profile of effectiveProfiles) {
       if (profile.type === "api_key") {
-        hasApiKeyProfile = true;
+        if (profile.status === "static") {
+          hasApiKeyProfile = true;
+        } else if (profile.status === "missing") {
+          hasMissing = true;
+        }
         continue;
       }
       if (profile.type !== "oauth" && profile.type !== "token") {
@@ -400,7 +420,7 @@ export function buildAuthHealthSummary(params: {
     }
 
     if (!hasExpirableProfile) {
-      provider.status = hasApiKeyProfile ? "static" : "missing";
+      provider.status = hasMissing ? "missing" : hasApiKeyProfile ? "static" : "missing";
       continue;
     }
 

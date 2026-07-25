@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -84,9 +87,15 @@
 
       .mount-fallback {
         box-sizing: border-box;
-        min-height: 100vh;
+        /* The app stylesheet clips the root scrollers, so this pre-app error
+           surface must own its scrolling on short windows. dvh keeps the
+           scroll range inside the visible mobile viewport; vh is the fallback. */
+        height: 100vh;
+        height: 100dvh;
+        overflow-y: auto;
         padding: 24px;
         place-items: center;
+        place-items: safe center;
       }
 
       .mount-fallback:not([hidden]) {
@@ -155,7 +164,6 @@
         background: transparent;
         font: inherit;
         font-weight: 700;
-        cursor: pointer;
       }
 
       .mount-fallback__button--primary {
@@ -209,14 +217,13 @@
       <div class="mount-fallback__panel" tabindex="-1">
         <p class="mount-fallback__eyebrow">OpenClaw Control UI</p>
         <h1 id="openclaw-mount-fallback-title">Control UI did not start</h1>
-        <p>
-          The browser loaded the static page, but the app bundle did not register the
-          <code>openclaw-app</code> web component. A browser extension or early content script may
-          be blocking module execution.
+        <p id="openclaw-mount-fallback-summary">
+          The browser loaded the static page, but the app bundle did not start. The gateway may be
+          restarting, or this page may reference assets from a different OpenClaw version.
         </p>
         <ul>
-          <li>Try again in a clean browser profile or private window.</li>
-          <li>Disable extensions that run on all pages, then reload this dashboard.</li>
+          <li>OpenClaw will retry the current app bundle automatically.</li>
+          <li>If this persists, reload or try a clean browser profile.</li>
           <li>
             See
             <a
@@ -249,11 +256,26 @@
         if (!app || !fallback) return;
 
         var panel = fallback.querySelector(".mount-fallback__panel");
+        var summary = document.getElementById("openclaw-mount-fallback-summary");
         var retry = document.getElementById("openclaw-mount-retry");
         var wait = document.getElementById("openclaw-mount-wait");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
+        var maxRecoveryAttempts = 6;
         var timer;
+        var recoveryTimer;
+        var recoveryAttempt = 0;
+        var recoveryInFlight = false;
+        var recoveryNavigation = false;
+
+        try {
+          var initialUrl = new URL(window.location.href);
+          recoveryNavigation = initialUrl.searchParams.has("openclaw_mount_recovery");
+          if (recoveryNavigation) {
+            initialUrl.searchParams.delete("openclaw_mount_recovery");
+            window.history.replaceState(null, "", initialUrl.href);
+          }
+        } catch (e) {}
 
         function appMounted() {
           try {
@@ -273,8 +295,75 @@
           document.body.classList.remove("openclaw-mount-fallback-active");
         }
 
+        function setSummary(text) {
+          if (summary) summary.textContent = text;
+        }
+
+        function scheduleRecovery() {
+          window.clearTimeout(recoveryTimer);
+          if (appMounted() || recoveryAttempt >= maxRecoveryAttempts) return;
+          var retryDelay = Math.min(delay, 1000 * Math.pow(2, recoveryAttempt));
+          recoveryTimer = window.setTimeout(retryCurrentDocument, retryDelay);
+        }
+
+        function finishRecoveryAttempt() {
+          recoveryInFlight = false;
+          if (appMounted()) return;
+          if (recoveryAttempt >= maxRecoveryAttempts) {
+            setSummary(
+              "The gateway is still unavailable. Try again, then check the troubleshooting guide if the problem persists.",
+            );
+            return;
+          }
+          setSummary(
+            "The gateway is not reachable yet. OpenClaw will keep retrying while it restarts.",
+          );
+          scheduleRecovery();
+        }
+
+        function retryCurrentDocument() {
+          if (
+            appMounted() ||
+            recoveryInFlight ||
+            recoveryAttempt >= maxRecoveryAttempts ||
+            typeof window.fetch !== "function"
+          )
+            return;
+          var documentUrl = new URL(window.location.href);
+          if (recoveryNavigation) {
+            setSummary(
+              "A fresh page still could not start the Control UI. Try again, then check the troubleshooting guide if the problem persists.",
+            );
+            return;
+          }
+          recoveryInFlight = true;
+          recoveryAttempt += 1;
+          documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+          var recoveryController = new AbortController();
+          var requestTimer = window.setTimeout(function () {
+            recoveryController.abort();
+          }, delay);
+          window
+            .fetch(documentUrl.href, {
+              cache: "no-store",
+              credentials: "same-origin",
+              signal: recoveryController.signal,
+            })
+            .then(function (response) {
+              if (!response.ok) throw new Error("gateway unavailable");
+              window.location.replace(documentUrl.href);
+            })
+            .catch(function () {
+              finishRecoveryAttempt();
+            })
+            .finally(function () {
+              window.clearTimeout(requestTimer);
+            });
+        }
+
         function showFallback() {
           if (appMounted()) return;
+          retryCurrentDocument();
           fallback.hidden = false;
           document.body.classList.add("openclaw-mount-fallback-active");
           if (panel && typeof panel.focus === "function") {
@@ -297,6 +386,7 @@
           window.customElements.whenDefined(tagName).then(
             function () {
               window.clearTimeout(timer);
+              window.clearTimeout(recoveryTimer);
               hideFallback();
             },
             function () {},
@@ -311,6 +401,8 @@
         if (wait) {
           wait.addEventListener("click", function () {
             hideFallback();
+            recoveryAttempt = 0;
+            retryCurrentDocument();
             armFallbackTimer();
           });
         }

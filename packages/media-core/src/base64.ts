@@ -37,6 +37,8 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
+const CANONICALIZE_BASE64_CHUNK_SIZE = 8192;
+
 function isBase64DataChar(code: number): boolean {
   return (
     (code >= 0x41 && code <= 0x5a) ||
@@ -52,9 +54,21 @@ function isBase64DataChar(code: number): boolean {
  * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  let cleaned = "";
+  const chunks: string[] = [];
+  let current = "";
+  let cleanedLength = 0;
   let padding = 0;
   let sawPadding = false;
+
+  const append = (char: string): void => {
+    current += char;
+    cleanedLength += 1;
+    if (current.length >= CANONICALIZE_BASE64_CHUNK_SIZE) {
+      chunks.push(current);
+      current = "";
+    }
+  };
+
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
     if (code <= 0x20) {
@@ -66,23 +80,26 @@ export function canonicalizeBase64(base64: string): string | undefined {
         return undefined;
       }
       sawPadding = true;
-      cleaned += "=";
+      append("=");
       continue;
     }
     if (sawPadding || !isBase64DataChar(code)) {
       return undefined;
     }
-    cleaned += base64[i];
+    append(base64[i] ?? "");
   }
-  if (!cleaned) {
+  if (cleanedLength === 0) {
     return undefined;
   }
-  const remainder = cleaned.length % 4;
+  const remainder = cleanedLength % 4;
   if (remainder !== 0) {
     if (sawPadding || remainder === 1) {
       return undefined;
     }
-    cleaned += "=".repeat(4 - remainder);
+    current += "=".repeat(4 - remainder);
   }
-  return cleaned;
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks.join("");
 }

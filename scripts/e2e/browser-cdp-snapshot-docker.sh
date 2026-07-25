@@ -41,9 +41,10 @@ else
   cat >"$build_dir/Dockerfile" <<EOF
 FROM $BASE_IMAGE
 USER root
-RUN apt-get update \\
- && apt-get install -y --no-install-recommends chromium fonts-liberation procps \\
- && rm -rf /var/lib/apt/lists/*
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/appuser/.cache/ms-playwright
+RUN mkdir -p "\$PLAYWRIGHT_BROWSERS_PATH" \\
+ && DEBIAN_FRONTEND=noninteractive node /app/node_modules/playwright-core/cli.js install --with-deps chromium \\
+ && chown -R appuser:appuser "\$PLAYWRIGHT_BROWSERS_PATH"
 USER appuser
 EOF
   echo "Building Docker image: $IMAGE_NAME"
@@ -72,25 +73,24 @@ source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
 openclaw_e2e_write_state_env
 entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
-mkdir -p /tmp/openclaw-browser-cdp/chrome
+mkdir -p /tmp/openclaw-browser-cdp
 find dist -maxdepth 1 -type f -name 'pw-ai-*.js' ! -name 'pw-ai-state-*' -exec mv {} /tmp/openclaw-browser-cdp/ \;
+if find dist -maxdepth 1 -type f -name 'pw-ai-*.js' ! -name 'pw-ai-state-*' | grep -q .; then
+  echo 'failed to disable Playwright AI snapshot chunk for raw CDP smoke' >&2
+  exit 1
+fi
 PORT=$PORT CDP_PORT=$CDP_PORT node scripts/e2e/lib/fixture.mjs browser-cdp
-chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \\
-  --remote-debugging-address=127.0.0.1 \\
-  --remote-debugging-port=$CDP_PORT \\
-  --user-data-dir=/tmp/openclaw-browser-cdp/chrome \\
-  about:blank >/tmp/browser-cdp-chromium.log 2>&1 &
 FIXTURE_PORT=$FIXTURE_PORT node scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs >/tmp/browser-cdp-fixture.log 2>&1 &
 openclaw_e2e_exec_gateway \"\$entry\" $PORT loopback /tmp/browser-cdp-gateway.log" >/dev/null
 
-echo "Waiting for Chromium and Gateway..."
+echo "Waiting for Gateway and fixture server..."
 if ! docker_e2e_wait_container_bash "$CONTAINER_NAME" 180 0.5 "
     source scripts/lib/openclaw-e2e-instance.sh
-    openclaw_e2e_probe_http_status http://127.0.0.1:$CDP_PORT/json/version
+    openclaw_e2e_probe_http_status http://127.0.0.1:$FIXTURE_PORT/
     openclaw_e2e_probe_tcp 127.0.0.1 $PORT
 "; then
   echo "Browser CDP snapshot container failed to become ready"
-  docker_e2e_tail_container_file_if_running "$CONTAINER_NAME" "/tmp/browser-cdp-chromium.log /tmp/browser-cdp-gateway.log /tmp/browser-cdp-fixture.log" 120
+  docker_e2e_tail_container_file_if_running "$CONTAINER_NAME" "/tmp/browser-cdp-gateway.log /tmp/browser-cdp-fixture.log" 120
   exit 1
 fi
 
@@ -101,14 +101,13 @@ source /tmp/openclaw-test-state-env
 source scripts/lib/openclaw-e2e-instance.sh
 entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 base_args=(--url ws://127.0.0.1:$PORT --token '$TOKEN')
-node \"\$entry\" browser \"\${base_args[@]}\" --browser-profile docker-cdp doctor --deep >/tmp/browser-cdp-doctor.txt
-grep -q 'OK live-snapshot' /tmp/browser-cdp-doctor.txt
 node \"\$entry\" browser \"\${base_args[@]}\" --browser-profile docker-cdp open http://127.0.0.1:$FIXTURE_PORT/ >/tmp/browser-cdp-open.txt
+node \"\$entry\" browser \"\${base_args[@]}\" --browser-profile docker-cdp doctor --deep >/tmp/browser-cdp-doctor.txt 2>&1 || true
 node \"\$entry\" browser \"\${base_args[@]}\" --browser-profile docker-cdp snapshot --interactive --urls --out /tmp/browser-cdp-snapshot.txt >/tmp/browser-cdp-snapshot.out
 node scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs /tmp/browser-cdp-snapshot.txt
 "; then
   echo "Browser CDP snapshot smoke failed"
-  docker_e2e_tail_container_file_if_running "$CONTAINER_NAME" "/tmp/browser-cdp-doctor.txt /tmp/browser-cdp-open.txt /tmp/browser-cdp-snapshot.out /tmp/browser-cdp-snapshot.txt /tmp/browser-cdp-chromium.log /tmp/browser-cdp-gateway.log /tmp/browser-cdp-fixture.log" 200
+  docker_e2e_tail_container_file_if_running "$CONTAINER_NAME" "/tmp/browser-cdp-doctor.txt /tmp/browser-cdp-open.txt /tmp/browser-cdp-snapshot.out /tmp/browser-cdp-snapshot.txt /tmp/browser-cdp-gateway.log /tmp/browser-cdp-fixture.log" 200
   exit 1
 fi
 

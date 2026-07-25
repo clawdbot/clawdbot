@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Feishu plugin module implements setup surface behavior.
 import {
   DEFAULT_ACCOUNT_ID,
@@ -6,6 +7,7 @@ import {
   mergeAllowFromEntries,
   patchTopLevelChannelConfigSection,
   promptSingleChannelSecretInput,
+  setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
@@ -248,16 +250,7 @@ function applyNewAppSecurityPolicy(
   return next;
 }
 
-// ---------------------------------------------------------------------------
-// Scan-to-create flow
-// ---------------------------------------------------------------------------
-
-let appRegistrationModulePromise: Promise<typeof import("./app-registration.js")> | null = null;
-
-const loadAppRegistrationModule = async () => {
-  appRegistrationModulePromise ??= import("./app-registration.js");
-  return await appRegistrationModulePromise;
-};
+const loadAppRegistrationModule = createLazyRuntimeModule(() => import("./app-registration.js"));
 
 async function promptFeishuDomain(params: {
   prompter: WizardPrompter;
@@ -287,6 +280,7 @@ async function promptFeishuSetupMethod(prompter: WizardPrompter): Promise<Feishu
 async function runScanToCreate(
   prompter: WizardPrompter,
   domain: FeishuDomain,
+  beforePersistentEffect?: () => Promise<void>,
 ): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
     await loadAppRegistrationModule();
@@ -297,6 +291,7 @@ async function runScanToCreate(
     return null;
   }
 
+  await beforePersistentEffect?.();
   const begin = await beginAppRegistration(domain);
 
   await prompter.note(t("wizard.feishu.scanQr"), t("wizard.feishu.scanTitle"));
@@ -363,7 +358,9 @@ async function runNewAppFlow(params: {
   scanDomain = selectedDomain;
 
   const scanResult =
-    setupMethod === "scan" ? await runScanToCreate(prompter, selectedDomain) : null;
+    setupMethod === "scan"
+      ? await runScanToCreate(prompter, selectedDomain, options?.beforePersistentEffect)
+      : null;
   if (scanResult) {
     appId = scanResult.appId;
     appSecret = scanResult.appSecret;
@@ -611,10 +608,5 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   },
 
   dmPolicy: feishuDmPolicy,
-  disable: (cfg) =>
-    patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      patch: { enabled: false },
-    }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

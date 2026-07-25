@@ -18,7 +18,9 @@ extension VoiceWakeOverlayController {
         self.logger.log(level: .info, "\(message)")
         self.activeToken = token
         self.activeSource = source
-        self.autoSendTask?.cancel(); self.autoSendTask = nil; self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendTask = nil
+        self.autoSendToken = nil
         self.model.text = transcript
         self.model.isFinal = isFinal
         self.model.forwardEnabled = forwardEnabled
@@ -44,7 +46,9 @@ extension VoiceWakeOverlayController {
         len=\(transcript.count)
         """
         self.logger.log(level: .info, "\(message)")
-        self.autoSendTask?.cancel(); self.autoSendTask = nil; self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendTask = nil
+        self.autoSendToken = nil
         self.model.text = transcript
         self.model.isFinal = false
         self.model.forwardEnabled = false
@@ -60,7 +64,6 @@ extension VoiceWakeOverlayController {
         token: UUID,
         transcript: String,
         autoSendAfter delay: TimeInterval?,
-        sendChime: VoiceWakeChime = .none,
         attributed: NSAttributedString? = nil)
     {
         guard self.guardToken(token, context: "final") else { return }
@@ -118,7 +121,8 @@ extension VoiceWakeOverlayController {
     /// UI-only path: show sending state and dismiss; actual forwarding is handled by the coordinator.
     func beginSendUI(token: UUID, sendChime: VoiceWakeChime = .none) {
         guard self.guardToken(token, context: "beginSendUI") else { return }
-        self.autoSendTask?.cancel(); self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendToken = nil
         let message = """
         overlay beginSendUI token=\(token.uuidString) \
         isSending=\(self.model.isSending) \
@@ -160,7 +164,8 @@ extension VoiceWakeOverlayController {
         sending=\(self.model.isSending)
         """
         self.logger.log(level: .info, "\(message)")
-        self.autoSendTask?.cancel(); self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendToken = nil
         self.model.isSending = false
         self.model.isEditing = false
 

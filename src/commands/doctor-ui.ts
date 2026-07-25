@@ -12,7 +12,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-export type UiProtocolFreshnessIssue =
+type UiProtocolFreshnessIssue =
   | {
       readonly kind: "missing-assets";
       readonly root: string;

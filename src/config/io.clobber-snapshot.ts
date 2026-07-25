@@ -1,5 +1,7 @@
 // Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
+import { createDedupeCache } from "../infra/dedupe.js";
+import { sleep } from "../utils/sleep.js";
 
 /** Maximum retained clobbered-config snapshots per config file. */
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
@@ -7,7 +9,10 @@ const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 const CONFIG_CLOBBER_LOCK_STALE_MS = 30_000;
 const CONFIG_CLOBBER_LOCK_RETRY_MS = 10;
 const CONFIG_CLOBBER_LOCK_TIMEOUT_MS = 2_000;
-const clobberCapWarnedPaths = new Set<string>();
+const clobberCapWarnedPaths = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 
 type ConfigClobberSnapshotFs = {
   promises: {
@@ -50,12 +55,6 @@ function isFsErrorCode(error: unknown, code: string): boolean {
     typeof (error as { code?: unknown }).code === "string" &&
     (error as { code: string }).code === code
   );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function resolveClobberPaths(configPath: string): {
@@ -215,10 +214,9 @@ function warnClobberCapReached(
   configPath: string,
   existing: number,
 ): void {
-  if (clobberCapWarnedPaths.has(configPath)) {
+  if (clobberCapWarnedPaths.check(configPath)) {
     return;
   }
-  clobberCapWarnedPaths.add(configPath);
   deps.logger.warn(
     `Config clobber snapshot cap reached for ${configPath}: ${existing} existing .clobbered.* files; rotating oldest snapshots to preserve the latest forensic copy.`,
   );

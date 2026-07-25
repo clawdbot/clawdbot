@@ -1,9 +1,9 @@
 // Qa Lab tests cover suite runtime transport plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
+import { findFailureOutboundMessage } from "./qa-transport.js";
 import {
-  createScenarioWaitForCondition,
-  findFailureOutboundMessage,
   formatTransportTranscript,
   readTransportTranscript,
   waitForNoOutbound,
@@ -37,7 +37,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });
@@ -126,7 +126,7 @@ describe("qa suite transport helpers", () => {
 
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
-    const waitForCondition = createScenarioWaitForCondition(state);
+    const waitForCondition = createQaChannelTransport(state).waitForCondition;
 
     const pending = waitForCondition(
       () =>
@@ -144,7 +144,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });
@@ -173,7 +173,7 @@ describe("qa suite transport helpers", () => {
       text: "ok do it",
     });
 
-    const waitForCondition = createScenarioWaitForCondition(state);
+    const waitForCondition = createQaChannelTransport(state).waitForCondition;
     const pending = waitForCondition(
       () =>
         state
@@ -191,7 +191,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.5 with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
+      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });

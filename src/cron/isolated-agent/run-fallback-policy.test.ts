@@ -428,6 +428,6 @@ describe("resolveCronFallbacksOverride", () => {
     const automationDocs = readFileSync("docs/automation/cron-jobs.md", "utf8");
 
     expect(cliDocs).toContain("Local-provider preflight checks walk configured fallbacks");
-    expect(automationDocs).toContain("Local-provider preflight checks walk configured fallbacks");
+    expect(automationDocs).toContain("This preflight walks the job's configured fallback chain");
   });
 });

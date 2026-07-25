@@ -1,18 +1,18 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.6.10",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/line",
-      "version": "2026.6.10",
+      "version": "2026.7.2",
       "dependencies": {
-        "@line/bot-sdk": "11.0.1",
+        "@line/bot-sdk": "11.2.0",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.10"
+        "openclaw": ">=2026.7.2"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -21,9 +21,9 @@
       }
     },
     "node_modules/@line/bot-sdk": {
-      "version": "11.0.1",
-      "resolved": "https://registry.npmjs.org/@line/bot-sdk/-/bot-sdk-11.0.1.tgz",
-      "integrity": "sha512-De9gBX2JfZs78nDSyzfetHJw0R6hncPVVy3tzPMwYZzgwK06C/tcijGy7Vq28K8uYKGVTSthbtMIoYKNhXISzw==",
+      "version": "11.2.0",
+      "resolved": "https://registry.npmjs.org/@line/bot-sdk/-/bot-sdk-11.2.0.tgz",
+      "integrity": "sha512-JKYFa3jaPYWqgI4hnc0ls+7tMmUEgnFF0Jb48kscKcGOO8qh4hddJyiq8/TFqaTWWxXQeSgYd1o5zrHjt6FrpQ==",
       "license": "Apache-2.0",
       "dependencies": {
         "@types/node": "^24.0.0"
@@ -33,9 +33,9 @@
       }
     },
     "node_modules/@types/node": {
-      "version": "24.13.1",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.13.1.tgz",
-      "integrity": "sha512-RSpUJGmvsJ1ZeBehQZFhIdpsz+bIpES0nIQXko4Ybq+N+kX6XvOq3Jo+iJ82FWLdblFq85AsMikd3m35jgezYg==",
+      "version": "24.13.3",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.13.3.tgz",
+      "integrity": "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==",
       "license": "MIT",
       "dependencies": {
         "undici-types": "~7.18.0"

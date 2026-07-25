@@ -10,10 +10,23 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
+
+const logVerboseMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+    shouldLogVerbose: () => true,
+  };
+});
 
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
@@ -73,6 +86,7 @@ describe("buildLineMessageContext", () => {
     }) as PostbackEvent;
 
   beforeEach(async () => {
+    logVerboseMock.mockClear();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -111,6 +125,118 @@ describe("buildLineMessageContext", () => {
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-1");
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
+  });
+
+  it("passes the caller-provided inbound history through to the context payload", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+      inboundHistory: [{ sender: "user:user-2", body: "earlier chatter", timestamp: 1000 }],
+    });
+
+    expect(context?.ctxPayload.InboundHistory).toEqual([
+      { sender: "user:user-2", body: "earlier chatter", timestamp: 1000 },
+    ]);
+  });
+
+  it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
+    const timestamp = 1_700_000_000_000;
+    const logCfg: OpenClawConfig = {
+      ...cfg,
+      agents: { defaults: { envelopeTimestamp: "off" } },
+    };
+    await buildLineMessageContext({
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "baseline", type: "text", text: "BODY_MARKER" },
+      } as Partial<MessageEvent>),
+      allMedia: [],
+      cfg: logCfg,
+      account,
+      commandAuthorized: true,
+    });
+    const baselineLog = String(logVerboseMock.mock.calls[0]?.[0]);
+    const baselinePreview = baselineLog.match(/preview="(.*)"$/)?.[1] ?? "";
+    const markerIndex = baselinePreview.indexOf("BODY_MARKER");
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    const rawBody = `${"x".repeat(199 - markerIndex)}🚀tail`;
+    logVerboseMock.mockClear();
+
+    await buildLineMessageContext({
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "1", type: "text", text: rawBody },
+      } as Partial<MessageEvent>),
+      allMedia: [],
+      cfg: logCfg,
+      account,
+      commandAuthorized: true,
+    });
+    const expectedPreview = `${baselinePreview.slice(0, markerIndex)}${"x".repeat(199 - markerIndex)}`;
+    const formattedBodyLength = markerIndex + rawBody.length;
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      `line inbound: from=line:user-1 len=${formattedBodyLength} preview="${expectedPreview}"`,
+    );
+  });
+
+  it("keeps failed media-only command text empty and preserves its native media fact", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      mediaUnavailable: true,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
+    expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: undefined,
+      kind: "image",
+    });
+  });
+
+  it("keeps materialized media-only text empty and projects structured media facts", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-2",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/line-image.png", contentType: "image/png" }],
+      cfg,
+      account,
+      commandAuthorized: false,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("");
+    expect(context?.ctxPayload.CommandBody).toBe("");
+    expect(context?.ctxPayload.BodyForAgent).toBe("");
+    expect(context?.ctxPayload.media?.[0]).toMatchObject({
+      path: "/tmp/line-image.png",
+      contentType: "image/png",
+      kind: "image",
+    });
   });
 
   it("routes group postback replies to the group id", async () => {

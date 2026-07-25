@@ -10,11 +10,13 @@ const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
 const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
+const SCENARIO_WORKFLOW = ".github/workflows/mantis-scenario.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
 const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
+  if?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;
@@ -76,6 +78,17 @@ function filesUnder(root: string): string[] {
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
+  it("dispatches from the scenario workflow using the proof workflow input contract", () => {
+    const run = jobStep(SCENARIO_WORKFLOW, "dispatch", "Dispatch scenario").run ?? "";
+    const branch = run.match(/telegram-desktop-proof\)([\s\S]*?)\n\s*;;/)?.[1];
+
+    expect(branch).toBeDefined();
+    expect(branch).toContain('if [[ -z "${PR_NUMBER:-}" ]]');
+    expect(branch).toContain('-f "pr_number=${PR_NUMBER}"');
+    expect(branch).not.toContain("baseline_ref=");
+    expect(branch).not.toContain("candidate_ref=");
+  });
+
   it("uses repository pnpm setup defaults", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
@@ -260,7 +273,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
     );
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).not.toMatch(
-      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload-validation\.js"/u,
+      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload_validation\.js"/u,
     );
   });
 
@@ -320,6 +333,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_PROOF_CMD");
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
     expect(prompt).toContain("Let `start` return or fail on its\n   own");
+    expect(prompt).toContain("`--mcp-app-fixture` option");
+    expect(prompt).toContain("mcp app conformance qa check");
+    expect(prompt).toContain("`companion-called` and\n   `resource-ok`");
+    expect(prompt).toContain("Reopen that same Telegram button after its ticket expires");
     expect(prompt).toContain(
       "Use a long\n   command timeout for `start`, `send`, `view`, and `finish`",
     );

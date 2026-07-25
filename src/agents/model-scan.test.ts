@@ -177,7 +177,7 @@ describe("scanOpenRouterModels", () => {
     });
   });
 
-  it("applies the scan timeout to the OpenRouter catalog request", async () => {
+  it("applies the scan timeout before the OpenRouter catalog responds", async () => {
     vi.useFakeTimers();
     const fetchImpl: typeof fetch = async (_input, init) =>
       await new Promise<Response>((_resolve, reject) => {
@@ -201,6 +201,68 @@ describe("scanOpenRouterModels", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     await scan;
+  });
+
+  it("keeps the catalog timeout active while reading a streaming body", async () => {
+    vi.useFakeTimers();
+    const timeoutMs = 20;
+    const chunkIntervalMs = 5;
+    const encoder = new TextEncoder();
+    let chunkCount = 0;
+    let abortCount = 0;
+
+    const fetchImpl = withFetchPreconnect(async (_input, init) => {
+      const signal = typeof init === "object" && init ? init.signal : undefined;
+      if (!signal) {
+        throw new Error("Expected catalog request signal");
+      }
+      let interval: ReturnType<typeof setInterval> | undefined;
+      let completionTimer: ReturnType<typeof setTimeout> | undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"data":['));
+            interval = setInterval(() => {
+              chunkCount += 1;
+              controller.enqueue(encoder.encode(" "));
+            }, chunkIntervalMs);
+            completionTimer = setTimeout(() => {
+              clearInterval(interval);
+              controller.enqueue(encoder.encode("]}"));
+              controller.close();
+            }, timeoutMs + chunkIntervalMs);
+            signal.addEventListener(
+              "abort",
+              () => {
+                abortCount += 1;
+                clearInterval(interval);
+                clearTimeout(completionTimer);
+                controller.error(signal.reason);
+              },
+              { once: true },
+            );
+          },
+          cancel() {
+            clearInterval(interval);
+            clearTimeout(completionTimer);
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const scan = expect(
+      scanOpenRouterModels({ fetchImpl, probe: false, timeoutMs }),
+    ).rejects.toThrow(/aborted/i);
+
+    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+    expect(chunkCount).toBe(3);
+    expect(abortCount).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(chunkIntervalMs + 1);
+    await scan;
+    expect(abortCount).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("caps oversized scan timeouts before scheduling catalog aborts", async () => {

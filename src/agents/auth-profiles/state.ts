@@ -3,7 +3,6 @@
  * This state tracks order, last-good profile, and cooldown/failure metadata
  * separately from secret-bearing credentials.
  */
-import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,7 +10,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { readPersistedAuthProfileStateRaw, writePersistedAuthProfileStateRaw } from "./sqlite.js";
+import { readPersistedAuthProfileStateRaw } from "./sqlite.js";
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
@@ -119,6 +118,7 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     blockedReason: normalizeEnumValue(raw.blockedReason, AUTH_BLOCKED_REASONS),
     blockedSource: normalizeEnumValue(raw.blockedSource, AUTH_BLOCKED_SOURCES),
     blockedModel: normalizeOptionalString(raw.blockedModel),
+    blockedScope: raw.blockedScope === "model" ? "model" : undefined,
     cooldownUntil: normalizeFiniteNumber(raw.cooldownUntil),
     cooldownReason: normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS),
     cooldownModel: normalizeOptionalString(raw.cooldownModel),
@@ -127,6 +127,7 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     errorCount: normalizeFiniteNumber(raw.errorCount),
     failureCounts: normalizeFailureCounts(raw.failureCounts),
     lastFailureAt: normalizeFiniteNumber(raw.lastFailureAt),
+    lastProbeAt: normalizeFiniteNumber(raw.lastProbeAt),
   };
   for (const key of Object.keys(stats) as Array<keyof ProfileUsageStats>) {
     if (stats[key] === undefined) {
@@ -211,17 +212,4 @@ export function buildPersistedAuthProfileState(
     ...(state.lastGood ? { lastGood: state.lastGood } : {}),
     ...(state.usageStats ? { usageStats: state.usageStats } : {}),
   };
-}
-
-/** Saves auth profile runtime state when it differs from the persisted payload. */
-export function savePersistedAuthProfileState(
-  store: AuthProfileState,
-  agentDir?: string,
-): AuthProfileStateStore | null {
-  const payload = buildPersistedAuthProfileState(store);
-  const existingRaw = readPersistedAuthProfileStateRaw(agentDir);
-  if (!payload || !isDeepStrictEqual(existingRaw, payload)) {
-    writePersistedAuthProfileStateRaw(payload, agentDir);
-  }
-  return payload;
 }

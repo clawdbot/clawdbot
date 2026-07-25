@@ -27,11 +27,16 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   if (!rawId) {
     return null;
   }
+  const hasExplicitUserKind = resolvedKind === "user" || lower.startsWith("user:");
+  // User ids map to inbound DM sender ids. Channel ids do not encode whether
+  // the conversation is public, private, or a group DM, so they stay inexact.
+  const recipientSessionExact = isUser && hasExplicitUserKind && /^[a-z0-9]{26}$/.test(rawId);
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "mattermost",
     accountId: params.accountId,
+    recipientSessionExact,
     peer: {
       kind: isUser ? "direct" : "channel",
       id: rawId,

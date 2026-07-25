@@ -10,7 +10,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
 import { resolveTelegramMessageCachePath } from "./message-cache.js";
 import {
@@ -33,6 +33,7 @@ type PersistedCacheEntry = {
   key: string;
   node: {
     sourceMessage: Message;
+    threadId?: string;
   };
 };
 
@@ -131,9 +132,33 @@ describe("telegram state migrations", () => {
     const persistedPath = resolveTelegramMessageCachePath(storePath);
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
+      const arrayEntry = persistedCacheEntry(9201, 'doctor preserves ]{"key": text');
+      arrayEntry.key = "default:7:9999";
+      arrayEntry.node.sourceMessage = {
+        ...arrayEntry.node.sourceMessage,
+        openclaw_prompt_context_projection: {
+          transcriptMessageId: "must-not-be-inferred",
+          partIndex: 0,
+          finalPart: true,
+        },
+      } as Message;
+      const appendedEntry = persistedCacheEntry(9202, "doctor imports appended JSONL");
+      appendedEntry.node.threadId = "42";
+      const invalidKeyEntry = persistedCacheEntry(9203, "invalid key");
+      invalidKeyEntry.key = "orphan";
+      const invalidDateEntry = persistedCacheEntry(9204, "invalid date");
+      invalidDateEntry.node.sourceMessage = {
+        ...invalidDateEntry.node.sourceMessage,
+        date: Number.NaN,
+      } as Message;
       await writeFile(
         persistedPath,
-        JSON.stringify([persistedCacheEntry(9201, "doctor imports this")]),
+        [
+          `${JSON.stringify([arrayEntry])}${JSON.stringify(appendedEntry)}`,
+          JSON.stringify(invalidKeyEntry),
+          JSON.stringify(invalidDateEntry),
+          '{"key":"default:7:9205","node":',
+        ].join("\n"),
       );
 
       const cfg = {
@@ -158,10 +183,23 @@ describe("telegram state migrations", () => {
       if (!messageCachePlan || messageCachePlan.kind !== "plugin-state-import") {
         throw new Error("expected Telegram message-cache plugin-state import plan");
       }
-
       const entries = await messageCachePlan.readEntries();
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.key).toBe("default:7:9201");
+      expect(entries).toHaveLength(2);
+      expect(entries[0]).toMatchObject({
+        key: "default:7:9201",
+        value: { version: 1, sourceMessage: { text: 'doctor preserves ]{"key": text' } },
+      });
+      expect(entries[1]).toMatchObject({
+        key: "default:7:9202",
+        value: {
+          version: 1,
+          sourceMessage: { text: "doctor imports appended JSONL" },
+          threadId: "42",
+        },
+      });
+      expect(entries[0]?.value).not.toHaveProperty(
+        "sourceMessage.openclaw_prompt_context_projection",
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -391,6 +429,7 @@ describe("telegram state migrations", () => {
         kind: "plugin-state-import",
         sourcePath: sentMessagePath,
         namespace: "telegram.sent-messages",
+        cleanupWhenEmpty: true,
       });
       expect(byLabel.get("Telegram thread bindings")).toMatchObject({
         kind: "plugin-state-import",
@@ -402,6 +441,7 @@ describe("telegram state migrations", () => {
         pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
         sourcePath: dispatchPath,
         namespace: dispatchNamespace,
+        cleanupWhenEmpty: true,
       });
       const dispatchPlan = byLabel.get("Telegram message dispatch dedupe");
       if (!dispatchPlan || dispatchPlan.kind !== "plugin-state-import") {
@@ -434,6 +474,59 @@ describe("telegram state migrations", () => {
         expect(await plan.readEntries()).toHaveLength(1);
       }
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up expired and boundary Telegram TTL cache sidecars", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const storePath = resolveStorePath(undefined, { env });
+    const sentMessagePath = `${storePath}.telegram-sent-messages.json`;
+    const dispatchPath = resolveTelegramMessageDispatchLegacyPath({
+      storePath,
+      namespace: "ops",
+    });
+    const expiredAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    const boundaryAt = Date.now() - 24 * 60 * 60 * 1000;
+    try {
+      await mkdir(path.dirname(sentMessagePath), { recursive: true });
+      await writeFile(sentMessagePath, JSON.stringify({ 7: { 42: expiredAt, 43: boundaryAt } }));
+      await writeFile(
+        dispatchPath,
+        JSON.stringify({ [JSON.stringify(["message", "7", 42])]: expiredAt }),
+      );
+
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                botToken: "test",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const expiredPlans = plans.filter(
+        (plan) =>
+          plan.kind === "plugin-state-import" &&
+          (plan.sourcePath === sentMessagePath || plan.sourcePath === dispatchPath),
+      );
+
+      expect(expiredPlans).toHaveLength(2);
+      for (const plan of expiredPlans) {
+        expect(plan).toMatchObject({ cleanupSource: "rename", cleanupWhenEmpty: true });
+        if (plan.kind !== "plugin-state-import") {
+          throw new Error("expected Telegram TTL cache import plan");
+        }
+        expect(await plan.readEntries()).toStrictEqual([]);
+      }
+    } finally {
+      vi.useRealTimers();
       await rm(dir, { recursive: true, force: true });
     }
   });

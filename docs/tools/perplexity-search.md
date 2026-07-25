@@ -6,11 +6,9 @@ read_when:
 title: "Perplexity search"
 ---
 
-OpenClaw supports Perplexity Search API as a `web_search` provider.
-It returns structured results with `title`, `url`, and `snippet` fields.
+OpenClaw supports the Perplexity Search API as a `web_search` provider. It returns structured results with `title`, `url`, and `snippet` fields.
 
-For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups.
-If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
+For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups. If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
 
 ## Install plugin
 
@@ -23,8 +21,8 @@ openclaw gateway restart
 
 ## Getting a Perplexity API key
 
-1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
-2. Generate an API key in the dashboard
+1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api).
+2. Generate an API key in the dashboard.
 3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 
 ## OpenRouter compatibility
@@ -92,13 +90,9 @@ Optional compatibility controls:
 
 ## Where to set the key
 
-**Via config:** run `openclaw configure --section web`. It stores the key in
-`~/.openclaw/openclaw.json` under `plugins.entries.perplexity.config.webSearch.apiKey`.
-That field also accepts SecretRef objects.
+**Via config:** run `openclaw configure --section web`. It stores the key in `~/.openclaw/openclaw.json` under `plugins.entries.perplexity.config.webSearch.apiKey`. That field also accepts SecretRef objects.
 
-**Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
-in the Gateway process environment. For a gateway install, put it in
-`~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
+**Via environment:** set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` in the Gateway process environment. For a gateway install, put it in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#env-vars-and-env-loading).
 
 If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
 
@@ -148,12 +142,9 @@ Per-page token limit.
 
 For the legacy Sonar/OpenRouter compatibility path:
 
-- `query`, `count`, and `freshness` are accepted
-- `count` is compatibility-only there; the response is still one synthesized
-  answer with citations rather than an N-result list
-- Search API-only filters such as `country`, `language`, `date_after`,
-  `date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page`
-  return explicit errors
+- `query`, `count`, and `freshness` are accepted.
+- `count` is compatibility-only there; the response is still one synthesized answer with citations rather than an N-result list.
+- Search API-only filters (`country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, `max_tokens_per_page`) return explicit errors.
 
 **Examples:**
 
@@ -200,16 +191,16 @@ await web_search({
 
 ### Domain filter rules
 
-- Maximum 20 domains per filter
-- Cannot mix allowlist and denylist in the same request
-- Use `-` prefix for denylist entries (e.g., `["-reddit.com"]`)
+- Maximum 20 domains per filter.
+- Cannot mix allowlist and denylist entries in the same request.
+- Use a `-` prefix for denylist entries (e.g., `["-reddit.com"]`).
 
 ## Notes
 
-- Perplexity Search API returns structured web search results (`title`, `url`, `snippet`)
-- OpenRouter or explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model` switches Perplexity back to Sonar chat completions for compatibility
-- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows
-- Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
+- Perplexity Search API returns structured web search results (`title`, `url`, `snippet`).
+- OpenRouter, or an explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, switches Perplexity back to Sonar chat completions for compatibility.
+- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows.
+- Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
 ## Related
 

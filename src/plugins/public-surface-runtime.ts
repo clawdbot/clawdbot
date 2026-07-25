@@ -42,7 +42,7 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
 }
 
 /** Normalizes a bundled plugin directory name and rejects path-like values. */
-export function normalizeBundledPluginDirName(dirName: string): string {
+function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
     !normalized ||
@@ -70,6 +70,31 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
     const sourceCandidate = path.resolve(params.sourceRoot, dirName, `${sourceBaseName}${ext}`);
     if (fs.existsSync(sourceCandidate)) {
       return sourceCandidate;
+    }
+  }
+  return null;
+}
+
+/** Resolves a public surface artifact within one installed plugin root. */
+export function resolvePluginRootPublicSurfacePath(params: {
+  pluginRoot: string;
+  artifactBasename: string;
+}): string | null {
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const pluginRoot = path.resolve(params.pluginRoot);
+  for (const candidate of [
+    path.join(pluginRoot, artifactBasename),
+    path.join(pluginRoot, "dist", artifactBasename),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+    const candidate = path.join(pluginRoot, `${sourceBaseName}${ext}`);
+    if (fs.existsSync(candidate)) {
+      return candidate;
     }
   }
   return null;

@@ -2,7 +2,7 @@
 import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
-import { inferPlaceholder } from "./shared.js";
+import { resolveMSTeamsMediaKind } from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -21,13 +21,19 @@ async function saveRemoteMediaDirect(params: {
   originalFilename?: string;
 }): Promise<SavedRemoteMedia> {
   const response = await params.fetchImpl(params.url, { redirect: "follow" });
-  return await saveResponseMedia(response, {
-    sourceUrl: params.url,
-    filePathHint: params.filePathHint,
-    maxBytes: params.maxBytes,
-    fallbackContentType: params.contentTypeHint,
-    originalFilename: params.originalFilename,
-  });
+  try {
+    return await saveResponseMedia(response, {
+      sourceUrl: params.url,
+      filePathHint: params.filePathHint,
+      maxBytes: params.maxBytes,
+      fallbackContentType: params.contentTypeHint,
+      originalFilename: params.originalFilename,
+    });
+  } finally {
+    // Guarded responses release their pinned dispatcher on EOF or cancel. A
+    // storage failure can happen before the body is read, so always cancel it.
+    await response.body?.cancel().catch(() => undefined);
+  }
 }
 
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {
@@ -37,7 +43,7 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
   contentTypeHint?: string;
-  placeholder?: string;
+  kind?: MSTeamsInboundMedia["kind"];
   preserveFilenames?: boolean;
   /**
    * Opt into the Teams-specific guarded fetch path. Only safe when the
@@ -70,8 +76,11 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   return {
     path: saved.path,
     contentType: saved.contentType,
-    placeholder:
-      params.placeholder ??
-      inferPlaceholder({ contentType: saved.contentType, fileName: params.filePathHint }),
+    kind:
+      params.kind ??
+      resolveMSTeamsMediaKind({
+        contentType: saved.contentType,
+        fileName: params.filePathHint,
+      }),
   };
 }

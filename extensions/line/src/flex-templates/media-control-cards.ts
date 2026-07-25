@@ -1,4 +1,5 @@
 // Line plugin module implements media control cards behavior.
+import { truncateLineActionLabel } from "../actions.js";
 import type {
   FlexBox,
   FlexBubble,
@@ -233,7 +234,7 @@ export function createMediaPlayerCard(params: {
               type: "button",
               action: {
                 type: "postback",
-                label: action.label.slice(0, 15),
+                label: truncateLineActionLabel(action.label, 15),
                 data: action.data,
               },
               style: "secondary",
@@ -510,21 +511,20 @@ export function createDeviceControlCard(params: {
     for (let i = 0; i < limitedControls.length; i += 2) {
       const rowButtons: FlexComponent[] = [];
 
-      for (let j = i; j < Math.min(i + 2, limitedControls.length); j++) {
-        const ctrl = limitedControls[j];
+      for (const [offset, ctrl] of limitedControls.slice(i, i + 2).entries()) {
         const buttonLabel = ctrl.icon ? `${ctrl.icon} ${ctrl.label}` : ctrl.label;
 
         rowButtons.push({
           type: "button",
           action: {
             type: "postback",
-            label: buttonLabel.slice(0, 18),
+            label: truncateLineActionLabel(buttonLabel, 18),
             data: ctrl.data,
           },
           style: ctrl.style ?? "secondary",
           flex: 1,
           height: "sm",
-          margin: j > i ? "md" : undefined,
+          margin: offset > 0 ? "md" : undefined,
         } as FlexButton);
       }
 

@@ -4,8 +4,8 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { listChatChannels } from "../channels/chat-meta.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/config.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { confirm, select } from "./configure.shared.js";
@@ -100,6 +100,7 @@ export async function removeChannelConfigWizard(
         options,
       }),
       runtime,
+      1,
     );
 
     if (choice.kind === "done") {
@@ -114,6 +115,7 @@ export async function removeChannelConfigWizard(
         initialValue: false,
       }),
       runtime,
+      1,
     );
     if (!confirmed) {
       continue;

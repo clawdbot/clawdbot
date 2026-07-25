@@ -1,15 +1,20 @@
 /** Cron service dependency, event, state, and public result types. */
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
+  CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronFailureNotificationDelivery,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
+  CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
@@ -23,7 +28,7 @@ import type {
 /** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
   jobId: string;
-  action: "added" | "updated" | "removed" | "started" | "finished";
+  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
   job?: CronJob;
   runAtMs?: number;
@@ -41,6 +46,7 @@ export type CronEvent = {
   sessionKey?: string;
   runId?: string;
   nextRunAtMs?: number;
+  triggerFired?: boolean;
 } & CronRunTelemetry;
 
 /** Logger contract consumed by cron service internals. */
@@ -67,8 +73,19 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  evaluateCronTrigger?: (params: {
+    job: CronJob;
+    script: string;
+    state: unknown;
+    streamBatch?: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
+  /** Resolve the current default when runtime config can change after startup. */
+  resolveDefaultAgentId?: () => string;
+  /** Revalidate agent ownership inside the cron mutation lock. */
+  isAgentAvailable?: (agentId: string) => boolean;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -117,6 +134,10 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
+    /** Exact cron run marker whose own activity must not block its awaited wake. */
+    owningCronJobMarker?: CronActiveJobMarker;
+    /** Exact command-lane task whose own slot must not block its awaited wake. */
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
@@ -146,12 +167,14 @@ export type CronServiceDeps = {
        * https://github.com/openclaw/openclaw/issues/15692
        */
       delivered?: boolean;
+      deliveryError?: string;
       /**
        * `true` when announce/direct delivery was attempted for this run, even
        * if the final per-message ack status is uncertain.
        */
       deliveryAttempted?: boolean;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome &
       CronRunTelemetry
   >;
@@ -159,7 +182,25 @@ export type CronServiceDeps = {
     {
       delivered?: boolean;
       deliveryAttempted?: boolean;
+      deliveryError?: string;
       delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
+  >;
+  runScriptJob?: (params: {
+    job: CronJob;
+    streamBatch?: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      deliveryError?: string;
+      delivery?: CronDeliveryTrace;
+      notify?: string;
+      wake?: "now" | "next-heartbeat";
+      stateChanged?: boolean;
+      state?: unknown;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome
   >;
   cleanupTimedOutAgentRun?: (params: {
@@ -184,20 +225,42 @@ export type CronServiceDeps = {
 };
 
 /** Cron deps after optional defaults have been made concrete. */
-export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
+};
+
+/** Process-local admission state shared by every execution entry point of one cron service. */
+type CronRunAdmission = {
+  active: number;
+  waiters: Array<(release: (() => void) | null) => void>;
+};
+
+type QueuedCronRunReservation = {
+  identity: object;
+  markerAtMs: number;
+  preserveWhenDisabled: boolean;
+  activationPreviousLastError?: { value: string | undefined };
 };
 
 /** Mutable cron service state shared across store, job, timer, and ops helpers. */
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Last known durable wake for each persisted job. Map presence distinguishes
+   * a durably unscheduled job from one that is not part of durable topology. */
+  durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: NodeJS.Timeout | null;
   running: boolean;
   stopped: boolean;
+  schedulingPaused: boolean;
+  schedulerStarted: boolean;
   restartRecoveryPending: boolean;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
+  /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
+  runAdmission: CronRunAdmission;
+  /** Durable markers for cron runs that are waiting for the shared admission limit. */
+  queuedRunReservationsByJobId: Map<string, QueuedCronRunReservation>;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -216,12 +279,17 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   return {
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
+    durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,
     stopped: false,
+    schedulingPaused: false,
+    schedulerStarted: false,
     restartRecoveryPending: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
+    runAdmission: { active: 0, waiters: [] },
+    queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
@@ -229,6 +297,15 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
   };
+}
+
+/** Dispatches a cron event without letting subscriber errors escape scheduler work. */
+export function emit(state: CronServiceState, evt: CronEvent) {
+  try {
+    state.deps.onEvent?.(evt);
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Direct-run mode: respect due time or force execution. */
@@ -240,7 +317,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
-  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
+  /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */
   storage: "sqlite";
@@ -265,7 +342,12 @@ export type CronRunResult =
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
 /** Created cron job returned by service mutation calls. */
-export type CronAddResult = CronJob;
+type CronDeclarativeAddResult = CronJob & {
+  created: boolean;
+  updated?: boolean;
+  job: CronJob;
+};
+export type CronAddResult = CronJob | CronDeclarativeAddResult;
 /** Updated cron job returned by service mutation calls. */
 export type CronUpdateResult = CronJob;
 
@@ -273,5 +355,20 @@ export type CronUpdateResult = CronJob;
 export type CronListResult = CronJob[];
 /** Normalized create input accepted by the cron service. */
 export type CronAddInput = CronJobCreate;
+/** Caller-specific declaration-key visibility and explicit enablement metadata. */
+export type CronAddOptions = {
+  matchesExisting?: (job: CronJob) => boolean;
+  enabledExplicit?: boolean;
+  /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
+  systemOwned?: boolean;
+  /** Authenticated caller provenance stamped by the service, never public input. */
+  scheduledToolPolicy?: CronScheduledToolPolicy;
+};
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
+/** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
+export type CronUpdateOptions = {
+  scheduledToolPolicy?: CronScheduledToolPolicy;
+};
+/** Cron-store-locked guard evaluated against the current job before an update applies. */
+export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

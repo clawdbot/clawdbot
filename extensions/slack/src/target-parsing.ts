@@ -15,6 +15,30 @@ export type SlackTarget = MessagingTarget;
 
 export type SlackTargetParseOptions = MessagingTargetParseOptions;
 
+// Letter-leading folded IDs are indistinguishable from supported channel names.
+// Doctor reports that ambiguity; runtime repairs only the digit-leading form.
+const SLACK_CHANNEL_API_ID_RE = /^[CDG][0-9][A-Z0-9]{7,}$/i;
+const SLACK_USER_API_ID_RE = /^[UW][A-Z0-9]{8,}$/i;
+
+function isUnambiguousSlackUserId(rawId: string): boolean {
+  const id = rawId.trim();
+  return /^[UW][A-Z0-9]+$/.test(id) || /^[uw][0-9][a-z0-9]{7,}$/.test(id);
+}
+
+/** Restores API casing for unambiguous normalized Slack conversation IDs. */
+export function canonicalizeSlackApiTargetId(
+  kind: SlackTargetKind,
+  rawId: string,
+  rawTarget?: string,
+): string {
+  const id = rawId.trim();
+  if (kind === "channel" && rawTarget?.trim().startsWith("#")) {
+    return id;
+  }
+  const idPattern = kind === "user" ? SLACK_USER_API_ID_RE : SLACK_CHANNEL_API_ID_RE;
+  return idPattern.test(id) ? id.toUpperCase() : id;
+}
+
 export function parseSlackTarget(
   raw: string,
   options: SlackTargetParseOptions = {},
@@ -46,6 +70,9 @@ export function parseSlackTarget(
     });
     return buildMessagingTarget("channel", id, trimmed);
   }
+  if (isUnambiguousSlackUserId(trimmed)) {
+    return buildMessagingTarget("user", trimmed, trimmed);
+  }
   if (options.defaultKind) {
     return buildMessagingTarget(options.defaultKind, trimmed, trimmed);
   }
@@ -54,7 +81,8 @@ export function parseSlackTarget(
 
 export function resolveSlackChannelId(raw: string): string {
   const target = parseSlackTarget(raw, { defaultKind: "channel" });
-  return requireTargetKind({ platform: "Slack", target, kind: "channel" });
+  const channelId = requireTargetKind({ platform: "Slack", target, kind: "channel" });
+  return canonicalizeSlackApiTargetId("channel", channelId, raw);
 }
 
 export function normalizeSlackMessagingTarget(raw: string): string | undefined {

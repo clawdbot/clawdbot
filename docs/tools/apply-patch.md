@@ -11,13 +11,13 @@ or multi-hunk edits where a single `edit` call would be brittle.
 
 The tool accepts a single `input` string that wraps one or more file operations:
 
-```
+```text
 *** Begin Patch
 *** Add File: path/to/file.txt
 +line 1
 +line 2
 *** Update File: src/app.ts
-@@
+@@ optional change context
 -old line
 +new line
 *** Delete File: obsolete.txt
@@ -34,11 +34,11 @@ The tool accepts a single `input` string that wraps one or more file operations:
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
 - Use `*** Move to:` within an `*** Update File:` hunk to rename files.
 - `*** End of File` marks an EOF-only insert when needed.
-- Available by default for OpenAI and OpenAI Codex models. Set
-  `tools.exec.applyPatch.enabled: false` to disable it.
-- Optionally gate by model via
-  `tools.exec.applyPatch.allowModels`.
-- Config is only under `tools.exec`.
+- Enabled by default for every model. Set `tools.exec.applyPatch.enabled: false`
+  to disable it, or restrict it to specific models with
+  `tools.exec.applyPatch.allowModels` (accepts raw ids like `gpt-5.4` or full
+  ids like `openai/gpt-5.4`).
+- Config lives under `tools.exec.applyPatch.*`.
 
 ## Example
 

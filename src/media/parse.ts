@@ -9,11 +9,13 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "@openclaw/net-policy/ip";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { expectDefined } from "@openclaw/normalization-core";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
-export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
 /** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
@@ -27,14 +29,16 @@ type ParsedMediaOutputSegment =
     };
 
 /** Controls which non-MEDIA syntaxes may be lifted into media attachments. */
-export type SplitMediaFromOutputOptions = {
+type SplitMediaFromOutputOptions = {
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
 };
 
+const FILE_URL_PREFIX_RE = /^file:\/\//i;
+
 /** Converts file URLs into plain local paths before downstream media validation. */
-export function normalizeMediaSource(src: string): string {
-  return src.startsWith("file://") ? src.replace("file://", "") : src;
+function normalizeMediaSource(src: string): string {
+  return src.replace(FILE_URL_PREFIX_RE, "");
 }
 
 const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
@@ -171,7 +175,7 @@ function isValidMedia(
   if (!opts?.allowSpaces && /\s/.test(candidate)) {
     return false;
   }
-  if (/^https?:\/\//i.test(candidate)) {
+  if (hasHttpUrlPrefix(candidate)) {
     return isAllowedRemoteMediaUrl(candidate);
   }
 
@@ -257,7 +261,7 @@ function findMatchingBracket(
 }
 
 function isRemoteMarkdownImageMedia(candidate: string): boolean {
-  return /^https?:\/\//i.test(candidate) && isValidMedia(candidate);
+  return hasHttpUrlPrefix(candidate) && isValidMedia(candidate);
 }
 
 function parseMarkdownTitle(input: string, start: number): number | undefined {
@@ -343,7 +347,7 @@ function parseMarkdownImageDestination(
   let destinationEnd = index;
   let parenDepth = 0;
   while (index < input.length) {
-    const ch = input[index];
+    const ch = input.charAt(index);
     if (ch === "\\") {
       index += 2;
       destinationEnd = index;
@@ -485,8 +489,6 @@ export function splitMediaFromOutput(
 ): {
   text: string;
   mediaUrls?: string[];
-  /** @deprecated Use mediaUrls[0]. */
-  mediaUrl?: string;
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
   segments?: ParsedMediaOutputSegment[];
 } {
@@ -580,7 +582,7 @@ export function splitMediaFromOutput(
       const start = match.index ?? 0;
       pieces.push(line.slice(cursor, start));
 
-      const payload = match[1];
+      const payload = expectDefined(match[1], "parse regex capture 1");
       const unwrapped = unwrapQuoted(payload);
       const payloadValue = unwrapped ?? payload;
       const parts = unwrapped ? [unwrapped] : payload.split(/\s+/).filter(Boolean);
@@ -602,7 +604,7 @@ export function splitMediaFromOutput(
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        looksLikeLocalFilePath(trimmedPayload) || trimmedPayload.startsWith("file://");
+        looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
       if (
         !unwrapped &&
         validCount === 1 &&
@@ -714,7 +716,6 @@ export function splitMediaFromOutput(
   return {
     text: cleanedText,
     mediaUrls: media,
-    mediaUrl: media[0],
     segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };

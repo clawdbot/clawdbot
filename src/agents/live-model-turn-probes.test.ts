@@ -9,10 +9,26 @@ import {
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
 } from "./live-model-turn-probes.js";
+
+function createImageProbeRunner(responses: string[]) {
+  const attempts: Array<1 | 2> = [];
+  return {
+    attempts,
+    run: async (attempt: 1 | 2) => {
+      attempts.push(attempt);
+      const response = responses[attempt - 1];
+      if (response === undefined) {
+        throw new Error(`Unexpected image probe attempt ${attempt}`);
+      }
+      return response;
+    },
+  };
+}
 
 describe("live model turn probes", () => {
   it("defaults probes on and accepts common opt-out values", () => {
@@ -87,16 +103,9 @@ describe("live model turn probes", () => {
     expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3.1-pro-preview" })).toBe(
       true,
     );
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(
-      true,
-    );
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "mimo-v2-pro" })).toBe(true);
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(
       true,
     );
-    expect(
-      shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "arcee-ai/trinity-mini" }),
-    ).toBe(true);
     expect(
       shouldSkipLiveModelFileProbe({
         provider: "openrouter",
@@ -149,9 +158,6 @@ describe("live model turn probes", () => {
         id: "accounts/fireworks/models/kimi-k2p6",
       }),
     ).toBe(true);
-    expect(shouldSkipLiveModelImageProbe({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(
-      true,
-    );
     expect(shouldSkipLiveModelImageProbe({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(
       shouldSkipLiveModelImageProbe({
@@ -174,5 +180,96 @@ describe("live model turn probes", () => {
     expect(fileProbeTextMatches("amber")).toBe(false);
     expect(imageProbeTextMatches("OK")).toBe(true);
     expect(imageProbeTextMatches("blue")).toBe(false);
+    expect(imageProbeTextMatches('" or "Reply with exactly')).toBe(false);
+  });
+
+  it("retries one mismatched image reply and accepts only a matching retry", async () => {
+    const { attempts, run } = createImageProbeRunner(["blue", "OK"]);
+    const retries: string[] = [];
+
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).resolves.toBe("OK");
+    expect(attempts).toEqual([1, 2]);
+    expect(retries).toEqual(["blue"]);
+  });
+
+  it("does not retry an image reply that already matches", async () => {
+    const { attempts, run } = createImageProbeRunner(["OK"]);
+    const retries: string[] = [];
+
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).resolves.toBe("OK");
+    expect(attempts).toEqual([1]);
+    expect(retries).toEqual([]);
+  });
+
+  it("does not retry provider errors", async () => {
+    const attempts: Array<1 | 2> = [];
+    const retries: string[] = [];
+    const run = async (attempt: 1 | 2): Promise<string> => {
+      attempts.push(attempt);
+      throw new Error("boom");
+    };
+
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).rejects.toThrow("boom");
+    expect(attempts).toEqual([1]);
+    expect(retries).toEqual([]);
+  });
+
+  it("fails when the image retry also does not match", async () => {
+    const { attempts, run } = createImageProbeRunner(["blue", '" or "Reply with exactly']);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "image probe did not return ok after retry",
+    );
+    expect(attempts).toEqual([1, 2]);
+  });
+
+  it("does not turn a mismatched image reply into an empty-response skip", async () => {
+    const { run } = createImageProbeRunner(["blue", ""]);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "attempt 2: <empty>",
+    );
+  });
+
+  it("fails after two empty image replies", async () => {
+    const { attempts, run } = createImageProbeRunner(["", ""]);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "attempt 1: <empty>; attempt 2: <empty>",
+    );
+    expect(attempts).toEqual([1, 2]);
+  });
+
+  it("fails when an empty image reply is followed by a mismatch", async () => {
+    const { run } = createImageProbeRunner(["", "blue"]);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "attempt 1: <empty>",
+    );
+  });
+
+  it("redacts nonmatching image replies from failure diagnostics", async () => {
+    const { run } = createImageProbeRunner(["first private reply", "second private reply"]);
+
+    const error = await runLiveModelImageProbeWithRetry({ run, onRetry: () => {} }).catch(
+      (cause: unknown) => String(cause),
+    );
+    expect(error).toContain("<non-matching response:");
+    expect(error).not.toContain("private reply");
   });
 });

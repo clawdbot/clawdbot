@@ -18,7 +18,11 @@ describe("Codex app inventory cache", () => {
       } satisfies v2.AppsListResponse;
     });
 
-    const key = buildCodexAppInventoryCacheKey({ codexHome: "/codex", authProfileId: "work" });
+    const key = buildCodexAppInventoryCacheKey(
+      { codexHome: "/codex", authProfileId: "work" },
+      "2026.6.27",
+      "2026.6.27",
+    );
     const read = cache.read({ key, request, nowMs: 0 });
     expect(read.state).toBe("missing");
     expect(read.refreshScheduled).toBe(true);
@@ -31,6 +35,14 @@ describe("Codex app inventory cache", () => {
     expect(fresh.state).toBe("fresh");
     expect(fresh.refreshScheduled).toBe(false);
     expect(fresh.snapshot?.apps.map((item) => item.id)).toEqual(["app-1", "app-2"]);
+  });
+
+  it("changes the cache key when either build version changes", () => {
+    const input = { codexHome: "/codex", authProfileId: "work" };
+    const baseline = buildCodexAppInventoryCacheKey(input, "2026.6.27", "2026.6.27");
+
+    expect(buildCodexAppInventoryCacheKey(input, "2026.6.28", "2026.6.27")).not.toBe(baseline);
+    expect(buildCodexAppInventoryCacheKey(input, "2026.6.27", "2026.6.28")).not.toBe(baseline);
   });
 
   it("can read missing inventory without scheduling app/list", async () => {
@@ -53,19 +65,13 @@ describe("Codex app inventory cache", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("stops paginated refresh once target app ids are found", async () => {
+  it("finds a targeted app on a later large page", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
     const request = vi.fn(async (_method: "app/list", params: v2.AppsListParams) => {
-      if (!params.cursor) {
-        return { data: [app("app-1")], nextCursor: "page-2" } satisfies v2.AppsListResponse;
-      }
-      if (params.cursor === "page-2") {
-        return {
-          data: [app("google-calendar-app")],
-          nextCursor: "page-3",
-        } satisfies v2.AppsListResponse;
-      }
-      return { data: [app("app-3")], nextCursor: null } satisfies v2.AppsListResponse;
+      return {
+        data: [app(params.cursor ? "google-calendar-app" : "app-1")],
+        nextCursor: params.cursor ? "page-3" : "page-2",
+      } satisfies v2.AppsListResponse;
     });
 
     const snapshot = await cache.refreshNow({
@@ -76,10 +82,55 @@ describe("Codex app inventory cache", () => {
 
     expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "google-calendar-app"]);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls.map(([, params]) => params.cursor ?? null)).toEqual([
-      null,
-      "page-2",
-    ]);
+    expect(request).toHaveBeenNthCalledWith(1, "app/list", {
+      cursor: undefined,
+      limit: 1_000,
+      forceRefetch: false,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "app/list", {
+      cursor: "page-2",
+      limit: 1_000,
+      forceRefetch: false,
+    });
+  });
+
+  it("exhausts targeted refresh pages when a target app is absent", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async (_method: "app/list", params: v2.AppsListParams) => {
+      return {
+        data: [app(params.cursor ? "app-2" : "app-1")],
+        nextCursor: params.cursor ? null : "page-2",
+      } satisfies v2.AppsListResponse;
+    });
+
+    const snapshot = await cache.refreshNow({
+      key: "runtime",
+      request,
+      targetAppIds: ["missing-app"],
+    });
+
+    expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "app-2"]);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a repeated app/list cursor instead of caching a partial snapshot", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async () => ({
+      data: [app(`app-${request.mock.calls.length}`)],
+      nextCursor: "page-2",
+    }));
+
+    await expect(
+      cache.refreshNow({
+        key: "runtime",
+        request,
+        targetAppIds: ["missing-app"],
+      }),
+    ).rejects.toThrow("app/list returned repeated cursor page-2");
+
+    const read = cache.read({ key: "runtime", request, suppressRefresh: true });
+    expect(read.state).toBe("missing");
+    expect(read.snapshot).toBeUndefined();
   });
 
   it("uses stale inventory for the current read while still refreshing asynchronously", async () => {
@@ -164,6 +215,22 @@ describe("Codex app inventory cache", () => {
     expect(serialized.message).toBe(
       "failed to list apps: Request failed with status 403 Forbidden: [HTML response body omitted]",
     );
+  });
+
+  it("keeps serialized app/list error messages on a UTF-16 boundary", () => {
+    const error = new Error(`${"x".repeat(499)}🚀tail`);
+
+    expect(serializeCodexAppInventoryError(error).message).toBe(`${"x".repeat(499)}...`);
+  });
+
+  it("keeps serialized app/list error data on a UTF-16 boundary", () => {
+    const error = Object.assign(new Error("app list failed"), {
+      data: { label: `${"x".repeat(499)}🚀tail` },
+    });
+
+    expect(serializeCodexAppInventoryError(error).data).toEqual({
+      label: `${"x".repeat(499)}...`,
+    });
   });
 
   it("forces a post-install refresh past an older in-flight app/list", async () => {

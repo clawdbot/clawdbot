@@ -1,18 +1,20 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
   AgentModelEntryConfig,
+  AgentModelPolicyConfig,
   EmbeddedAgentExecutionContract,
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
+import type { MemorySearchConfig } from "./types.memory.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
-import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { AgentToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type AgentRuntimeAcpConfig = {
@@ -87,6 +89,8 @@ export type AgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
+  /** Optional per-agent model for short internal tasks such as generated session titles. */
+  utilityModel?: string;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.
    * Normal schema parsing rejects this key; use per-model agentRuntime instead.
@@ -94,10 +98,12 @@ export type AgentConfig = {
   agentRuntime?: AgentModelEntryConfig["agentRuntime"];
   /** Per-model metadata overrides for this agent. */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Per-agent model override policy. Replaces the default policy when allow is present. */
+  modelPolicy?: AgentModelPolicyConfig;
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
   compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  thinkingDefault?: AgentDefaultsConfig["thinkingDefault"];
   /** Optional per-agent default verbosity level. */
   verboseDefault?: "off" | "on" | "full";
   /** Optional per-agent tool progress detail mode. */
@@ -116,11 +122,17 @@ export type AgentConfig = {
   experimental?: AgentDefaultsConfig["experimental"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
-  memorySearch?: MemorySearchConfig;
+  /** Per-agent overrides for the shared top-level memory configuration. */
+  memory?: {
+    search?: MemorySearchConfig;
+  };
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
-  /** Optional per-agent TTS overrides, deep-merged over messages.tts. */
-  tts?: TtsConfig;
+  /** Optional per-agent typing start policy. */
+  typingMode?: AgentDefaultsConfig["typingMode"];
+  /** Optional per-agent TTS overrides, deep-merged over top-level tts. */
+  /** Per-agent TTS overrides. prefsPath remains scoped because agents may use distinct preference stores. */
+  tts?: TtsConfig & { prefsPath?: string };
   /** Optional per-agent skills subsystem overrides. */
   skillsLimits?: Pick<SkillsLimitsConfig, "maxSkillsPromptChars">;
   /** Optional per-agent overrides for selected context/token-heavy limits. */
@@ -129,7 +141,7 @@ export type AgentConfig = {
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
-  groupChat?: GroupChatConfig;
+  groupChat?: Omit<GroupChatConfig, "visibleReplies">;
   subagents?: {
     /** Prompt-only guidance for how strongly this agent should delegate work. */
     delegationMode?: SubagentDelegationMode;
@@ -142,8 +154,6 @@ export type AgentConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
-  /** Optional outer run loop retry boundaries. */
-  runRetries?: AgentDefaultsConfig["runRetries"];
   /** Optional per-agent embedded OpenClaw overrides. */
   embeddedAgent?: {
     /** Optional per-agent execution contract override. */
@@ -158,7 +168,11 @@ export type AgentConfig = {
   runtime?: AgentRuntimeConfig;
 };
 
+export type AgentEntryConfig = Omit<AgentConfig, "id">;
+
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
+  entries?: Record<string, AgentEntryConfig>;
+  /** Internal non-serialized projection materialized by validation for ID-based runtime code. */
   list?: AgentConfig[];
 };

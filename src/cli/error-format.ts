@@ -1,4 +1,5 @@
 // Reusable CLI error-message formatters that keep recovery hints consistent across commands.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "./command-format.js";
 
 const DEFAULT_GATEWAY_PORT_EXAMPLE = 18789;
@@ -59,7 +60,7 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
   const rawCause = params.cause instanceof Error ? params.cause.message : String(params.cause);
   const cause = rawCause.trim().replace(/[.。]+$/u, "");
   const preview =
-    params.value.length > 48 ? `${params.value.slice(0, 45).trimEnd()}...` : params.value;
+    params.value.length > 48 ? `${truncateUtf16Safe(params.value, 45).trimEnd()}...` : params.value;
   return [
     `Could not parse ${JSON.stringify(preview)} as JSON for --strict-json.`,
     `${cause}.`,

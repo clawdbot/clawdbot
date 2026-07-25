@@ -1,8 +1,8 @@
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 /**
  * Twitch setup wizard surface for CLI setup.
  */
-
-import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
@@ -13,6 +13,7 @@ import {
   type WizardPrompter,
   normalizeAccountId,
   createSetupTranslator,
+  setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -382,6 +383,7 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
 };
 
 export const twitchSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["accessToken"],
   resolveAccountId: ({ cfg }) => resolveSetupAccountId(cfg),
   applyAccountConfig: ({ cfg, accountId }) =>
     setTwitchAccount(
@@ -392,6 +394,14 @@ export const twitchSetupAdapter: ChannelSetupAdapter = {
       accountId,
     ),
 };
+
+// Intentionally empty: Twitch setup stores no flag values (the adapter only
+// enables the account; credentials flow through the wizard). Shipped CLIs
+// parsed-and-ignored global channel flags here; rejecting them is by design.
+export const twitchSetupContract = defineChannelSetupContract({
+  fields: {},
+  legacyAdapter: twitchSetupAdapter,
+});
 
 export const twitchSetupWizard: ChannelSetupWizard = {
   channel,
@@ -473,18 +483,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
   },
   dmPolicy: twitchDmPolicy,
   groupAccess: twitchGroupAccess,
-  disable: (cfg) => {
-    const twitch = (cfg.channels as Record<string, unknown>)?.twitch as
-      | Record<string, unknown>
-      | undefined;
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        twitch: { ...twitch, enabled: false },
-      },
-    };
-  },
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
 type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
@@ -520,5 +519,6 @@ export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
     isEnabled: (account) => account.enabled !== false,
   },
   setup: twitchSetupAdapter,
+  setupContract: twitchSetupContract,
   setupWizard: twitchSetupWizard,
 };

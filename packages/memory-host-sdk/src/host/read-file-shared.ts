@@ -1,4 +1,5 @@
 // Memory Host SDK module implements read file shared behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { MemoryReadResult } from "./types.js";
 
 // Shared memory-file read result shaping and truncation notices.
@@ -48,7 +49,7 @@ function fitLinesToCharBudget(params: { lines: string[]; maxChars: number }): {
   }
 
   return {
-    text: text.slice(0, maxChars),
+    text: truncateUtf16Safe(text, maxChars),
     includedLines: 1,
     hardTruncatedSingleLine: true,
   };
@@ -85,7 +86,7 @@ export function buildMemoryReadResultFromSlice(params: {
       : undefined;
   const truncated = charCapTruncated || moreSourceLinesRemain;
   const text =
-    truncated && fitted.text
+    truncated && (fitted.text || fitted.hardTruncatedSingleLine)
       ? `${fitted.text}${buildContinuationNotice({
           nextFrom,
           suggestReadFallback: fitted.hardTruncatedSingleLine && params.suggestReadFallback,

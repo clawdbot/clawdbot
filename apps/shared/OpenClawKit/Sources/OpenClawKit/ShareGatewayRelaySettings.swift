@@ -2,6 +2,7 @@ import Foundation
 
 public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
     public let gatewayURLString: String
+    public let gatewayStableID: String?
     public let token: String?
     public let password: String?
     public let sessionKey: String
@@ -10,6 +11,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
 
     public init(
         gatewayURLString: String,
+        gatewayStableID: String? = nil,
         token: String?,
         password: String?,
         sessionKey: String,
@@ -17,6 +19,7 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
         deliveryTo: String? = nil)
     {
         self.gatewayURLString = gatewayURLString
+        self.gatewayStableID = gatewayStableID
         self.token = token
         self.password = password
         self.sessionKey = sessionKey
@@ -26,7 +29,10 @@ public struct ShareGatewayRelayConfig: Codable, Sendable, Equatable {
 }
 
 public enum ShareGatewayRelaySettings {
-    private static var suiteName: String { OpenClawAppGroup.identifier }
+    private static var suiteName: String {
+        OpenClawAppGroup.identifier
+    }
+
     private static let relayConfigKey = "share.gatewayRelay.config.v1"
     private static let lastEventKey = "share.gatewayRelay.event.v1"
 
@@ -37,6 +43,22 @@ public enum ShareGatewayRelaySettings {
     public static func loadConfig() -> ShareGatewayRelayConfig? {
         guard let data = self.defaults.data(forKey: self.relayConfigKey) else { return nil }
         return try? JSONDecoder().decode(ShareGatewayRelayConfig.self, from: data)
+    }
+
+    /// An endpoint is not a gateway identity. If the extension launches before the
+    /// host can prove a stable ID, discard unscoped device auth and use explicit auth only.
+    public static func loadConfigDiscardingUnscopedDeviceAuth() -> ShareGatewayRelayConfig? {
+        guard let config = self.loadConfig() else { return nil }
+        if config.gatewayStableID?.isEmpty == false {
+            return config
+        }
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) else {
+            return config
+        }
+        DeviceAuthStore.discardUnscopedTokens(
+            deviceId: identity.deviceId,
+            profile: .shareExtension)
+        return config
     }
 
     public static func saveConfig(_ config: ShareGatewayRelayConfig) {

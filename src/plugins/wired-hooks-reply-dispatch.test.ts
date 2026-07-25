@@ -1,7 +1,9 @@
 // Covers wired plugin hook dispatch before replies.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 const replyDispatchEvent = {
   ctx: buildTestCtx({ SessionKey: "agent:test:session", BodyForAgent: "hello" }),
@@ -112,7 +114,7 @@ describe("reply_dispatch hook runner", () => {
         ],
         { logger },
       );
-      registry.typedHooks[0].timeoutMs = 5;
+      expectDefined(registry.typedHooks[0], "registry.typedHooks[0] test invariant").timeoutMs = 5;
 
       const run = runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
       await vi.advanceTimersByTimeAsync(5);

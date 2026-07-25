@@ -166,6 +166,11 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     const account = resolveAccount(cfg, "default");
     expect(await telegramPluginBase.config.isConfigured!(account, cfg)).toBe(false);
     expect(telegramPluginBase.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
+    expect(telegramPluginBase.config.describeAccount?.(account, cfg)).toMatchObject({
+      configured: true,
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+    });
   });
 
   it("keeps read-only accessors from resolving bot token SecretRefs", () => {

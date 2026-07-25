@@ -6,146 +6,90 @@ read_when:
 title: "BTW side questions"
 ---
 
-`/btw` lets you ask a quick side question about the **current session** without
-turning that question into normal conversation history. `/side` is an alias.
-
-It is modeled after Claude Code's `/btw` behavior, but adapted to OpenClaw's
-Gateway and multi-channel architecture.
-
-## What it does
-
-When you send:
+`/btw` (alias `/side`) asks a quick side question about the **current
+session** without adding it to conversation history. It is modeled after
+Claude Code's `/btw`, adapted to OpenClaw's Gateway and multi-channel
+architecture.
 
 ```text
 /btw what changed?
+/side what does this error mean?
 ```
 
-OpenClaw:
+## What it does
 
-1. snapshots the current session context,
-2. runs a separate ephemeral side query,
-3. answers only the side question,
-4. leaves the main run alone,
-5. does **not** write the BTW question or answer to session history,
-6. emits the answer as a **live side result** rather than a normal assistant message.
+1. Snapshots the current session as background context (including any
+   in-flight main-run prompt).
+2. Runs a separate, one-shot side query telling the model to answer only the
+   side question and not resume or steer the main task.
+3. Delivers the answer as a live side result, not a normal assistant message.
+4. Never writes the question or answer to session history or `chat.history`.
 
-The important mental model is:
+The main run, if one is active, is left untouched.
 
-- same session context
-- separate one-shot side query
-- same native harness transport when the session uses a native harness
-- no future context pollution
-- no transcript persistence
+For Codex harness sessions, BTW forks the active Codex app-server thread into
+an ephemeral child thread instead of running a separate provider call. This
+keeps Codex OAuth and native tool/thread behavior intact, and the forked
+thread keeps the parent thread's current approval policy, sandbox, and native
+tool surface. The forked thread gets a boundary prompt telling the model that
+everything before it is inherited reference context, not active instructions,
+and that only messages after the boundary are live. `/btw` requires an
+existing Codex thread; send a normal message first.
 
-For Codex harness sessions, BTW stays inside Codex by forking the active
-app-server thread as an ephemeral side thread. That keeps Codex OAuth and native
-thread behavior intact while still isolating the side answer from the parent
-transcript. Like Codex `/side`, the side thread keeps the current Codex
-permissions and native tool surface, with guardrails that tell the model not to
-treat inherited parent-thread work as active instructions.
-
-For CLI runtime aliases, BTW uses the owning CLI backend in side-question mode
-instead of falling back to a direct provider call. OpenClaw seeds sanitized
-conversation context into a fresh one-shot CLI invocation, disables OpenClaw MCP
-tool bundling and reusable CLI session state for that invocation, and lets the
-backend add any CLI-native no-resume or no-tools flags it supports. Direct
-non-CLI runtimes keep the direct one-shot path.
+For CLI runtime aliases, BTW invokes the owning CLI backend in one-shot
+side-question mode: it seeds sanitized conversation context into a fresh CLI
+invocation with tool bundling and reusable session state disabled, and adds
+any no-resume/no-tools flags the backend supports. Direct (non-CLI) runtimes
+use a direct one-shot provider call instead.
 
 ## What it does not do
 
-`/btw` does **not**:
-
-- create a new durable session,
-- continue the unfinished main task,
-- write BTW question/answer data to transcript history,
-- appear in `chat.history`,
-- survive a reload.
-
-It is intentionally **ephemeral**.
-
-## How context works
-
-BTW uses the current session as **background context only**.
-
-If the main run is currently active, OpenClaw snapshots the current message
-state and includes the in-flight main prompt as background context, while
-explicitly telling the model:
-
-- answer only the side question,
-- do not resume or complete the unfinished main task,
-- do not steer the parent conversation.
-
-That keeps BTW isolated from the main run while still making it aware of what
-the session is about.
+`/btw` does not create a durable session, continue the unfinished main task,
+persist question/answer data to transcript history, or survive a reload.
 
 ## Delivery model
 
-BTW is **not** delivered as a normal assistant transcript message.
-
-At the Gateway protocol level:
-
-- normal assistant chat uses the `chat` event
-- BTW uses the `chat.side_result` event
-
-This separation is intentional. If BTW reused the normal `chat` event path,
-clients would treat it like regular conversation history.
-
-Because BTW uses a separate live event and is not replayed from
-`chat.history`, it disappears after reload.
+Normal assistant chat uses the Gateway `chat` event. BTW uses a separate
+`chat.side_result` event so clients cannot mistake it for regular
+conversation history. Because it is not replayed from `chat.history`, it
+disappears after reload.
 
 ## Surface behavior
 
-### TUI
+| Surface           | Behavior                                                                                                                                                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                                           |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                                                         |
+| Control UI / web  | Rendered as a floating "Side chat" panel pinned to the thread. Answers accumulate as turns and a "Follow up" input asks the next side question. Close (`Esc` or the X) keeps the conversation and reopens on the next answer; the trash button discards it and stops a pending run. |
 
-In TUI, BTW is rendered inline in the current session view, but it remains
-ephemeral:
+## Selection popup (Control UI)
 
-- visibly distinct from a normal assistant reply
-- dismissible with `Enter` or `Esc`
-- not replayed on reload
+Highlighting text inside a chat message in the Control UI opens a small
+selection popup with two actions:
 
-### External channels
+- **More details** immediately sends an implicit `/btw` question asking the
+  model to explain the highlighted text in the context of the current
+  session. The answer arrives in the floating side chat panel.
+- **Ask in side chat** pre-fills the composer with a `/btw` draft quoting the
+  highlighted text so you can type your own question about it.
 
-On channels like Telegram, WhatsApp, and Discord, BTW is delivered as a
-clearly labeled one-off reply because those surfaces do not have a local
-ephemeral overlay concept.
+Both actions follow normal `/btw` semantics: the question and answer stay out
+of session history and the main run is left untouched.
 
-The answer is still treated as a side result, not normal session history.
+## When to use it
 
-### Control UI / web
-
-The Gateway emits BTW correctly as `chat.side_result`, and BTW is not included
-in `chat.history`, so the persistence contract is already correct for web.
-
-The current Control UI still needs a dedicated `chat.side_result` consumer to
-render BTW live in the browser. Until that client-side support lands, BTW is a
-Gateway-level feature with full TUI and external-channel behavior, but not yet
-a complete browser UX.
-
-## When to use BTW
-
-Use `/btw` when you want:
-
-- a quick clarification about the current work,
-- a factual side answer while a long run is still in progress,
-- a temporary answer that should not become part of future session context.
-
-Examples:
+Use `/btw` for a quick clarification, a factual side answer while a long run
+is still in progress, or a temporary answer that should not enter future
+session context.
 
 ```text
 /btw what file are we editing?
-/side what changed while the main run continued?
-/btw what does this error mean?
 /btw summarize the current task in one sentence
 /btw what is 17 * 19?
 ```
 
-## When not to use BTW
-
-Do not use `/btw` when you want the answer to become part of the session's
-future working context.
-
-In that case, ask normally in the main session instead of using BTW.
+For anything you want to become part of the session's future working
+context, ask normally in the main session instead.
 
 ## Related
 

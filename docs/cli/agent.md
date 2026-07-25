@@ -7,19 +7,11 @@ title: "Agent"
 
 # `openclaw agent`
 
-Run an agent turn via the Gateway (use `--local` for embedded).
-Use `--agent <id>` to target a configured agent directly.
+Run one agent turn through the Gateway. The explicit `--local` flag is the only embedded execution path.
 
-Pass at least one session selector:
+Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`.
 
-- `--to <dest>`
-- `--session-key <key>`
-- `--session-id <id>`
-- `--agent <id>`
-
-Related:
-
-- Agent send tool: [Agent send](/tools/agent-send)
+Related: [Agent send tool](/tools/agent-send)
 
 ## Options
 
@@ -38,7 +30,7 @@ Related:
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
 - `--deliver`: send the reply back to the selected channel/target
-- `--timeout <seconds>`: override agent timeout (default 600 or config value)
+- `--timeout <seconds>`: override this command's agent-turn deadline (default 600, or `agents.defaults.timeoutSeconds`); `0` disables the overall deadline. The 600-second fallback belongs to this CLI command, not ordinary Gateway turns, whose default is 48 hours.
 - `--json`: output JSON
 
 ## Examples
@@ -58,23 +50,20 @@ openclaw agent --agent ops --message "Run locally" --local
 
 ## Notes
 
-- Pass exactly one of `--message` or `--message-file`. `--message-file` preserves multiline file content after removing an optional UTF-8 BOM, and rejects files that are not valid UTF-8.
-- Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
-- `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
-- `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
-- Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.
-- `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
-- `--session-key` selects an explicit session key. Agent-prefixed keys must use `agent:<agent-id>:<session-key>`, and `--agent` must match the key's agent id when both are provided. Bare non-sentinel keys are scoped to `--agent` when supplied, or to the configured default agent otherwise; for example, `--agent ops --session-key incident-42` routes to `agent:ops:incident-42`. Literal `global` and `unknown` remain unscoped only when no `--agent` is supplied; in that case, embedded fallback and store ownership use the configured default agent.
-- `--json` keeps stdout reserved for the JSON response. Gateway, plugin, and embedded-fallback diagnostics are routed to stderr so scripts can parse stdout directly.
-- Embedded fallback JSON includes `meta.transport: "embedded"` and `meta.fallbackFrom: "gateway"` so scripts can distinguish fallback runs from Gateway runs.
-- If the Gateway accepts an agent run but the CLI times out waiting for the final reply, embedded fallback uses a fresh explicit `gateway-fallback-*` session/run id and reports `meta.fallbackReason: "gateway_timeout"` plus the fallback session fields. This avoids racing the Gateway-owned transcript lock or silently replacing the original routed conversation session.
-- For Gateway-backed runs, `SIGTERM` and `SIGINT` interrupt the waiting CLI request. If the Gateway has already accepted the run, the CLI also sends `chat.abort` for that accepted run id before exiting. Local `--local` runs and embedded fallback runs receive the same abort signal, but do not send `chat.abort`. If a duplicate `--run-id` reaches the Gateway while the original agent run is still active, the duplicate response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep an outer hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can still reap the process if shutdown cannot drain.
-- When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
-- Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
+- Pass exactly one of `--message` or `--message-file`. `--message-file` strips a leading UTF-8 BOM and preserves multiline content; it rejects files that are not valid UTF-8. Files larger than 4 MiB are rejected before dispatch.
+- Slash commands (for example `/compact`) cannot run through `--message`. The CLI rejects them and points you at the first-class command instead (`openclaw sessions compact <key>` for compaction).
+- `--local` runs are one-shot: bundled MCP loopback resources and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave local child processes running. Gateway-backed runs keep Gateway-owned MCP loopback resources under the running Gateway process instead.
+- Standalone embedded execution with `--local` refuses to reuse an existing main session while restart recovery is pending. Run the turn through a healthy Gateway, or reset it there with `/new` or `/reset`; an independent embedded process cannot safely coordinate that recovery owner with the Gateway scanner.
+- With `--agent`, `--channel` and `--to` together, session routing follows the channel's canonical recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.
+- `--session-key` selects an explicit session key. Agent-prefixed keys must use `agent:<agent-id>:<session-key>`, and `--agent` must match the key's agent id when both are given. Bare non-sentinel keys scope to `--agent` when supplied, or to the configured default agent otherwise; for example `--agent ops --session-key incident-42` routes to `agent:ops:incident-42`. The literal keys `global` and `unknown` stay unscoped only when no `--agent` is supplied.
+- `--json` reserves stdout for the JSON response; Gateway, plugin, and `--local` diagnostics go to stderr so scripts can parse stdout directly.
+- After transient handshake retries are exhausted, a Gateway timeout or closed connection fails the command; the CLI never silently reruns the turn embedded. Transport loss is ambiguous — the Gateway may have accepted and may still finish the turn — so the stderr hint says to check `openclaw gateway status` and the session transcript before retrying or rerunning with `--local`, to avoid executing the turn twice.
+- `SIGTERM`/`SIGINT` interrupt a waiting Gateway-backed request; if the Gateway already accepted the run, the CLI also sends `chat.abort` for that run id before exiting. `--local` runs receive the same signal but do not send `chat.abort`. A launcher child that terminates from the first forwarded `SIGINT` or `SIGTERM` exits with status 130 or 143, respectively. If the internal run-dedup key already has an active run for this session, the response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep a hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can reap the process if shutdown cannot drain.
+- When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), never resolved secret plaintext. Marker writes come from the active source config snapshot, not from resolved runtime secret values.
 
 ## JSON delivery status
 
-When `--json --deliver` is used, the CLI JSON response may include top-level `deliveryStatus` so scripts can distinguish delivered, suppressed, partial, and failed sends:
+With `--json --deliver`, the CLI JSON response includes top-level `deliveryStatus` so scripts can distinguish delivered, suppressed, partial, and failed sends:
 
 ```json
 {
@@ -90,20 +79,27 @@ When `--json --deliver` is used, the CLI JSON response may include top-level `de
 }
 ```
 
-`deliveryStatus.status` is one of `sent`, `suppressed`, `partial_failed`, or `failed`. `suppressed` means delivery was intentionally not sent, for example a message-sending hook cancelled it or there was no visible result; it is still a terminal no-retry outcome. `partial_failed` means at least one payload was sent before a later payload failed. `failed` means no durable send completed or delivery preflight failed.
+Gateway-backed CLI responses also preserve the raw Gateway result shape at `result.deliveryStatus`.
 
-Gateway-backed CLI responses also preserve the raw Gateway result shape, where the same object is available at `result.deliveryStatus`.
+`deliveryStatus.status` is one of:
+
+| Status           | Meaning                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sent`           | Delivery completed.                                                                                                                        |
+| `suppressed`     | Delivery was intentionally not sent (for example a message-sending hook cancelled it, or there was no visible result). Terminal, no retry. |
+| `partial_failed` | At least one payload sent before a later payload failed.                                                                                   |
+| `failed`         | No durable send completed, or delivery preflight failed.                                                                                   |
 
 Common fields:
 
 - `requested`: always `true` when the object is present.
-- `attempted`: `true` after the durable send path ran; `false` for preflight failures or no visible payloads.
+- `attempted`: `true` once the durable send path ran; `false` for preflight failures or no visible payloads.
 - `succeeded`: `true`, `false`, or `"partial"`; `"partial"` pairs with `status: "partial_failed"`.
-- `reason`: a lowercase snake-case reason from durable delivery or preflight validation. Known reasons include `cancelled_by_message_sending_hook`, `no_visible_payload`, `no_visible_result`, `channel_resolved_to_internal`, `unknown_channel`, `invalid_delivery_target`, and `no_delivery_target`; failed durable sends may also report the failed stage. Treat unknown values as opaque because the set can expand.
-- `resultCount`: number of channel send results when available.
-- `sentBeforeError`: `true` when a partial failure sent at least one payload before the error.
-- `error`: boolean `true` for failed or partial-failed sends.
-- `errorMessage`: included only when an underlying delivery error message is captured. Preflight failures carry `error` and `reason` but no `errorMessage`.
+- `reason`: lowercase snake-case reason from durable delivery or preflight validation. Known values include `cancelled_by_message_sending_hook`, `no_visible_payload`, `no_visible_result`, `channel_resolved_to_internal`, `unknown_channel`, `invalid_delivery_target`, and `no_delivery_target`; failed durable sends may also report the failed stage. Treat unknown values as opaque since the set can expand.
+- `resultCount`: number of channel send results, when available.
+- `sentBeforeError`: `true` when a partial failure sent at least one payload before erroring.
+- `error`: `true` for failed or partial-failed sends.
+- `errorMessage`: present only when an underlying delivery error message was captured. Preflight failures carry `error`/`reason` but no `errorMessage`.
 - `payloadOutcomes`: optional per-payload results with `index`, `status`, `reason`, `resultCount`, `error`, `stage`, `sentBeforeError`, or hook metadata when available.
 
 ## Related

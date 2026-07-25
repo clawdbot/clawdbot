@@ -21,8 +21,8 @@ export function parseMockOpenAiPort(value, label = "mock OpenAI port") {
 
 export function applyMockOpenAiModelConfig(cfg, params) {
   const mockPort = parseMockOpenAiPort(params.mockPort);
-  const modelRef = params.modelRef ?? "openai/gpt-5.5";
-  const modelId = modelRef.split("/").at(-1) ?? "gpt-5.5";
+  const modelRef = params.modelRef ?? "openai/gpt-5.6-luna";
+  const modelId = modelRef.split("/").at(-1) ?? "gpt-5.6-luna";
   const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   cfg.models = {
     ...cfg.models,

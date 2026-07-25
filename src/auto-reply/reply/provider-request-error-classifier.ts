@@ -8,14 +8,15 @@ import { isFailoverError } from "../../agents/failover-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 /** Provider request error classes that get a specialized user-facing reply. */
-export type ProviderRequestErrorCode =
+type ProviderRequestErrorCode =
   | "provider_authentication_error"
   | "provider_conversation_state_error"
   | "provider_internal_error"
+  | "provider_model_unavailable"
   | "provider_rate_limit_or_quota_error";
 
 /** Structured provider error classification for reply failure handling. */
-export type ProviderRequestErrorClassification = {
+type ProviderRequestErrorClassification = {
   code: ProviderRequestErrorCode;
   userMessage: string;
   technicalMessage: string;
@@ -25,13 +26,21 @@ export type ProviderRequestErrorClassification = {
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
 
-export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
+const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
 
-export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 
-export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+
+/**
+ * User-facing copy for a configured model the provider no longer serves.
+ * Distinct from generic failures because retrying or starting a new session
+ * cannot help: the model id itself must be changed in config.
+ */
+const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
+  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
 
 /** Classifies provider request failures that are actionable for users. */
 export function classifyProviderRequestError(
@@ -46,6 +55,17 @@ export function classifyProviderRequestError(
     return {
       code: "provider_authentication_error",
       userMessage: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
+      technicalMessage,
+    };
+  }
+  // Detect retired/unavailable models structurally via the typed failover
+  // reason set at resolution time (run.ts), not by matching provider error
+  // text. Free-text provider rejections without a typed reason are left to the
+  // failover layer that owns error classification.
+  if (isFailoverError(err) && err.reason === "model_not_found") {
+    return {
+      code: "provider_model_unavailable",
+      userMessage: PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE,
       technicalMessage,
     };
   }
@@ -77,7 +97,7 @@ export function classifyProviderRequestError(
 }
 
 /** Detects provider errors that indicate invalid conversation/tool turn state. */
-export function isProviderConversationStateErrorMessage(message: string): boolean {
+function isProviderConversationStateErrorMessage(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   return (
     (lower.includes("custom tool call output is missing") && lower.includes("call id")) ||
@@ -85,6 +105,10 @@ export function isProviderConversationStateErrorMessage(message: string): boolea
       lower.includes("tooluse") &&
       lower.includes("exceeds the number") &&
       lower.includes("previous turn")) ||
+    // Anthropic/Bedrock orphaned tool-call replay: "`tool_use` ids were found
+    // without `tool_result` blocks immediately after: ...". Same broken-turn
+    // shape as the toolResult/toolUse count mismatch above, just snake_case.
+    (lower.includes("tool_use") && lower.includes("tool_result") && lower.includes("without")) ||
     lower.includes("function call turn comes immediately after") ||
     lower.includes("incorrect role information") ||
     lower.includes("roles must alternate") ||

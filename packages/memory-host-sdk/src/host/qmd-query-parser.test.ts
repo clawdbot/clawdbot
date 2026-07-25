@@ -60,6 +60,15 @@ complete`,
     expect(parseQmdQueryJson("", "[qmd] warning: no results found\n")).toStrictEqual([]);
   });
 
+  it("keeps bounded stderr context UTF-16 safe", () => {
+    const prefix = "a".repeat(116);
+    const stderr = `${prefix}😀${"b".repeat(120)}`;
+
+    expect(() => parseQmdQueryJson("", stderr)).toThrow(
+      `qmd query returned invalid JSON: stdout empty (stderr: ${prefix}...)`,
+    );
+  });
+
   it("does not treat arbitrary non-marker text as no-results output", () => {
     expect(() =>
       parseQmdQueryJson("warning: search completed; no results found for this query", ""),

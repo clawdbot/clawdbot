@@ -1,5 +1,7 @@
 // Verifies plugin readonly-scope audit findings.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
@@ -15,23 +17,27 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
     resolveConfiguredChannelPluginIdsMock(...args),
 }));
 
-vi.mock("../plugins/runtime.js", () => ({
-  getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
-}));
+vi.mock("../plugins/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
+  return {
+    ...actual,
+    getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
+  };
+});
 
 vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
   loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>
     loadPluginMetadataRegistrySnapshotMock(...args),
 }));
 
-const { collectPluginSecurityAuditFindings, runSecurityAudit } = await import("./audit.js");
+const { runSecurityAudit } = await import("./audit.js");
 
-function createAuditContext(params: {
-  sourceConfig: Parameters<typeof collectPluginSecurityAuditFindings>[0]["sourceConfig"];
-  plugins: Parameters<typeof collectPluginSecurityAuditFindings>[0]["plugins"];
-}): Parameters<typeof collectPluginSecurityAuditFindings>[0] {
+function createAuditOptions(params: {
+  sourceConfig: OpenClawConfig;
+  plugins: Parameters<typeof runSecurityAudit>[0]["plugins"];
+}): Parameters<typeof runSecurityAudit>[0] {
   return {
-    cfg: params.sourceConfig,
+    config: params.sourceConfig,
     sourceConfig: params.sourceConfig,
     env: {},
     platform: process.platform,
@@ -44,7 +50,6 @@ function createAuditContext(params: {
     plugins: params.plugins,
     loadPluginSecurityCollectors: true,
     configSnapshot: null,
-    codeSafetySummaryCache: new Map<string, Promise<unknown>>(),
   };
 }
 
@@ -54,7 +59,7 @@ function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string)
     throw new Error(`expected ${label} call`);
   }
   const [arg] = call;
-  return arg;
+  return expectDefined(arg, "arg test invariant");
 }
 
 describe("security audit read-only plugin scope", () => {
@@ -91,8 +96,8 @@ describe("security audit read-only plugin scope", () => {
     });
     resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
 
-    await collectPluginSecurityAuditFindings(
-      createAuditContext({
+    await runSecurityAudit(
+      createAuditOptions({
         sourceConfig,
         plugins: [],
       }),
@@ -138,8 +143,8 @@ describe("security audit read-only plugin scope", () => {
     });
     resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
 
-    await collectPluginSecurityAuditFindings(
-      createAuditContext({
+    await runSecurityAudit(
+      createAuditOptions({
         sourceConfig,
         plugins: [{ id: "external-channel-plugin" }] as never,
       }),
@@ -161,15 +166,15 @@ describe("security audit read-only plugin scope", () => {
       },
     };
 
-    const findings = await collectPluginSecurityAuditFindings({
-      ...createAuditContext({
+    const report = await runSecurityAudit({
+      ...createAuditOptions({
         sourceConfig,
         plugins: [],
       }),
       loadPluginSecurityCollectors: false,
     });
 
-    expect(findings).toStrictEqual([]);
+    expect(report.findings.some((finding) => finding.checkId.startsWith("plugins."))).toBe(false);
     expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
     expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();

@@ -2,7 +2,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Return whether a direct-run path points at the current module path. */
+/**
+ * Return whether a direct-run path points at the current module path.
+ * @internal Directly tested script implementation detail.
+ */
 export function isDirectRunPath(directPath, modulePath, platform = process.platform) {
   if (!directPath || !modulePath) {
     return false;

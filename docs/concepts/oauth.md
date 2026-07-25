@@ -8,16 +8,16 @@ read_when:
 title: "OAuth"
 ---
 
-OpenClaw supports "subscription auth" via OAuth for providers that offer it
-(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic, the practical split
-is now:
+OpenClaw supports OAuth ("subscription auth") for providers that offer it,
+notably **OpenAI Codex (ChatGPT OAuth)** and **Anthropic Claude CLI reuse**.
+For Anthropic, the practical split is:
 
-- **Anthropic API key**: normal Anthropic API billing
+- **Anthropic API key**: normal Anthropic API billing.
 - **Anthropic Claude CLI / subscription auth inside OpenClaw**: Anthropic staff
-  told us this usage is allowed again
-
-OpenAI Codex OAuth is explicitly supported for use in external tools like
-OpenClaw.
+  told us this usage is allowed again, so OpenClaw treats Claude CLI reuse and
+  `claude -p` usage as sanctioned for this integration unless Anthropic
+  publishes a new policy. For Anthropic in production, API key auth is still
+  the safer recommended path.
 
 OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
 canonical provider id `openai`. Older `openai-codex:*` profile ids and
@@ -25,16 +25,14 @@ canonical provider id `openai`. Older `openai-codex:*` profile ids and
 `openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
 new config.
 
-For Anthropic in production, API key auth is the safer recommended path.
-
-This page explains:
+This page covers:
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
 - how to handle **multiple accounts** (profiles + per-session overrides)
 
-OpenClaw also supports **provider plugins** that ship their own OAuth or API-key
-flows. Run them via:
+Provider plugins that ship their own OAuth or API-key flow run through the
+same entry point:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -42,50 +40,59 @@ openclaw models auth login --provider <id>
 
 ## The token sink (why it exists)
 
-OAuth providers commonly mint a **new refresh token** during login/refresh flows. Some providers (or OAuth clients) can invalidate older refresh tokens when a new one is issued for the same user/app.
+OAuth providers commonly mint a new refresh token on every login/refresh.
+Some providers invalidate the previous refresh token when a new one is
+issued for the same user/app. Practical symptom: log in via OpenClaw _and_
+via Claude Code / Codex CLI, and one of them randomly gets logged out later.
 
-Practical symptom:
+To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 
-- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets "logged out" later
-
-To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
-
-- the runtime reads credentials from **one place**
-- we can keep multiple profiles and route them deterministically
-- external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
-  `openai:default` profile, but once OpenClaw has a local OAuth profile,
-  the local refresh token is canonical. If that local refresh token is rejected,
-  OpenClaw can use a usable same-account Codex CLI token as a runtime-only
-  fallback; other integrations can remain externally managed and re-read their
-  CLI auth store
-- status and startup paths that already know the configured provider set scope
-  external CLI discovery to that set, so an unrelated CLI login store is not
-  probed for a single-provider setup
+- the runtime reads credentials from one place per agent
+- multiple profiles can coexist and route deterministically
+- external CLI reuse is provider-specific: once OpenClaw owns a local OAuth
+  profile for a provider, the local refresh token is canonical. If that local
+  refresh token is rejected, OpenClaw reports the profile for
+  re-authentication instead of falling back to external CLI token material.
+  Codex CLI bootstrap is narrower still: it can only seed an empty
+  `openai:default`-style profile before OpenClaw owns OAuth for that
+  provider; after that, OpenClaw-owned refreshes stay canonical
+- status/startup paths scope external CLI discovery to the provider set
+  already configured, so an unrelated CLI login store is not probed for a
+  single-provider setup
 
 ## Storage (where tokens live)
 
-Secrets are stored in agent auth stores:
+Secrets live per agent, keyed by the logical name `auth-profiles.json` (the
+underlying store is the agent's SQLite database; the JSON name is kept for
+compatibility and tooling display):
 
-- Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- Auth profiles (OAuth + API keys + optional value-level refs):
+  `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
   (static `api_key` entries are scrubbed when discovered)
 
 Legacy import-only file (still supported, but not the main store):
 
-- `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use)
+- `~/.openclaw/credentials/oauth.json` (imported into the auth profile store on first use)
 
-All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration-reference#auth-storage)
+All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
 When a secondary agent has no local auth profile, OpenClaw uses read-through
-inheritance from the default/main agent store. It does not clone the main
-agent's `auth-profiles.json` on read. OAuth refresh tokens are especially
-sensitive: normal copy flows skip them by default because some providers rotate
-or invalidate refresh tokens after use. Configure a separate OAuth login for an
-agent when it needs an independent account.
+inheritance from the default/main agent store; it does not clone the main
+agent's store on read. OAuth refresh tokens are especially sensitive: normal
+copy flows skip them by default because some providers rotate or invalidate
+refresh tokens after use. Configure a separate OAuth login for an agent when
+it needs an independent account.
 
-## Anthropic legacy token compatibility
+## Anthropic Claude CLI reuse
+
+OpenClaw supports Anthropic Claude CLI reuse and `claude -p` as a sanctioned
+auth path. If you already have a local Claude login on the host,
+onboarding/configure can reuse it directly. Anthropic setup-token remains
+available as a supported token-auth path, but OpenClaw prefers Claude CLI
+reuse when it is available.
 
 <Warning>
 Anthropic's public Claude Code docs say direct Claude Code use stays within
@@ -106,22 +113,15 @@ Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
 and [Z.AI / GLM Coding Plan](/providers/zai).
 </Warning>
 
-OpenClaw also exposes Anthropic setup-token as a supported token-auth path, but it now prefers Claude CLI reuse and `claude -p` when available.
-
-## Anthropic Claude CLI migration
-
-OpenClaw supports Anthropic Claude CLI reuse again. If you already have a local
-Claude login on the host, onboarding/configure can reuse it directly.
-
 ## OAuth exchange (how login works)
 
-OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm` and wired into the wizards/commands.
+OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm.ts` and wired into the wizards/commands.
 
 ### Anthropic setup-token
 
 Flow shape:
 
-1. start Anthropic setup-token or paste-token from OpenClaw
+1. create the token by running `claude setup-token` on any machine with Claude Code, then start Anthropic setup-token or paste-token from OpenClaw
 2. OpenClaw stores the resulting Anthropic credential in an auth profile
 3. model selection stays on `anthropic/...`
 4. existing Anthropic auth profiles remain available for rollback/order control
@@ -130,7 +130,7 @@ Flow shape:
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
 
-The login command still uses the canonical OpenAI provider id:
+The login command uses the canonical OpenAI provider id:
 
 ```bash
 openclaw models auth login --provider openai
@@ -144,35 +144,37 @@ profile ids into `auth.order` or `/model ...@<profileId>`.
 
 Flow shape (PKCE):
 
-1. generate PKCE verifier/challenge + random `state`
-2. open `https://auth.openai.com/oauth/authorize?...`
-3. try to capture callback on `http://127.0.0.1:1455/auth/callback`
-4. if callback can't bind (or you're remote/headless), paste the redirect URL/code
-5. exchange at `https://auth.openai.com/oauth/token`
+1. generate a PKCE verifier/challenge and a random `state`
+2. open `https://auth.openai.com/oauth/authorize?...` (scope
+   `openid profile email offline_access`)
+3. try to capture the callback on `http://localhost:1455/auth/callback` (the
+   callback host defaults to `localhost` and only accepts loopback hosts;
+   override with `OPENCLAW_OAUTH_CALLBACK_HOST`)
+4. if you can paste a code before the callback lands (or you are
+   remote/headless and the callback can't bind), paste the redirect URL/code
+   instead - manual paste races the browser callback and whichever completes
+   first wins
+5. exchange the code at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
 Wizard path is `openclaw onboard` → auth choice `openai`.
 
 ## Refresh + expiry
 
-Profiles store an `expires` timestamp.
+Profiles store an `expires` timestamp. At runtime:
 
-At runtime:
+- if `expires` is in the future, use the stored access token
+- if expired, refresh (under a file lock) and overwrite the stored credentials
+- if a secondary agent reads an inherited main-agent OAuth profile, the
+  refresh writes back to the main agent store instead of copying the refresh
+  token into the secondary agent store
+- externally managed CLI credentials (Claude CLI, narrow Codex CLI bootstrap;
+  see [The token sink](#the-token-sink-why-it-exists)) are re-read instead of
+  spending a copied refresh token. If a managed refresh fails, OpenClaw
+  reports the affected profile for re-authentication instead of returning
+  external CLI token material.
 
-- if `expires` is in the future → use the stored access token
-- if expired → refresh (under a file lock) and overwrite the stored credentials
-- if a secondary agent reads an inherited main-agent OAuth profile, refresh
-  writes back to the main agent store instead of copying the refresh token into
-  the secondary agent store
-- exception: some external CLI credentials stay externally managed; OpenClaw
-  re-reads those CLI auth stores instead of spending copied refresh tokens.
-  Codex CLI bootstrap is intentionally narrower: it seeds an empty
-  `openai:default` profile, then OpenClaw-owned refreshes keep the local
-  profile canonical. If the local Codex refresh fails and Codex CLI has a
-  usable token for the same account, OpenClaw may use that token for the current
-  runtime request without writing it back to `auth-profiles.json`.
-
-The refresh flow is automatic; you generally don't need to manage tokens manually.
+The refresh flow is automatic; you generally do not need to manage tokens manually.
 
 ## Multiple accounts (profiles) + routing
 
@@ -191,9 +193,8 @@ Then configure auth per-agent (wizard) and route chats to the right agent.
 
 ### 2) Advanced: multiple profiles in one agent
 
-`auth-profiles.json` supports multiple profile IDs for the same provider.
-
-Pick which profile is used:
+The auth profile store supports multiple profile IDs for the same provider.
+Pick which one is used:
 
 - globally via config ordering (`auth.order`)
 - per-session via `/model ...@<profileId>`
@@ -202,9 +203,11 @@ Example (session override):
 
 - `/model Opus@anthropic:work`
 
-How to see what profile IDs exist:
+List existing profile IDs with:
 
-- `openclaw channels list --json` (shows `auth[]`)
+```bash
+openclaw models auth list --provider <id>
+```
 
 Related docs:
 

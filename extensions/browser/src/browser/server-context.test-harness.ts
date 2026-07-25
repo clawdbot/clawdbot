@@ -39,6 +39,8 @@ export function makeBrowserServerState(params?: {
     cdpIsLoopback: profile.cdpIsLoopback,
     cdpPortRangeStart: 18800,
     cdpPortRangeEnd: 18810,
+    extensionRelayDefaultPort: 18808,
+    extensionRelayPorts: {},
     evaluateEnabled: false,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
@@ -63,7 +65,7 @@ export function makeBrowserServerState(params?: {
     },
   };
   return {
-    server: null as any,
+    server: null as unknown as BrowserServerState["server"],
     port: 0,
     resolved: {
       ...resolvedBase,

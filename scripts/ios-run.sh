@@ -110,6 +110,7 @@ fi
 
 "${ROOT_DIR}/scripts/ios-configure-signing.sh"
 "${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
+node "${ROOT_DIR}/scripts/ios-write-swift-filelist.mjs"
 
 cd "${IOS_DIR}"
 "${XCODEGEN_BIN}" generate

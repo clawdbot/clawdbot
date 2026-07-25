@@ -27,6 +27,7 @@ type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
 type CustomMessageEntry = Extract<SessionEntry, { type: "custom_message" }>;
 type LabelEntry = Extract<SessionEntry, { type: "label" }>;
 type ModelChangeEntry = Extract<SessionEntry, { type: "model_change" }>;
+type ResetEntry = Extract<SessionEntry, { type: "reset" }>;
 type SessionInfoEntry = Extract<SessionEntry, { type: "session_info" }>;
 type SessionMessageEntry = Extract<SessionEntry, { type: "message" }>;
 type ThinkingLevelChangeEntry = Extract<SessionEntry, { type: "thinking_level_change" }>;
@@ -51,6 +52,7 @@ const sessionEntryTypes = new Set<string>([
   "label",
   "message",
   "model_change",
+  "reset",
   "session_info",
   "thinking_level_change",
 ] satisfies SessionEntry["type"][]);
@@ -248,6 +250,13 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
         typeof candidate.tokensBefore === "number"
       );
     }
+    case "reset": {
+      const candidate = entry as Pick<ResetEntry, "firstKeptEntryId" | "reason">;
+      return (
+        (candidate.firstKeptEntryId === undefined || isString(candidate.firstKeptEntryId)) &&
+        ["new", "reset", "idle", "daily", "cron-stale"].includes(candidate.reason)
+      );
+    }
     case "custom":
       return isString((entry as { customType?: unknown }).customType);
     case "custom_message": {
@@ -366,9 +375,10 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
       if (!entry) {
         break;
       }
-      pathLocal.unshift(entry);
+      pathLocal.push(entry);
       id = entry.parentId;
     }
+    pathLocal.reverse();
     return pathLocal;
   };
   const firstReadableDescendantOnBranch = (
@@ -419,7 +429,11 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
           : null
         : (entry.parentId ?? null);
     let repaired = parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
-    if (repaired.type === "compaction" && rejectedIds.has(repaired.firstKeptEntryId)) {
+    if (
+      (repaired.type === "compaction" || repaired.type === "reset") &&
+      repaired.firstKeptEntryId !== undefined &&
+      rejectedIds.has(repaired.firstKeptEntryId)
+    ) {
       // A rejected first-kept row would make compaction summaries unusable.
       // Prefer the closest readable parent, then a readable descendant on the
       // same branch, before falling back to the repaired parent.
@@ -435,7 +449,7 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
         repaired = { ...repaired, firstKeptEntryId } as SessionEntry;
       }
     }
-    if (repaired.type !== "compaction") {
+    if (repaired.type !== "compaction" && repaired.type !== "reset") {
       for (const rejectedId of rejectedAncestors) {
         if (!firstReadableDescendantByRejectedId.has(rejectedId)) {
           firstReadableDescendantByRejectedId.set(rejectedId, repaired.id);
@@ -577,6 +591,34 @@ function fileEntryOrMigrationSlot(value: unknown, index: number): FileEntry {
     parentId: null,
     timestamp: "1970-01-01T00:00:00.000Z",
   } as unknown as FileEntry;
+}
+
+function createReadableTranscriptFileState(params: {
+  fileEntries: FileEntry[];
+  header: SessionHeader | null;
+  migrated?: boolean;
+}): TranscriptFileState {
+  const readable = readableSessionState(params.fileEntries);
+  return new TranscriptFileState({
+    header: params.header,
+    entries: readable.entries,
+    leafId: readable.leafId,
+    appendParentId: params.migrated ? readable.leafId : readable.appendParentId,
+    ...(!params.migrated && readable.appendMode ? { appendMode: readable.appendMode } : {}),
+    opaqueParentsById: readable.opaqueParentsById,
+    logicalParentsById: readable.logicalParentsById,
+    migrated: params.migrated,
+  });
+}
+
+/** Builds readable branch state from persisted transcript records. */
+export function createTranscriptFileStateFromPersistedEntries(
+  entries: readonly unknown[],
+): TranscriptFileState {
+  const fileEntries = entries.map(fileEntryOrMigrationSlot);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  return createReadableTranscriptFileState({ fileEntries, header });
 }
 
 /** In-memory transcript state with branch, label, and append helpers. */
@@ -791,6 +833,17 @@ export class TranscriptFileState {
     });
   }
 
+  appendResetBoundary(reason: ResetEntry["reason"], firstKeptEntryId?: string): ResetEntry {
+    return this.appendEntry({
+      type: "reset",
+      id: generateEntryId(this.byId),
+      parentId: this.appendParentId,
+      timestamp: new Date().toISOString(),
+      reason,
+      ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+    });
+  }
+
   appendCustomEntry(customType: string, data?: unknown): CustomEntry {
     return this.appendEntry({
       type: "custom",
@@ -808,7 +861,7 @@ export class TranscriptFileState {
       id: generateEntryId(this.byId),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
-      name: name.trim(),
+      name: name.replace(/[\r\n]+/g, " ").trim(),
     });
   }
 
@@ -943,17 +996,7 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const readable = readableSessionState(fileEntries);
-  return new TranscriptFileState({
-    header,
-    entries: readable.entries,
-    leafId: readable.leafId,
-    appendParentId: migrated ? readable.leafId : readable.appendParentId,
-    ...(!migrated && readable.appendMode ? { appendMode: readable.appendMode } : {}),
-    opaqueParentsById: readable.opaqueParentsById,
-    logicalParentsById: readable.logicalParentsById,
-    migrated,
-  });
+  return createReadableTranscriptFileState({ fileEntries, header, migrated });
 }
 
 /** Rewrite the full transcript through the private-file store. */
@@ -993,3 +1036,4 @@ export async function persistTranscriptStateMutation(params: {
     rejectSymlinkParents: true,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   collectConfiguredModelRefs,
   collectConfiguredModelRefValues,
-  extractProviderFromModelRef,
 } from "./configured-model-refs.js";
 
 describe("configured model refs", () => {
@@ -13,16 +12,21 @@ describe("configured model refs", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+            utilityModel: "google/gemini-3.1-flash-lite-preview",
+            mediaModels: { image: "openai/gpt-image-2" },
             compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
           },
-          list: [{ id: "custom", model: "xai/grok-4-fast" }],
+          entries: {
+            custom: {
+              model: "xai/grok-4-fast",
+              utilityModel: "openai/gpt-5.5-nano",
+            },
+          },
         },
         hooks: {
           mappings: [{ model: "openai/gpt-5.5-nano" }],
         },
-        messages: {
-          tts: { summaryModel: "openai/gpt-5.5-mini" },
-        },
+        tts: { summaryModel: "openai/gpt-5.5-mini" },
         channels: {
           modelByChannel: {
             discord: {
@@ -34,11 +38,17 @@ describe("configured model refs", () => {
     ).toEqual([
       { path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
       { path: "agents.defaults.model.fallbacks.0", value: "anthropic/claude-sonnet-4-6" },
+      {
+        path: "agents.defaults.utilityModel",
+        value: "google/gemini-3.1-flash-lite-preview",
+      },
+      { path: "agents.defaults.mediaModels.image", value: "openai/gpt-image-2" },
       { path: "agents.defaults.compaction.memoryFlush.model", value: "openai/gpt-5.5-mini" },
-      { path: "agents.list.0.model", value: "xai/grok-4-fast" },
+      { path: "agents.entries.custom.model", value: "xai/grok-4-fast" },
+      { path: "agents.entries.custom.utilityModel", value: "openai/gpt-5.5-nano" },
       { path: "channels.modelByChannel.discord.guild", value: "anthropic/claude-opus-4-8" },
       { path: "hooks.mappings.0.model", value: "openai/gpt-5.5-nano" },
-      { path: "messages.tts.summaryModel", value: "openai/gpt-5.5-mini" },
+      { path: "tts.summaryModel", value: "openai/gpt-5.5-mini" },
     ]);
   });
 
@@ -64,10 +74,5 @@ describe("configured model refs", () => {
         },
       }),
     ).toEqual([]);
-  });
-
-  it("extracts normalized providers from provider-prefixed refs", () => {
-    expect(extractProviderFromModelRef(" OpenAI/gpt-5.5 ")).toBe("openai");
-    expect(extractProviderFromModelRef("gpt-5.5")).toBeNull();
   });
 });

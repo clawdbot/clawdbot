@@ -4,6 +4,10 @@ import type { SourceInfo } from "../../agents/sessions/source-info.js";
 export interface Skill {
   name: string;
   description: string;
+  /** Additional loading guidance rendered with the location in full and compact catalogs. */
+  locationNote?: string;
+  /** Runtime-only content for non-filesystem skill locators such as node://. */
+  readContent?: string;
   filePath: string;
   baseDir: string;
   /** Deterministic marker for the SKILL.md content rendered as <version>. */
@@ -48,6 +52,9 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <description>${escapeXml(skill.description)}</description>`);
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    if (skill.locationNote) {
+      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
+    }
     if (skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }

@@ -1,228 +1,146 @@
 ---
-summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
+summary: "Install and use the OpenClaw macOS menu bar app"
 read_when:
-  - Implementing macOS app features
-  - Changing gateway lifecycle or node bridging on macOS
+  - Installing the macOS app
+  - Deciding between local and remote Gateway mode on macOS
+  - Looking for macOS app release downloads
 title: "macOS app"
 ---
 
-The macOS app is the **menu-bar companion** for OpenClaw. It owns permissions,
-manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
-capabilities to the agent as a node.
+The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
+permission prompts, notifications, WebChat, voice input, Canvas, and
+Mac-hosted node tools such as `system.run`.
 
-## What it does
+Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
 
-- Shows native notifications and status in the menu bar.
-- Owns TCC prompts (Notifications, Accessibility, Screen Recording, Microphone,
-  Speech Recognition, Automation/AppleScript).
-- Runs or connects to the Gateway (local or remote).
-- Exposes macOS-only tools (Canvas, Camera, Screen Recording, `system.run`).
-- Starts the local node host service in **remote** mode (launchd), and stops it in **local** mode.
-- Optionally hosts **PeekabooBridge** for UI automation.
-- Installs the global CLI (`openclaw`) on request via npm, pnpm, or bun (the app prefers npm, then pnpm, then bun; Node remains the recommended Gateway runtime).
+Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
-## Local vs remote mode
+## Download
 
-- **Local** (default): the app attaches to a running local Gateway if present;
-  otherwise it enables the launchd service via `openclaw gateway install`.
-- **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
-  a local process.
-  The app starts the local **node host service** so the remote Gateway can reach this Mac.
-  The app does not spawn the Gateway as a child process.
-  Gateway discovery now prefers Tailscale MagicDNS names over raw tailnet IPs,
-  so the Mac app recovers more reliably when tailnet IPs change.
+Get macOS app builds from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).
+When a release ships macOS app assets, look for:
 
-## Launchd control
+- `OpenClaw-<version>.dmg` (preferred)
+- `OpenClaw-<version>.zip`
 
-The app manages a per-user LaunchAgent labeled `ai.openclaw.gateway`
-(or `ai.openclaw.<profile>` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` still unloads).
+Some releases only ship CLI, evidence, or Windows assets. If the newest release
+has no macOS app asset, use the newest one that does, or build from source with
+[macOS dev setup](/platforms/mac/dev-setup).
 
-```bash
-launchctl kickstart -k gui/$UID/ai.openclaw.gateway
-launchctl bootout gui/$UID/ai.openclaw.gateway
-```
-
-Replace the label with `ai.openclaw.<profile>` when running a named profile.
-
-If the LaunchAgent isn't installed, enable it from the app or run
-`openclaw gateway install`.
-
-If the gateway repeatedly disappears for minutes to hours and only resumes when you touch the Control UI or SSH into the host, see the troubleshooting note for macOS Maintenance Sleep / `ENETDOWN` crashes and launchd's respawn-protection gate in [Gateway troubleshooting](/gateway/troubleshooting#macos-gateway-silently-stops-responding-then-resumes-when-you-touch-the-dashboard).
-
-## Node capabilities (mac)
-
-The macOS app presents itself as a node. Common commands:
-
-- Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
-- Camera: `camera.snap`, `camera.clip`
-- Screen: `screen.snapshot`, `screen.record`
-- System: `system.run`, `system.notify`
-
-The node reports a `permissions` map so agents can decide what's allowed.
-
-Node service + app IPC:
-
-- When the headless node host service is running (remote mode), it connects to the Gateway WS as a node.
-- `system.run` executes in the macOS app (UI/TCC context) over a local Unix socket; prompts + output stay in-app.
-
-Diagram (SCI):
-
-```
-Gateway -> Node Service (WS)
-                 |  IPC (UDS + token + HMAC + TTL)
-                 v
-             Mac App (UI + TCC + system.run)
-```
-
-## Exec approvals (system.run)
-
-`system.run` is controlled by **Exec approvals** in the macOS app (Settings → Exec approvals).
-Security + ask + allowlist are stored locally on the Mac in:
-
-```
-~/.openclaw/exec-approvals.json
-```
-
-Example:
-
-```json
-{
-  "version": 1,
-  "defaults": {
-    "security": "deny",
-    "ask": "on-miss"
-  },
-  "agents": {
-    "main": {
-      "security": "allowlist",
-      "ask": "on-miss",
-      "allowlist": [{ "pattern": "/opt/homebrew/bin/rg" }]
-    }
-  }
-}
-```
-
-Notes:
-
-- `allowlist` entries are glob patterns for resolved binary paths, or bare command names for PATH-invoked commands.
-- Raw shell command text that contains shell control or expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss and requires explicit approval (or allowlisting the shell binary).
-- Choosing "Always Allow" in the prompt adds that command to the allowlist.
-- `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`) and then merged with the app's environment.
-- For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped environment overrides are reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
-- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
-
-## Deep links
-
-The app registers the `openclaw://` URL scheme for local actions.
-
-### `openclaw://agent`
-
-Triggers a Gateway `agent` request.
-
-```bash
-open 'openclaw://agent?message=Hello%20from%20deep%20link'
-```
-
-Query parameters:
-
-- `message` (required)
-- `sessionKey` (optional)
-- `thinking` (optional)
-- `deliver` / `to` / `channel` (optional)
-- `timeoutSeconds` (optional)
-- `key` (optional unattended mode key)
-
-Safety:
-
-- Without `key`, the app prompts for confirmation.
-- Without `key`, the app enforces a short message limit for the confirmation prompt and ignores `deliver` / `to` / `channel`.
-- With a valid `key`, the run is unattended (intended for personal automations).
-
-## Onboarding flow (typical)
+## First run
 
 1. Install and launch **OpenClaw.app**.
-2. Complete the permissions checklist (TCC prompts).
-3. Ensure **Local** mode is active and the Gateway is running.
-4. Install the CLI if you want terminal access.
+2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
+3. Wait while the app installs the matching CLI runtime. In local mode it also
+   installs and starts the Gateway.
+4. Establish inference with a live model check. After it passes, OpenClaw
+   handles the remaining setup.
+5. Complete the macOS permission checklist and send the onboarding test message.
 
-## State dir placement (macOS)
+If the app reaches an existing Gateway whose default agent has a configured
+model, it treats that Gateway as already set up, skips provider onboarding and
+OpenClaw, and opens the dashboard. If the Gateway cannot connect or its
+default agent has no model, inference onboarding remains available for
+recovery.
 
-Avoid putting your OpenClaw state dir in iCloud or other cloud-synced folders.
-Sync-backed paths can add latency and occasionally cause file-lock/sync races for
-sessions and credentials.
+For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
+For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
-Prefer a local non-synced state path such as:
+## Updates
 
-```bash
-OPENCLAW_STATE_DIR=~/.openclaw
-```
+The dashboard update card names what the app will update:
 
-If `openclaw doctor` detects state under:
+- **Update Mac app + Gateway** means the signed app owns the local launchd
+  Gateway. Sparkle updates the app first; after relaunch, the app automatically
+  updates and restarts its Gateway at the matching version, then verifies the
+  connection.
+- **Update Gateway** means the app is connected to a remote Gateway, a manually
+  managed local Gateway, or another install the app does not own. The button
+  runs that Gateway's normal update flow instead of changing the Mac app.
 
-- `~/Library/Mobile Documents/com~apple~CloudDocs/...`
-- `~/Library/CloudStorage/...`
+A failed coordinated update stays in its setup-style window with retry,
+[update guide](/install/updating), and Discord actions. Automatic repair never
+downgrades a newer Gateway or overrides an `extended-stable` channel pin.
 
-it will warn and recommend moving back to a local path.
+After a successful update, the app finds the most recently human-used,
+top-level direct session and gives that agent a one-time update event. Heartbeat
+and cron activity do not affect this choice. The agent can then welcome you back
+from the conversation you were most likely using. In remote mode, the app
+updates only the local Mac node runtime and skips the notification when the
+remote Gateway is older than the app.
 
-## Build and dev workflow (native)
+Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
+to beta app builds; `stable`, `extended-stable`, and missing or unknown values
+stay on stable app builds.
 
-- `cd apps/macos && swift build`
-- `swift run OpenClaw` (or Xcode)
-- Package app: `scripts/package-mac-app.sh`
+## Open dashboard links
 
-## Debug gateway connectivity (macOS CLI)
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width while keeping the dashboard navigation visible. Drag the divider to choose another width; the app remembers it. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
 
-Use the debug CLI to exercise the same Gateway WebSocket handshake and discovery
-logic that the macOS app uses, without launching the app.
+The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
-```bash
-cd apps/macos
-swift run openclaw-mac connect --json
-swift run openclaw-mac discover --timeout 3000 --json
-```
+Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links from the dashboard continue to open in the default browser; new-window links inside the sidebar open as new sidebar tabs. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
 
-Connect options:
+## Import browser logins
 
-- `--url <ws://host:port>`: override config
-- `--mode <local|remote>`: resolve from config (default: config or local)
-- `--probe`: force a fresh health probe
-- `--timeout <ms>`: request timeout (default: `15000`)
-- `--json`: structured output for diffing
+The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
-Discovery options:
+## Choose a Gateway mode
 
-- `--include-local`: include gateways that would be filtered as "local"
-- `--timeout <ms>`: overall discovery window (default: `2000`)
-- `--json`: structured output for diffing
+| Mode   | Use it when                                                                    | Detail page                                        |
+| ------ | ------------------------------------------------------------------------------ | -------------------------------------------------- |
+| Local  | This Mac should run the Gateway and keep it alive with launchd.                | [Gateway on macOS](/platforms/mac/bundled-gateway) |
+| Remote | Another host runs the Gateway; this Mac controls it over SSH, LAN, or Tailnet. | [Remote control](/platforms/mac/remote)            |
 
-<Tip>
-Compare against `openclaw gateway discover --json` to see whether the macOS app's discovery pipeline (`local.` plus the configured wide-area domain, with wide-area and Tailscale Serve fallbacks) differs from the Node CLI's `dns-sd` based discovery.
-</Tip>
+Both modes need an installed `openclaw` CLI because the app reuses its node-host
+runtime. On a fresh Mac, the app installs the matching CLI automatically; local
+mode then starts the Gateway wizard, while remote mode connects to the selected
+Gateway without starting a second local Gateway.
+See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
-## Remote connection plumbing (SSH tunnels)
+## What the app owns
 
-When the macOS app runs in **Remote** mode, it opens an SSH tunnel so local UI
-components can talk to a remote Gateway as if it were on localhost.
+- Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
+- macOS permission prompts for screen, microphone, speech, automation, and accessibility.
+- One Mac node that combines native Canvas, camera/screen capture, notifications,
+  location, and computer control with the CLI node host's system, browser,
+  plugin, skill, and MCP commands.
+- Exec approval prompts for Mac-hosted commands.
+- App-context execution for approved shell commands, preserving the app's macOS
+  permission attribution while the CLI runtime owns shared node policy.
+- Remote-mode SSH tunnels or direct Gateway connections.
 
-### Control tunnel (Gateway WebSocket port)
+In the embedded Control UI, **Settings → Notifications** shows the app's native
+notification permission instead of browser push because the app delivers notifications natively.
 
-- **Purpose:** health checks, status, Web Chat, config, and other control-plane calls.
-- **Local port:** the Gateway port (default `18789`), always stable.
-- **Remote port:** the same Gateway port on the remote host.
-- **Behavior:** no random local port; the app reuses an existing healthy tunnel
-  or restarts it if needed.
-- **SSH shape:** `ssh -N -L <local>:127.0.0.1:<remote>` with BatchMode +
-  ExitOnForwardFailure + keepalive options.
-- **IP reporting:** the SSH tunnel uses loopback, so the gateway will see the node
-  IP as `127.0.0.1`. Use **Direct (ws/wss)** transport if you want the real client
-  IP to appear (see [macOS remote access](/platforms/mac/remote)).
+The app does **not** replace the Gateway or general CLI docs. Gateway
+configuration, providers, plugins, channels, tools, and security live in their
+own docs.
 
-For setup steps, see [macOS remote access](/platforms/mac/remote). For protocol
-details, see [Gateway protocol](/gateway/protocol).
+## macOS detail pages
 
-## Related docs
+| Task                                     | Read                                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Install or debug the CLI/Gateway service | [Gateway on macOS](/platforms/mac/bundled-gateway)                                          |
+| Keep state out of cloud-synced folders   | [Gateway on macOS](/platforms/mac/bundled-gateway#state-directory-on-macos)                 |
+| Debug app discovery and connectivity     | [Gateway on macOS](/platforms/mac/bundled-gateway#debug-app-connectivity)                   |
+| Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)                                           |
+| Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)                                             |
+| Detect the Mac you most recently used    | [Active computer presence](/nodes/presence)                                                 |
+| Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)                                                     |
+| Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
+| Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |
+| Use voice wake or push-to-talk           | [Voice wake](/platforms/mac/voicewake)                                                      |
+| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                                                             |
+| Host PeekabooBridge for UI automation    | [Peekaboo bridge](/platforms/mac/peekaboo)                                                  |
+| Configure command approvals              | [Exec approvals](/tools/exec-approvals), [advanced details](/tools/exec-approvals-advanced) |
+| Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |
+| Capture logs                             | [macOS logging](/platforms/mac/logging)                                                     |
+| Build from source                        | [macOS dev setup](/platforms/mac/dev-setup)                                                 |
 
-- [Gateway runbook](/gateway)
-- [Gateway (macOS)](/platforms/mac/bundled-gateway)
-- [macOS permissions](/platforms/mac/permissions)
-- [Canvas](/platforms/mac/canvas)
+## Related
+
+- [Platforms](/platforms)
+- [Getting started](/start/getting-started)
+- [Gateway](/gateway)
+- [Exec approvals](/tools/exec-approvals)

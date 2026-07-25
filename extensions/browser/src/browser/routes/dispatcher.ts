@@ -5,6 +5,7 @@
  * the same route handlers without opening an HTTP socket.
  */
 import { escapeRegExp } from "../../utils.js";
+import { normalizeBrowserRequestPath } from "../request-policy.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
@@ -58,13 +59,6 @@ function createRegistry() {
   return { routes, router };
 }
 
-function normalizePath(path: string) {
-  if (!path) {
-    return "/";
-  }
-  return path.startsWith("/") ? path : `/${path}`;
-}
-
 /** Create an in-process dispatcher for registered browser routes. */
 export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
   const registry = createRegistry();
@@ -73,7 +67,7 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
   return {
     dispatch: async (req: BrowserDispatchRequest): Promise<BrowserDispatchResponse> => {
       const method = req.method;
-      const path = normalizePath(req.path);
+      const path = normalizeBrowserRequestPath(req.path) || "/";
       const query = req.query ?? {};
       const body = req.body;
       const signal = req.signal;

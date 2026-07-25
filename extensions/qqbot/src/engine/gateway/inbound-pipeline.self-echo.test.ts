@@ -2,10 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QQBotInboundAccess } from "../adapter/index.js";
 import type { RefIndexEntry } from "../ref/types.js";
+import type { ProcessedAttachments } from "./inbound-attachments.js";
 import type { InboundPipelineDeps } from "./inbound-context.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
 import type { QueuedMessage } from "./message-queue.js";
-import type { GatewayAccount, GatewayPluginRuntime, ProcessedAttachments } from "./types.js";
+import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const getRefIndexMock = vi.hoisted(() => vi.fn<(refIdx: string) => RefIndexEntry | null>());
 const setRefIndexMock = vi.hoisted(() => vi.fn<(refIdx: string, entry: RefIndexEntry) => void>());
@@ -73,6 +74,11 @@ const emptyAllowlist: QQBotInboundAccess["state"]["allowlists"]["dm"] = {
 
 function makeRuntime(): GatewayPluginRuntime {
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: {
@@ -102,15 +108,18 @@ function makeRuntime(): GatewayPluginRuntime {
             };
           };
           const input = await params.adapter.ingest(params.raw);
-          const turn = (await params.adapter.resolveTurn(
+          await params.adapter.resolveTurn(
             input,
             {
               kind: "message",
               canStartAgentTurn: true,
             },
             {},
-          )) as { runDispatch: () => Promise<unknown> };
-          return { dispatchResult: await turn.runDispatch() };
+          );
+          return {
+            dispatched: true,
+            dispatchResult: { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } },
+          };
         }),
       },
       text: {

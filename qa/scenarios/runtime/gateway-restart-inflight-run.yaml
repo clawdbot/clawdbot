@@ -1,20 +1,28 @@
-title: Gateway restart in-flight recovery
+title: Gateway restart Code Mode wait recovery
 
 scenario:
   id: gateway-restart-inflight-run
   surface: runtime
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
-      - runtime.restart-recovery
+      - session-memory.recovery-restart-recovery
     secondary:
-      - runtime.gateway-restart
-      - runtime.delivery
-  objective: Verify an agent run interrupted by a gateway restart does not duplicate delivery and the same session can recover on the next turn.
+      - gateway.restart-and-stop-gateway-restart
+      - session-memory.recovery-delivery
+  gatewayConfigPatch:
+    tools:
+      alsoAllow:
+        - qa_restart_wait
+        - qa_restart_unsafe_probe
+      codeMode:
+        enabled: true
+        timeoutMs: 60000
+  objective: Verify replay-safe Code Mode work interrupted on its wait control reconstructs and delivers automatically after a gateway restart.
   successCriteria:
-    - Scenario starts an agent run before applying a restart-required config change.
+    - Scenario persists a Code Mode wait call before applying a restart-required config change.
     - Gateway and qa-channel return healthy after the restart.
-    - The interrupted run emits its marker at most once and the next turn delivers the recovery marker exactly once.
+    - The interrupted work reconstructs automatically under a host-owned restart-safe policy, rejects a non-replay-safe probe before execution, and emits its marker exactly once without a resend notice or manual follow-up.
   docsRefs:
     - docs/gateway/configuration.md
     - docs/automation/tasks.md
@@ -25,12 +33,12 @@ scenario:
     - src/gateway/server-restart-sentinel.ts
   execution:
     kind: flow
-    summary: Start an agent run, restart the gateway, then verify recovery delivery is not duplicated.
+    summary: Restart while replay-safe Code Mode wait is executing, then verify automatic reconstruction and delivery.
     config:
-      prompt: "Gateway restart in-flight QA check. Read QA_KICKOFF_TASK.md, then reply exactly: RESTART-INFLIGHT-MAYBE-OK"
-      recoveryPrompt: "Gateway restart recovery follow-up marker. Reply exactly: RESTART-RECOVERY-OK"
-      interruptedMarker: RESTART-INFLIGHT-MAYBE-OK
-      recoveryMarker: RESTART-RECOVERY-OK
+      requiredProviderMode: mock-openai
+      prompt: "Code Mode restart wait QA check. Reply exactly: RESTART-CODE-MODE-WAIT-OK"
+      interruptedMarker: RESTART-CODE-MODE-WAIT-OK
+      restartNoticeNeedle: "couldn't safely resume"
 
 flow:
   steps:
@@ -48,9 +56,21 @@ flow:
         - set: startIndex
           value:
             expr: state.getSnapshot().messages.length
+        - set: gatewayLogCursor
+          value:
+            expr: markGatewayLogCursor()
+        - set: conversationId
+          value:
+            expr: "`restart-inflight-${randomUUID().slice(0, 8)}`"
         - set: sessionKey
           value:
-            expr: "`agent:qa:restart-inflight:${randomUUID().slice(0, 8)}`"
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: conversationId }, dmScope: 'per-channel-peer', identityLinks: env.cfg.session?.identityLinks })"
+        - set: restartPatch
+          value:
+            expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } }, tools: { codeMode: { enabled: false } } })"
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: startAgentRun
           saveAs: started
           args:
@@ -59,28 +79,33 @@ flow:
                 ref: sessionKey
               message:
                 expr: config.prompt
+              to:
+                expr: "`dm:${conversationId}`"
+              taskTracking: false
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 180000)
-        - call: readConfigSnapshot
-          saveAs: current
+        - call: waitForCondition
+          saveAs: plannedWait
           args:
-            - ref: env
-        - set: nextConfig
-          value:
-            expr: "(() => { const nextConfig = structuredClone(current.config); const gatewayConfig = (nextConfig.gateway ??= {}); const controlUi = (gatewayConfig.controlUi ??= {}); const allowedOrigins = Array.isArray(controlUi.allowedOrigins) ? [...controlUi.allowedOrigins] : []; const origin = `http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`; if (!allowedOrigins.includes(origin)) allowedOrigins.push(origin); controlUi.allowedOrigins = allowedOrigins; return nextConfig; })()"
-        - call: applyConfig
+            - lambda:
+                async: true
+                expr: "fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`).then((requests) => requests.find((request) => request.plannedToolName === 'wait' && String(request.allInputText ?? '').includes(config.interruptedMarker)))"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - 25
+        - call: waitForCondition
+          saveAs: interruptedTranscript
+          args:
+            - lambda:
+                async: true
+                expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => summary.lastMessageRole === 'assistant' && summary.lastAssistantToolNames?.includes('wait') ? summary : undefined)"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - 25
+        - call: restartGatewayWithConfigPatch
           args:
             - env:
                 ref: env
-              nextConfig:
-                ref: nextConfig
-              sessionKey:
-                ref: sessionKey
-              deliveryContext:
-                channel: qa-channel
-                to: dm:qa-operator
-              note: QA restart in-flight run check
-              restartDelayMs: 1000
+              patch:
+                ref: restartPatch
         - call: waitForGatewayHealthy
           args:
             - ref: env
@@ -89,47 +114,56 @@ flow:
           args:
             - ref: env
             - 180000
-        - call: waitForAgentRun
-          saveAs: waited
+        - call: sleep
+          args:
+            - 6500
+        - call: readSessionTranscriptSummary
+          saveAs: postRestartTranscript
           args:
             - ref: env
-            - expr: started.runId
-            - expr: liveTurnTimeoutMs(env, 180000)
+            - ref: sessionKey
         - assert:
-            expr: "waited.status === 'ok' || waited.status === 'timeout' || (waited.status === 'error' && (String(waited.error ?? '').includes('EmbeddedAttemptSessionTakeoverError') || String(waited.error ?? '').includes('AbortError') || String(waited.error ?? '').includes('This operation was aborted')))"
+            expr: "postRestartTranscript.lastAssistantStopReason !== 'error' && postRestartTranscript.lastAssistantStopReason !== 'aborted'"
             message:
-              expr: "`interrupted agent run ended with unexpected status: ${JSON.stringify(waited)}`"
-        - set: interruptedMatches
-          value:
-            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.interruptedMarker))"
-        - assert:
-            expr: "interruptedMatches.length <= 1"
-            message:
-              expr: "`interrupted run duplicated marker ${interruptedMatches.length} times; outbound=${recentOutboundSummary(state)}`"
-        - call: runAgentPrompt
-          args:
-            - ref: env
-            - sessionKey:
-                ref: sessionKey
-              message:
-                expr: config.recoveryPrompt
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 180000)
+              expr: "`restart recovery left an abort artifact: ${JSON.stringify(postRestartTranscript)}`"
         - call: waitForOutboundMessage
           saveAs: outbound
           args:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.recoveryMarker)"
+                expr: "candidate.conversation.id === conversationId && candidate.text.includes(config.interruptedMarker)"
             - expr: liveTurnTimeoutMs(env, 180000)
             - sinceIndex:
                 ref: startIndex
-        - set: matchingOutbounds
+        - set: interruptedMatches
           value:
-            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.recoveryMarker))"
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.interruptedMarker))"
         - assert:
-            expr: "matchingOutbounds.length === 1"
+            expr: "interruptedMatches.length === 1"
             message:
-              expr: "`expected exactly one restart recovery marker, got ${matchingOutbounds.length}; outbound=${recentOutboundSummary(state)}`"
-      detailsExpr: "`runId=${started.runId} interruptedStatus=${String(waited.status)} interruptedMarkers=${interruptedMatches.length}\\n${outbound.text}`"
+              expr: "`expected exactly one automatically recovered marker, got ${interruptedMatches.length}; outbound=${recentOutboundSummary(state)}`"
+        - set: restartNotices
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && candidate.text.includes(config.restartNoticeNeedle))"
+        - assert:
+            expr: "restartNotices.length === 0"
+            message:
+              expr: "`automatic recovery emitted ${restartNotices.length} resend notice(s); outbound=${recentOutboundSummary(state)}`"
+        - set: recoveryRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)) : []"
+        - assert:
+            expr: "recoveryRequests.some((request) => String(request.allInputText ?? '').includes('Your previous turn was interrupted by a gateway restart'))"
+            message: restart recovery prompt did not reach the provider
+        - assert:
+            expr: "recoveryRequests.every((request) => !String(request.allInputText ?? '').includes('[OpenClaw heartbeat poll]'))"
+            message: heartbeat poll raced the restart recovery proof
+        - set: recoveryLogs
+          value:
+            expr: readGatewayLogs().slice(gatewayLogCursor)
+        - assert:
+            expr: "recoveryLogs.includes('dispatching restart-safe recovery') && recoveryLogs.includes('restart-safe recovery tool policy retained')"
+            message:
+              expr: "`restart-safe host policy was not observed; logs=${recoveryLogs}`"
+      detailsExpr: "`runId=${started.runId} session=${sessionKey} plannedTool=${plannedWait.plannedToolName} persistedTail=${interruptedTranscript.lastMessageRole}/${interruptedTranscript.lastAssistantStopReason}/${interruptedTranscript.lastAssistantToolNames?.join(',')} recoveredTail=${postRestartTranscript.lastMessageRole}/${postRestartTranscript.lastAssistantStopReason}/${postRestartTranscript.lastAssistantContentTypes?.join(',')} recoveredMarkers=${interruptedMatches.length} resendNotices=${restartNotices.length} restartSafePolicy=true heartbeatPoll=false\\n${outbound.text}`"

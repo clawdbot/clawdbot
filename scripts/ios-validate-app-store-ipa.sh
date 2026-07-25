@@ -4,13 +4,16 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-validate-app-store-ipa.sh --ipa apps/ios/build/app-store/OpenClaw-<version>.ipa
+  scripts/ios-validate-app-store-ipa.sh --ipa apps/ios/build/app-store/OpenClaw-<version>.ipa \
+    [--expected-commit <full-sha>] [--expected-build-timestamp <utc-iso>]
 
 Validates the exported iOS App Store IPA before App Store Connect upload.
 EOF
 }
 
 IPA_PATH=""
+EXPECTED_GIT_COMMIT=""
+EXPECTED_BUILD_TIMESTAMP=""
 EXPECTED_TEAM_ID="FWJYW4S8P8"
 EXPECTED_BUNDLE_ID="ai.openclawfoundation.app"
 EXPECTED_PROFILE_NAME="OpenClaw App Store ai.openclawfoundation.app"
@@ -18,6 +21,7 @@ EXPECTED_APP_GROUP="group.ai.openclawfoundation.app.shared"
 EXPECTED_PUSH_MODE="appStore"
 
 PLIST_BUDDY_BIN="${IOS_VALIDATE_PLIST_BUDDY_BIN:-/usr/libexec/PlistBuddy}"
+PLUTIL_BIN="${IOS_VALIDATE_PLUTIL_BIN:-plutil}"
 CODESIGN_BIN="${IOS_VALIDATE_CODESIGN_BIN:-codesign}"
 SECURITY_BIN="${IOS_VALIDATE_SECURITY_BIN:-security}"
 UNZIP_BIN="${IOS_VALIDATE_UNZIP_BIN:-unzip}"
@@ -38,6 +42,16 @@ while [[ $# -gt 0 ]]; do
     --ipa)
       require_option_value "$1" "${2-}"
       IPA_PATH="$2"
+      shift 2
+      ;;
+    --expected-commit)
+      require_option_value "$1" "${2-}"
+      EXPECTED_GIT_COMMIT="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --expected-build-timestamp)
+      require_option_value "$1" "${2-}"
+      EXPECTED_BUILD_TIMESTAMP="$2"
       shift 2
       ;;
     -h|--help)
@@ -123,6 +137,30 @@ assert_plist_string() {
   fi
 }
 
+assert_plist_nonempty_string() {
+  local plist="$1"
+  local key_path="$2"
+  local label="$3"
+  local actual
+  actual="$("${PLUTIL_BIN}" -extract "${key_path}" raw -expect string -o - "${plist}" 2>/dev/null || true)"
+  if [[ -z "${actual}" ]]; then
+    echo "Invalid IPA: ${label} must be a non-empty string." >&2
+    exit 1
+  fi
+}
+
+assert_plist_true() {
+  local plist="$1"
+  local key_path="$2"
+  local label="$3"
+  local actual
+  actual="$(plist_value "${plist}" "${key_path}")"
+  if [[ "${actual}" != "true" ]]; then
+    echo "Invalid IPA: ${label}; expected true, got ${actual:-missing}." >&2
+    exit 1
+  fi
+}
+
 assert_plist_key_absent() {
   local plist="$1"
   local key_path="$2"
@@ -158,8 +196,51 @@ assert_plist_empty_or_absent() {
   fi
 }
 
+assert_build_provenance() {
+  local commit
+  local timestamp
+  commit="$(plist_value "${info_plist}" "OpenClawGitCommit")"
+  timestamp="$(plist_value "${info_plist}" "OpenClawBuildTimestamp")"
+  if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Invalid IPA: OpenClawGitCommit must be a full lowercase commit SHA; got ${commit:-missing}." >&2
+    exit 1
+  fi
+  if [[ ! "${timestamp}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{3})?Z$ ]]; then
+    echo "Invalid IPA: OpenClawBuildTimestamp must be a canonical UTC timestamp; got ${timestamp:-missing}." >&2
+    exit 1
+  fi
+  if [[ -n "${EXPECTED_GIT_COMMIT}" && "${commit}" != "${EXPECTED_GIT_COMMIT}" ]]; then
+    echo "Invalid IPA: embedded Git commit mismatch; expected ${EXPECTED_GIT_COMMIT}, got ${commit}." >&2
+    exit 1
+  fi
+  if [[ -n "${EXPECTED_BUILD_TIMESTAMP}" && "${timestamp}" != "${EXPECTED_BUILD_TIMESTAMP}" ]]; then
+    echo "Invalid IPA: embedded build timestamp mismatch; expected ${EXPECTED_BUILD_TIMESTAMP}, got ${timestamp}." >&2
+    exit 1
+  fi
+}
+
+assert_localized_plists_resolve_build_settings() {
+  local localized_plist
+  local rendered
+  while IFS= read -r -d '' localized_plist; do
+    if ! rendered="$("${PLUTIL_BIN}" -convert xml1 -o - "${localized_plist}" 2>/dev/null)"; then
+      echo "Invalid IPA: could not read localized plist ${localized_plist#"${app_path}/"}." >&2
+      exit 1
+    fi
+    if grep -Eq '\$\([A-Za-z0-9_.-]+\)|\$\{[A-Za-z0-9_.-]+\}' <<<"${rendered}"; then
+      echo "Invalid IPA: unresolved build setting in localized plist ${localized_plist#"${app_path}/"}." >&2
+      exit 1
+    fi
+  done < <(find "${app_path}" -type f -path "*.lproj/InfoPlist.strings" -print0)
+}
+
 assert_plist_string "${info_plist}" "CFBundleIdentifier" "${EXPECTED_BUNDLE_ID}" "bundle identifier mismatch"
+assert_plist_string "${info_plist}" "CFBundleDisplayName" "OpenClaw" "display name mismatch"
 assert_plist_string "${info_plist}" "OpenClawPushMode" "${EXPECTED_PUSH_MODE}" "push mode mismatch"
+assert_plist_nonempty_string "${info_plist}" "NSHealthShareUsageDescription" "Health share usage description"
+assert_plist_nonempty_string "${info_plist}" "NSHealthUpdateUsageDescription" "Health update usage description"
+assert_build_provenance
+assert_localized_plists_resolve_build_settings
 assert_plist_empty_or_absent "${info_plist}" "OpenClawPushRelayBaseURL" "push relay URL override"
 assert_plist_key_absent "${info_plist}" "OpenClawPushTransport" "legacy push transport"
 assert_plist_key_absent "${info_plist}" "OpenClawPushDistribution" "legacy push distribution"
@@ -177,6 +258,7 @@ assert_plist_string "${entitlements_plist}" "application-identifier" "${EXPECTED
 assert_plist_string "${entitlements_plist}" "com.apple.developer.team-identifier" "${EXPECTED_TEAM_ID}" "signed team identifier mismatch"
 assert_plist_string "${entitlements_plist}" "aps-environment" "production" "signed APNs entitlement mismatch"
 assert_plist_string "${entitlements_plist}" "com.apple.developer.devicecheck.appattest-environment" "production" "signed App Attest entitlement mismatch"
+assert_plist_true "${entitlements_plist}" "com.apple.developer.healthkit" "signed HealthKit entitlement mismatch"
 assert_plist_array_contains "${entitlements_plist}" "com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "signed App Group entitlement mismatch"
 
 if ! "${SECURITY_BIN}" cms -D -i "${embedded_profile}" >"${profile_plist}" 2>"${tmp_dir}/security.err"; then
@@ -190,6 +272,7 @@ assert_plist_array_contains "${profile_plist}" "TeamIdentifier" "${EXPECTED_TEAM
 assert_plist_string "${profile_plist}" "Entitlements:application-identifier" "${EXPECTED_TEAM_ID}.${EXPECTED_BUNDLE_ID}" "embedded profile application identifier mismatch"
 assert_plist_string "${profile_plist}" "Entitlements:aps-environment" "production" "embedded profile APNs entitlement mismatch"
 assert_plist_array_contains "${profile_plist}" "Entitlements:com.apple.developer.devicecheck.appattest-environment" "production" "embedded profile App Attest entitlement mismatch"
+assert_plist_true "${profile_plist}" "Entitlements:com.apple.developer.healthkit" "embedded profile HealthKit entitlement mismatch"
 assert_plist_array_contains "${profile_plist}" "Entitlements:com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "embedded profile App Group entitlement mismatch"
 
 echo "Validated iOS App Store IPA: ${IPA_PATH}"

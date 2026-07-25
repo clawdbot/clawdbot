@@ -37,7 +37,7 @@ export interface QQBotExecApprovalConfig {
   target?: "dm" | "channel" | "both";
 }
 
-export interface QQBotGroupConfig {
+interface QQBotGroupConfig {
   requireMention?: boolean;
   commandLevel?: QQBotGroupCommandLevel;
   ignoreOtherMentions?: boolean;
@@ -119,17 +119,15 @@ export interface QQBotAccountConfig {
   upgradeMode?: "doc" | "hot-reload";
   /**
    * Block streaming + optional QQ C2C official stream API.
-   * - `true`: same as `mode: "partial"` and `c2cStreamApi: true` (recommended).
-   * - `false` / omitted: no official C2C stream for this account (see object form for fine control).
-   * - Object (legacy / advanced): `mode` "partial" | "off", `c2cStreamApi` for C2C `/stream_messages`.
+   * - `mode` "partial" (default) enables block streaming; "off" disables it.
+   * - `nativeTransport: true` uses QQ's official C2C `stream_messages` API for DMs.
+   * Legacy `streaming: true|false` scalars and the `c2cStreamApi` key migrate
+   * via `openclaw doctor --fix`.
    */
-  streaming?:
-    | boolean
-    | {
-        mode?: "off" | "partial";
-        /** @deprecated Prefer `streaming: true`. */
-        c2cStreamApi?: boolean;
-      };
+  streaming?: {
+    mode?: "off" | "partial";
+    nativeTransport?: boolean;
+  };
   groups?: Record<string, QQBotGroupConfig>;
 }
 

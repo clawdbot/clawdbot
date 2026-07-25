@@ -4,11 +4,6 @@
  * instead of this broad compatibility surface.
  */
 
-import {
-  buildCommandsMessage as buildCommandsMessageCompat,
-  buildCommandsMessagePaginated as buildCommandsMessagePaginatedCompat,
-  buildHelpMessage as buildHelpMessageCompat,
-} from "../auto-reply/command-status-builders.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -269,7 +264,7 @@ export async function resolveSenderCommandAuthorization(
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;
   const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const senderAllowedForCommands = params.isSenderAllowed(
     params.senderId,
     params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
@@ -293,25 +288,4 @@ export async function resolveSenderCommandAuthorization(
     senderAllowedForCommands,
     commandAuthorized,
   };
-}
-
-/** @deprecated Use `openclaw/plugin-sdk/command-status` instead. */
-export function buildCommandsMessage(
-  ...args: Parameters<typeof buildCommandsMessageCompat>
-): ReturnType<typeof buildCommandsMessageCompat> {
-  return buildCommandsMessageCompat(...args);
-}
-
-/** @deprecated Use `openclaw/plugin-sdk/command-status` instead. */
-export function buildCommandsMessagePaginated(
-  ...args: Parameters<typeof buildCommandsMessagePaginatedCompat>
-): ReturnType<typeof buildCommandsMessagePaginatedCompat> {
-  return buildCommandsMessagePaginatedCompat(...args);
-}
-
-/** @deprecated Use `openclaw/plugin-sdk/command-status` instead. */
-export function buildHelpMessage(
-  ...args: Parameters<typeof buildHelpMessageCompat>
-): ReturnType<typeof buildHelpMessageCompat> {
-  return buildHelpMessageCompat(...args);
 }

@@ -1,11 +1,43 @@
 // Discord tests cover audio plugin behavior.
-import { Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough, Readable } from "node:stream";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  resolveFfmpegBin: () => "ffmpeg",
+}));
+
 import {
   createDiscordOpusEncodeStream,
+  createDiscordOpusPlaybackStream,
   decodeOpusStream,
   decodeOpusStreamChunks,
 } from "./audio.js";
+
+function createFakeFfmpeg() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    stdin: PassThrough;
+    killed: boolean;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  child.killed = false;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    return true;
+  });
+  return child;
+}
 
 async function collectBuffers(stream: Readable): Promise<Buffer[]> {
   const chunks: Buffer[] = [];
@@ -74,5 +106,51 @@ describe("discord voice opus codec", () => {
     });
 
     expect(onError).toHaveBeenCalledWith(err);
+  });
+});
+
+describe("createDiscordOpusPlaybackStream child stream errors", () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "routes a %s stream error to the playback stream instead of crashing",
+    async (streamName) => {
+      const ffmpeg = createFakeFfmpeg();
+      spawnMock.mockReturnValue(ffmpeg);
+
+      const playback = createDiscordOpusPlaybackStream("input.mp3");
+      const errorSeen = new Promise<Error>((resolve) => {
+        playback.once("error", resolve);
+      });
+
+      const streamError = new Error(`${streamName} broke`);
+      expect(() => ffmpeg[streamName].emit("error", streamError)).not.toThrow();
+
+      await expect(errorSeen).resolves.toBe(streamError);
+      expect(ffmpeg.kill).toHaveBeenCalledOnce();
+      expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
+    },
+  );
+
+  it("bounds multibyte ffmpeg stderr by bytes without a replacement character", async () => {
+    const ffmpeg = createFakeFfmpeg();
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const playback = createDiscordOpusPlaybackStream("input.mp3");
+    const errorSeen = new Promise<Error>((resolve) => {
+      playback.once("error", resolve);
+    });
+
+    ffmpeg.stderr.write("é".repeat(4095));
+    ffmpeg.stderr.write("😀");
+    ffmpeg.emit("close", 1, null);
+
+    const error = await errorSeen;
+    const stderrText = error.message.replace(/^ffmpeg exited with code 1: /, "");
+    expect(stderrText).toBe("é".repeat(4095));
+    expect(Buffer.byteLength(stderrText)).toBeLessThanOrEqual(8192);
+    expect(stderrText).not.toContain("\uFFFD");
   });
 });

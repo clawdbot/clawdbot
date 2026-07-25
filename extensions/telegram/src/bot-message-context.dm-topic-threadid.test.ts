@@ -13,8 +13,16 @@ vi.mock("./bot-message-context.body.js", () => ({
     historyKey: undefined,
     commandAuthorized: false,
     effectiveWasMentioned: true,
+    inboundEventKind: "user_request",
+    mentionFacts: {
+      canDetectMention: false,
+      wasMentioned: true,
+      effectiveWasMentioned: true,
+      requireMention: false,
+    },
     canDetectMention: false,
     shouldBypassMention: false,
+    hasControlCommand: false,
     stickerCacheHit: false,
     locationData: undefined,
   }),
@@ -92,6 +100,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
           text: "parent",
           from: { id: 99, first_name: "Bob" },
         },
+        from: { id: 42, first_name: "Alice", username: "alice_bot", is_bot: true },
       },
       sessionRuntime: {
         buildChannelInboundEventContext:
@@ -100,10 +109,12 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     });
 
     expect(ctx?.ctxPayload.ReplyToBody).toBe("parent");
+    expect(ctx?.ctxPayload.SenderIsBot).toBe(true);
     expect(buildChannelInboundEventContextMock).toHaveBeenCalledOnce();
     const [turnOptions] = buildChannelInboundEventContextMock.mock.calls.at(0) ?? [];
     expect(turnOptions?.channel).toBe("telegram");
     expect(turnOptions?.from).toBe("telegram:1234");
+    expect(turnOptions?.sender?.isBot).toBe(true);
     expect(turnOptions?.message.rawBody).toBe("hello");
     expect(turnOptions?.message.bodyForAgent).toBe("hello");
     expect(turnOptions?.reply?.to).toBe("telegram:1234");

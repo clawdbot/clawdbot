@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover translate behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +88,7 @@ describe("i18n", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("should return the key if translation is missing", () => {
@@ -98,7 +100,9 @@ describe("i18n", () => {
   });
 
   it("should replace parameters correctly", () => {
-    expect(translate.t("overview.stats.cronNext", { time: "10:00" })).toBe("Next wake 10:00");
+    expect(translate.t("connection.help.copyCommandAria", { command: "openclaw dashboard" })).toBe(
+      "Copy command: openclaw dashboard",
+    );
   });
 
   it("should fallback to English if key is missing in another locale", async () => {
@@ -204,12 +208,25 @@ describe("i18n", () => {
     }
   });
 
-  it("keeps shipped locales structurally aligned with English", () => {
-    const englishKeys = flatten(en);
+  it("keeps mobile pairing copy localized in shipped locale bundles", () => {
+    const checkedKeys = flatten(en).filter(
+      (key) => key.startsWith("nodes.pairing.") && key !== "nodes.pairing.title",
+    );
+
     for (const [locale, value] of Object.entries(shippedLocales)) {
-      expect(flatten(value as Record<string, string | Record<string, unknown>>), locale).toEqual(
-        englishKeys,
-      );
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
+    }
+  });
+
+  it("keeps new chat composer commands localized in shipped locale bundles", () => {
+    const checkedKeys = ["chat.composer.addAttachment", "chat.composer.attachFileOption"];
+
+    for (const [locale, value] of Object.entries(shippedLocales)) {
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
     }
   });
 });

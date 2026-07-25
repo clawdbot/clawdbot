@@ -343,6 +343,54 @@ describe("browser manage output", () => {
     expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 
+  it("prints managed graphics facts in status output", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            profile: "openclaw",
+            driver: "openclaw",
+            transport: "cdp",
+            running: true,
+            cdpReady: true,
+            cdpHttp: true,
+            pid: 4321,
+            cdpPort: 18800,
+            cdpUrl: "http://127.0.0.1:18800",
+            chosenBrowser: "chromium",
+            userDataDir: null,
+            color: "#00AA00",
+            headless: true,
+            noSandbox: false,
+            executablePath: null,
+            attachOnly: false,
+            graphics: {
+              status: "available",
+              observedAt: 123,
+              acceleration: "hardware",
+              renderer: "ANGLE (Intel)",
+              vendor: "Intel",
+              version: "OpenGL ES 3.0",
+              backend: "(gl=angle,angle=metal)",
+              devices: [],
+              featureStatus: {},
+              disabledFeatures: [],
+              driverBugWorkarounds: [],
+              videoDecoding: [],
+              videoEncoding: [],
+            },
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "status"], { from: "user" });
+
+    expect(lastRuntimeLog()).toContain(
+      "graphics: hardware; renderer ANGLE (Intel); backend (gl=angle,angle=metal)",
+    );
+  });
+
   it("prints suggested tab references while keeping raw target ids visible", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/tabs"
@@ -432,6 +480,21 @@ describe("browser manage output", () => {
           noSandbox: false,
           executablePath: null,
           attachOnly: false,
+          graphics: {
+            status: "available",
+            observedAt: 123,
+            acceleration: "software",
+            renderer: "ANGLE (Google, SwiftShader Device)",
+            vendor: "Google Inc.",
+            version: "OpenGL ES 3.0",
+            backend: "(gl=angle,angle=swiftshader)",
+            devices: [],
+            featureStatus: {},
+            disabledFeatures: [],
+            driverBugWorkarounds: [],
+            videoDecoding: [],
+            videoEncoding: [],
+          },
         };
       }
       if (req.path === "/profiles") {
@@ -459,6 +522,7 @@ describe("browser manage output", () => {
 
     const output = lastRuntimeLog();
     expect(output).toContain("OK gateway: browser control endpoint reachable");
+    expect(output).toContain("OK graphics: software");
     expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
   });
 

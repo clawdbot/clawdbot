@@ -22,7 +22,7 @@ export type PlainTextToolCallBlock = {
 export type PlainTextToolCallParseOptions = {
   /** Optional allowlist of tool names that may be accepted. */
   allowedToolNames?: Iterable<string>;
-  /** Maximum JSON payload size accepted for one parsed call. */
+  /** Maximum serialized payload size accepted for one parsed call. */
   maxPayloadBytes?: number;
 };
 

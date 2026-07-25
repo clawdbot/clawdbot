@@ -29,8 +29,8 @@ Healthy baseline:
 
 ## After an update
 
-Use this when Telegram, iMessage, BlueBubbles-era configs, or another plugin
-channel disappears after updating.
+Use this when Telegram, iMessage, BlueBubbles-era configs, or another plugin channel disappears
+after updating.
 
 ```bash
 openclaw status --all
@@ -39,11 +39,10 @@ openclaw gateway restart
 openclaw status --all
 ```
 
-Look for `plugin load failed: dependency tree corrupted; run openclaw doctor
---fix` in `openclaw status --all`. That means the channel is configured, but
-the plugin setup/load path hit a corrupt dependency tree instead of registering
-the channel. `openclaw doctor --fix` removes stale plugin dependency staging
-directories and stale auth shadows, then `openclaw gateway restart` reloads the
+Look for `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` in `openclaw
+status --all`. That means the channel is configured, but plugin setup/load hit a corrupted
+dependency tree instead of registering the channel. `openclaw doctor --fix` clears stale
+plugin-runtime dependency symlinks and stale auth shadows, then `openclaw gateway restart` reloads
 clean state.
 
 ## WhatsApp
@@ -65,15 +64,15 @@ Full troubleshooting: [WhatsApp troubleshooting](/channels/whatsapp#troubleshoot
 
 ### Telegram failure signatures
 
-| Symptom                              | Fastest check                                    | Fix                                                                                                                        |
-| ------------------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `/start` but no usable reply flow    | `openclaw pairing list telegram`                 | Approve pairing or change DM policy.                                                                                       |
-| Bot online but group stays silent    | Verify mention requirement and bot privacy mode  | Disable privacy mode for group visibility or mention bot.                                                                  |
-| Send failures with network errors    | Inspect logs for Telegram API call failures      | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                                                                          |
-| Startup reports `getMe returned 401` | Check configured token source                    | Re-copy or regenerate the BotFather token and update `botToken`, `tokenFile`, or default-account `TELEGRAM_BOT_TOKEN`.     |
-| Polling stalls or reconnects slowly  | `openclaw logs --follow` for polling diagnostics | Upgrade; if restarts are false positives, tune `pollingStallThresholdMs`. Persistent stalls still point to proxy/DNS/IPv6. |
-| `setMyCommands` rejected at startup  | Inspect logs for `BOT_COMMANDS_TOO_MUCH`         | Reduce plugin/skill/custom Telegram commands or disable native menus.                                                      |
-| Upgraded and allowlist blocks you    | `openclaw security audit` and config allowlists  | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs.                                                |
+| Symptom                              | Fastest check                                    | Fix                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `/start` but no usable reply flow    | `openclaw pairing list telegram`                 | Approve pairing or change DM policy.                                                                                   |
+| Bot online but group stays silent    | Verify mention requirement and bot privacy mode  | Disable privacy mode for group visibility or mention bot.                                                              |
+| Send failures with network errors    | Inspect logs for Telegram API call failures      | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                                                                      |
+| Startup reports `getMe returned 401` | Check configured token source                    | Re-copy or regenerate the BotFather token and update `botToken`, `tokenFile`, or default-account `TELEGRAM_BOT_TOKEN`. |
+| Polling stalls or reconnects slowly  | `openclaw logs --follow` for polling diagnostics | Upgrade; persistent stalls usually point to proxy/DNS/IPv6.                                                            |
+| `setMyCommands` rejected at startup  | Inspect logs for `BOT_COMMANDS_TOO_MUCH`         | Reduce plugin/skill/custom Telegram commands or disable native menus.                                                  |
+| Upgraded and allowlist blocks you    | `openclaw security audit` and config allowlists  | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs.                                            |
 
 Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshooting)
 
@@ -112,9 +111,7 @@ Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
 | Can send but no receive on macOS     | Check macOS privacy permissions for Messages automation | Re-grant TCC permissions and restart channel process.                 |
 | DM sender blocked                    | `openclaw pairing list imessage`                        | Approve pairing or update allowlist.                                  |
 
-Full troubleshooting:
-
-- [iMessage troubleshooting](/channels/imessage#troubleshooting)
+Full troubleshooting: [iMessage troubleshooting](/channels/imessage#troubleshooting)
 
 ## Signal
 

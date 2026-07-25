@@ -52,7 +52,6 @@ import {
   callPluginToolsMcp,
   findSkill,
   handleQaAction,
-  resolveWorkspaceSkillPath,
   writeWorkspaceSkill,
 } from "./suite-runtime-agent-tools.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -96,9 +95,6 @@ describe("qa suite runtime agent tools helpers", () => {
     const workspaceDir = await makeTempDir("qa-workspace-");
 
     for (const name of ["", " spaced", "spaced ", ".", "..", "../escape", "..\\escape", "a/b"]) {
-      expect(() => resolveWorkspaceSkillPath(workspaceDir, name), name).toThrow(
-        `invalid QA workspace skill name: ${JSON.stringify(name)}`,
-      );
       await expect(
         writeWorkspaceSkill({
           env: { gateway: { workspaceDir } } as never,

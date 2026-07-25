@@ -1,55 +1,40 @@
 // Builds diagnostics for Codex plugin config and provider wiring.
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  AUTO_AGENT_RUNTIME_ID,
+  isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
 } from "../agents/agent-runtime-id.js";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentModelFallbacksOverride,
+  resolveEffectiveModelFallbacks,
+} from "../agents/agent-scope.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
-import { openAIProviderUsesCodexRuntimeByDefault } from "../agents/openai-routing.js";
-import type { AgentModelEntryConfig } from "./types.agent-defaults.js";
-import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "../agents/model-selection-config.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../agents/model-selection-shared.js";
+import { resolveOpenAIImplicitAgentRuntime } from "../agents/openai-routing.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentModelFallbackValues } from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const CODEX_PLUGIN_ID = "codex";
 const OPENAI_PROVIDER_ID = "openai";
 
-function normalizeRuntimeId(raw?: string | null): string | undefined {
-  return normalizeOptionalAgentRuntimeId(raw);
-}
-
-function isCodexRuntimeSelection(raw?: string | null): boolean {
-  return normalizeRuntimeId(raw) === CODEX_PLUGIN_ID;
-}
-
-function isOpenAiCodexDefaultRuntimeSelection(params: {
-  cfg: OpenClawConfig;
-  raw?: string | null;
-}): boolean {
-  const runtime = normalizeRuntimeId(params.raw);
-  if (runtime === CODEX_PLUGIN_ID) {
-    return true;
-  }
-  if (runtime !== AUTO_AGENT_RUNTIME_ID && runtime !== "default") {
-    return false;
-  }
-  // "auto"/"default" only means Codex for the official OpenAI route.
-  // Custom OpenAI-compatible base URLs stay on the OpenClaw runtime path.
-  return openAIProviderUsesCodexRuntimeByDefault({
-    provider: OPENAI_PROVIDER_ID,
-    config: params.cfg,
-  });
-}
-
-function parseProviderModelRef(raw: string): { provider: string; model: string } | null {
-  const slashIndex = raw.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= raw.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(raw.slice(0, slashIndex));
-  const model = raw.slice(slashIndex + 1).trim();
-  return provider && model ? { provider, model } : null;
-}
+type ModelRoute = {
+  provider: string;
+  modelId: string;
+};
 
 function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
   for (const [pluginId, entry] of Object.entries(cfg.plugins?.entries ?? {})) {
@@ -60,159 +45,262 @@ function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
   return undefined;
 }
 
-function openAiProviderRuntimePolicy(cfg: OpenClawConfig): AgentRuntimePolicyConfig | undefined {
-  for (const [providerId, providerConfig] of Object.entries(cfg.models?.providers ?? {})) {
-    if (normalizeProviderId(providerId) === OPENAI_PROVIDER_ID) {
-      return providerConfig?.agentRuntime?.id?.trim() ? providerConfig.agentRuntime : undefined;
-    }
-  }
-  return undefined;
-}
-
-function listConfiguredAgentIds(cfg: OpenClawConfig): Array<string | undefined> {
-  const ids: Array<string | undefined> = [undefined];
-  for (const agent of cfg.agents?.list ?? []) {
-    if (typeof agent.id === "string" && agent.id.trim()) {
-      ids.push(agent.id);
-    }
-  }
-  return ids;
-}
-
-function openAiProviderModelCanResolveToCodexDefault(params: {
+function configuredRuntimeNeedsCodex(params: {
   cfg: OpenClawConfig;
-  modelId: string;
+  env: NodeJS.ProcessEnv;
+  modelId?: string;
+  runtimeId?: string;
 }): boolean {
-  // Provider model rows are below exact agent model policies in runtime
-  // precedence, so inspect the resolved policy instead of the raw row.
-  return listConfiguredAgentIds(params.cfg).some((agentId) =>
-    isOpenAiCodexDefaultRuntimeSelection({
-      cfg: params.cfg,
-      raw: resolveModelRuntimePolicy({
-        config: params.cfg,
-        provider: OPENAI_PROVIDER_ID,
-        modelId: params.modelId,
-        agentId,
-      }).policy?.id,
-    }),
+  const runtimeId = normalizeOptionalAgentRuntimeId(params.runtimeId);
+  if (runtimeId === CODEX_PLUGIN_ID) {
+    return true;
+  }
+  if (!isDefaultAgentRuntimeId(runtimeId)) {
+    return false;
+  }
+  return (
+    resolveOpenAIImplicitAgentRuntime({
+      provider: OPENAI_PROVIDER_ID,
+      modelId: params.modelId,
+      config: params.cfg,
+      env: params.env,
+    }) === CODEX_PLUGIN_ID
   );
 }
 
-function openAiHasCodexDefaultRuntimePolicy(cfg: OpenClawConfig): boolean {
+/** Resolves effective runtime policy for one canonical provider/model route. */
+export function configuredModelRouteNeedsCodex(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentId?: string;
+  route: ModelRoute;
+}): boolean {
+  if (normalizeProviderId(params.route.provider) !== OPENAI_PROVIDER_ID) {
+    return false;
+  }
+  const runtime = resolveModelRuntimePolicy({
+    config: params.cfg,
+    provider: OPENAI_PROVIDER_ID,
+    modelId: params.route.modelId,
+    agentId: params.agentId,
+  }).policy?.id;
+  return configuredRuntimeNeedsCodex({
+    cfg: params.cfg,
+    env: params.env,
+    modelId: params.route.modelId,
+    runtimeId: runtime,
+  });
+}
+
+function resolveEffectiveSelectedModelRefs(params: { cfg: OpenClawConfig; agentId: string }): {
+  complete: boolean;
+  values: ReadonlySet<string>;
+} {
+  const { cfg, agentId } = params;
+  const mainPrimaryRaw = resolveAgentEffectiveModelPrimary(cfg, agentId);
+  const mainFallbacks =
+    resolveAgentModelFallbacksOverride(cfg, agentId) ??
+    resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  const subagentPrimaryRaw =
+    resolveSubagentConfiguredModelSelection({ cfg, agentId }) ?? mainPrimaryRaw;
+  const subagentFallbacks =
+    resolveEffectiveModelFallbacks({
+      cfg,
+      agentId,
+      sessionKey: `agent:${agentId}:subagent:codex-diagnostic`,
+      hasSessionModelOverride: true,
+      modelOverrideSource: "auto",
+    }) ?? [];
+  const values = new Set<string>();
+  for (const raw of [mainPrimaryRaw, ...mainFallbacks, subagentPrimaryRaw, ...subagentFallbacks]) {
+    const value = raw?.trim();
+    if (value) {
+      values.add(value);
+    }
+  }
+  return {
+    complete: Boolean(mainPrimaryRaw?.trim() && subagentPrimaryRaw?.trim()),
+    values,
+  };
+}
+
+function configuredRefTargetsAgent(params: {
+  cfg: OpenClawConfig;
+  path: string;
+  agentId: string;
+}): boolean {
+  const match = /^agents\.list\.(\d+)\./.exec(params.path);
+  if (!match) {
+    return true;
+  }
+  const entry = params.cfg.agents?.list?.[Number(match[1])];
+  return Boolean(entry && normalizeAgentId(entry.id) === params.agentId);
+}
+
+function configuredRefIsEffectiveForAgent(params: {
+  cfg: OpenClawConfig;
+  path: string;
+  value: string;
+  agentId: string;
+  selectedModelRefs: ReadonlySet<string>;
+}): boolean {
+  if (!configuredRefTargetsAgent(params)) {
+    return false;
+  }
+  // Defaults may be shadowed by per-agent main/subagent selections. Keep only
+  // refs the runtime's inheritance rules leave reachable for this agent.
+  if (/^agents\.(?:defaults|list\.\d+)\.(?:model|subagents\.model)(?:\.|$)/.test(params.path)) {
+    return params.selectedModelRefs.has(params.value);
+  }
+  const agent = resolveAgentConfig(params.cfg, params.agentId);
+  if (params.path.endsWith(".heartbeat.model")) {
+    const heartbeat =
+      agent?.heartbeat?.model?.trim() || params.cfg.agents?.defaults?.heartbeat?.model?.trim();
+    return heartbeat === params.value;
+  }
+  if (params.path.endsWith(".utilityModel")) {
+    const utilityModel = (agent?.utilityModel ?? params.cfg.agents?.defaults?.utilityModel)?.trim();
+    return utilityModel === params.value;
+  }
+  return true;
+}
+
+function configuredProviderPoliciesNeedCodex(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  agentIds: string[],
+): boolean {
+  for (const agentId of agentIds) {
+    const genericPolicy = resolveModelRuntimePolicy({
+      config: cfg,
+      provider: OPENAI_PROVIDER_ID,
+      agentId,
+    }).policy;
+    if (
+      genericPolicy?.id?.trim() &&
+      configuredRuntimeNeedsCodex({ cfg, env, runtimeId: genericPolicy.id })
+    ) {
+      return true;
+    }
+  }
   for (const [providerId, providerConfig] of Object.entries(cfg.models?.providers ?? {})) {
     if (normalizeProviderId(providerId) !== OPENAI_PROVIDER_ID) {
       continue;
     }
-    if (isCodexRuntimeSelection(providerConfig?.agentRuntime?.id)) {
-      return true;
-    }
-    // A model-scoped explicit "auto"/"default" overrides provider-wide PI/OpenClaw
-    // policy and falls back to the official OpenAI Codex runtime default.
-    if (
-      providerConfig?.models?.some(
-        (model) =>
-          model.agentRuntime?.id?.trim() &&
-          openAiProviderModelCanResolveToCodexDefault({ cfg, modelId: model.id }),
-      )
-    ) {
-      return true;
-    }
-  }
-  if (agentModelsHaveCodexDefaultRuntimePolicy(cfg, cfg.agents?.defaults?.models)) {
-    return true;
-  }
-  return (
-    cfg.agents?.list?.some((agent) =>
-      agentModelsHaveCodexDefaultRuntimePolicy(cfg, agent.models),
-    ) ?? false
-  );
-}
-
-function agentModelsHaveCodexDefaultRuntimePolicy(
-  cfg: OpenClawConfig,
-  models: Record<string, AgentModelEntryConfig> | undefined,
-): boolean {
-  for (const [modelRef, modelConfig] of Object.entries(models ?? {})) {
-    const parsed = parseProviderModelRef(modelRef);
-    if (
-      parsed?.provider === OPENAI_PROVIDER_ID &&
-      isOpenAiCodexDefaultRuntimeSelection({
-        cfg,
-        raw: modelConfig?.agentRuntime?.id,
-      })
-    ) {
-      return true;
+    for (const model of providerConfig.models ?? []) {
+      if (!model.agentRuntime?.id?.trim()) {
+        continue;
+      }
+      const parsed = parseModelCatalogRef(model.id);
+      const modelId = parsed?.provider === OPENAI_PROVIDER_ID ? parsed.modelId : model.id.trim();
+      if (
+        modelId &&
+        modelId !== "*" &&
+        agentIds.some((agentId) =>
+          configuredModelRouteNeedsCodex({
+            cfg,
+            env,
+            agentId,
+            route: { provider: OPENAI_PROVIDER_ID, modelId },
+          }),
+        )
+      ) {
+        return true;
+      }
     }
   }
   return false;
 }
 
-function openAiWildcardRuntimePolicy(
-  models: Record<string, AgentModelEntryConfig> | undefined,
-): AgentRuntimePolicyConfig | undefined {
-  for (const [modelRef, modelConfig] of Object.entries(models ?? {})) {
-    const parsed = parseProviderModelRef(modelRef);
-    if (
-      parsed?.provider === OPENAI_PROVIDER_ID &&
-      parsed.model === "*" &&
-      modelConfig?.agentRuntime?.id?.trim()
-    ) {
-      return modelConfig.agentRuntime;
+function configuredModelRefsNeedCodex(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentIds: string[];
+}): { complete: boolean; needsCodex: boolean } {
+  const refs = collectConfiguredModelRefs(params.cfg);
+  let complete = true;
+  for (const agentId of params.agentIds) {
+    const selected = resolveEffectiveSelectedModelRefs({ cfg: params.cfg, agentId });
+    complete &&= selected.complete;
+    const primary = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId,
+      manifestPlugins: [],
+    });
+    const aliasIndex = buildModelAliasIndex({
+      cfg: params.cfg,
+      defaultProvider: primary.provider,
+      manifestPlugins: [],
+    });
+    for (const ref of refs) {
+      if (
+        !configuredRefIsEffectiveForAgent({
+          cfg: params.cfg,
+          path: ref.path,
+          value: ref.value,
+          agentId,
+          selectedModelRefs: selected.values,
+        })
+      ) {
+        continue;
+      }
+      const resolved = resolveModelRefFromString({
+        cfg: params.cfg,
+        raw: ref.value,
+        defaultProvider: primary.provider,
+        aliasIndex,
+        allowManifestNormalization: false,
+      });
+      const route = resolved
+        ? { provider: resolved.ref.provider, modelId: resolved.ref.model }
+        : undefined;
+      if (
+        route &&
+        configuredModelRouteNeedsCodex({ cfg: params.cfg, env: params.env, agentId, route })
+      ) {
+        return { complete, needsCodex: true };
+      }
     }
   }
-  return undefined;
+  return { complete, needsCodex: false };
 }
 
-function openAiDefaultRouteRuntimePolicy(
+function defaultOpenAiRouteNeedsCodex(
   cfg: OpenClawConfig,
-): AgentRuntimePolicyConfig | undefined {
-  // This mirrors the default-route slice of resolveModelRuntimePolicy: a global
-  // OpenAI wildcard policy is more specific than the provider-level policy.
-  return (
-    openAiWildcardRuntimePolicy(cfg.agents?.defaults?.models) ?? openAiProviderRuntimePolicy(cfg)
-  );
-}
-
-function openAiDefaultRouteKeepsCodexUnavailable(cfg: OpenClawConfig): boolean {
-  const policy = openAiDefaultRouteRuntimePolicy(cfg);
-  if (!policy?.id?.trim()) {
-    // With no explicit runtime policy, the OpenAI route only needs Codex on the
-    // official OpenAI endpoint. OpenAI-compatible proxies stay on OpenClaw.
-    return !openAIProviderUsesCodexRuntimeByDefault({
-      provider: OPENAI_PROVIDER_ID,
+  env: NodeJS.ProcessEnv,
+  agentIds: string[],
+): boolean {
+  return agentIds.some((agentId) => {
+    const runtimeId = resolveModelRuntimePolicy({
       config: cfg,
-    });
-  }
-  // Any explicit default-route policy that does not resolve to Codex keeps the
-  // external Codex plugin optional, including custom OpenAI-compatible base URLs.
-  return !isOpenAiCodexDefaultRuntimeSelection({ cfg, raw: policy.id });
+      provider: OPENAI_PROVIDER_ID,
+      agentId,
+    }).policy?.id;
+    return configuredRuntimeNeedsCodex({ cfg, env, runtimeId });
+  });
 }
 
-/**
- * Reports whether the default OpenAI route intentionally avoids the Codex plugin.
- *
- * Route-specific Codex selections still win; this only answers the missing-plugin
- * diagnostic question for OpenAI defaults and OpenAI-compatible proxy configs.
- */
-export function configExplicitlyKeepsCodexUnavailableForOpenAi(cfg: OpenClawConfig): boolean {
-  if (openAiHasCodexDefaultRuntimePolicy(cfg)) {
-    return false;
+function configNeedsCodexForOpenAi(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  const agentIds = listAgentIds(cfg);
+  const configuredRefs = configuredModelRefsNeedCodex({ cfg, env, agentIds });
+  if (configuredRefs.needsCodex) {
+    return true;
   }
-  return openAiDefaultRouteKeepsCodexUnavailable(cfg);
+  if (configuredProviderPoliciesNeedCodex(cfg, env, agentIds)) {
+    return true;
+  }
+  return configuredRefs.complete ? false : defaultOpenAiRouteNeedsCodex(cfg, env, agentIds);
 }
 
-/**
- * Suppresses missing Codex plugin diagnostics when config makes Codex optional.
- *
- * Explicitly enabled entries still warn so operator intent is honored even when
- * all default routes would otherwise stay on the OpenClaw runtime.
- */
-export function shouldSuppressMissingCodexPluginDiagnostics(cfg: OpenClawConfig): boolean {
+/** Suppresses missing Codex diagnostics when no effective OpenAI route selects it. */
+export function shouldSuppressMissingCodexPluginDiagnostics(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   const entryEnabled = codexPluginEntryEnabled(cfg);
   if (entryEnabled === true) {
     return false;
   }
-  // A disabled entry is an explicit opt-out from the external Codex plugin.
-  // Route-specific Codex warnings still come from doctor when Codex is selected.
-  return entryEnabled === false || configExplicitlyKeepsCodexUnavailableForOpenAi(cfg);
+  // A disabled entry is an explicit opt-out; doctor reports selected-route conflicts.
+  return entryEnabled === false || !configNeedsCodexForOpenAi(cfg, env);
 }

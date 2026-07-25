@@ -13,7 +13,7 @@ import {
 type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
 
 /** Returns true when a registered route matches any canonical request candidate. */
-export function doesPluginRouteMatchPath(
+function doesPluginRouteMatchPath(
   route: PluginHttpRouteEntry,
   context: PluginRoutePathContext,
 ): boolean {

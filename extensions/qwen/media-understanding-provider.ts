@@ -18,14 +18,12 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
-const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
+const DEFAULT_QWEN_MEDIA_MODEL = "qwen3.6-plus";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
 
-export async function describeQwenVideo(
-  params: VideoDescriptionRequest,
-): Promise<VideoDescriptionResult> {
+async function describeQwenVideo(params: VideoDescriptionRequest): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
+  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_MEDIA_MODEL);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
   const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_QWEN_VIDEO_PROMPT);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -84,8 +82,8 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     id: "qwen",
     capabilities: ["image", "video"],
     defaultModels: {
-      image: "qwen-vl-max-latest",
-      video: DEFAULT_QWEN_VIDEO_MODEL,
+      image: DEFAULT_QWEN_MEDIA_MODEL,
+      video: DEFAULT_QWEN_MEDIA_MODEL,
     },
     autoPriority: {
       video: 15,

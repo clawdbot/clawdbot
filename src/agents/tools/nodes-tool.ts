@@ -47,6 +47,7 @@ const NODES_TOOL_ACTIONS = [
   "device_info",
   "device_permissions",
   "device_health",
+  "which",
   "invoke",
 ] as const;
 
@@ -90,7 +91,12 @@ async function resolveNodePairApproveScopes(
 const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
-  node: Type.Optional(Type.String()),
+  node: Type.Optional(
+    Type.String({
+      description:
+        "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    }),
+  ),
   requestId: Type.Optional(Type.String()),
   // notify
   title: Type.Optional(Type.String()),
@@ -122,6 +128,14 @@ const NodesToolSchema = Type.Object({
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
+  // which
+  bins: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 64,
+      description: "which: executable names to resolve on the selected node.",
+    }),
+  ),
   // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
@@ -147,7 +161,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover/control paired nodes: status, describe, pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications, executable lookup (which + bins), generic invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -159,7 +173,12 @@ export function createNodesTool(options?: {
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {
-            const node = readStringParam(params, "node", { required: true });
+            const node = readStringParam(params, "node");
+            if (!node) {
+              throw new Error(
+                'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+              );
+            }
             const nodeId = await resolveNodeId(gatewayOpts, node);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }
@@ -241,6 +260,7 @@ export function createNodesTool(options?: {
               action: action as NodeCommandAction,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -250,6 +270,7 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -286,6 +307,17 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
+              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
+            });
+          }
+          case "which": {
+            return await executeNodeCommandAction({
+              action,
+              input: params,
+              gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -295,6 +327,7 @@ export function createNodesTool(options?: {
               action,
               input: params,
               gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
@@ -311,7 +344,10 @@ export function createNodesTool(options?: {
             : "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
-        const pairing = action === "invoke" ? readConnectPairingRequiredMessage(message) : null;
+        const pairing =
+          action === "invoke" || action === "which"
+            ? readConnectPairingRequiredMessage(message)
+            : null;
         if (pairing) {
           const requestId = pairing.requestId ?? null;
           const approveHint = requestId

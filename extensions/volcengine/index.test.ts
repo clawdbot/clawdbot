@@ -36,6 +36,10 @@ describe("volcengine plugin", () => {
         contextWindow: entry.contextWindow,
       })),
     ]);
+    expect(DOUBAO_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
+      "ark-code-latest",
+      "doubao-seed-code",
+    ]);
   });
 
   it("declares its coding provider auth alias in the manifest", () => {
@@ -73,9 +77,9 @@ describe("volcengine plugin", () => {
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "volcengine-plan",
-      modelId: "kimi-k2.5",
+      modelId: "doubao-seed-code",
       model: {
-        id: "kimi-k2.5",
+        id: "doubao-seed-code",
         provider: "volcengine-plan",
         api: "openai-completions",
         compat: { unsupportedToolSchemaKeywords: ["not"] },

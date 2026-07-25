@@ -7,9 +7,11 @@ import type { Context, Model } from "../llm/types.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import {
   buildOpenAICompletionsParams,
-  buildOpenAIResponsesParams,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-transport-stream.js";
+import { testing as openAITransportTesting } from "./openai-transport-stream.test-support.js";
+
+const { buildOpenAIResponsesParams } = openAITransportTesting;
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && Boolean(OPENAI_KEY);
@@ -51,7 +53,7 @@ const context = {
 } satisfies Context;
 
 describeLive("OpenAI tool projection live", () => {
-  const modelId = process.env.OPENCLAW_LIVE_OPENAI_TOOL_MODEL || "gpt-5.5";
+  const modelId = process.env.OPENCLAW_LIVE_OPENAI_TOOL_MODEL || "gpt-5.6-luna";
   const client = new OpenAI({ apiKey: OPENAI_KEY });
 
   it("calls a healthy Responses function after quarantining an unreadable sibling", async () => {
@@ -88,7 +90,7 @@ describeLive("OpenAI tool projection live", () => {
     });
   }, 45_000);
 
-  it("calls a GPT-5.5 Chat Completions function without incompatible reasoning effort", async () => {
+  it("calls a GPT-5.6 Chat Completions function with reasoning disabled", async () => {
     const model = {
       id: modelId,
       name: modelId,
@@ -115,7 +117,7 @@ describeLive("OpenAI tool projection live", () => {
         },
       },
     });
-    expect(params).not.toHaveProperty("reasoning_effort");
+    expect(params.reasoning_effort).toBe("none");
     const { stream_options: _streamOptions, ...nonStreamingParams } = params;
 
     const response = await client.chat.completions.create({

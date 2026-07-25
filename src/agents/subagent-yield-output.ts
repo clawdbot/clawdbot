@@ -3,20 +3,22 @@
  *
  * Accepts provider-specific tool-call and tool-result shapes used by transcript repair and announce capture.
  */
+import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 
 function readToolName(value: unknown): string | undefined {
   const record = asOptionalRecord(value);
   if (!record) {
     return undefined;
   }
-  for (const key of ["name", "toolName", "tool_name", "functionName", "function_name"]) {
-    const candidate = record[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(record, [
+    "name",
+    "toolName",
+    "tool_name",
+    "functionName",
+    "function_name",
+  ]);
 }
 
 function isToolCallBlock(value: unknown): boolean {
@@ -49,11 +51,7 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   if (!trimmed.startsWith("{")) {
     return undefined;
   }
-  try {
-    return asOptionalRecord(JSON.parse(trimmed));
-  } catch {
-    return undefined;
-  }
+  return asOptionalRecord(safeParseJson(trimmed));
 }
 
 function readStructuredToolPayload(content: unknown): Record<string, unknown> | undefined {

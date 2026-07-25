@@ -4,13 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  ensureTailscaleEndpoint,
-  resetGmailSetupUtilsCachesForTest,
-  resolvePythonExecutablePath,
-  runGcloud,
-} from "./gmail-setup-utils.js";
-
 const itUnix = process.platform === "win32" ? it.skip : it;
 const runCommandWithTimeoutMock = vi.fn();
 
@@ -19,14 +12,19 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 beforeEach(() => {
+  vi.resetModules();
   runCommandWithTimeoutMock.mockClear();
-  resetGmailSetupUtilsCachesForTest();
 });
 
-describe("resolvePythonExecutablePath", () => {
+async function loadGmailSetupUtils() {
+  return await import("./gmail-setup-utils.js");
+}
+
+describe("runGcloud interpreter resolution", () => {
   itUnix(
     "resolves a working python path and caches the result",
     async () => {
+      const { runGcloud } = await loadGmailSetupUtils();
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-"));
       try {
         const realPython = path.join(tmp, "python-real");
@@ -40,22 +38,32 @@ describe("resolvePythonExecutablePath", () => {
         await fs.chmod(shim, 0o755);
 
         await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
-          runCommandWithTimeoutMock.mockResolvedValue({
-            stdout: `${realPython}\n`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-          });
+          runCommandWithTimeoutMock
+            .mockResolvedValueOnce({
+              stdout: `${realPython}\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            })
+            .mockResolvedValue({
+              stdout: "",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            });
 
-          const resolved = await resolvePythonExecutablePath();
-          expect(resolved).toBe(realPython);
+          await runGcloud(["config", "list"]);
 
           await withEnvAsync({ PATH: "/bin" }, async () => {
-            const cached = await resolvePythonExecutablePath();
-            expect(cached).toBe(realPython);
+            await runGcloud(["config", "list"]);
           });
-          expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+          expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
+          expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+            timeoutMs: 120_000,
+            env: { CLOUDSDK_PYTHON: realPython, CLOUDSDK_PYTHON_ARGS: undefined },
+          });
         });
       } finally {
         await fs.rm(tmp, { recursive: true, force: true });
@@ -69,6 +77,7 @@ describe("runGcloud", () => {
   itUnix(
     "overrides an inherited CLOUDSDK_PYTHON value with a resolved interpreter",
     async () => {
+      const { runGcloud } = await loadGmailSetupUtils();
       const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gcloud-python-"));
       try {
         const realPython = path.join(tmp, "python-real");
@@ -84,6 +93,7 @@ describe("runGcloud", () => {
         await withEnvAsync(
           {
             CLOUDSDK_PYTHON: path.join(tmp, "evil", "python"),
+            CLOUDSDK_PYTHON_ARGS: "-cprint('attacker')",
             PATH: `${shimDir}${path.delimiter}/usr/bin`,
           },
           async () => {
@@ -109,7 +119,7 @@ describe("runGcloud", () => {
               ["gcloud", "config", "list"],
               {
                 timeoutMs: 120_000,
-                env: { CLOUDSDK_PYTHON: realPython },
+                env: { CLOUDSDK_PYTHON: realPython, CLOUDSDK_PYTHON_ARGS: undefined },
               },
             );
           },
@@ -122,9 +132,11 @@ describe("runGcloud", () => {
   );
 
   itUnix("unsets inherited CLOUDSDK_PYTHON when no trusted interpreter is found", async () => {
+    const { runGcloud } = await loadGmailSetupUtils();
     await withEnvAsync(
       {
         CLOUDSDK_PYTHON: "/tmp/attacker-python",
+        CLOUDSDK_PYTHON_ARGS: "-cprint('attacker')",
         PATH: "",
       },
       async () => {
@@ -141,7 +153,7 @@ describe("runGcloud", () => {
         expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
         expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["gcloud", "config", "list"], {
           timeoutMs: 120_000,
-          env: { CLOUDSDK_PYTHON: undefined },
+          env: { CLOUDSDK_PYTHON: undefined, CLOUDSDK_PYTHON_ARGS: undefined },
         });
       },
     );
@@ -150,6 +162,7 @@ describe("runGcloud", () => {
 
 describe("ensureTailscaleEndpoint", () => {
   it("includes stdout and exit code when tailscale serve fails", async () => {
+    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({
         stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
@@ -183,6 +196,7 @@ describe("ensureTailscaleEndpoint", () => {
   });
 
   it("includes JSON parse failure details with stdout", async () => {
+    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: "not-json",
       stderr: "",
@@ -208,6 +222,7 @@ describe("ensureTailscaleEndpoint", () => {
   });
 
   it("passes abort signal to tailscale status and serve commands", async () => {
+    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
     const abortController = new AbortController();
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({

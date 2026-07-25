@@ -2,6 +2,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
+import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
@@ -9,6 +10,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -16,8 +18,9 @@ import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-tra
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
-  QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+  TurnAdoptionLifecycle,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -33,7 +36,22 @@ export type QueueSettings = {
   dropPolicy?: QueueDropPolicy;
 };
 
+export type ResolveQueueSettingsParams = {
+  cfg: OpenClawConfig;
+  channel?: string;
+  sessionEntry?: SessionEntry;
+  inlineMode?: QueueMode;
+  inlineOptions?: Partial<QueueSettings>;
+  pluginDebounceMs?: number;
+};
+
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
+
+type QueueInsertPosition = "tail" | "front";
+
+export type EnqueueFollowupRunOptions = {
+  position?: QueueInsertPosition;
+};
 
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
@@ -61,14 +79,27 @@ export type FollowupRun = {
   currentInboundContext?: CurrentInboundPromptContext;
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
   abortSignal?: AbortSignal;
+  /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
+  queueAbortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
-  queuedLifecycle?: QueuedReplyLifecycle;
+  /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
+  /** Force individual drain; never merge this run into a collect batch. */
+  disableCollectBatching?: boolean;
+  /** Internal marker for the one-shot stranded final recovery retry. */
+  strandedReplyRetry?: boolean;
+  /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
+  protectFromQueueOverflow?: boolean;
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in this prompt. */
+  media?: MediaFact[];
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider
@@ -99,11 +130,15 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    clientCaps?: string[];
+    toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    /** Parent session provenance used to validate inherited group policy. */
+    spawnedBy?: string;
     senderId?: string;
     channelContext?: PluginHookChannelContext;
     senderName?: string;
@@ -120,6 +155,8 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    /** Prevents the queued run from selecting configured fallback models. */
+    modelSelectionLocked?: boolean;
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
@@ -134,7 +171,7 @@ export type FollowupRun = {
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
-    execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+    execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
     bashElevated?: {
       enabled: boolean;
       allowed: boolean;
@@ -147,8 +184,10 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
+    cliSessionBindingFacts?: CliSessionBindingFacts;
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
@@ -158,36 +197,108 @@ export type FollowupRun = {
   };
 };
 
-export function isFollowupRunAborted(run: Pick<FollowupRun, "abortSignal">): boolean {
-  return run.abortSignal?.aborted === true;
+export function isFollowupRunAborted(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): boolean {
+  return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
 }
 
-const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
-const completedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
+export function resolveFollowupAbortSignal(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): AbortSignal | undefined {
+  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+}
 
-export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): void {
-  const lifecycle = run.queuedLifecycle;
-  if (!lifecycle || enqueuedFollowupLifecycles.has(lifecycle)) {
+const enqueuedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const admittedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const admittingTurnAdoptionLifecycles = new WeakMap<TurnAdoptionLifecycle, Promise<void>>();
+const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
+const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
+
+type FollowupLifecycleRun = Pick<FollowupRun, "turnAdoptionLifecycle">;
+
+export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (lifecycle && !enqueuedTurnAdoptionLifecycles.has(lifecycle)) {
+    if (lifecycle.onDeferred?.() === false) {
+      return false;
+    }
+    enqueuedTurnAdoptionLifecycles.add(lifecycle);
+  }
+  return true;
+}
+
+export function retireFollowupRunCancellation(run: FollowupLifecycleRun): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (!lifecycle || retiredTurnAdoptionCancellationLifecycles.has(lifecycle)) {
     return;
   }
-  enqueuedFollowupLifecycles.add(lifecycle);
-  lifecycle.onEnqueued?.();
+  retiredTurnAdoptionCancellationLifecycles.add(lifecycle);
+  lifecycle.onCancellationRetired?.();
 }
 
-export function completeFollowupRunLifecycle(run: Pick<FollowupRun, "queuedLifecycle">): void {
-  const lifecycle = run.queuedLifecycle;
-  if (!lifecycle || completedFollowupLifecycles.has(lifecycle)) {
+export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Promise<void> {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (!lifecycle || admittedTurnAdoptionLifecycles.has(lifecycle)) {
     return;
   }
-  completedFollowupLifecycles.add(lifecycle);
-  lifecycle.onComplete?.();
+  const existing = admittingTurnAdoptionLifecycles.get(lifecycle);
+  if (existing) {
+    await existing;
+    return;
+  }
+  if (completedTurnAdoptionLifecycles.has(lifecycle)) {
+    throw new Error("followup run lifecycle completed before admission");
+  }
+
+  const admission = Promise.resolve().then(async () => {
+    if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+      await lifecycle.onAdopted();
+      admittedTurnAdoptionLifecycles.add(lifecycle);
+    }
+  });
+
+  admittingTurnAdoptionLifecycles.set(lifecycle, admission);
+  try {
+    await admission;
+  } finally {
+    admittingTurnAdoptionLifecycles.delete(lifecycle);
+  }
 }
 
-export type ResolveQueueSettingsParams = {
-  cfg: OpenClawConfig;
-  channel?: string;
-  sessionEntry?: SessionEntry;
-  inlineMode?: QueueMode;
-  inlineOptions?: Partial<QueueSettings>;
-  pluginDebounceMs?: number;
-};
+export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+
+  const finish = () => {
+    if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
+      return;
+    }
+    completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
+    // Async onAbandoned work must contain its own rejections; core guarantees a
+    // non-rejecting promise. onSettled must still run after a synchronous throw.
+    try {
+      if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+        lifecycle.onAbandoned?.();
+      }
+    } finally {
+      lifecycle.onSettled?.();
+    }
+  };
+
+  if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
+    completedTurnAdoptionLifecycles.add(lifecycle);
+  }
+
+  const admission = lifecycle ? admittingTurnAdoptionLifecycles.get(lifecycle) : undefined;
+  if (!admission) {
+    finish();
+    return;
+  }
+  // Completion closes future admission immediately, but the callback waits for
+  // the in-flight admission attempt so adoption and abandonment cannot race.
+  void admission.then(finish, finish).catch(() => {});
+}

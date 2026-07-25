@@ -42,6 +42,10 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
+function stripEdgePunctuation(text: string): string {
+  return text.replace(/^\p{P}+|\p{P}+$/gu, "");
+}
+
 /** Returns true only for token-only silent replies. */
 export function isSilentReplyText(
   text: string | undefined,
@@ -52,7 +56,12 @@ export function isSilentReplyText(
   }
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  // Models sometimes wrap the token in punctuation. Preserve exact custom-token matching,
+  // but keep symbols such as emoji substantive so they are still delivered.
+  return (
+    getSilentExactRegex(token).test(text) ||
+    getSilentExactRegex(token).test(stripEdgePunctuation(text.trim()))
+  );
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };
@@ -301,9 +310,6 @@ export function isSilentReplyPrefixText(
   if (normalized.length < 2) {
     return false;
   }
-  if (/[^A-Z_]/.test(normalized)) {
-    return false;
-  }
   const tokenUpper = token.toUpperCase();
   if (!tokenUpper.startsWith(normalized)) {
     return false;
@@ -311,8 +317,16 @@ export function isSilentReplyPrefixText(
   if (normalized.includes("_")) {
     return true;
   }
-  // Keep underscore guard for generic tokens to avoid suppressing unrelated
-  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
-  // because NO_REPLY streaming can transiently emit that fragment.
+  // Full-token match is safe for any token.
+  if (normalized === tokenUpper) {
+    return true;
+  }
+  // For custom tokens containing non-letter characters (digits, hyphens),
+  // only match if the prefix includes at least one non-letter character
+  // from the token. Otherwise, a pure-letter prefix like "HE" for "HELP-QUIET"
+  // would suppress natural language that happens to share that prefix (#100007).
+  if (/[^A-Z_]/.test(tokenUpper)) {
+    return /[^A-Z_]/.test(normalized);
+  }
   return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }

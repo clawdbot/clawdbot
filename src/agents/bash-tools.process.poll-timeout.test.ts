@@ -4,13 +4,9 @@
  */
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import {
-  addSession,
-  appendOutput,
-  markExited,
-  resetProcessRegistryForTests,
-} from "./bash-process-registry.js";
+import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
 
@@ -108,6 +104,30 @@ test("process poll accepts string timeout values", async () => {
   });
 });
 
+test("process poll warns when the session times out while poll is waiting", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-timeout-while-polling";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+
+    setTimeout(() => {
+      markExited(session, null, "SIGKILL", "failed", "overall-timeout", false);
+    }, 10);
+
+    const pollPromise = pollSession(processTool, "toolcall", sessionId, 2000);
+    await vi.advanceTimersByTimeAsync(250);
+    const poll = await pollPromise;
+
+    expect(pollStatus(poll)).toBe("failed");
+    expect(poll.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Verify the resulting state before retrying"),
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("process poll clamps long waits to 30 seconds", async () => {
   vi.useFakeTimers();
   try {
@@ -200,4 +220,43 @@ test("process poll resets retryInMs when output appears and clears on completion
   const pollFinished = await pollSession(processTool, "toolcall-finished", sessionId);
   expect(pollStatus(pollFinished)).toBe("completed");
   expect(retryMs(pollFinished)).toBeUndefined();
+});
+
+test("process poll exposes finished-session termination metadata", async () => {
+  const sessionId = "sess-signal";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stderr", "terminated\n");
+  markExited(session, null, "SIGKILL", "failed", "no-output-timeout", true);
+
+  const poll = await pollSession(processTool, "toolcall-signal", sessionId);
+  const details = poll.details as {
+    status?: string;
+    exitCode?: number | null;
+    exitSignal?: NodeJS.Signals | number | null;
+    exitReason?: string;
+    timedOut?: boolean;
+    noOutputTimedOut?: boolean;
+    aggregated?: string;
+  };
+
+  expect(details.status).toBe("failed");
+  expect(details.exitCode).toBeUndefined();
+  expect(details.exitSignal).toBe("SIGKILL");
+  expect(details.exitReason).toBe("no-output-timeout");
+  expect(details.timedOut).toBe(true);
+  expect(details.noOutputTimedOut).toBe(true);
+  expect(details.aggregated).toContain("terminated");
+  expect(poll.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("external side effects may already have completed"),
+  });
+  expect(poll.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("Verify the resulting state before retrying"),
+  });
+  expect(poll.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("Do not automatically rerun non-idempotent commands"),
+  });
 });

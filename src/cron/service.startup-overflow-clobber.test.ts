@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { start } from "./service/ops.js";
+import { start, status } from "./service/ops.js";
 import { createCronServiceState } from "./service/state.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -41,9 +42,10 @@ describe("CronService startup catch-up repair scoping", () => {
     };
   }
 
-  it("keeps the overflow daily-cron catch-up deferral after start()'s maintenance pass", async () => {
+  it("keeps the overflow daily-cron catch-up deferral across a second restart", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    let now = startNow;
     const tomorrowNaturalSlot = Date.parse("2025-12-14T09:00:00.000Z");
 
     await saveCronStore(store.storePath, {
@@ -58,15 +60,17 @@ describe("CronService startup catch-up repair scoping", () => {
       ],
     });
 
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => startNow,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const createState = () =>
+      createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+    const state = createState();
 
     await start(state);
 
@@ -74,8 +78,36 @@ describe("CronService startup catch-up repair scoping", () => {
 
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
     expect(deferred?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
+    expect(deferred?.state.startupCatchupAtMs).toBe(startNow + 5_000);
 
+    await status(state);
+    expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
+
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
     state.stopped = true;
+    now = startNow + 3_000;
+
+    const restartedState = createState();
+    await start(restartedState);
+
+    const restarted = restartedState.store?.jobs.find((job) => job.id === "daily-overflow");
+    expect(restarted?.state.nextRunAtMs).toBe(startNow + 5_000);
+    expect(restarted?.state.startupCatchupAtMs).toBe(startNow + 5_000);
+
+    now = startNow + 5_005;
+    await onTimer(restartedState);
+
+    const completed = restartedState.store?.jobs.find((job) => job.id === "daily-overflow");
+    expect(completed?.state.lastRunStatus).toBe("ok");
+    expect(completed?.state.nextRunAtMs).toBe(tomorrowNaturalSlot);
+    expect(completed?.state.startupCatchupAtMs).toBeUndefined();
+
+    if (restartedState.timer) {
+      clearTimeout(restartedState.timer);
+    }
+    restartedState.stopped = true;
     await store.cleanup();
   });
 

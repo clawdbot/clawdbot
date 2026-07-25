@@ -66,7 +66,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
   command
     .description("Repair post-update doctor and plugin convergence")
     .option("--json", "Output result as JSON", false)
-    .option("--channel <stable|beta|dev>", "Persist update channel before repair")
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
     .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option(
@@ -115,7 +115,7 @@ export function registerUpdateCli(program: Command) {
     .option("--json", "Output result as JSON", false)
     .option("--no-restart", "Skip restarting the gateway service after a successful update")
     .option("--dry-run", "Preview update actions without making changes", false)
-    .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)")
     .option(
       "--tag <dist-tag|version|spec>",
       "Override the package target for this update (dist-tag, version, or package spec)",
@@ -130,6 +130,10 @@ export function registerUpdateCli(program: Command) {
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
+        [
+          "openclaw update --channel extended-stable",
+          "Switch to the monthly supported npm channel",
+        ],
         ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
@@ -152,7 +156,7 @@ ${theme.heading("What this does:")}
   - npm installs: updates via detected package manager
 
 ${theme.heading("Switch channels:")}
-  - Use --channel stable|beta|dev to persist the update channel in config
+  - Use --channel stable|extended-stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
   - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
   - Use --tag main for a one-off package update from GitHub main
@@ -167,7 +171,7 @@ ${theme.heading("Examples:")}
 ${fmtExamples}
 
 ${theme.heading("Notes:")}
-  - Switch channels with --channel stable|beta|dev
+  - Switch channels with --channel stable|extended-stable|beta|dev
   - For global installs: auto-updates via detected package manager when possible (see docs/install/updating.md)
   - Downgrades require confirmation (can break configuration)
   - Skips update if the working directory has uncommitted changes
@@ -227,7 +231,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           ["openclaw update status --json", "JSON output."],
           ["openclaw update status --timeout 10", "Custom timeout."],
         ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
-          "- Shows current update channel (stable/beta/dev) and source",
+          "- Shows current update channel (stable/extended-stable/beta/dev) and source",
         )}\n${theme.muted("- Includes git tag/branch/SHA for source checkouts")}\n\n${theme.muted(
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,

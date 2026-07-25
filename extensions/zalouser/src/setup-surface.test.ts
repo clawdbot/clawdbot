@@ -9,6 +9,13 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
 import { zalouserSetupPlugin } from "./setup-test-helpers.js";
+import {
+  checkZaloAuthenticatedMock,
+  logoutZaloProfileMock,
+  resolveZaloAllowFromEntriesMock,
+  resolveZaloGroupsByEntriesMock,
+  startZaloQrLoginMock,
+} from "./zalo-js.test-mocks.js";
 
 const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 
@@ -93,6 +100,7 @@ describe("zalouser setup wizard", () => {
   }
 
   it("enables the account without forcing QR login", async () => {
+    checkZaloAuthenticatedMock.mockClear();
     const prompter = createTestWizardPrompter({
       confirm: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Login via QR code now?") {
@@ -108,6 +116,91 @@ describe("zalouser setup wizard", () => {
     const result = await runSetup({ prompter });
 
     expectEnabledDefaultSetup(result);
+    expect(checkZaloAuthenticatedMock).toHaveBeenCalledWith("default", {
+      credentialPersistence: "read-only",
+    });
+  });
+
+  it("checks setup status without persisting refreshed session credentials", async () => {
+    checkZaloAuthenticatedMock.mockClear();
+    checkZaloAuthenticatedMock.mockResolvedValueOnce(true);
+
+    await expect(
+      zalouserSetupWizard.status.resolveConfigured({ cfg: {} as OpenClawConfig }),
+    ).resolves.toBe(true);
+
+    expect(checkZaloAuthenticatedMock).toHaveBeenCalledWith("default", {
+      credentialPersistence: "read-only",
+    });
+  });
+
+  it("guards first-time QR login before starting it", async () => {
+    checkZaloAuthenticatedMock.mockResolvedValueOnce(false);
+    startZaloQrLoginMock.mockClear();
+    const guardError = new Error("verified inference changed");
+    const beforePersistentEffect = vi.fn(async () => {
+      throw guardError;
+    });
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(
+        async ({ message }: { message: string }) => message === "Login via QR code now?",
+      ),
+    });
+
+    await expect(runSetup({ prompter, options: { beforePersistentEffect } })).rejects.toBe(
+      guardError,
+    );
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(startZaloQrLoginMock).not.toHaveBeenCalled();
+  });
+
+  it("binds asynchronous QR credential persistence to the inference guard", async () => {
+    checkZaloAuthenticatedMock.mockResolvedValueOnce(false);
+    startZaloQrLoginMock.mockClear();
+    const beforePersistentEffect = vi.fn(async () => {});
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(
+        async ({ message }: { message: string }) => message === "Login via QR code now?",
+      ),
+    });
+
+    await runSetup({ prompter, options: { beforePersistentEffect } });
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+    expect(startZaloQrLoginMock).toHaveBeenCalledWith({
+      profile: "default",
+      timeoutMs: 35_000,
+      beforeCredentialPersistence: beforePersistentEffect,
+    });
+  });
+
+  it("revalidates between logging out and starting replacement QR login", async () => {
+    checkZaloAuthenticatedMock.mockResolvedValueOnce(true);
+    logoutZaloProfileMock.mockClear();
+    startZaloQrLoginMock.mockClear();
+    const guardError = new Error("verified inference changed");
+    const beforePersistentEffect = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(guardError);
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async () => false),
+    });
+
+    await expect(runSetup({ prompter, options: { beforePersistentEffect } })).rejects.toBe(
+      guardError,
+    );
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
+    expect(logoutZaloProfileMock).toHaveBeenCalledWith("default");
+    expect(startZaloQrLoginMock).not.toHaveBeenCalled();
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      logoutZaloProfileMock.mock.invocationCallOrder[0]!,
+    );
+    expect(logoutZaloProfileMock.mock.invocationCallOrder[0]).toBeLessThan(
+      beforePersistentEffect.mock.invocationCallOrder[1]!,
+    );
   });
 
   it("prompts DM policy before group access in quickstart", async () => {
@@ -172,6 +265,7 @@ describe("zalouser setup wizard", () => {
   });
 
   it("writes canonical enabled entries for configured groups", async () => {
+    resolveZaloGroupsByEntriesMock.mockClear();
     const prompter = createQuickstartPrompter({
       groupAccess: true,
       groupPolicy: "allowlist",
@@ -185,6 +279,37 @@ describe("zalouser setup wizard", () => {
     expect(result.cfg.channels?.zalouser?.groups).toEqual({
       Family: { enabled: true, requireMention: true },
       Work: { enabled: true, requireMention: true },
+    });
+    expect(resolveZaloGroupsByEntriesMock).toHaveBeenCalledWith({
+      profile: "default",
+      entries: ["Family", "Work"],
+      credentialPersistence: "read-only",
+    });
+  });
+
+  it("resolves setup DM allowlists without persisting refreshed credentials", async () => {
+    resolveZaloAllowFromEntriesMock.mockClear();
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Login via QR code now?") {
+          return false;
+        }
+        if (message === "Configure Zalo groups access?") {
+          return false;
+        }
+        return false;
+      }),
+      text: vi.fn(async ({ message }: { message: string }) =>
+        message === "Zalouser allowFrom (name or user id)" ? "Alice" : "",
+      ) as ReturnType<typeof createTestWizardPrompter>["text"],
+    });
+
+    await runSetup({ prompter, forceAllowFrom: true });
+
+    expect(resolveZaloAllowFromEntriesMock).toHaveBeenCalledWith({
+      profile: "default",
+      entries: ["Alice"],
+      credentialPersistence: "read-only",
     });
   });
 

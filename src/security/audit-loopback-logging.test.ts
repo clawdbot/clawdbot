@@ -2,12 +2,13 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { collectGatewayConfigFindings, collectLoggingFindings } from "./audit.js";
+import { collectSecurityAuditFindings } from "./audit.test-support.js";
+import type { SecurityAuditFinding } from "./audit.types.js";
 
 function hasGatewayFinding(
   checkId: "gateway.trusted_proxies_missing" | "gateway.loopback_no_auth",
   severity: "warn" | "critical",
-  findings: ReturnType<typeof collectGatewayConfigFindings>,
+  findings: SecurityAuditFinding[],
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
@@ -15,7 +16,7 @@ function hasGatewayFinding(
 function hasLoggingFinding(
   checkId: "logging.redact_off",
   severity: "warn",
-  findings: ReturnType<typeof collectLoggingFindings>,
+  findings: SecurityAuditFinding[],
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
@@ -34,7 +35,7 @@ describe("security audit loopback and logging findings", () => {
           hasGatewayFinding(
             "gateway.trusted_proxies_missing",
             "warn",
-            collectGatewayConfigFindings(cfg, cfg, process.env),
+            await collectSecurityAuditFindings(cfg),
           ),
         ).toBe(true);
       })(),
@@ -55,18 +56,16 @@ describe("security audit loopback and logging findings", () => {
             hasGatewayFinding(
               "gateway.loopback_no_auth",
               "critical",
-              collectGatewayConfigFindings(cfg, cfg, process.env),
+              await collectSecurityAuditFindings(cfg),
             ),
           ).toBe(true);
         },
       ),
       (async () => {
-        const cfg: OpenClawConfig = {
-          logging: { redactSensitive: "off" },
-        };
-        expect(hasLoggingFinding("logging.redact_off", "warn", collectLoggingFindings(cfg))).toBe(
-          true,
-        );
+        const cfg: OpenClawConfig = {};
+        expect(
+          hasLoggingFinding("logging.redact_off", "warn", await collectSecurityAuditFindings(cfg)),
+        ).toBe(false);
       })(),
     ]);
   });

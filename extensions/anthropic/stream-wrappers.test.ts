@@ -1,12 +1,12 @@
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 // Anthropic tests cover stream wrappers plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  testing,
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicServiceTierWrapper,
-  createAnthropicThinkingPrefillWrapper,
   resolveAnthropicBetas,
   resolveAnthropicFastMode,
   wrapAnthropicProviderStream,
@@ -17,6 +17,21 @@ const OAUTH_BETA = "oauth-2025-04-20";
 const DEFAULT_BETA_HEADER =
   "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
 const OAUTH_BETA_HEADER = `claude-code-20250219,${OAUTH_BETA},${DEFAULT_BETA_HEADER}`;
+const initialTransportHost = getAiTransportHost();
+
+beforeAll(() => {
+  configureAiTransportHost({
+    ...initialTransportHost,
+    resolveProviderRequestCapabilities: (input) => ({
+      ...initialTransportHost.resolveProviderRequestCapabilities(input),
+      allowsAnthropicServiceTier: input.provider === "anthropic",
+    }),
+  });
+});
+
+afterAll(() => {
+  configureAiTransportHost(initialTransportHost);
+});
 
 function runWrapper(apiKey: string | undefined): Record<string, string> | undefined {
   const captured: { headers?: Record<string, string> } = {};
@@ -46,16 +61,16 @@ function createPayloadCapturingBaseStream(captured: {
   };
 }
 
-function runComposedAnthropicProviderStream(apiKey: string) {
+function runComposedAnthropicProviderStream(apiKey: string, modelId = "claude-sonnet-4-6") {
   const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
   const wrapped = wrapAnthropicProviderStream({
     streamFn: createPayloadCapturingBaseStream(captured),
-    modelId: "claude-sonnet-4-6",
+    modelId,
     extraParams: { context1m: true, serviceTier: "auto" },
   } as never);
 
   void wrapped?.(
-    { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+    { provider: "anthropic", api: "anthropic-messages", id: modelId } as never,
     {} as never,
     { apiKey } as never,
   );
@@ -92,25 +107,31 @@ describe("anthropic stream wrappers", () => {
   });
 
   it("strips legacy context-1m betas for Claude CLI or legacy token auth", () => {
-    const warn = vi.spyOn(testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-oat01-123");
     expect(headers?.["anthropic-beta"]).toBeDefined();
     expect(headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("strips legacy context-1m betas for API key auth", () => {
-    const warn = vi.spyOn(testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-api-123");
     expect(headers?.["anthropic-beta"]).toBeDefined();
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("skips service_tier for OAuth token in composed stream chain", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
     expect(captured.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
+    expect(captured.payload?.service_tier).toBeUndefined();
+  });
+
+  it("skips unsupported service_tier for Claude Opus 5", () => {
+    const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-opus-5");
+    expect(captured.payload?.service_tier).toBeUndefined();
+  });
+
+  it("skips unsupported service_tier for Claude Sonnet 5", () => {
+    const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-sonnet-5");
     expect(captured.payload?.service_tier).toBeUndefined();
   });
 
@@ -156,6 +177,25 @@ describe("anthropic stream wrappers", () => {
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
+  it("uses Opus 5 identity boundaries for context1m beta wrapper activation", () => {
+    const opus5 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-5");
+    const opus50 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-opus-50");
+
+    expect(opus5.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
+    expect(opus50.headers?.["anthropic-beta"]).toBeUndefined();
+  });
+
+  it("uses Fable 5 identity boundaries for context1m beta wrapper activation", () => {
+    const fable5 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-fable-5");
+    const fable50 = runComposedAnthropicProviderStream(
+      "sk-ant-oat01-oauth-token",
+      "claude-fable-50",
+    );
+
+    expect(fable5.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
+    expect(fable50.headers?.["anthropic-beta"]).toBeUndefined();
+  });
+
   it("preserves OAuth-required betas when legacy context-1m is the only configured beta", () => {
     const captured: { headers?: Record<string, string> } = {};
     const wrapped = wrapAnthropicProviderStream({
@@ -181,16 +221,19 @@ describe("anthropic stream wrappers", () => {
 
 describe("createAnthropicThinkingPrefillWrapper", () => {
   function runThinkingPrefillWrapper(payload: Record<string, unknown>): Record<string, unknown> {
-    const wrapper = createAnthropicThinkingPrefillWrapper(((_model, _context, options) => {
-      options?.onPayload?.(payload as never, {} as never);
-      return {} as never;
-    }) as StreamFn);
-    void wrapper({ provider: "anthropic", api: "anthropic-messages" } as never, {} as never, {});
+    const wrapper = wrapAnthropicProviderStream({
+      streamFn: ((_model, _context, options) => {
+        options?.onPayload?.(payload as never, {} as never);
+        return {} as never;
+      }) as StreamFn,
+      modelId: "claude-sonnet-4-6",
+      extraParams: {},
+    } as never);
+    void wrapper?.({ provider: "anthropic", api: "anthropic-messages" } as never, {} as never, {});
     return payload;
   }
 
   it("removes trailing assistant prefill when extended thinking is enabled", () => {
-    const warn = vi.spyOn(testing.log, "warn").mockImplementation(() => undefined);
     const payload = runThinkingPrefillWrapper({
       thinking: { type: "enabled", budget_tokens: 1024 },
       messages: [
@@ -200,7 +243,6 @@ describe("createAnthropicThinkingPrefillWrapper", () => {
     });
 
     expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
-    expect(warn).toHaveBeenCalledOnce();
   });
 
   it("keeps assistant prefill when thinking is disabled", () => {
@@ -280,7 +322,7 @@ describe("Anthropic service_tier payload wrappers", () => {
   );
 
   it("fast mode injects service_tier=standard_only when disabled for API keys", () => {
-    const payload = serviceTierWrapperCases[0].run({
+    const payload = expectDefined(serviceTierWrapperCases[0], "disabled fast-mode case").run({
       apiKey: "sk-ant-api03-test-key",
       enabled: false,
     });
@@ -301,7 +343,7 @@ describe("Anthropic service_tier payload wrappers", () => {
   });
 
   it("explicit service tier injects service_tier=standard_only for regular API keys", () => {
-    const payload = serviceTierWrapperCases[1].run({
+    const payload = expectDefined(serviceTierWrapperCases[1], "explicit service-tier case").run({
       apiKey: "sk-ant-api03-test-key",
       serviceTier: "standard_only",
     });

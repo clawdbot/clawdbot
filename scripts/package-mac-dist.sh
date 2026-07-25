@@ -10,11 +10,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
-APP_VERSION_INPUT="${APP_VERSION:-$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")}"
+APP_VERSION_INPUT="${APP_VERSION:-}"
 
 # Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
@@ -128,6 +129,12 @@ correction_build_from_exact_tag() {
 
 # Local fallback releases must not silently fall back to a git-rev-count build number.
 # For correction tags, pass a higher explicit APP_BUILD than the canonical floor.
+require_swift_toolchain
+
+if [[ -z "$APP_VERSION_INPUT" ]]; then
+  APP_VERSION_INPUT="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
+fi
+
 if [[ -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]; then
   CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$APP_VERSION_INPUT")"
   APP_BUILD="$(correction_build_from_exact_tag "$APP_VERSION_INPUT" "$CANONICAL_APP_BUILD")"

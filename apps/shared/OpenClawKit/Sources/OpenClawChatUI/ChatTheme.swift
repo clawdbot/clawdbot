@@ -21,7 +21,6 @@ enum OpenClawChatTheme {
         static let lightCanvasMiddle = UIColor(red: 250 / 255.0, green: 251 / 255.0, blue: 252 / 255.0, alpha: 1)
         static let lightCanvasBottom = UIColor.white
         static let lightAccent = UIColor(red: 220 / 255.0, green: 38 / 255.0, blue: 38 / 255.0, alpha: 1)
-        static let lightAccentHot = UIColor(red: 239 / 255.0, green: 68 / 255.0, blue: 68 / 255.0, alpha: 1)
         static let darkCanvasTop = UIColor(red: 12 / 255.0, green: 13 / 255.0, blue: 15 / 255.0, alpha: 1)
         static let darkCanvasMiddle = UIColor(red: 7 / 255.0, green: 8 / 255.0, blue: 10 / 255.0, alpha: 1)
         static let darkCanvasBottom = UIColor(red: 4 / 255.0, green: 5 / 255.0, blue: 6 / 255.0, alpha: 1)
@@ -29,7 +28,6 @@ enum OpenClawChatTheme {
         static let darkPanelRaised = UIColor(red: 17 / 255.0, green: 18 / 255.0, blue: 21 / 255.0, alpha: 1)
         static let darkComposer = UIColor(red: 24 / 255.0, green: 25 / 255.0, blue: 28 / 255.0, alpha: 1)
         static let darkAccent = UIColor(red: 198 / 255.0, green: 49 / 255.0, blue: 42 / 255.0, alpha: 1)
-        static let darkAccentHot = UIColor(red: 239 / 255.0, green: 62 / 255.0, blue: 82 / 255.0, alpha: 1)
     }
 
     private static func adaptiveColor(
@@ -66,46 +64,13 @@ enum OpenClawChatTheme {
         dynamicProvider: resolvedOnboardingAssistantBubbleColor(for:))
     #endif
 
-    static var surface: Color {
-        #if os(macOS)
-        Color(nsColor: .windowBackgroundColor)
-        #else
-        Color(uiColor: .systemBackground)
-        #endif
-    }
-
     @ViewBuilder
     static var background: some View {
         #if os(macOS)
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.12),
-                    Color(nsColor: .windowBackgroundColor).opacity(0.35),
-                    Color.black.opacity(0.35),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing)
-            RadialGradient(
-                colors: [
-                    Color(nsColor: .systemOrange).opacity(0.14),
-                    .clear,
-                ],
-                center: .topLeading,
-                startRadius: 40,
-                endRadius: 320)
-            RadialGradient(
-                colors: [
-                    Color(nsColor: .systemTeal).opacity(0.12),
-                    .clear,
-                ],
-                center: .topTrailing,
-                startRadius: 40,
-                endRadius: 280)
-            Color.black.opacity(0.08)
-        }
+        // Plain material so the chat reads as a native surface; the window
+        // (or the anchored panel's effect view) supplies the vibrancy.
+        Rectangle()
+            .fill(.ultraThinMaterial)
         #else
         ZStack {
             LinearGradient(
@@ -126,14 +91,6 @@ enum OpenClawChatTheme {
         #endif
     }
 
-    static var card: Color {
-        #if os(macOS)
-        Color(nsColor: .textBackgroundColor)
-        #else
-        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanel)
-        #endif
-    }
-
     static var subtleCard: AnyShapeStyle {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
@@ -144,7 +101,9 @@ enum OpenClawChatTheme {
 
     static var userBubble: Color {
         #if os(macOS)
-        Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+        // Follow the user's system accent; hosts can still override per-view
+        // with `userAccent` (e.g. the seam color in the desktop app).
+        Color(nsColor: .controlAccentColor)
         #else
         self.adaptiveColor(
             light: IOSPalette.lightAccent,
@@ -164,11 +123,32 @@ enum OpenClawChatTheme {
         #endif
     }
 
+    static var muted: Color {
+        .secondary
+    }
+
+    static var warning: Color {
+        #if os(macOS)
+        Color(nsColor: .systemOrange)
+        #else
+        Color(uiColor: .systemOrange)
+        #endif
+    }
+
+    static var success: Color {
+        #if os(macOS)
+        Color(nsColor: .systemGreen)
+        #else
+        Color(uiColor: .systemGreen)
+        #endif
+    }
+
     static var assistantBubble: Color {
         #if os(macOS)
         Color(nsColor: self.assistantBubbleDynamicNSColor)
         #else
-        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanelRaised)
+        // iMessage-style grey receiver bubble: clearly visible on the white chat surface.
+        self.adaptiveColor(light: .systemGray5, dark: IOSPalette.darkPanelRaised)
         #endif
     }
 

@@ -8,13 +8,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 // Child-session discovery reads the combined gateway session store and matches
 // both legacy spawnedBy and newer parentSessionKey relationships.
 /** Direct child session entry returned for parent session lookups. */
-export type DirectChildSessionEntry = {
+type DirectChildSessionEntry = {
   sessionKey: string;
   entry: SessionEntry;
 };
 
 /** Returns true when a session store row is a direct child of the parent key. */
-export function isDirectChildSessionEntry(params: {
+function isDirectChildSessionEntry(params: {
   sessionKey: string;
   entry: SessionEntry | undefined;
   parentKey: string;

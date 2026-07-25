@@ -45,7 +45,16 @@ enum GatewayWebSocketTestSupport {
         return params?["scopes"] as? [String]
     }
 
-    static func connectOkData(id: String) -> Data {
+    static func connectOkData(
+        id: String,
+        tickIntervalMs: Int = 30000,
+        deviceToken: String? = nil,
+        canvasPluginSurfaceURL: String? = nil) -> Data
+    {
+        let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
+        let pluginSurfaceField = canvasPluginSurfaceURL.map {
+            #", "pluginSurfaceUrls": { "canvas": "\#($0)" }"#
+        } ?? ""
         let json = """
         {
           "type": "res",
@@ -55,15 +64,15 @@ enum GatewayWebSocketTestSupport {
             "type": "hello-ok",
             "protocol": 2,
             "server": { "version": "test", "connId": "test" },
-            "features": { "methods": [], "events": [] },
+            "features": { "methods": [], "events": [] }\(pluginSurfaceField),
             "snapshot": {
               "presence": [ { "ts": 1 } ],
               "health": {},
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0
             },
-            "auth": { "role": "operator", "scopes": [] },
-            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
+            "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
+            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }
           }
         }
         """
@@ -133,12 +142,20 @@ enum GatewayWebSocketTestSupport {
         """
         return Data(json.utf8)
     }
+
+    static func eventData(event: String = "presence", seq: Int) -> Data {
+        Data(
+            """
+            {"type":"event","event":"\(event)","payload":{},"seq":\(seq)}
+            """.utf8)
+    }
 }
 
 extension NSLock {
     @inline(__always)
     fileprivate func withLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.lock(); defer { self.unlock() }
+        self.lock()
+        defer { self.unlock() }
         return try body()
     }
 }
@@ -173,6 +190,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func snapshotConnectRequestID() -> String? {
         self.lock.withLock { self.connectRequestID }
+    }
+
+    func snapshotSendCount() -> Int {
+        self.lock.withLock { self.sendCount }
     }
 
     func resume() {
@@ -232,6 +253,21 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
         handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
     }
 
+    func emitReceiveSuccessOnce(_ message: URLSessionWebSocketTask.Message) {
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
+            defer { self.pendingReceiveHandler = nil }
+            return self.pendingReceiveHandler
+        }
+        handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
+    }
+
+    func hasPendingReceiveHandler() -> Bool {
+        self.lock.withLock { self.pendingReceiveHandler != nil }
+    }
+
     func emitReceiveFailure(_ error: Error = URLError(.networkConnectionLost)) {
         let handler = self.lock.withLock { self.pendingReceiveHandler }
         handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(error))
@@ -263,7 +299,11 @@ final class GatewayTestWebSocketSession: WebSocketSessioning, @unchecked Sendabl
     }
 
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        _ = url
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        _ = request
         let task = self.taskFactory()
         self.lock.withLock {
             self.makeCount += 1

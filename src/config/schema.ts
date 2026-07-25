@@ -14,10 +14,9 @@ import {
   schemaHasChildren,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "./schema.tiers.js";
 
-export type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-
-export type ConfigSchema = Record<string, unknown>;
+type ConfigSchema = Record<string, unknown>;
 
 type JsonSchemaNode = Record<string, unknown>;
 
@@ -108,7 +107,7 @@ export type ConfigSchemaResponse = {
   generatedAt: string;
 };
 
-export type ConfigSchemaLookupChild = {
+type ConfigSchemaLookupChild = {
   key: string;
   path: string;
   type?: string | string[];
@@ -119,17 +118,17 @@ export type ConfigSchemaLookupChild = {
   hintPath?: string;
 };
 
-export type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+type ConfigSchemaReloadKind = "restart" | "hot" | "none";
 
-export type ConfigSchemaReloadMetadata = {
+type ConfigSchemaReloadMetadata = {
   kind: ConfigSchemaReloadKind;
 };
 
-export type ConfigSchemaReloadMetadataResolver = (
+type ConfigSchemaReloadMetadataResolver = (
   path: string,
 ) => ConfigSchemaReloadMetadata | null | undefined;
 
-export type ConfigSchemaLookupResult = {
+type ConfigSchemaLookupResult = {
   path: string;
   schema: JsonSchemaNode;
   reloadKind?: ConfigSchemaReloadKind;
@@ -144,7 +143,10 @@ export type PluginUiMetadata = {
   description?: string;
   configUiHints?: Record<
     string,
-    Pick<ConfigUiHint, "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder">
+    Pick<
+      ConfigUiHint,
+      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
+    >
   >;
   configSchema?: JsonSchemaNode;
 };
@@ -556,10 +558,16 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
       collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
     ),
   );
+  const mergedSchema = applyChannelSchemas(generated.schema, bundledChannels);
   const next = {
     ...generated,
-    schema: applyChannelSchemas(generated.schema, bundledChannels),
-    uiHints: mergedHints,
+    schema: mergedSchema,
+    uiHints: applyDerivedTags(
+      applyResolvedConfigTierHints(
+        mergedSchema,
+        applyConfigTierHints(mergedHints, { includePluginOwnedChannels: true }),
+      ),
+    ),
   };
   cachedBase = next;
   return next;
@@ -605,7 +613,12 @@ export function buildConfigSchema(params?: {
   const merged = {
     ...base,
     schema: mergedSchema,
-    uiHints: mergedHints,
+    uiHints: applyDerivedTags(
+      applyResolvedConfigTierHints(
+        mergedSchema,
+        applyConfigTierHints(mergedHints, { includePluginOwnedChannels: true }),
+      ),
+    ),
   };
   if (cacheKey) {
     setMergedSchemaCache(cacheKey, merged);
@@ -845,3 +858,4 @@ export function lookupConfigSchema(
     ),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

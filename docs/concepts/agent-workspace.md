@@ -7,7 +7,8 @@ title: "Agent workspace"
 sidebarTitle: "Agent workspace"
 ---
 
-The workspace is the agent's home. It is the only working directory used for file tools and for workspace context. Keep it private and treat it as memory.
+The workspace is the agent's home: the working directory used for file tools
+and workspace context. Keep it private and treat it as memory.
 
 This is separate from `~/.openclaw/`, which stores config, credentials, and sessions.
 
@@ -21,7 +22,10 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 
 - Default: `~/.openclaw/workspace`
 - If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw/workspace-<profile>`.
-- Override in `~/.openclaw/openclaw.json`:
+- `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
+- Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
+
+Override in `~/.openclaw/openclaw.json`:
 
 ```json5
 {
@@ -33,13 +37,15 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 }
 ```
 
-`openclaw onboard`, `openclaw configure`, or `openclaw setup` will create the workspace and seed the bootstrap files if they are missing.
+Per-agent override: `agents.entries.*.workspace`.
+
+`openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
 
 <Note>
 Sandbox seed copies only accept regular in-workspace files; symlink/hardlink aliases that resolve outside the source workspace are ignored.
 </Note>
 
-If you already manage the workspace files yourself, you can disable bootstrap file creation:
+If you already manage the workspace files yourself, disable bootstrap file creation:
 
 ```json5
 { agents: { defaults: { skipBootstrap: true } } }
@@ -47,17 +53,15 @@ If you already manage the workspace files yourself, you can disable bootstrap fi
 
 ## Extra workspace folders
 
-Older installs may have created `~/openclaw`. Keeping multiple workspace directories around can cause confusing auth or state drift, because only one workspace is active at a time.
+Older installs may have created `~/openclaw`. Keeping multiple workspace directories around can cause confusing auth or state drift, since only one workspace is active at a time.
 
 <Note>
-**Recommendation:** keep a single active workspace. If you no longer use the extra folders, archive or move them to Trash (for example `trash ~/openclaw`). If you intentionally keep multiple workspaces, make sure `agents.defaults.workspace` points to the active one.
-
-`openclaw doctor` warns when it detects extra workspace directories.
+**Recommendation:** keep a single active workspace. If you no longer use the extra folders, archive or move them to Trash (for example `trash ~/openclaw`). If you intentionally keep multiple workspaces, make sure `agents.defaults.workspace` (or the per-agent `workspace` key) points to the active one.
 </Note>
 
 ## Workspace file map
 
-These are the standard files OpenClaw expects inside the workspace:
+Standard files OpenClaw expects inside the workspace:
 
 <AccordionGroup>
   <Accordion title="AGENTS.md - operating instructions">
@@ -91,7 +95,7 @@ These are the standard files OpenClaw expects inside the workspace:
     Curated long-term memory: durable facts, preferences, decisions, and short summaries. Keep detailed logs in `memory/YYYY-MM-DD.md` so memory tools can retrieve them on demand without injecting them into every prompt. Only load `MEMORY.md` in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
   </Accordion>
   <Accordion title="skills/ - workspace skills (optional)">
-    Workspace-specific skills. Highest-precedence skill location for that workspace. Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
+    Workspace-specific skills. Highest-precedence skill location for that workspace, ahead of project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
   </Accordion>
   <Accordion title="canvas/ - Canvas UI files (optional)">
     Canvas UI files for node displays (for example `canvas/index.html`).
@@ -99,7 +103,7 @@ These are the standard files OpenClaw expects inside the workspace:
 </AccordionGroup>
 
 <Note>
-If any bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Large bootstrap files are truncated when injected; adjust limits with `agents.defaults.bootstrapMaxChars` (default: 20000) and `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `openclaw setup` can recreate missing defaults without overwriting existing files.
+If a bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Large bootstrap files are truncated when injected; adjust limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `openclaw setup` can recreate missing defaults without overwriting existing files.
 </Note>
 
 ## What is NOT in the workspace
@@ -107,13 +111,21 @@ If any bootstrap file is missing, OpenClaw injects a "missing file" marker into 
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
 
 - `~/.openclaw/openclaw.json` (config)
+- `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
 - `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (model auth profiles: OAuth + API keys)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
-- `~/.openclaw/agents/<agentId>/sessions/` (session transcripts + metadata)
+- `~/.openclaw/agents/<agentId>/sessions/` (legacy migration sources and archive/support artifacts)
 - `~/.openclaw/skills/` (managed skills)
 
 If you need to migrate sessions or config, copy them separately and keep them out of version control.
+
+Older OpenClaw releases wrote `openclaw-workspace-state.json`,
+`.openclaw/workspace-state.json`, and `.attested` workspace sidecars. Current
+runtime uses only the shared SQLite database for that state. If Doctor reports
+one of these files, run `openclaw doctor --fix`; Doctor imports valid legacy
+state and deletes a source only after verifying the database rows.
 
 ## Git backup (recommended, private)
 
@@ -213,13 +225,15 @@ Suggested `.gitignore` starter:
     Run `openclaw setup --workspace <path>` to seed any missing files.
   </Step>
   <Step title="Copy sessions (optional)">
-    If you need sessions, copy `~/.openclaw/agents/<agentId>/sessions/` from the old machine separately.
+    If you need sessions, copy `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    from the old machine separately. Copy `~/.openclaw/agents/<agentId>/sessions/`
+    only when you also need legacy migration inputs or archive/support artifacts.
   </Step>
 </Steps>
 
 ## Advanced notes
 
-- Multi-agent routing can use different workspaces per agent. See [Channel routing](/channels/channel-routing) for routing configuration.
+- Multi-agent routing can use different workspaces per agent via `agents.entries.*.workspace`. See [Channel routing](/channels/channel-routing) for routing configuration.
 - If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox workspaces under `agents.defaults.sandbox.workspaceRoot`.
 
 ## Related

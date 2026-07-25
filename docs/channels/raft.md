@@ -8,9 +8,9 @@ title: "Raft"
 sidebarTitle: "Raft"
 ---
 
-Raft support connects an OpenClaw agent to a Raft External Agent through the local
-Raft CLI. Raft sends authenticated wake hints to the Gateway. The agent then uses
-the Raft CLI to check and send messages.
+Raft connects an OpenClaw agent to a Raft External Agent through the local
+Raft CLI. Raft sends authenticated wake hints to the Gateway; the agent then
+uses the Raft CLI to check and send messages. Direct chat only (no groups).
 
 ## Install
 
@@ -26,11 +26,13 @@ Details: [Plugins](/tools/plugin)
 ## Prerequisites
 
 - A Raft workspace with an External Agent.
-- The Raft CLI installed on the same host as the OpenClaw Gateway.
-- A Raft CLI profile that is already signed in and associated with that External Agent.
+- The Raft CLI installed on the same host as the OpenClaw Gateway, on the
+  service's `PATH`.
+- A Raft CLI profile that is already signed in and associated with that
+  External Agent.
 
-The plugin does not store Raft credentials. The Raft CLI keeps that authentication
-in its own profile.
+The plugin does not store Raft credentials; the Raft CLI keeps that
+authentication in its own profile.
 
 ## Configure
 
@@ -73,28 +75,32 @@ Use a named account when one Gateway connects to more than one Raft External Age
 }
 ```
 
-The interactive setup flow records the same profile:
+Interactive setup records the same profile:
 
 ```bash
-openclaw channels setup raft
+openclaw channels add --channel raft
 ```
 
-## How It Works
+## How it works
 
 When the Gateway starts, the plugin:
 
 1. Opens a loopback-only HTTP wake endpoint on an ephemeral port.
 2. Starts `raft --profile <profile> agent bridge` with that endpoint and a
    per-process token.
-3. Accepts only authenticated, content-free wake hints with a replay identity from the local bridge.
-4. Requires one of `eventId`, `attemptId`, `messageId`, `delivery_id`, `wake_id`, or `id`.
-5. Deduplicates recent retried wake deliveries by bridge event id, including across Gateway restarts.
-6. Returns a stable runtime session for the current bridge and an empty activity-drain batch for the Raft CLI protocol.
-7. Starts one serialized OpenClaw agent turn for each accepted wake.
+3. Accepts only authenticated, content-free wake hints with a replay identity
+   from the local bridge.
+4. Requires one of `eventId`, `attemptId`, `messageId`, `delivery_id`,
+   `wake_id`, or `id` on every wake payload.
+5. Deduplicates retried wake deliveries by bridge event id for 24 hours,
+   including across Gateway restarts.
+6. Returns a stable runtime session for the current bridge and an empty
+   activity-drain batch for the Raft CLI protocol.
+7. Starts one serialized OpenClaw agent turn per accepted wake.
 
-The bridge owns Raft delivery retries and reconnects. The OpenClaw turn receives
-only a wake notice, not a copied Raft message body. It uses the CLI to read
-pending messages and to send its response:
+The bridge owns Raft delivery retries and reconnects. The OpenClaw turn
+receives only a wake notice, not a copied Raft message body. It uses the CLI
+to read pending messages and to send its response:
 
 ```bash
 raft --profile openclaw message check
@@ -102,9 +108,7 @@ raft --profile openclaw message send
 ```
 
 <Note>
-Raft is not a normal push-message transport. OpenClaw does not automatically
-send the model's final text back through the bridge, so the agent must use the
-Raft CLI after processing a wake.
+Raft is not a push-message transport. OpenClaw does not automatically send the model's final text back through the bridge, so the agent must use the Raft CLI after processing a wake.
 </Note>
 
 ## Verify
@@ -116,9 +120,9 @@ openclaw channels status --probe
 openclaw plugins inspect raft --runtime --json
 ```
 
-Then send a message to the Raft External Agent. The Gateway log should show the
-Raft bridge starting, followed by an inbound wake. The agent should use the
-configured Raft profile to check its pending messages.
+Then send a message to the Raft External Agent. The Gateway log should show
+the Raft bridge starting, followed by an inbound wake. The agent should use
+the configured Raft profile to check its pending messages.
 
 ## Troubleshooting
 
@@ -135,8 +139,8 @@ configured Raft profile to check its pending messages.
   <Accordion title="A wake arrives but no Raft response is sent">
     This is expected when the agent does not invoke the Raft CLI. The wake
     bridge does not carry message bodies or automatic final replies. Check the
-    agent's tool policy and ensure it can run `raft --profile <profile> message
-    check` and `message send`.
+    agent's tool policy and ensure it can run `raft --profile <profile>
+    message check` and `message send`.
   </Accordion>
 </AccordionGroup>
 

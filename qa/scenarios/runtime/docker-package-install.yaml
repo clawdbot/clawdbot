@@ -1,0 +1,36 @@
+title: Docker package install evidence
+
+scenario:
+  id: docker-package-install
+  surface: containers
+  category: containers.image-release-and-validation
+  coverage:
+    secondary:
+      - containers.docker-e2e-package-artifact-generation
+      - cli.package-manager-installs
+  objective: Build the real OpenClaw package artifact, install and execute it in the scheduler-selected bare container image, and record exact package, image, and container identities.
+  successCriteria:
+    - The canonical Docker package helper builds and validates the real npm tarball.
+    - The scheduler prepares the package and bare target image through the shared planner and catalog.
+    - A clean target container installs the tarball with npm and executes the installed OpenClaw CLI.
+    - The installed package name and version match the tarball metadata.
+    - Evidence records the package digest and version, bare image ID, target container ID, installed package root, and executed CLI version.
+  docsRefs:
+    - docs/install/updating.md
+    - docs/help/testing.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/package-openclaw-for-docker.mjs
+    - scripts/e2e/docker-package-install.sh
+    - scripts/lib/docker-e2e-scenarios.mjs
+    - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+    summary: Builds the real package artifact, installs and executes it in a clean target container, and records artifact identities.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --lane
+      - docker-package-install

@@ -1,10 +1,10 @@
 // Slack tests cover outbound delivery plugin behavior.
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   addTestHook,
   createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-  deliverOutboundPayloads,
   initializeGlobalHookRunner,
   releasePinnedPluginChannelRegistry,
   resetGlobalHookRunner,
@@ -68,7 +68,7 @@ describe("slack outbound shared hook wiring", () => {
     });
     initializeGlobalHookRunner(hookRegistry);
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "slack",
       to: "C123",
@@ -99,7 +99,7 @@ describe("slack outbound shared hook wiring", () => {
   });
 
   it("passes replyToId as Slack threadTs for threaded outbound delivery", async () => {
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "slack",
       to: "C123",
@@ -108,11 +108,16 @@ describe("slack outbound shared hook wiring", () => {
       replyToId: "1712000000.000001",
     });
 
-    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "hello", {
-      cfg,
-      threadTs: "1712000000.000001",
-      accountId: "default",
-    });
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        cfg,
+        threadTs: "1712000000.000001",
+        accountId: "default",
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 
   it("respects cancel from the shared hook without a second adapter pass", async () => {
@@ -126,7 +131,7 @@ describe("slack outbound shared hook wiring", () => {
     });
     initializeGlobalHookRunner(hookRegistry);
 
-    const result = await deliverOutboundPayloads({
+    const result = await sendDurableMessageBatch({
       cfg,
       channel: "slack",
       to: "C123",
@@ -137,6 +142,6 @@ describe("slack outbound shared hook wiring", () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(sendMessageSlackMock).not.toHaveBeenCalled();
-    expect(result).toStrictEqual([]);
+    expect(result).toMatchObject({ status: "suppressed", results: [] });
   });
 });

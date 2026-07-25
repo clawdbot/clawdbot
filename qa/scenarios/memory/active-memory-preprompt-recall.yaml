@@ -2,12 +2,12 @@ title: Active Memory pre-reply recall
 
 scenario:
   id: active-memory-preprompt-recall
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.active-recall
+      - session-memory.active-memory-active-recall
     secondary:
-      - memory.recall
+      - session-memory.active-memory-recall
   objective: Verify Active Memory surfaces a memory-only preference before the main reply, and that the same question stays unresolved when the plugin is off.
   plugins:
     - active-memory
@@ -23,10 +23,10 @@ scenario:
             allowedChatTypes:
               - direct
             logging: true
-            persistTranscripts: true
-            transcriptDir: qa-memory-e2e
             queryMode: recent
             maxSummaryChars: 220
+            timeoutMs: 15000
+            setupGraceTimeoutMs: 30000
   successCriteria:
     - With Active Memory off after doctor migrates the legacy session toggle, the session shows no Active Memory plugin activity.
     - With Active Memory on, plugin-owned evidence shows the Active Memory sub-agent searched memory before the main reply.
@@ -42,8 +42,10 @@ scenario:
   execution:
     kind: flow
     summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
+    channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: Mutates legacy Active Memory state and runs doctor while the Gateway is stopped, then restarts the Gateway.
     config:
-      requiredChannelDriver: qa-channel
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on
       memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
@@ -51,7 +53,6 @@ scenario:
       expectedNeedle: lemon pepper wings
       prompt: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
       promptSnippet: "Silent snack recall check"
-      transcriptDir: qa-memory-e2e
 
 flow:
   steps:
@@ -85,46 +86,44 @@ flow:
         - set: activeSessionKey
           value:
             expr: "'agent:qa:qa-channel:direct:active-memory-on'"
-        - set: transcriptRoot
+        - set: doctorOutputPath
           value:
-            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'transcripts', 'agents', 'qa', config.transcriptDir)"
-        - set: toggleStorePath
-          value:
-            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'session-toggles.json')"
-        - call: fs.rm
+            expr: "path.join(env.gateway.tempRoot, 'active-memory-doctor-output.txt')"
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: qa gateway child does not expose restartAfterStateMutation
+        - call: env.gateway.restartAfterStateMutation
           args:
-            - ref: transcriptRoot
-            - recursive: true
-              force: true
-        - call: fs.rm
-          args:
-            - ref: toggleStorePath
-            - force: true
-        - call: fs.mkdir
-          args:
-            - expr: "path.dirname(toggleStorePath)"
-            - recursive: true
-        - call: fs.writeFile
-          args:
-            - ref: toggleStorePath
-            - expr: "`${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\\n`"
-            - utf8
-        - call: runQaCli
-          saveAs: doctorFixOutput
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  (async () => {
+                    const toggleStorePath = path.join(ctx.stateDir, "plugins", "active-memory", "session-toggles.json");
+                    await fs.rm(toggleStorePath, { force: true });
+                    await fs.mkdir(path.dirname(toggleStorePath), { recursive: true });
+                    await fs.writeFile(toggleStorePath, `${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\n`, "utf8");
+                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes"], {
+                      timeoutMs: liveTurnTimeoutMs(env, 60000),
+                    });
+                    await fs.writeFile(doctorOutputPath, doctorFixOutput, "utf8");
+                  })()
+        - call: waitForGatewayHealthy
           args:
             - ref: env
-            - - doctor
-              - --fix
-              - --yes
-            - timeoutMs:
-                expr: liveTurnTimeoutMs(env, 60000)
+            - 120000
+        - call: fs.readFile
+          saveAs: doctorFixOutput
+          args:
+            - ref: doctorOutputPath
+            - utf8
         - assert:
             expr: "String(doctorFixOutput).includes('Migrated 1 Active Memory session toggle entry')"
             message:
               expr: "`doctor --fix did not migrate the Active Memory session toggle: ${doctorFixOutput}`"
-        - set: requestCountBeforeBaseline
+        - set: requestCursorBeforeBaseline
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: baselineStartIndex
           value:
             expr: "state.getSnapshot().messages.length"
@@ -155,16 +154,16 @@ flow:
             then:
               - set: baselineMockRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeBaseline)"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`))"
         - set: baselineSessionStore
           value:
             expr: "await readRawQaSessionStore(env)"
         - assert:
             expr: "!Array.isArray(baselineSessionStore[baselineSessionKey]?.pluginDebugEntries) || !baselineSessionStore[baselineSessionKey].pluginDebugEntries.some((pluginEntry) => pluginEntry?.pluginId === 'active-memory')"
             message: baseline session unexpectedly recorded active-memory plugin activity
-        - set: requestCountBeforeActive
+        - set: requestCursorBeforeActive
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: activeStartIndex
           value:
             expr: "state.getSnapshot().messages.length"
@@ -198,40 +197,29 @@ flow:
                   message:
                     expr: "`active memory reply missed the hidden preference: ${activeOutbound.text}`"
         - call: waitForCondition
-          saveAs: transcriptPath
-          args:
-            - lambda:
-                async: true
-                expr: "await (async () => { const entries = (await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).toSorted(); return entries.length > 0 ? path.join(transcriptRoot, entries.at(-1)) : undefined; })()"
-            - 10000
-        - call: fs.readFile
-          saveAs: transcriptText
-          args:
-            - ref: transcriptPath
-            - utf8
-        - assert:
-            expr: "transcriptText.includes('memory_search')"
-            message: active memory transcript missing memory_search
-        - assert:
-            expr: "transcriptText.includes('memory_get')"
-            message: active memory transcript missing memory_get
-        - call: waitForCondition
           saveAs: activeSessionEntry
           args:
             - lambda:
                 async: true
                 expr: "await (async () => { const store = await readRawQaSessionStore(env); const entry = store[activeSessionKey]; if (!entry || !Array.isArray(entry.pluginDebugEntries)) return undefined; return entry.pluginDebugEntries.some((pluginEntry) => pluginEntry?.pluginId === 'active-memory' && Array.isArray(pluginEntry.lines) && pluginEntry.lines.some((line) => line.includes('Active Memory: status=ok'))) ? entry : undefined; })()"
             - 10000
+        - call: readRawQaSessionStore
+          saveAs: sessionStoreAfterRecall
+          args:
+            - ref: env
+        - assert:
+            expr: "!Object.keys(sessionStoreAfterRecall).some((sessionKey) => sessionKey.startsWith(`${activeSessionKey}:active-memory:`))"
+            message: active memory recall left a transient SQLite session behind
         - if:
             expr: "Boolean(env.mock)"
             then:
               - set: mockRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeActive)"
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`))"
               - assert:
                   expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_search')"
                   message: expected mock Active Memory search request
               - assert:
                   expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_get')"
                   message: expected mock Active Memory memory_get request
-      detailsExpr: "`${activeOutbound.text}\\n\\ntranscript=${transcriptPath}`"
+      detailsExpr: activeOutbound.text

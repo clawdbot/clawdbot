@@ -310,6 +310,97 @@ describe("web-provider-runtime-shared", () => {
     expect(mockArg(mocks.loadOpenClawPlugins).onlyPluginIds).toEqual(["brave"]);
   });
 
+  it("uses bundled runtime artifacts before loading a plugin registry", () => {
+    const resolveBundledRuntimeArtifactProviders = vi.fn(() => ["provider"]);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+        workspaceDir: "/workspace",
+        env: { FIRECRAWL_API_KEY: "" },
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["firecrawl"],
+        mapRegistryProviders: vi.fn(() => []),
+        resolveBundledRuntimeArtifactProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveBundledRuntimeArtifactProviders).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir: "/workspace",
+      env: { FIRECRAWL_API_KEY: "" },
+      onlyPluginIds: ["firecrawl"],
+    });
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plugin loading when bundled runtime artifacts do not cover the scope", () => {
+    const fallbackRegistry = { source: "fallback" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    const resolveBundledRuntimeArtifactProviders = vi.fn(() => null);
+    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["external-provider"],
+        mapRegistryProviders,
+        resolveBundledRuntimeArtifactProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveBundledRuntimeArtifactProviders).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mapRegistryProviders).toHaveBeenCalledWith({
+      registry: fallbackRegistry,
+      onlyPluginIds: ["external-provider"],
+    });
+  });
+
+  it("loads the plugin registry when runtime activation is explicitly requested", () => {
+    const fallbackRegistry = { source: "activated" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    const resolveBundledRuntimeArtifactProviders = vi.fn(() => ["artifact-provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        activate: true,
+        config: {},
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["firecrawl"],
+        mapRegistryProviders,
+        resolveBundledRuntimeArtifactProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveBundledRuntimeArtifactProviders).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mockArg(mocks.loadOpenClawPlugins).activate).toBe(true);
+  });
+
   it("falls back to a scoped provider load when the active runtime registry has no web providers", () => {
     const activeRegistry = { source: "active" };
     const fallbackRegistry = { source: "fallback" };

@@ -25,6 +25,7 @@
       "provider": "together",
       "method": "api-key",
       "choiceId": "together-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Together AI API key",
       "groupId": "together",
       "groupLabel": "Together AI",
@@ -116,7 +117,7 @@
       }
     },
     "discovery": {
-      "together": "static"
+      "together": "refreshable"
     }
   },
   "configSchema": {

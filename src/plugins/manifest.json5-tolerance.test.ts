@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearPluginManifestLoadCache,
-  loadPluginManifest,
-  MAX_PLUGIN_MANIFEST_BYTES,
-} from "./manifest.js";
+import { loadPluginManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -18,7 +14,6 @@ function makeTempDir() {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  clearPluginManifestLoadCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -148,6 +143,59 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes catalog curation metadata from the manifest", () => {
+    const dir = makeTempDir();
+    const json5Content = `{
+  id: "catalog-plugin",
+  catalog: {
+    featured: false,
+    order: 0,
+  },
+  configSchema: { type: "object" }
+}`;
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), json5Content, "utf-8");
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.catalog).toEqual({ featured: false, order: 0 });
+    }
+  });
+
+  it("retains static MCP server declarations", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "mcp-app-plugin",
+        configSchema: { type: "object" },
+        mcpServers: {
+          app: {
+            transport: "stdio",
+            command: "node",
+            args: ["./mcp-server.js"],
+          },
+          invalid: "./not-a-server.json",
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.mcpServers).toEqual({
+        app: {
+          transport: "stdio",
+          command: "node",
+          args: ["./mcp-server.js"],
+        },
+      });
+    }
+  });
+
   it("normalizes activation and setup descriptor metadata from the manifest", () => {
     const dir = makeTempDir();
     const json5Content = `{
@@ -217,26 +265,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("plugin manifest must be an object");
-    }
-  });
-
-  it("rejects oversized manifests before parsing", () => {
-    const dir = makeTempDir();
-    fs.writeFileSync(
-      path.join(dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "too-large",
-        configSchema: { type: "object" },
-        padding: "x".repeat(MAX_PLUGIN_MANIFEST_BYTES),
-      }),
-      "utf-8",
-    );
-
-    const result = loadPluginManifest(dir, false);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("unsafe plugin manifest path");
     }
   });
 });

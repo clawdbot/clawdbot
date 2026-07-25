@@ -1,4 +1,5 @@
 // Imessage tests cover test plugin plugin behavior.
+import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
@@ -10,11 +11,17 @@ import {
   resetFacadeRuntimeStateForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearIMessageApprovalReactionTargetsForTest,
+  resolveIMessageApprovalReactionTargetWithPersistence,
+} from "./approval-reactions.js";
 import { imessagePlugin } from "./channel.js";
 import { createIMessageTestPlugin } from "./imessage.test-plugin.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
 
 beforeEach(() => {
   resetFacadeRuntimeStateForTest();
+  clearIMessageApprovalReactionTargetsForTest();
 });
 
 afterEach(() => {
@@ -112,6 +119,20 @@ describe("createIMessageTestPlugin", () => {
     });
   });
 
+  it("preserves sanitized HTML formatting as native ranges", () => {
+    const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
+    const sanitized = imessagePlugin.outbound?.sanitizeText?.({ text, payload: { text } });
+
+    expect(sanitized).toBe("**bold** ~~strike~~");
+    expect(extractMarkdownFormatRuns(sanitized ?? "")).toEqual({
+      text: "bold strike",
+      ranges: [
+        { start: 0, length: 4, styles: ["bold"] },
+        { start: 5, length: 6, styles: ["strikethrough"] },
+      ],
+    });
+  });
+
   it("declares native iMessage voice memo TTS delivery", () => {
     expect(imessagePlugin.capabilities.tts?.voice).toStrictEqual({
       synthesisTarget: "audio-file",
@@ -160,6 +181,66 @@ describe("createIMessageTestPlugin", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it("keeps shared forwarded approvals reaction-resolvable through outbound hooks", async () => {
+    const beforeDeliverPayload = imessagePlugin.outbound?.beforeDeliverPayload;
+    const afterDeliverPayload = imessagePlugin.outbound?.afterDeliverPayload;
+    if (!beforeDeliverPayload || !afterDeliverPayload) {
+      throw new Error("Expected iMessage approval delivery hooks");
+    }
+    const cfg = {
+      channels: { imessage: { enabled: true } },
+    } as OpenClawConfig;
+    const payload = buildTypedExecApprovalPendingReplyPayload({
+      approvalId: "exec-shared-hook",
+      approvalSlug: "shared-hook",
+      command: "echo shared",
+      host: "gateway",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const target = {
+      channel: "imessage",
+      to: "+15551230000",
+      accountId: "default",
+    };
+
+    await beforeDeliverPayload({
+      cfg,
+      target,
+      payload,
+      hint: { kind: "approval-pending", approvalKind: "exec" },
+    });
+    expect(payload.text).toContain("👍 Allow Once");
+    expect(payload.text).toContain("👎 Deny");
+
+    await afterDeliverPayload({
+      cfg,
+      target,
+      payload,
+      results: [
+        {
+          channel: "imessage",
+          messageId: "42",
+          meta: {
+            imessageMessageGuid: "p:0/shared-hook-guid",
+            imessageVisibleText: payload.text,
+          },
+        },
+      ],
+    });
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "p:0/shared-hook-guid",
+        reactionKey: "👍",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-shared-hook",
+      approvalKind: "exec",
+      decision: "allow-once",
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {
@@ -279,6 +360,36 @@ describe("createIMessageTestPlugin", () => {
           expect(sendText).toBeTypeOf("function");
         },
       },
+    });
+  });
+
+  it("carries the stable iMessage GUID beside the broad adapter delivery identity", async () => {
+    const sendText = requireMessageSendText(requireMessageAdapter());
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "imessage", messageId: "42" }],
+      kind: "text",
+    });
+    const sendIMessage = async () => ({
+      messageId: "42",
+      guid: "p:0/stable-guid",
+      sentText: "hello",
+      receipt,
+    });
+
+    const result = await sendText({
+      cfg: {} as never,
+      to: "+15551234567",
+      text: "hello",
+      deps: { imessage: sendIMessage },
+    } as Parameters<typeof sendText>[0] & {
+      deps: { imessage: typeof sendIMessage };
+    });
+
+    expect(result.messageId).toBe("42");
+    expect(result.receipt.primaryPlatformMessageId).toBe("42");
+    expect((result as typeof result & { meta?: Record<string, unknown> }).meta).toEqual({
+      imessageMessageGuid: "p:0/stable-guid",
+      imessageVisibleText: "hello",
     });
   });
 

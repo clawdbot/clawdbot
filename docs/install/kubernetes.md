@@ -6,11 +6,11 @@ read_when:
 title: "Kubernetes"
 ---
 
-A minimal starting point for running OpenClaw on Kubernetes — not a production-ready deployment. It covers the core resources and is meant to be adapted to your environment.
+A minimal starting point for running OpenClaw on Kubernetes, not a production-ready deployment. It covers the core resources and is meant to be adapted to your environment.
 
-## Why not Helm?
+## Why not Helm
 
-OpenClaw is a single container with some config files. The interesting customization is in agent content (markdown files, skills, config overrides), not infrastructure templating. Kustomize handles overlays without the overhead of a Helm chart. If your deployment grows more complex, a Helm chart can be layered on top of these manifests.
+OpenClaw is a single container with some config files. The interesting customization is in agent content (Markdown files, skills, config overrides), not infrastructure templating. Kustomize handles overlays without the overhead of a Helm chart. Layer a Helm chart on top of these manifests if your deployment grows more complex.
 
 ## What you need
 
@@ -29,8 +29,7 @@ kubectl port-forward svc/openclaw 18789:18789 -n openclaw
 open http://localhost:18789
 ```
 
-Retrieve the configured shared secret for the Control UI. This deploy script
-creates token auth by default:
+`deploy.sh` creates token auth by default. Retrieve the generated gateway token for the Control UI:
 
 ```bash
 kubectl get secret openclaw-secrets -n openclaw -o jsonpath='{.data.OPENCLAW_GATEWAY_TOKEN}' | base64 -d
@@ -40,7 +39,7 @@ For local debugging, `./scripts/k8s/deploy.sh --show-token` prints the token aft
 
 ## Local testing with Kind
 
-If you don't have a cluster, create one locally with [Kind](https://kind.sigs.k8s.io/):
+If you do not have a cluster, create one locally with [Kind](https://kind.sigs.k8s.io/):
 
 ```bash
 ./scripts/k8s/create-kind.sh           # auto-detects docker or podman
@@ -53,7 +52,7 @@ Then deploy as usual with `./scripts/k8s/deploy.sh`.
 
 ### 1) Deploy
 
-**Option A** — API key in environment (one step):
+**Option A: API key in environment (one step)**
 
 ```bash
 # Replace with your provider: ANTHROPIC, GEMINI, OPENAI, or OPENROUTER
@@ -63,7 +62,7 @@ export <PROVIDER>_API_KEY="..."
 
 The script creates a Kubernetes Secret with the API key and an auto-generated gateway token, then deploys. If the Secret already exists, it preserves the current gateway token and any provider keys not being changed.
 
-**Option B** — create the secret separately:
+**Option B: create the secret separately**
 
 ```bash
 export <PROVIDER>_API_KEY="..."
@@ -71,7 +70,7 @@ export <PROVIDER>_API_KEY="..."
 ./scripts/k8s/deploy.sh
 ```
 
-Use `--show-token` with either command if you want the token printed to stdout for local testing.
+Add `--show-token` to either command to print the token to stdout for local testing.
 
 ### 2) Access the gateway
 
@@ -82,7 +81,7 @@ open http://localhost:18789
 
 ## What gets deployed
 
-```
+```text
 Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
 ├── Deployment/openclaw        # Single pod, init container + gateway
 ├── Service/openclaw           # ClusterIP on port 18789
@@ -137,18 +136,18 @@ OPENCLAW_NAMESPACE=my-namespace ./scripts/k8s/deploy.sh
 Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 
 ```yaml
-image: ghcr.io/openclaw/openclaw:latest # or pin to a specific version from https://github.com/openclaw/openclaw/releases
+image: ghcr.io/openclaw/openclaw:slim # primary; official Docker Hub mirror: openclaw/openclaw
 ```
 
 ### Expose beyond port-forward
 
-The default manifests bind the gateway to loopback inside the pod. That works with `kubectl port-forward`, but it does not work with a Kubernetes `Service` or Ingress path that needs to reach the pod IP.
+The default manifests bind the gateway to loopback inside the pod. That works with `kubectl port-forward`, but not with a Kubernetes `Service` or Ingress path that needs to reach the pod IP directly.
 
-If you want to expose the gateway through an Ingress or load balancer:
+To expose the gateway through an Ingress or load balancer:
 
-- Change the gateway bind in `scripts/k8s/manifests/configmap.yaml` from `loopback` to a non-loopback bind that matches your deployment model
-- Keep gateway auth enabled and use a proper TLS-terminated entrypoint
-- Configure the Control UI for remote access using the supported web security model (for example HTTPS/Tailscale Serve and explicit allowed origins when needed)
+- Change the gateway bind in `scripts/k8s/manifests/configmap.yaml` from `loopback` to a non-loopback bind that matches your deployment model.
+- Keep gateway auth enabled and use a proper TLS-terminated entrypoint.
+- Configure the Control UI for remote access using the supported web security model (for example HTTPS/Tailscale Serve and explicit allowed origins when needed).
 
 ## Re-deploy
 
@@ -168,16 +167,16 @@ This deletes the namespace and all resources in it, including the PVC.
 
 ## Architecture notes
 
-- The gateway binds to loopback inside the pod by default, so the included setup is for `kubectl port-forward`
-- No cluster-scoped resources — everything lives in a single namespace
-- Security: `readOnlyRootFilesystem`, `drop: ALL` capabilities, non-root user (UID 1000)
-- The default config keeps the Control UI on the safer local-access path: loopback bind plus `kubectl port-forward` to `http://127.0.0.1:18789`
-- If you move beyond localhost access, use the supported remote model: HTTPS/Tailscale plus the appropriate gateway bind and Control UI origin settings
-- Secrets are generated in a temp directory and applied directly to the cluster — no secret material is written to the repo checkout
+- The gateway binds to loopback inside the pod by default, so the included setup is for `kubectl port-forward`.
+- No cluster-scoped resources; everything lives in a single namespace.
+- Security hardening: `readOnlyRootFilesystem`, `drop: ALL` capabilities, non-root user (UID 1000).
+- The default config keeps the Control UI on the safer local-access path: loopback bind plus `kubectl port-forward` to `http://127.0.0.1:18789`.
+- If you move beyond localhost access, use the supported remote model: HTTPS/Tailscale plus the appropriate gateway bind and Control UI origin settings.
+- Secrets are generated in a temp directory and applied directly to the cluster; no secret material is written to the repo checkout.
 
 ## File structure
 
-```
+```text
 scripts/k8s/
 ├── deploy.sh                   # Creates namespace + secret, deploys via kustomize
 ├── create-kind.sh              # Local Kind cluster (auto-detects docker/podman)

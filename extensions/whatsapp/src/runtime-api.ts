@@ -17,9 +17,9 @@ export {
 export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 
 export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -45,16 +45,9 @@ export type { WhatsAppAccountConfig } from "./account-types.js";
 
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
-let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
-
-function loadChannelRuntime() {
-  channelRuntimePromise ??= import("./channel.runtime.js");
-  return channelRuntimePromise;
-}
-
 export async function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>
 ): ReturnType<MonitorWebChannel> {
-  const { monitorWebChannel: monitorWebChannelLocal } = await loadChannelRuntime();
+  const { monitorWebChannel: monitorWebChannelLocal } = await loadWhatsAppChannelRuntime();
   return await monitorWebChannelLocal(...args);
 }

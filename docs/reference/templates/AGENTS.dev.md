@@ -8,13 +8,18 @@ read_when:
 
 # AGENTS.md - OpenClaw Workspace
 
-This folder is the assistant's working directory.
+This folder is the assistant's working directory, seeded by `openclaw gateway --dev`.
 
-## First run (one-time)
+## Your identity is pre-seeded
 
-- If BOOTSTRAP.md exists, follow its ritual and delete it once complete.
+Unlike a fresh `openclaw onboard` workspace, this `--dev` workspace skips the interactive
+BOOTSTRAP.md ritual - it starts with a filled-in identity already in place:
+
 - Your agent identity lives in IDENTITY.md.
-- Your profile lives in USER.md.
+- The user profile lives in USER.md.
+- Your persona lives in SOUL.md.
+
+Edit any of these directly if you want a different dev identity.
 
 ## Backup tip (recommended)
 

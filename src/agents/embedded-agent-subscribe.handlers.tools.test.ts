@@ -12,9 +12,14 @@ import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
-  testing as beforeToolCallTesting,
 } from "./agent-tools.before-tool-call.js";
+import {
+  adjustedParamsByToolCallId,
+  buildAdjustedParamsKey,
+  recordToolExecutionTracked,
+} from "./agent-tools.before-tool-call.state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
+import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -24,14 +29,71 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import {
+  createAskUserTool,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+} from "./tools/ask-user-tool.js";
+import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
+type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
+
+const pendingAskUserFinishes = new Set<() => Promise<void>>();
+
+async function activateAskUserPrompt(toolCallId: string, args: unknown) {
+  let questionId: string | undefined;
+  let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
+  const tool = createAskUserTool({
+    sessionKey: "agent:unit-session",
+    runId: "run-test",
+    gatewayCall: async (method, _opts, params) => {
+      if (method === "question.request") {
+        if (!params || typeof params !== "object" || !("id" in params)) {
+          throw new Error("question.request params missing id");
+        }
+        questionId = String(params.id);
+        return { id: questionId };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          resolveAnswer = resolve;
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    },
+  });
+  const pending = tool.execute(toolCallId, args);
+  let finished = false;
+  const finish = async () => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    await vi.waitFor(() => expect(resolveAnswer).toBeTypeOf("function"));
+    resolveAnswer?.({ status: "cancelled" });
+    await pending;
+    pendingAskUserFinishes.delete(finish);
+  };
+  pendingAskUserFinishes.add(finish);
+  await vi.waitFor(() => expect(questionId).toBeTypeOf("string"));
+  return { questionId: questionId!, finish };
+}
+
+afterEach(async () => {
+  await Promise.all([...pendingAskUserFinishes].map((finish) => finish()));
+  resetPendingAskUserQuestionsForTest();
+});
+
+const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
-  onBlockReplyFlush: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  onBlockReplyFlush: ReturnType<
+    typeof vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>
+  >;
   onAgentEvent: ReturnType<typeof vi.fn>;
   onExecutionPhase: ReturnType<typeof vi.fn>;
   trace: ReturnType<typeof vi.fn>;
@@ -39,7 +101,7 @@ function createTestContext(): {
 } {
   // Shared tool-handler fixture exposes the callbacks and state maps mutated by
   // start/update/end handlers without booting a full subscription.
-  const onBlockReplyFlush = vi.fn<() => Promise<void>>();
+  const onBlockReplyFlush = vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();
@@ -90,6 +152,7 @@ function createTestContext(): {
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
       toolExecutionSinceLastBlockReply: false,
+      assistantMessageIndex: 0,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -117,6 +180,19 @@ function requireEvent(
   return event;
 }
 
+function requirePayloadToolMetas(
+  toolMetas: ToolHandlerContext["state"]["toolMetas"],
+): PayloadToolMetas {
+  return toolMetas.map((toolMeta) => {
+    if (!toolMeta.toolName) {
+      throw new Error("expected tool metadata to include toolName");
+    }
+    return toolMeta.meta === undefined
+      ? { toolName: toolMeta.toolName }
+      : { toolName: toolMeta.toolName, meta: toolMeta.meta };
+  });
+}
+
 function requireString(value: unknown, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`expected ${label}`);
@@ -127,6 +203,52 @@ function requireString(value: unknown, label: string): string {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+describe("update_plan progress events", () => {
+  it("emits the typed full plan snapshot after a successful result", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const emitted: CapturedAgentEvent[] = [];
+    const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
+    try {
+      await handleToolExecutionEnd(ctx, {
+        type: "tool_execution_end",
+        toolName: "update_plan",
+        toolCallId: "plan-1",
+        isError: false,
+        result: {
+          content: [],
+          details: {
+            status: "updated",
+            explanation: "Implementation underway",
+            plan: [
+              { step: "Inspect", status: "completed" },
+              { step: "Patch", status: "in_progress" },
+            ],
+          },
+        },
+      });
+      await Promise.resolve();
+
+      const expected = {
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "openclaw",
+          explanation: "Implementation underway",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        },
+      };
+      expect(onAgentEvent).toHaveBeenCalledWith(expected);
+      expect(emitted).toContainEqual(expect.objectContaining(expected));
+    } finally {
+      unsubscribe();
+    }
+  });
+});
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
@@ -177,6 +299,314 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  it("delivers a numbered ask_user prompt with question id association", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "deploy_target",
+          header: "Target",
+          question: "Where should this deploy?",
+          options: [
+            { label: "Staging (Recommended)", description: "Safer default" },
+            { label: "Production" },
+          ],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-call-1",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-call-1", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    const { questionId } = activation;
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: [
+        "Question for you:",
+        "",
+        "Target",
+        "Where should this deploy?",
+        "1. Staging (Recommended) - Safer default",
+        "2. Production",
+        "Other: reply with your own answer.",
+        "",
+        "Reply with the number, the option text, or your own answer.",
+      ].join("\n"),
+      channelData: {
+        askUser: {
+          questionId,
+        },
+      },
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          { type: "text", text: "Where should this deploy?" },
+          {
+            type: "text",
+            text: [
+              "- Staging (Recommended): Safer default",
+              "- Production",
+              "",
+              "Tap an option, or reply with the option text or your own answer.",
+            ].join("\n"),
+          },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging (Recommended)",
+                action: {
+                  type: "question",
+                  questionId,
+                  optionValue: "Staging (Recommended)",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId,
+                  optionValue: "Production",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await activation.finish();
+  });
+
+  it.each([
+    {
+      name: "multi-question",
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+        {
+          id: "region",
+          header: "Region",
+          question: "Which region?",
+          options: [{ label: "EU" }, { label: "US" }],
+        },
+      ],
+    },
+    {
+      name: "multi-select",
+      questions: [
+        {
+          id: "targets",
+          header: "Targets",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+          multiSelect: true,
+        },
+      ],
+    },
+  ])("keeps $name ask_user prompts text-only", async ({ questions }) => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const toolCallId = `ask-${questions[0]?.id ?? "unknown"}`;
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId,
+      args: { questions },
+    });
+    const activation = await activateAskUserPrompt(toolCallId, { questions });
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    const payload = onToolResult.mock.calls[0]?.[0];
+    expect(payload?.text).toContain(
+      questions.length > 1
+        ? "Reply by number or question id. Use a declared option where choices are fixed."
+        : "Reply with the number, the option text, or your own answer.",
+    );
+    expect(payload).not.toHaveProperty("presentation");
+    expect(payload).not.toHaveProperty("presentationTextMode");
+    await activation.finish();
+  });
+
+  it("reserves ask_user before awaiting block-reply flush", async () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    let releaseFlush: (() => void) | undefined;
+    onBlockReplyFlush.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    const pending = handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-flush",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-flush", args);
+    await Promise.resolve();
+    expect(onToolResult).not.toHaveBeenCalled();
+
+    releaseFlush?.();
+    await pending;
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await activation.finish();
+  });
+
+  it.each(["buffer", "callback"] as const)(
+    "releases ask_user reservation when the %s flush throws synchronously",
+    (flushKind) => {
+      const { ctx, onBlockReplyFlush } = createTestContext();
+      ctx.params.onToolResult = vi.fn();
+      const failure = new Error("flush failed");
+      if (flushKind === "buffer") {
+        vi.mocked(ctx.flushBlockReplyBuffer).mockImplementation(() => {
+          throw failure;
+        });
+      } else {
+        onBlockReplyFlush.mockImplementation(() => {
+          throw failure;
+        });
+      }
+      const args = {
+        questions: [
+          {
+            id: "target",
+            header: "Target",
+            question: "Where next?",
+            options: [{ label: "Staging" }, { label: "Production" }],
+          },
+        ],
+      };
+
+      expect(() =>
+        handleToolExecutionStart(ctx, {
+          type: "tool_execution_start",
+          toolName: "ask_user",
+          toolCallId: `ask-${flushKind}-failure`,
+          args,
+        }),
+      ).toThrow(failure);
+      expect(
+        reserveAskUserPromptDelivery({
+          toolCallId: `ask-${flushKind}-retry`,
+          sessionKey: "agent:unit-session",
+          questions: normalizeAskUserParams(args).questions,
+        }),
+      ).toBeDefined();
+    },
+  );
+
+  it("delivers only the ask_user prompt that reserved the session slot", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-first",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-first", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-second",
+      args,
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelData: {
+          askUser: {
+            questionId: activation.questionId,
+          },
+        },
+      }),
+    );
+    await activation.finish();
+  });
+
+  it("releases an undelivered ask_user reservation when execution is rejected", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-denied",
+      args,
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "ask_user",
+      toolCallId: "ask-denied",
+      isError: true,
+      result: { content: [{ type: "text", text: "denied" }] },
+    });
+    await Promise.resolve();
+    expect(onToolResult).not.toHaveBeenCalled();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-after-denial",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-after-denial", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await activation.finish();
+  });
+
   it("emits trace-only tool start diagnostics when trace logging is enabled", async () => {
     const { ctx, trace, isEnabled, warn } = createTestContext();
     isEnabled.mockImplementation((level: string) => level === "trace");
@@ -239,6 +669,10 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyFlush).toHaveBeenCalledWith({
+      reason: "tool_start",
+      assistantMessageIndex: 0,
+    });
     expect(onExecutionPhase).toHaveBeenCalledWith({
       phase: "tool_execution_started",
       tool: "read",
@@ -298,7 +732,86 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+  });
+
+  it("keeps read warning args previews on UTF-16 boundaries", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(200)}${emoji}tail`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("marks astral-only read warning args previews as truncated", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-astral-args",
+      args: emoji.repeat(101),
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${emoji.repeat(100)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("does not scan visible preview content beyond the raw warning bound", async () => {
+    const { ctx, warn } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-bounded-args",
+      args: `${" ".repeat(200)}hidden`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta).not.toHaveProperty("argsPreview");
+  });
+
+  it("does not split surrogate pairs when bounding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    // Whitespace collapsing must not let a surrogate half from the raw cap survive sanitization.
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(198)}  🎉`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(198)}…`);
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
@@ -378,6 +891,68 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.toolMetaById.has("tool-callback-rejects")).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
   });
+
+  it("preserves hidden tool telemetry while marking its channel progress private", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      args: { runId: "cm_1" },
+      hideFromChannelProgress: true,
+    });
+    handleToolExecutionUpdate(ctx, {
+      type: "tool_execution_update",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      args: { runId: "cm_1" },
+      partialResult: { status: "waiting" },
+      hideFromChannelProgress: true,
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      isError: false,
+      result: { details: { status: "completed" } },
+      hideFromChannelProgress: true,
+    });
+
+    const lifecycleEvents = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .filter((event) => event.data?.name === "wait");
+    expect(lifecycleEvents).not.toHaveLength(0);
+    expect(lifecycleEvents.every((event) => event.data?.hideFromChannelProgress === true)).toBe(
+      true,
+    );
+  });
+
+  it("keeps an unmarked catalog tool named wait visible", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "wait",
+      toolCallId: "tool-catalog-wait",
+      args: {},
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "wait",
+      toolCallId: "tool-catalog-wait",
+      isError: false,
+      result: { details: { status: "completed" } },
+    });
+
+    const lifecycleEvents = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .filter((event) => event.data?.name === "wait");
+    expect(lifecycleEvents).not.toHaveLength(0);
+    expect(lifecycleEvents.every((event) => event.data?.hideFromChannelProgress !== true)).toBe(
+      true,
+    );
+  });
 });
 
 describe("handleToolExecutionEnd cron mutation tracking", () => {
@@ -436,6 +1011,147 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.itemActiveIds.size).toBe(0);
   });
 
+  it.each([
+    ["exec", "openclaw cron add --at +1h --message 'follow up' --name reminder"],
+    ["exec", "npx openclaw cron add --at=+1h --message 'follow up'"],
+    ["exec", "bunx openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "pnpm exec openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "pnpm dlx openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "npx -y openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "bunx --bun openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "pnpm dlx openclaw@latest cron add --at +1h --message 'follow up'"],
+    ["exec", "npx openclaw@latest cron add --at +1h --message 'follow up'"],
+    ["exec", "bunx openclaw@latest cron add --at +1h --message 'follow up'"],
+    ["exec", "/usr/local/bin/openclaw cron add --at +1h --message 'follow up'"],
+    ["bash", "corepack pnpm exec openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "env OPENCLAW_PROFILE=test openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw cron create --at +1h --message 'follow up'"],
+    ["exec", "openclaw --profile work cron create --at +1h --message 'follow up'"],
+    ["exec", "openclaw --dev cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw --log-level debug --no-color cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw --container helper cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw cron add --at +1h --message 'follow up || wait'"],
+    ["exec", "openclaw cron add --at +1h --message 'follow up' 2>&1"],
+  ] as const)("increments successfulCronAdds when %s runs %s", async (toolName, command) => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName,
+        toolCallId: "tool-shell-cron-add",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName,
+        toolCallId: "tool-shell-cron-add",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            durationMs: 12,
+            aggregated: "warning text and human-readable success output",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
+  it("does not increment successfulCronAdds when shell cron add fails", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add-failed",
+        args: {
+          command: "openclaw cron add --at +1h --message 'follow up' --name reminder",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add-failed",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 1,
+            aggregated: "Cron job name is required.",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it.each([
+    ["openclaw cron list --json", "a different cron action"],
+    ["echo openclaw cron add --at +1h", "a command that only mentions cron add"],
+    ["openclaw cron add --at '+1h", "an unterminated shell argument"],
+    ["cd /tmp && openclaw cron add --at +1h", "a compound command"],
+    ["openclaw cron add --help", "the add command help"],
+    ["openclaw cron create -h", "the create alias help"],
+    ["openclaw cron add --bad||true", "a masked cron failure"],
+    ["openclaw cron add --at +1h; true", "a semicolon suffix"],
+    ["openclaw cron add --at +1h | cat", "a pipeline suffix"],
+    ["openclaw cron add --at +1h & true", "a background suffix"],
+    ["openclaw cron add --at +1h\ntrue", "a newline-separated suffix"],
+    ["openclaw cron add --bad # ignored\ntrue", "a comment-masked cron failure"],
+    ["npx -y echo openclaw cron add --at +1h", "a package runner for another executable"],
+    ["pnpm openclaw cron add --at +1h", "a bare pnpm package script"],
+    ["corepack pnpm openclaw cron add --at +1h", "a corepack pnpm package script"],
+    ["openclaw@latest cron add --at +1h", "a package spec without a package runner"],
+    ["pnpm exec openclaw@latest cron add --at +1h", "a package spec passed to pnpm exec"],
+    ["openclaw cron add --bad &>/tmp/cron.log", "a bash-only combined redirection"],
+    ["openclaw cron add --bad &>>/tmp/cron.log", "a bash-only append redirection"],
+  ])("does not count %s (%s)", async (command) => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-not-cron-add",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-not-cron-add",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            durationMs: 12,
+            aggregated: "completed",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
   it("keeps pre-execution cron failures replay-safe", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
@@ -457,6 +1173,71 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
         isError: true,
         executionStarted: false,
         result: { details: { status: "error", error: "job required" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("uses wrapped execution-boundary evidence when terminal events omit it", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-aborted-before-execution";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        result: { details: { status: "error", error: "tool timed out" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("prefers wrapped execution-boundary evidence over a terminal event default", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-cancelled-before-body";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        executionStarted: true,
+        result: { details: { status: "error", error: "cancelled before tool body" } },
       } as never,
     );
 
@@ -638,6 +1419,66 @@ describe("handleToolExecutionEnd private result observer", () => {
   });
 });
 
+describe("handleToolExecutionEnd MCP App channel view tracking", () => {
+  const result = (viewId: string, title: string) => ({
+    details: {
+      mcpAppPreview: {
+        view: { id: viewId, title },
+        mcpApp: { viewId },
+      },
+    },
+  });
+
+  it("retains only the latest successful bounded view identity", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_first",
+      toolCallId: "mcp-first",
+      isError: false,
+      result: result("view-first", "First app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_failed",
+      toolCallId: "mcp-failed",
+      isError: true,
+      result: result("view-failed", "Failed app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_latest",
+      toolCallId: "mcp-latest",
+      isError: false,
+      result: result("view-latest", "Latest app"),
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toEqual({ viewId: "view-latest" });
+  });
+
+  it("ignores mismatched or unbounded preview data", async () => {
+    const { ctx } = createTestContext();
+    const leaked = {
+      ...result("view-safe", "Safe app"),
+      html: "private html",
+      sessionKey: "agent:secret",
+      bearerToken: "secret",
+    };
+    leaked.details.mcpAppPreview.view.id = "different-view";
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_invalid",
+      toolCallId: "mcp-invalid",
+      isError: false,
+      result: leaked,
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toBeUndefined();
+  });
+});
+
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
   it("records accepted sessions_spawn identifiers", async () => {
     const { ctx } = createTestContext();
@@ -753,6 +1594,56 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
+  it("preserves an unresolved mutation across a later read failure", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        args: { path: "/tmp/demo.txt", content: "updated" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        isError: true,
+        result: { error: "permission denied" },
+      } as never,
+    );
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        args: { path: "/tmp/missing.txt" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        isError: true,
+        result: { error: "file not found" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "write",
+      error: "permission denied",
+      mutatingAction: true,
+    });
+  });
+
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
 
@@ -809,6 +1700,76 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     );
 
     expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
+  it("emits a prepared validation diagnostic without model arguments", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const error =
+      'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{"path":"secret.txt","contents":"PTY_PLANTED_SECRET"}';
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-validation",
+        args: { path: "secret.txt" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-validation",
+        isError: true,
+        executionStarted: false,
+        errorKind: "argument-validation",
+        result: { details: { status: "error", error } },
+      } as never,
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      }),
+    });
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("PTY_PLANTED_SECRET");
+  });
+
+  it("does not export a validation-lookalike error from an executed tool", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const error =
+      'Validation failed for tool "edit":\n  - secret tool output\n\nReceived arguments:\n{}';
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-spoof",
+        args: {},
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-spoof",
+        isError: true,
+        executionStarted: true,
+        result: { details: { status: "error", error } },
+      } as never,
+    );
+
+    const resultEvent = onAgentEvent.mock.calls.find(
+      ([event]) => event.stream === "tool" && event.data.phase === "result",
+    )?.[0];
+    expect(resultEvent?.data).not.toHaveProperty("toolErrorSummary");
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("secret tool output");
   });
 
   it("marks successful mutating tool results as replay-invalid for terminal lifecycle truth", async () => {
@@ -1027,6 +1988,48 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         text: "rewritten delivery",
         mediaUrls: ["/tmp/rewritten.png"],
       },
+    ]);
+  });
+
+  it("records rich-content delivery when visible text is blank", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-rich-content";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "send",
+          provider: "telegram",
+          to: "chat-rich",
+          text: "  ",
+          presentation: JSON.stringify({
+            blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+          }),
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { details: { messageId: "message-rich" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-rich",
+        hasRichContent: true,
+      }),
     ]);
   });
 
@@ -1337,6 +2340,33 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {
+  it("retains every failed call after later successes change the last-error slot", async () => {
+    const { ctx } = createTestContext();
+
+    for (const [toolCallId, isError] of [
+      ["tool-read-failed", true],
+      ["tool-read-succeeded", false],
+      ["tool-exec-failed", true],
+    ] as const) {
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: toolCallId.includes("read") ? "read" : "exec",
+          toolCallId,
+          isError,
+          result: isError ? { error: `${toolCallId} failed` } : { content: "ok" },
+        } as never,
+      );
+    }
+
+    expect(ctx.state.toolMetas.map(({ toolName, isError }) => ({ toolName, isError }))).toEqual([
+      { toolName: "read", isError: true },
+      { toolName: "read", isError: undefined },
+      { toolName: "exec", isError: true },
+    ]);
+  });
+
   it("records timeout metadata for failed exec results", async () => {
     const { ctx } = createTestContext();
 
@@ -1369,6 +2399,249 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       toolName: "exec",
       timedOut: true,
     });
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
+  });
+
+  it("uses raw exec metadata for failed tool payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command",
+        args: { command: "python3 /tmp/audit.py" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 /tmp/audit.py, `python3 /tmp/audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)");
+  });
+
+  it("uses raw exec metadata for payload warnings when commands contain backticks", async () => {
+    const { ctx } = createTestContext();
+    const command = "node -e 'console.log(1, `x`)'";
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command-backticks",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command-backticks",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run node inline script, ``node -e 'console.log(1, `x`)'``",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)");
+  });
+
+  it("preserves node context in raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-raw-command",
+        args: { command: "python3 /tmp/audit.py", host: "node", node: "mac-1" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe(
+      "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
+    );
+  });
+
+  it("preserves cwd context in raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cwd-raw-command",
+        args: { command: "python3 audit.py", workdir: "/tmp/build" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cwd-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 audit.py (in /tmp/build), `python3 audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe(
+      "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)` (exit 1)",
+    );
+  });
+
+  it("preserves compact cwd labels in semantic raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-repo-raw-command",
+        args: { command: "git status", workdir: "/Users/agent/Projects/OpenClaw" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-repo-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "check git status (repo), `git status`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)");
   });
 
   it("records structured error codes for failed tool results", async () => {
@@ -1564,10 +2837,12 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         result: {
           details: {
             status: "approval-unavailable",
-            reason: "initiating-platform-disabled",
+            reason: "no-approval-route",
             channel: "discord",
             channelLabel: "Discord",
             accountId: "work",
+            host: "node",
+            nodeId: "node-mac-1",
           },
         },
       } as never,
@@ -1577,7 +2852,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       requireMockCallArg(onToolResult, 0, "tool result").text,
       "tool result text",
     );
-    expect(text).toContain("native chat exec approvals are not configured on Discord");
+    expect(text).toContain("no interactive approval client is currently available");
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");
@@ -2812,4 +4093,28 @@ describe("control UI credential redaction (issue #72283)", () => {
     expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
     expect(emittedResult).toContain("OPENROUTER_API_KEY=");
   });
+
+  it("emits primitive string results as visible tool output", async () => {
+    const { ctx } = createTestContext();
+    ctx.shouldEmitToolOutput = () => true;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-string-output",
+        isError: false,
+        result: "plain result",
+      } as never,
+    );
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "gateway",
+      undefined,
+      "plain result",
+      "plain result",
+    );
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

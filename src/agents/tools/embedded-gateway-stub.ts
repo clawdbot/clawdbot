@@ -3,6 +3,7 @@
  *
  * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
  */
+import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
   SessionsResolveParams,
@@ -15,14 +16,12 @@ import type {
 } from "../../gateway/session-transcript-readers.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
-import {
-  normalizeFastMode,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { readPositiveIntegerParam } from "./common.js";
+import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
+
+const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 
 interface EmbeddedGatewayRuntime {
   resolveSessionAgentId: (opts: {
@@ -31,6 +30,23 @@ interface EmbeddedGatewayRuntime {
     agentId?: string;
   }) => string;
   getRuntimeConfig: () => OpenClawConfig;
+  resolveDefaultAgentId: (config: OpenClawConfig) => string;
+  resolveSessionStoreKey: (params: { cfg: OpenClawConfig; sessionKey: string }) => string;
+  resolveStoredSessionKeyForAgentStore: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+  }) => string;
+  searchSessionTranscripts: (params: {
+    agentId: string;
+    limit?: number;
+    query: string;
+    sessionKeys?: string[];
+  }) => {
+    hits: unknown[];
+    indexing: boolean;
+    truncated: boolean;
+  };
   augmentChatHistoryWithCliSessionImports: (opts: {
     entry: unknown;
     provider: string | undefined;
@@ -47,6 +63,11 @@ interface EmbeddedGatewayRuntime {
     maxSingleMessageBytes: number;
   }) => { messages: unknown[] };
   resolveEffectiveChatHistoryMaxChars: (cfg: OpenClawConfig) => number;
+  dropPreSessionStartAnnouncePairs: (
+    messages: unknown[],
+    sessionStartedAt: number | undefined,
+  ) => unknown[];
+  projectChatDisplayMessages: (msgs: unknown[], opts?: { maxChars?: number }) => unknown[];
   projectRecentChatDisplayMessages: (
     msgs: unknown[],
     opts?: { maxChars?: number; maxMessages?: number },
@@ -81,6 +102,14 @@ interface EmbeddedGatewayRuntime {
     scope: SessionTranscriptReadScope,
     opts: ReadSessionMessagesAsyncOptions,
   ) => Promise<unknown[]>;
+  readRecentSessionMessagesWithStatsAsync: (
+    scope: SessionTranscriptReadScope,
+    opts: { maxMessages: number; maxBytes?: number; allowResetArchiveFallback?: boolean },
+  ) => Promise<{ messages: unknown[]; totalMessages: number }>;
+  readSessionMessagesPageWithStatsAsync: (
+    scope: SessionTranscriptReadScope,
+    opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+  ) => Promise<{ messages: unknown[]; totalMessages: number }>;
   resolveSessionModelRef: (
     cfg: OpenClawConfig,
     entry: unknown,
@@ -96,6 +125,73 @@ async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
     runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
   }
   return runtimeMod;
+}
+
+function readOffsetParam(params: Record<string, unknown>): number | undefined {
+  const offset = readNonNegativeIntegerParam(params, "offset");
+  if (params.offset !== undefined && offset === undefined) {
+    throw new Error("offset must be a non-negative integer");
+  }
+  return offset;
+}
+
+function readChatHistoryMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const seq = (metadata as Record<string, unknown>).seq;
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+}
+
+function resolveChatHistoryNextOffset(params: {
+  messages: unknown[];
+  totalMessages: number;
+  offset: number;
+  rawPageMessages: number;
+}): number {
+  const oldestSeq = params.messages
+    .map((message) => readChatHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  if (oldestSeq !== undefined) {
+    return Math.max(params.offset, params.totalMessages - oldestSeq + 1);
+  }
+  return params.offset + params.rawPageMessages;
+}
+
+function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
+  if (messages.length <= max) {
+    return messages;
+  }
+  const start = Math.max(0, messages.length - max);
+  const boundarySeq = readChatHistoryMessageSeq(messages[start]);
+  if (boundarySeq === undefined) {
+    return messages.slice(start);
+  }
+  // Offset cursors can only resume at transcript-record boundaries.
+  // Keep boundary rows with the same seq together so projection mirrors are not stranded.
+  let safeStart = start;
+  while (safeStart > 0 && readChatHistoryMessageSeq(messages[safeStart - 1]) === boundarySeq) {
+    safeStart--;
+  }
+  return messages.slice(safeStart);
+}
+
+function dropChatHistoryOverreadContextMessage(
+  messages: unknown[],
+  contextMessage: unknown,
+): unknown[] {
+  if (contextMessage === undefined) {
+    return messages;
+  }
+  const index = messages.indexOf(contextMessage);
+  if (index < 0) {
+    return messages;
+  }
+  return [...messages.slice(0, index), ...messages.slice(index + 1)];
 }
 
 async function handleSessionsList(params: Record<string, unknown>) {
@@ -129,10 +225,72 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   return { ok: true, key: resolved.key };
 }
 
+async function handleSessionsSearch(params: Record<string, unknown>) {
+  const rt = await getRuntime();
+  const cfg = rt.getRuntimeConfig();
+  const query = typeof params.query === "string" ? params.query.trim() : "";
+  if (!query) {
+    throw new Error("query must not be empty");
+  }
+  if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
+    throw new Error(`query must not exceed ${SESSIONS_SEARCH_MAX_QUERY_CHARS} characters`);
+  }
+  if (params.agentId !== undefined && params.sessionKeys === undefined) {
+    throw new Error("agentId requires sessionKeys");
+  }
+  const requestedSessionKeys = Array.isArray(params.sessionKeys)
+    ? params.sessionKeys.filter(
+        (sessionKey): sessionKey is string => typeof sessionKey === "string",
+      )
+    : undefined;
+  // Mirror the gateway protocol validator: an explicit sessionKeys filter must
+  // stay non-empty, or an empty array would silently widen to an unfiltered
+  // agent-wide search.
+  if (params.sessionKeys !== undefined && (requestedSessionKeys?.length ?? 0) === 0) {
+    throw new Error("sessionKeys must be a non-empty array of session keys");
+  }
+  const requestedAgentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
+  const sessionKeys = requestedSessionKeys?.map((sessionKey) =>
+    requestedAgentId
+      ? rt.resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
+      : rt.resolveSessionStoreKey({ cfg, sessionKey }),
+  );
+  const agentIds = new Set(
+    sessionKeys?.map((sessionKey) =>
+      requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+        ? requestedAgentId
+        : rt.resolveSessionAgentId({ sessionKey, config: cfg }),
+    ),
+  );
+  if (
+    agentIds.size > 1 ||
+    (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
+  ) {
+    throw new Error("sessions.search supports one agent per call");
+  }
+  const agentId =
+    requestedAgentId ?? agentIds.values().next().value ?? rt.resolveDefaultAgentId(cfg);
+  const result = rt.searchSessionTranscripts({
+    agentId,
+    query,
+    limit: readPositiveIntegerParam(params, "limit"),
+    ...(sessionKeys ? { sessionKeys } : {}),
+  });
+  return {
+    results: result.hits,
+    ...(result.indexing ? { indexing: true } : {}),
+    ...(result.truncated ? { truncated: true } : {}),
+  };
+}
+
 async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionKey: string;
   sessionId: string | undefined;
   messages: unknown[];
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -144,6 +302,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const requestedAgentId = agentId ?? parsedAgentId;
   const limit = readPositiveIntegerParam(params, "limit");
+  const offset = readOffsetParam(params) ?? 0;
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const { cfg, storePath, entry } = rt.loadSessionEntry(sessionKey, sessionLoadOptions);
@@ -158,6 +317,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const defaultLimit = 200;
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
+  const rawHistoryWindowMessages = max * 20 + 20;
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const sessionEntry =
     typeof entry?.sessionId === "string"
@@ -168,7 +328,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       : undefined;
 
   const localMessages =
-    sessionId && storePath
+    params.offset === undefined && sessionId && storePath
       ? await rt.readSessionMessagesAsync(
           {
             agentId: sessionAgentId,
@@ -177,30 +337,105 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
             sessionKey,
             storePath,
           },
-          {
-            mode: "recent",
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-            allowResetArchiveFallback: true,
-          },
+          params.offset === undefined
+            ? {
+                mode: "recent",
+                maxMessages: max,
+                maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+                allowResetArchiveFallback: true,
+              }
+            : {
+                mode: "full",
+                reason: "chat.history offset pagination",
+                allowResetArchiveFallback: true,
+              },
         )
       : [];
+  const offsetPage =
+    params.offset !== undefined && sessionId && storePath
+      ? offset === 0
+        ? await rt.readRecentSessionMessagesWithStatsAsync(
+            {
+              agentId: sessionAgentId,
+              sessionEntry,
+              sessionId,
+              sessionKey,
+              storePath,
+            },
+            {
+              maxMessages: rawHistoryWindowMessages + 1,
+              maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+              allowResetArchiveFallback: true,
+            },
+          )
+        : await rt.readSessionMessagesPageWithStatsAsync(
+            {
+              agentId: sessionAgentId,
+              sessionEntry,
+              sessionId,
+              sessionKey,
+              storePath,
+            },
+            {
+              offset,
+              maxMessages: max + 1,
+              allowResetArchiveFallback: true,
+            },
+          )
+      : undefined;
 
-  const rawMessages = rt.augmentChatHistoryWithCliSessionImports({
-    entry,
-    provider: resolvedSessionModel.provider,
-    localMessages,
-  });
+  const sessionStartedAt =
+    typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined;
+  const offsetPageOverreadContextMessage =
+    offsetPage !== undefined
+      ? offset === 0
+        ? offsetPage.messages.length > rawHistoryWindowMessages
+          ? offsetPage.messages[0]
+          : undefined
+        : offsetPage.messages.length > max
+          ? offsetPage.messages[0]
+          : undefined
+      : undefined;
+  const localMessagesForHistory =
+    offsetPage !== undefined
+      ? dropChatHistoryOverreadContextMessage(
+          rt.dropPreSessionStartAnnouncePairs(offsetPage.messages, sessionStartedAt),
+          offsetPageOverreadContextMessage,
+        )
+      : localMessages;
+  const rawMessages =
+    params.offset === undefined
+      ? rt.augmentChatHistoryWithCliSessionImports({
+          entry,
+          provider: resolvedSessionModel.provider,
+          localMessages: localMessagesForHistory,
+        })
+      : localMessagesForHistory;
+  const recencyFilteredMessages = rt.dropPreSessionStartAnnouncePairs(
+    rawMessages,
+    sessionStartedAt,
+  );
 
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
 
   // Mirror Gateway chat.history trimming so embedded mode has the same byte ceilings.
-  const normalized = rt.augmentChatHistoryWithCanvasBlocks(
-    rt.projectRecentChatDisplayMessages(rawMessages, {
-      maxChars: effectiveMaxChars,
-      maxMessages: max,
-    }),
-  );
+  const projected =
+    params.offset === undefined
+      ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
+          maxChars: effectiveMaxChars,
+          maxMessages: max,
+        })
+      : offset === 0
+        ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
+            maxChars: effectiveMaxChars,
+            maxMessages: max,
+          })
+        : rt.projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars });
+  const windowed =
+    params.offset === undefined || offset === 0
+      ? projected
+      : capOffsetChatHistoryProjectedMessages(projected, max);
+  const normalized = rt.augmentChatHistoryWithCanvasBlocks(windowed);
 
   const perMessageHardCap = Math.min(rt.CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = rt.replaceOversizedChatHistoryMessages({
@@ -209,11 +444,28 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   });
   const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
   const bounded = rt.enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+  const nextOffset =
+    offsetPage !== undefined
+      ? resolveChatHistoryNextOffset({
+          messages: bounded.messages,
+          totalMessages: offsetPage.totalMessages,
+          offset,
+          rawPageMessages:
+            offset === 0
+              ? offsetPage.messages.length
+              : Math.min(max, Math.max(0, offsetPage.totalMessages - offset)),
+        })
+      : 0;
+  const hasMore = offsetPage !== undefined ? nextOffset < offsetPage.totalMessages : false;
 
   return {
     sessionKey,
     sessionId,
     messages: bounded.messages,
+    ...(params.offset !== undefined
+      ? { offset, hasMore, totalMessages: offsetPage?.totalMessages ?? projected.length }
+      : {}),
+    ...(hasMore && offsetPage !== undefined ? { nextOffset } : {}),
     thinkingLevel: entry?.thinkingLevel as string | undefined,
     fastMode: normalizeFastMode(entry?.fastMode),
     verboseLevel: entry?.verboseLevel as string | undefined,
@@ -231,6 +483,8 @@ export function createEmbeddedCallGateway(): EmbeddedCallGateway {
         return (await handleSessionsList(params)) as T;
       case "sessions.resolve":
         return (await handleSessionsResolve(params)) as T;
+      case "sessions.search":
+        return (await handleSessionsSearch(params)) as T;
       case "chat.history":
         return (await handleChatHistory(params)) as T;
       default:

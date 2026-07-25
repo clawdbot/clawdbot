@@ -397,6 +397,33 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("does not split surrogate pairs when truncating model labels", () => {
+    const longLabel = `a😀${"b".repeat(36)}`;
+    const cases = [
+      {
+        name: "model ID fallback",
+        model: longLabel,
+      },
+      {
+        name: "configured display name",
+        model: "short-model-id",
+        modelNames: new Map([["test/short-model-id", longLabel]]),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = buildModelsKeyboard({
+        provider: "test",
+        models: [testCase.model],
+        currentPage: 1,
+        totalPages: 1,
+        modelNames: "modelNames" in testCase ? testCase.modelNames : undefined,
+      });
+
+      expect(result[0]?.[0]?.text, testCase.name).toBe(`…${"b".repeat(36)}`);
+    }
+  });
+
   it("uses compact selection callback when provider/model callback exceeds 64 bytes", () => {
     const model = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
     const result = buildModelsKeyboard({

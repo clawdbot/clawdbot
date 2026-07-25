@@ -1,10 +1,16 @@
 // Session key case tests cover preserving meaningful case in session keys.
 import { describe, expect, it } from "vitest";
-import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+import {
+  resolveSessionEntryCandidates,
+  resolveSessionStoreEntry,
+} from "../config/sessions/store-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import {
-  isCasePreservingPeer,
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../utils/delivery-context.shared.js";
+import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   normalizeSessionPeerId,
   parseRawSessionConversationRef,
@@ -16,8 +22,11 @@ const ROOM_LOWER_KEY = "agent:main:matrix:channel:!mixedroomabcdef:example.org";
 const ROOM_MIXED_THREAD_KEY = `${ROOM_MIXED_KEY}:thread:$ThreadRootAbC`;
 const ROOM_LOWER_THREAD_KEY = `${ROOM_LOWER_KEY}:thread:$threadrootabc`;
 const ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY = `${ROOM_LOWER_KEY}:thread:$ThreadRootAbC`;
-const entry = (to: string, updatedAt: number): SessionEntry =>
-  ({ updatedAt, deliveryContext: { channel: "matrix", to } }) as unknown as SessionEntry;
+const entry = (to: string, updatedAt: number): SessionEntry => ({
+  sessionId: `session-${updatedAt}`,
+  updatedAt,
+  delivery: normalizeSessionDeliveryState({ context: { channel: "matrix", to } }),
+});
 
 // Regression matrix for the generic opt-in case-preservation registry
 // (openclaw/openclaw#75670 — Matrix room ids; #82853 — Signal groups).
@@ -26,22 +35,6 @@ const entry = (to: string, updatedAt: number): SessionEntry =>
 const ROOM_A = "!MixedRoomAbCdEf:example.org";
 const ROOM_B = "!OtherRoomGhIjKl:matrix.example.org";
 const EVENT = "$EvMixedCaseAbCdEfGhIjKlMnOpQrStUvWxYz0";
-
-describe("isCasePreservingPeer", () => {
-  it("enrolls Matrix channel/group and Signal group; not direct or other channels", () => {
-    expect(isCasePreservingPeer("matrix", "channel")).toBe(true);
-    expect(isCasePreservingPeer("matrix", "group")).toBe(true);
-    expect(isCasePreservingPeer("matrix", "direct")).toBe(false);
-    expect(isCasePreservingPeer("signal", "group")).toBe(true);
-    expect(isCasePreservingPeer("signal", "direct")).toBe(false);
-    expect(isCasePreservingPeer("telegram", "group")).toBe(false);
-    expect(isCasePreservingPeer("slack", "channel")).toBe(false);
-  });
-
-  it("is case-insensitive on the channel/peerKind labels", () => {
-    expect(isCasePreservingPeer("Matrix", "Channel")).toBe(true);
-  });
-});
 
 describe("requiresFoldedSessionKeyAliasProof", () => {
   it("requires alias proof only for tail-preserved Matrix room keys", () => {
@@ -261,6 +254,26 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
 });
 
 describe("resolveSessionStoreEntry — case-distinct Matrix session safety (codex #87366 P2)", () => {
+  it("returns the selected persisted key when resolving candidate rows", () => {
+    const staleExact = entry("room:!MixedRoomAbCdEf:example.org", 100);
+    const freshStructuralAlias = entry("room:!MixedRoomAbCdEf:example.org", 200);
+    const structuralAliasKey = "Agent:Main:Matrix:Channel:!MixedRoomAbCdEf:example.org";
+
+    const resolved = resolveSessionEntryCandidates({
+      entries: [
+        { sessionKey: ROOM_MIXED_KEY, entry: staleExact },
+        { sessionKey: structuralAliasKey, entry: freshStructuralAlias },
+      ],
+      sessionKey: ROOM_MIXED_KEY,
+    });
+
+    expect(resolved.existing).toEqual({
+      sessionKey: structuralAliasKey,
+      entry: freshStructuralAlias,
+    });
+    expect(resolved.legacyKeys).toContain(structuralAliasKey);
+  });
+
   it("does NOT collapse a case-distinct sibling room (different real room, not an alias)", () => {
     // Two genuinely distinct Matrix rooms whose ids differ only by case; each
     // delivers to its OWN id. Resolving one must not mark the other for deletion.
@@ -273,7 +286,7 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     expect(r.legacyKeys).not.toContain(ROOM_LOWER_KEY);
     expect(r.legacyKeys).toEqual([]);
     // exact mixed-case entry wins over the fresher distinct sibling
-    expect(r.existing?.deliveryContext?.to).toBe("room:!MixedRoomAbCdEf:example.org");
+    expect(deliveryContextFromSession(r.existing)?.to).toBe("room:!MixedRoomAbCdEf:example.org");
   });
 
   it("keeps fresher Matrix aliases that normalize to the same opaque key", () => {
@@ -340,18 +353,22 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     };
     const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_KEY });
     expect(r.legacyKeys).toContain(ROOM_LOWER_KEY);
-    expect(r.existing?.deliveryContext?.to).toBe("room:!MixedRoomAbCdEf:example.org");
+    expect(deliveryContextFromSession(r.existing)?.to).toBe("room:!MixedRoomAbCdEf:example.org");
   });
 
   it("recognizes lowercased Matrix artifacts with inbound origin room metadata", () => {
     const store: Record<string, SessionEntry> = {
       [ROOM_LOWER_KEY]: {
+        sessionId: "matrix-origin",
         updatedAt: 50,
-        origin: {
-          provider: "matrix",
-          nativeChannelId: "!MixedRoomAbCdEf:example.org",
-        },
-      } as unknown as SessionEntry,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "matrix", to: "room:!MixedRoomAbCdEf:example.org" },
+          origin: {
+            provider: "matrix",
+            nativeChannelId: "!MixedRoomAbCdEf:example.org",
+          },
+        }),
+      },
     };
 
     const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_KEY });
@@ -365,12 +382,12 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     const lowerAliasKey = "agent:main:matrix:channel:#mixedroomalias:example.org";
     const store: Record<string, SessionEntry> = {
       [lowerAliasKey]: {
+        sessionId: "matrix-alias",
         updatedAt: 50,
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:#MixedRoomAlias:example.org",
-        },
-      } as unknown as SessionEntry,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "matrix", to: "room:#MixedRoomAlias:example.org" },
+        }),
+      },
     };
 
     const r = resolveSessionStoreEntry({ store, sessionKey: mixedAliasKey });
@@ -382,13 +399,16 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
   it("does not collapse Matrix thread artifacts when the stored thread id differs by case", () => {
     const store: Record<string, SessionEntry> = {
       [ROOM_LOWER_THREAD_KEY]: {
+        sessionId: "matrix-thread-mismatch",
         updatedAt: 50,
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!MixedRoomAbCdEf:example.org",
-          threadId: "$threadrootabc",
-        },
-      } as unknown as SessionEntry,
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!MixedRoomAbCdEf:example.org",
+            threadId: "$threadrootabc",
+          },
+        }),
+      },
     };
 
     const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_THREAD_KEY });
@@ -400,13 +420,16 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
   it("collapses Matrix thread artifacts when room and thread metadata both match", () => {
     const store: Record<string, SessionEntry> = {
       [ROOM_LOWER_THREAD_KEY]: {
+        sessionId: "matrix-thread-match",
         updatedAt: 50,
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!MixedRoomAbCdEf:example.org",
-          threadId: "$ThreadRootAbC",
-        },
-      } as unknown as SessionEntry,
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!MixedRoomAbCdEf:example.org",
+            threadId: "$ThreadRootAbC",
+          },
+        }),
+      },
     };
 
     const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_THREAD_KEY });
@@ -418,13 +441,16 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
   it("collapses Matrix thread artifacts with legacy lowercased room and preserved event id", () => {
     const store: Record<string, SessionEntry> = {
       [ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY]: {
+        sessionId: "matrix-thread-preserved",
         updatedAt: 50,
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!MixedRoomAbCdEf:example.org",
-          threadId: "$ThreadRootAbC",
-        },
-      } as unknown as SessionEntry,
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!MixedRoomAbCdEf:example.org",
+            threadId: "$ThreadRootAbC",
+          },
+        }),
+      },
     };
 
     const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_THREAD_KEY });

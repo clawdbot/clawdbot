@@ -2,18 +2,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 const REGISTRY_IDS = [
-  "agents.defaults.memorySearch.remote.apiKey",
-  "agents.list[].memorySearch.remote.apiKey",
+  "memory.search.remote.apiKey",
+  "agents.entries.*.memory.search.remote.apiKey",
   "channels.discord.token",
-  "channels.discord.accounts.ops.token",
-  "channels.discord.accounts.chat.token",
+  "channels.discord.accounts.*.token",
   "channels.telegram.botToken",
   "gateway.auth.token",
   "gateway.auth.password",
   "gateway.remote.token",
   "gateway.remote.password",
   "models.providers.*.apiKey",
-  "messages.tts.providers.openai.apiKey",
+  "tts.providers.openai.apiKey",
   "plugins.entries.voice-call.config.twilio.authToken",
   "plugins.entries.firecrawl.config.webFetch.apiKey",
   "plugins.entries.firecrawl.config.webSearch.apiKey",
@@ -23,9 +22,6 @@ const REGISTRY_IDS = [
   "plugins.entries.other-fetch.config.webFetch.apiKey",
   "plugins.entries.other-fetch.config.webSearch.apiKey",
   "skills.entries.demo.apiKey",
-  "tools.web.fetch.firecrawl.apiKey",
-  "tools.web.search.apiKey",
-  "tools.web.search.*.apiKey",
 ] as const;
 
 function readPath(source: unknown, path: string): unknown {
@@ -268,8 +264,8 @@ describe("command secret target ids", () => {
 
   it("includes memorySearch remote targets for agent runtime commands", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
-    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
-    expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("memory.search.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.entries.*.memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
@@ -284,35 +280,31 @@ describe("command secret target ids", () => {
     expect(ids.has("gateway.auth.password")).toBe(true);
     expect(ids.has("gateway.remote.token")).toBe(true);
     expect(ids.has("gateway.remote.password")).toBe(true);
-    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
-    expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("memory.search.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.entries.*.memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 
   it("scopes capability web search commands to search credential surfaces only", () => {
     const ids = getCapabilityWebSearchCommandSecretTargetIds();
-    expect(ids.has("tools.web.search.apiKey")).toBe(true);
-    expect(ids.has("tools.web.search.*.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
     expect(ids.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
     expect(ids.has("models.providers.openai.apiKey")).toBe(false);
-    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(false);
-    expect(ids.has("messages.tts.providers.openai.apiKey")).toBe(false);
+    expect(ids.has("memory.search.remote.apiKey")).toBe(false);
+    expect(ids.has("tts.providers.openai.apiKey")).toBe(false);
     expect(ids.has("skills.entries.demo.apiKey")).toBe(false);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 
   it("scopes capability web fetch commands to fetch credential surfaces only", () => {
     const ids = getCapabilityWebFetchCommandSecretTargetIds();
-    expect(ids.has("tools.web.search.apiKey")).toBe(false);
-    expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(false);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
     expect(ids.has("models.providers.openai.apiKey")).toBe(false);
-    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(false);
-    expect(ids.has("messages.tts.providers.openai.apiKey")).toBe(false);
+    expect(ids.has("memory.search.remote.apiKey")).toBe(false);
+    expect(ids.has("tts.providers.openai.apiKey")).toBe(false);
     expect(ids.has("skills.entries.demo.apiKey")).toBe(false);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
@@ -445,80 +437,6 @@ describe("command secret target ids", () => {
     expect(scoped.forcedActivePaths).toEqual(
       new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
     );
-  });
-
-  it("keeps selected top-level web search credential refs in command targets", () => {
-    const scoped = getCapabilityWebSearchCommandSecretTargets({
-      tools: {
-        web: {
-          search: {
-            provider: "brave",
-            enabled: true,
-            apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" },
-          },
-        },
-      },
-    } as never);
-
-    expect(scoped.targetIds).toEqual(
-      new Set(["plugins.entries.brave.config.webSearch.apiKey", "tools.web.search.apiKey"]),
-    );
-    expect(scoped.forcedActivePaths).toBeUndefined();
-  });
-
-  it("maps selected legacy scoped web search refs to registry targets", () => {
-    const scoped = getCapabilityWebSearchCommandSecretTargets({
-      tools: {
-        web: {
-          search: {
-            provider: "exa",
-            enabled: true,
-            exa: {
-              apiKey: { source: "env", provider: "default", id: "EXA_API_KEY" },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(scoped.targetIds).toEqual(
-      new Set(["plugins.entries.exa.config.webSearch.apiKey", "tools.web.search.*.apiKey"]),
-    );
-    expect(scoped.allowedPaths).toEqual(
-      new Set(["plugins.entries.exa.config.webSearch.apiKey", "tools.web.search.exa.apiKey"]),
-    );
-    expect(scoped.forcedActivePaths).toBeUndefined();
-  });
-
-  it("skips stale legacy scoped web search refs when plugin credential wins", () => {
-    const scoped = getCapabilityWebSearchCommandSecretTargets({
-      tools: {
-        web: {
-          search: {
-            provider: "exa",
-            enabled: true,
-            exa: {
-              apiKey: { source: "env", provider: "default", id: "STALE_EXA_API_KEY" },
-            },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          exa: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "EXA_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(scoped.targetIds).toEqual(new Set(["plugins.entries.exa.config.webSearch.apiKey"]));
-    expect(scoped.allowedPaths).toBeUndefined();
-    expect(scoped.forcedActivePaths).toBeUndefined();
   });
 
   it("maps selected fallback credential paths to registry targets", () => {
@@ -846,31 +764,6 @@ describe("command secret target ids", () => {
     expect(fetchConfigured.forcedActivePaths).toBeUndefined();
   });
 
-  it("keeps selected legacy Firecrawl web fetch refs in command targets", () => {
-    const scoped = getCapabilityWebFetchCommandSecretTargets({
-      tools: {
-        web: {
-          fetch: {
-            provider: "firecrawl",
-            enabled: true,
-            firecrawl: {
-              apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-            },
-          },
-        },
-      },
-    } as never);
-
-    expect(scoped.targetIds).toEqual(
-      new Set([
-        "plugins.entries.firecrawl.config.webFetch.apiKey",
-        "tools.web.fetch.firecrawl.apiKey",
-      ]),
-    );
-    expect(scoped.allowedPaths).toBeUndefined();
-    expect(scoped.forcedActivePaths).toBeUndefined();
-  });
-
   it("does not add fallback credential paths for non-selected fetch providers", () => {
     const scoped = getCapabilityWebFetchCommandSecretTargets({
       tools: { web: { fetch: { provider: "other", enabled: true } } },
@@ -1065,11 +958,7 @@ describe("command secret target ids", () => {
     });
 
     expect(scoped.targetIds).toEqual(
-      new Set([
-        "channels.discord.accounts.chat.token",
-        "channels.discord.accounts.ops.token",
-        "channels.discord.token",
-      ]),
+      new Set(["channels.discord.accounts.*.token", "channels.discord.token"]),
     );
   });
 
@@ -1078,9 +967,9 @@ describe("command secret target ids", () => {
       config: {
         channels: {
           discord: {
-            defaultAccount: "ops",
+            defaultAccount: "Ops Team",
             accounts: {
-              ops: {
+              "Ops Team": {
                 token: { source: "env", provider: "default", id: "DISCORD_OPS" },
               },
             },
@@ -1092,12 +981,32 @@ describe("command secret target ids", () => {
 
     expect(scoped.allowedPaths).toBeUndefined();
     expect(scoped.targetIds).toEqual(
-      new Set([
-        "channels.discord.accounts.chat.token",
-        "channels.discord.accounts.ops.token",
-        "channels.discord.token",
-      ]),
+      new Set(["channels.discord.accounts.*.token", "channels.discord.token"]),
     );
+  });
+
+  it("scopes a missing accountId to the channel default when requested", () => {
+    const scoped = getScopedChannelsCommandSecretTargets({
+      config: {
+        channels: {
+          discord: {
+            defaultAccount: "Ops Team",
+            accounts: {
+              "Ops Team": {
+                token: { source: "env", provider: "default", id: "DISCORD_OPS" },
+              },
+              chat: {
+                token: { source: "env", provider: "default", id: "DISCORD_CHAT" },
+              },
+            },
+          },
+        },
+      } as never,
+      channel: "discord",
+      defaultAccountWhenMissing: true,
+    });
+
+    expect(scoped.allowedPaths).toEqual(new Set(["channels.discord.accounts.Ops Team.token"]));
   });
 
   it("scopes allowed paths to channel globals + selected account", () => {

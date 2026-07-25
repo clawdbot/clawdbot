@@ -314,7 +314,7 @@ async function writeArtifact(filePath, content) {
 /**
  * Generates and writes dependency change report artifacts.
  */
-export async function runDependencyChangesReport(options) {
+async function runDependencyChangesReport(options) {
   const headLockfileText = await readFile(path.join(options.rootDir, options.headLockfile), "utf8");
   const baseLockfileText = options.baseRef
     ? readGitFile(options.baseRef, "pnpm-lock.yaml", options.rootDir)

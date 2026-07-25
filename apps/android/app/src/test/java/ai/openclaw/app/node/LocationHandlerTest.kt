@@ -1,12 +1,15 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.LocationMode
 import android.content.Context
 import android.location.LocationManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class LocationHandlerTest : NodeHandlerRobolectricTest() {
@@ -41,6 +44,53 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
               coarseGranted = true,
             ),
           isForeground = { false },
+        )
+
+      val result = handler.handleLocationGet(null)
+
+      assertFalse(result.ok)
+      assertEquals("LOCATION_BACKGROUND_UNAVAILABLE", result.error?.code)
+    }
+
+  @Test
+  fun handleLocationGet_allowsBackgroundWhenThirdPartyAlwaysGrantIsEffective() =
+    runTest {
+      val source =
+        FakeLocationDataSource(
+          fineGranted = false,
+          coarseGranted = true,
+          backgroundGranted = true,
+          payload = LocationCaptureManager.Payload("""{"ok":true}"""),
+        )
+      val handler =
+        LocationHandler.forTesting(
+          appContext = appContext(),
+          dataSource = source,
+          isForeground = { false },
+          locationMode = { LocationMode.Always },
+          backgroundLocationEnabled = { true },
+        )
+
+      val result = handler.handleLocationGet(null)
+
+      assertTrue(result.ok)
+    }
+
+  @Test
+  fun handleLocationGet_deniesBackgroundWhenFlavorDisablesAlwaysMode() =
+    runTest {
+      val handler =
+        LocationHandler.forTesting(
+          appContext = appContext(),
+          dataSource =
+            FakeLocationDataSource(
+              fineGranted = true,
+              coarseGranted = true,
+              backgroundGranted = true,
+            ),
+          isForeground = { false },
+          locationMode = { LocationMode.Always },
+          backgroundLocationEnabled = { false },
         )
 
       val result = handler.handleLocationGet(null)
@@ -157,11 +207,34 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
       assertEquals("LOCATION_UNAVAILABLE", result.error?.code)
       assertEquals("gps offline", result.error?.message)
     }
+
+  @Test
+  fun handleLocationGet_propagatesParentCancellation() =
+    runTest {
+      val handler =
+        LocationHandler.forTesting(
+          appContext = appContext(),
+          dataSource =
+            FakeLocationDataSource(
+              fineGranted = true,
+              coarseGranted = true,
+              failure = CancellationException("request retired"),
+            ),
+        )
+
+      try {
+        handler.handleLocationGet(null)
+        fail("expected cancellation to propagate")
+      } catch (err: CancellationException) {
+        assertEquals("request retired", err.message)
+      }
+    }
 }
 
 private class FakeLocationDataSource(
   private val fineGranted: Boolean,
   private val coarseGranted: Boolean,
+  private val backgroundGranted: Boolean = false,
   private val payload: LocationCaptureManager.Payload? = null,
   private val failure: Throwable? = null,
   private val timeout: Boolean = false,
@@ -174,6 +247,8 @@ private class FakeLocationDataSource(
   override fun hasFinePermission(context: Context): Boolean = fineGranted
 
   override fun hasCoarsePermission(context: Context): Boolean = coarseGranted
+
+  override fun hasBackgroundPermission(context: Context): Boolean = backgroundGranted
 
   override suspend fun fetchLocation(
     desiredProviders: List<String>,

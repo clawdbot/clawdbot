@@ -200,7 +200,7 @@ function stringParam(params: Record<string, unknown>, key: string): string {
 function makeTool(
   name: string,
   description: string,
-  properties: Record<string, unknown>,
+  properties: Parameters<typeof Type.Object>[0],
   execute: (params: Record<string, unknown>) => unknown,
 ): AnyAgentTool {
   const tool = {
@@ -612,7 +612,7 @@ export function parseTaskLimit(raw: string | undefined, label: string): number {
   return parsed;
 }
 
-export async function main() {
+async function main() {
   const model = readArg("model") ?? process.env.OPENCLAW_CODE_MODE_LIVE_MODEL ?? "gpt-5.4-mini";
   const modeArg = readArg("modes");
   const modes = (modeArg ? modeArg.split(",") : ["regular", "code-namespace"]) as Mode[];

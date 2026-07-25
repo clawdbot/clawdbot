@@ -8,6 +8,7 @@ import {
   type NodePairingSupersededRequest,
   type RequestNodePairingResult,
 } from "../infra/node-pairing.js";
+import { createDeferred, type Deferred } from "../shared/deferred.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL,
   buildRateLimitIdentityKey,
@@ -22,11 +23,7 @@ type ReapprovalRequestParams = {
   baseDir?: string;
 };
 
-type DeferredResult = {
-  promise: Promise<RequestNodePairingResult | null>;
-  resolve: (result: RequestNodePairingResult | null) => void;
-  reject: (error: unknown) => void;
-};
+type DeferredResult = Deferred<RequestNodePairingResult | null>;
 
 type QueuedRequest = {
   fingerprint: string;
@@ -45,16 +42,6 @@ export type NodeReapprovalCoordinator = {
   finalizeCleanup: (claim: NodePairingCleanupClaim) => Promise<NodePairingSupersededRequest[]>;
   dispose: () => void;
 };
-
-function createDeferredResult(): DeferredResult {
-  let resolve!: DeferredResult["resolve"];
-  let reject!: DeferredResult["reject"];
-  const promise = new Promise<RequestNodePairingResult | null>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function normalizeFingerprintList(value: string[] | undefined): string[] | undefined {
   return value
@@ -188,7 +175,7 @@ export function createNodeReapprovalCoordinator(
       const fingerprint = buildRequestFingerprint(params.input);
       const state = requestStates.get(nodeId);
       if (!state) {
-        const deferred = createDeferredResult();
+        const deferred = createDeferred<RequestNodePairingResult | null>();
         const nextState: NodeRequestState = { activeFingerprint: fingerprint };
         requestStates.set(nodeId, nextState);
         startFirstRequest(nodeId, nextState, {
@@ -200,13 +187,13 @@ export function createNodeReapprovalCoordinator(
         return deferred.promise;
       }
       if (state.queued?.fingerprint === fingerprint) {
-        const follower = createDeferredResult();
+        const follower = createDeferred<RequestNodePairingResult | null>();
         state.queued.params = params;
         state.queued.followers.push(follower);
         return follower.promise;
       }
 
-      const deferred = createDeferredResult();
+      const deferred = createDeferred<RequestNodePairingResult | null>();
       if (state.queued) {
         state.queued.deferred.resolve(null);
         for (const follower of state.queued.followers) {

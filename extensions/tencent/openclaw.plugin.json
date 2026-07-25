@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
-  "providers": ["tencent-tokenhub"],
+  "providers": ["tencent-tokenhub", "tencent-tokenplan"],
   "modelCatalog": {
     "providers": {
       "tencent-tokenhub": {
@@ -50,14 +50,48 @@
             },
             "compat": {
               "supportsUsageInStreaming": true,
-              "supportsReasoningEffort": true
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "high"]
+            }
+          },
+          {
+            "id": "hy3",
+            "name": "Hy3 (TokenHub)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 64000,
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"]
+            }
+          }
+        ]
+      },
+      "tencent-tokenplan": {
+        "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "hy3",
+            "name": "Hy3 (TokenPlan)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 64000,
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"]
             }
           }
         ]
       }
     },
     "discovery": {
-      "tencent-tokenhub": "static"
+      "tencent-tokenhub": "refreshable",
+      "tencent-tokenplan": "refreshable"
     }
   },
   "setup": {
@@ -65,7 +99,18 @@
       {
         "id": "tencent-tokenhub",
         "envVars": ["TOKENHUB_API_KEY"]
+      },
+      {
+        "id": "tencent-tokenplan",
+        "envVars": ["TOKENPLAN_API_KEY"]
       }
+    ]
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": [
+      "models.providers.tencent-tokenhub",
+      "agents.defaults.models.tencent-tokenhub/hy3",
+      "agents.defaults.models.tencent-tokenhub/hy3-preview"
     ]
   },
   "providerAuthChoices": [
@@ -73,6 +118,7 @@
       "provider": "tencent-tokenhub",
       "method": "api-key",
       "choiceId": "tokenhub-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Tencent TokenHub",
       "groupId": "tencent",
       "groupLabel": "Tencent Cloud",
@@ -81,6 +127,20 @@
       "cliFlag": "--tokenhub-api-key",
       "cliOption": "--tokenhub-api-key <key>",
       "cliDescription": "Tencent TokenHub API key"
+    },
+    {
+      "provider": "tencent-tokenplan",
+      "method": "api-key",
+      "choiceId": "tokenplan-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Tencent TokenPlan",
+      "groupId": "tencent",
+      "groupLabel": "Tencent Cloud",
+      "groupHint": "Tencent TokenPlan",
+      "optionKey": "tokenplanApiKey",
+      "cliFlag": "--tokenplan-api-key",
+      "cliOption": "--tokenplan-api-key <key>",
+      "cliDescription": "Tencent TokenPlan API key"
     }
   ],
   "configSchema": {

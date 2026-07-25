@@ -3,10 +3,23 @@ import { describe, expect, it } from "vitest";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 
 describe("splitTelegramReasoningText", () => {
-  it("splits real tagged reasoning and answer", () => {
-    expect(splitTelegramReasoningText("<think>example</think>Done")).toEqual({
-      reasoningText: "Thinking\n\n_example_",
-      answerText: "Done",
+  it("keeps unflagged angle-bracket reasoning tags in the answer lane", () => {
+    const text = "<think>example</think>Done";
+    expect(splitTelegramReasoningText(text)).toEqual({
+      answerText: text,
+    });
+  });
+
+  it("keeps unclosed unflagged reasoning-looking text in the answer lane", () => {
+    const text = "Before <think>unclosed content after";
+    expect(splitTelegramReasoningText(text)).toEqual({
+      answerText: text,
+    });
+  });
+
+  it("formats tagged text when the payload is explicitly reasoning", () => {
+    expect(splitTelegramReasoningText("<think>example</think>Done", true)).toEqual({
+      reasoningText: "🧠 _example_",
     });
   });
 
@@ -25,7 +38,7 @@ describe("splitTelegramReasoningText", () => {
   });
 
   it("does not emit partial reasoning tag prefixes", () => {
-    expect(splitTelegramReasoningText("  <thi")).toStrictEqual({});
+    expect(splitTelegramReasoningText("  <thi", true)).toStrictEqual({});
   });
 
   it("keeps visible Thinking-prefixed answers in the answer lane", () => {

@@ -63,7 +63,6 @@ export default definePluginEntry({
               ? ["allow-once", "deny"]
               : ["allow-once", "allow-always", "deny"],
           timeoutMs: 120_000,
-          timeoutBehavior: "deny",
           onResolution(decision) {
             console.log(`deploy approval resolved: ${decision}`);
           },
@@ -76,16 +75,18 @@ export default definePluginEntry({
 
 Write prompt text for the person who will approve the action:
 
-- Keep `title` short and action-focused. The Gateway accepts up to 80
-  characters.
-- Keep `description` specific and bounded. The Gateway accepts up to 256
+- Keep `title` short and action-focused; the Gateway caps it at 80 characters.
+- Keep `description` specific and bounded; the Gateway caps it at 512
   characters.
 - Include the action, target, and risk. Do not include secrets, tokens, or
   private payloads that should not appear in chat approval surfaces.
-- Use `severity: "critical"` only for actions where the wrong decision could
-  cause production damage or data loss.
-- Use `allowedDecisions: ["allow-once", "deny"]` when persistent trust is
-  unsafe for that action.
+- `severity` defaults to `"warning"` when omitted. Use `"critical"` only for
+  actions where the wrong decision could cause production damage or data loss.
+- `allowedDecisions` defaults to `["allow-once", "allow-always", "deny"]` when
+  omitted. Pass `["allow-once", "deny"]` when persistent trust is unsafe for
+  that action.
+- `timeoutMs` defaults to 120000 (2 minutes) and is capped at 600000 (10
+  minutes) regardless of the requested value.
 
 ## Decision behavior
 
@@ -97,9 +98,14 @@ available approval surfaces, and waits for a decision.
 | `allow-once`      | The current call continues.                                               |
 | `allow-always`    | The current call continues and the decision is passed to the plugin.      |
 | `deny`            | The call is blocked with a denied tool result.                            |
-| Timeout           | The call is blocked unless `timeoutBehavior` is `"allow"`.                |
+| Timeout           | The call is blocked.                                                      |
 | Cancellation      | The call is blocked when the run is aborted.                              |
 | No approval route | The call is blocked because no connected approval surface can resolve it. |
+
+Only the exact `allow-once` and `allow-always` decisions permitted by the
+request allow execution. Unknown, malformed, mismatched, missing, and timed-out
+decisions fail closed. The legacy `timeoutBehavior` field remains accepted for
+plugin compatibility but is deprecated and ignored; do not set it in new hooks.
 
 `allow-always` is only durable when the requesting plugin or runtime implements
 that persistence. For ordinary `before_tool_call.requireApproval` hooks,
@@ -179,7 +185,7 @@ offer only `allow-once` and `deny`.
 **`/approve` rejects the decision.** The request restricted
 `allowedDecisions`. Use one of the decisions printed in the prompt.
 
-**A Slack, Discord, Telegram, or Matrix prompt routes differently from exec
+**A Discord, Matrix, Slack, or Telegram prompt routes differently from exec
 approvals.** Plugin approvals and exec approvals use separate config and may use
 different authorization checks. Verify `approvals.plugin` and the channel's
 plugin approval support instead of only checking `approvals.exec`.
@@ -187,7 +193,7 @@ plugin approval support instead of only checking `approvals.exec`.
 ## Related
 
 - [Plugin hooks](/plugins/hooks#tool-call-policy)
-- [Building plugins](/plugins/building-plugins#registering-agent-tools)
+- [Building plugins](/plugins/building-plugins#registering-tools)
 - [Advanced exec approvals](/tools/exec-approvals-advanced#plugin-approval-forwarding)
 - [Gateway protocol](/gateway/protocol)
 - [Codex harness runtime](/plugins/codex-harness-runtime#native-permissions-and-mcp-elicitations)

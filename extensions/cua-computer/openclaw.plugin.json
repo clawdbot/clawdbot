@@ -1,0 +1,18 @@
+{
+  "id": "cua-computer",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "name": "CUA Computer",
+  "description": "Experimental cua-driver computer control for Windows and Linux node hosts.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "driverPath": {
+        "type": "string"
+      }
+    }
+  }
+}

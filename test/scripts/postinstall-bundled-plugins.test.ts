@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import {
   applyBaileysEncryptedStreamFinishHotfix,
   collectLegacyPluginRuntimeDepsStateRoots,
@@ -17,7 +18,6 @@ import {
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
-import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
@@ -482,27 +482,35 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
-  it("surfaces deprecated plugin registry migration break-glass warnings", async () => {
-    const warn = vi.fn();
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {
-        deprecationWarnings: ["OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated"],
-      },
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+  it("does not migrate operator plugin state from a source checkout", async () => {
+    const packageRoot = "/source";
+    const existingPaths = new Set([
+      path.join(packageRoot, ".git"),
+      path.join(packageRoot, "src"),
+      path.join(packageRoot, "extensions"),
+      path.join(
+        packageRoot,
+        "dist",
+        "commands",
+        "doctor",
+        "shared",
+        "plugin-registry-migration.js",
+      ),
+    ]);
+    const importModule = vi.fn();
 
-    await runPluginRegistryPostinstallMigration({
-      packageRoot: "/pkg",
-      existsSync: vi.fn(() => true),
-      importModule,
-      log: { log: vi.fn(), warn },
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot,
+        existsSync: vi.fn((filePath: string) => existingPaths.has(filePath)),
+        importModule,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      reason: "source-checkout",
     });
-
-    expect(warn).toHaveBeenCalledWith(
-      "[postinstall] OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated",
-    );
+    expect(importModule).not.toHaveBeenCalled();
   });
 
   it("keeps plugin registry postinstall migration non-fatal when dist entries are unavailable", async () => {
@@ -519,54 +527,6 @@ describe("bundled plugin postinstall", () => {
       reason: "missing-dist-entry",
     });
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("honors plugin registry postinstall migration disable env", async () => {
-    const importModule = vi.fn(async () => {
-      throw new Error("dist migration module should not import when migration is disabled");
-    });
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toEqual({
-      status: "disabled",
-      migrated: false,
-      reason: "disabled-env",
-    });
-    expect(importModule).not.toHaveBeenCalled();
-  });
-
-  it("does not disable plugin registry migration for falsey env flag strings", async () => {
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {},
-    }));
-    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
-
-    await expect(
-      runPluginRegistryPostinstallMigration({
-        packageRoot: "/pkg",
-        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-        existsSync: vi.fn(() => true),
-        importModule,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).resolves.toEqual({
-      status: "skip-existing",
-      migrated: false,
-      preflight: {},
-    });
-    expect(importModule).toHaveBeenCalledOnce();
-    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
-      env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "0" },
-      packageRoot: "/pkg",
-    });
   });
 
   it("prunes stale dist files from packaged installs", async () => {
@@ -592,7 +552,7 @@ describe("bundled plugin postinstall", () => {
   it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
     const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
-    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "testing.js");
+    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "channel-test-helpers.js");
     const nestedTestHelperFile = path.join(
       packageRoot,
       "dist",
@@ -611,7 +571,7 @@ describe("bundled plugin postinstall", () => {
     const inventory = await writePackageDistInventory(packageRoot);
 
     expect(inventory).toContain("dist/plugin-sdk/runtime.js");
-    expect(inventory).not.toContain("dist/plugin-sdk/testing.js");
+    expect(inventory).not.toContain("dist/plugin-sdk/channel-test-helpers.js");
     expect(inventory).not.toContain(
       "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
     );
@@ -991,7 +951,10 @@ describe("bundled plugin postinstall", () => {
     ).toThrow(
       "installed dist scan exceeded 1 filesystem entries; refusing to scan unbounded package contents",
     );
-    expect(MAX_INSTALLED_DIST_SCAN_ENTRIES).toBeGreaterThan(1);
+    // One budget spans all three prune walks, and npm upgrades scan old+new
+    // content-hashed dist files (~24k entries as of 2026.6.x). A cap without
+    // several-x headroom fails `npm install -g openclaw` for upgrading users.
+    expect(MAX_INSTALLED_DIST_SCAN_ENTRIES).toBeGreaterThanOrEqual(100_000);
   });
 
   it("uses one packaged dist scan budget across listing and pruning phases", () => {

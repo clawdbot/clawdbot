@@ -131,6 +131,90 @@ describe("mattermost directory", () => {
     ]);
   });
 
+  it("paginates team members before resolving peer directory users in batches", async () => {
+    const firstPageMembers = Array.from({ length: 200 }, (_, index) => ({
+      user_id: `user-${index + 1}`,
+    }));
+    const client = {
+      token: "token-default",
+      request: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: "team-1" }])
+        .mockResolvedValueOnce(firstPageMembers)
+        .mockResolvedValueOnce([{ user_id: "user-201" }, { user_id: "user-202" }])
+        .mockResolvedValueOnce([{ id: "user-1", username: "alice" }])
+        .mockResolvedValueOnce([
+          { id: "user-201", username: "zara" },
+          { id: "user-202", username: "yuki" },
+        ]),
+    };
+
+    listMattermostAccountIdsMock.mockReturnValue(["default"]);
+    resolveMattermostAccountMock.mockReturnValue({
+      enabled: true,
+      botToken: "token-default",
+      baseUrl: "https://chat.example.com",
+    });
+    createMattermostClientMock.mockReturnValue(client);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryPeers({
+        cfg: {} as never,
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual([
+      { kind: "user", id: "user:user-1", name: "alice", handle: undefined },
+      { kind: "user", id: "user:user-201", name: "zara", handle: undefined },
+      { kind: "user", id: "user:user-202", name: "yuki", handle: undefined },
+    ]);
+
+    expect(client.request).toHaveBeenNthCalledWith(2, "/teams/team-1/members?page=0&per_page=200");
+    expect(client.request).toHaveBeenNthCalledWith(3, "/teams/team-1/members?page=1&per_page=200");
+    expect(client.request).toHaveBeenNthCalledWith(4, "/users/ids", {
+      method: "POST",
+      body: JSON.stringify(firstPageMembers.map((member) => member.user_id)),
+    });
+    expect(client.request).toHaveBeenNthCalledWith(5, "/users/ids", {
+      method: "POST",
+      body: JSON.stringify(["user-201", "user-202"]),
+    });
+  });
+
+  it("applies peer limits after resolving users", async () => {
+    const client = {
+      token: "token-default",
+      request: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: "team-1" }])
+        .mockResolvedValueOnce([{ user_id: "missing-user" }, { user_id: "user-2" }])
+        .mockResolvedValueOnce([{ id: "user-2", username: "bob" }]),
+    };
+
+    listMattermostAccountIdsMock.mockReturnValue(["default"]);
+    resolveMattermostAccountMock.mockReturnValue({
+      enabled: true,
+      botToken: "token-default",
+      baseUrl: "https://chat.example.com",
+    });
+    createMattermostClientMock.mockReturnValue(client);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryPeers({
+        cfg: {} as never,
+        runtime: {} as never,
+        limit: 1,
+      }),
+    ).resolves.toEqual([{ kind: "user", id: "user:user-2", name: "bob", handle: undefined }]);
+
+    expect(client.request).toHaveBeenNthCalledWith(2, "/teams/team-1/members?page=0&per_page=200");
+    expect(client.request).toHaveBeenNthCalledWith(3, "/users/ids", {
+      method: "POST",
+      body: JSON.stringify(["missing-user", "user-2"]),
+    });
+  });
+
   it("uses user search when a query is present and applies limits", async () => {
     const client = {
       token: "token-default",

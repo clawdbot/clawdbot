@@ -2,7 +2,10 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveChannelStreamingBlockEnabled,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -17,7 +20,6 @@ import {
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   CoreConfig,
-  MatrixConfig,
   MatrixStreamingConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -46,10 +48,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
-import {
-  createMatrixInboundEventDeduper,
-  type MatrixInboundEventDeduper,
-} from "./inbound-dedupe.js";
+import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
@@ -58,7 +57,7 @@ import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
-export type MonitorMatrixOpts = {
+type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
@@ -69,13 +68,20 @@ export type MonitorMatrixOpts = {
   setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
 
+// Account entries are schema-open (accounts: z.record(z.unknown())), so
+// unmigrated account configs can still carry the retired scalar/boolean
+// spellings at runtime even though the root schema rejects them. Honor them
+// through the same deprecation window as the shared flat-key fallback in
+// src/channels/streaming.ts; doctor migrates the spellings to streaming.mode.
+type MatrixStreamingInput = MatrixStreamingConfig | MatrixStreamingMode | boolean | undefined;
+
 function isMatrixStreamingConfig(
-  streaming: MatrixConfig["streaming"],
+  streaming: MatrixStreamingInput,
 ): streaming is MatrixStreamingConfig {
   return Boolean(streaming && typeof streaming === "object" && !Array.isArray(streaming));
 }
 
-function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): MatrixStreamingMode {
+function resolveMatrixStreamingMode(streaming: MatrixStreamingInput): MatrixStreamingMode {
   if (streaming === true || streaming === "partial") {
     return "partial";
   }
@@ -97,7 +103,7 @@ function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): Matri
   return "off";
 }
 
-function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]): boolean {
+function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): boolean {
   if (!isMatrixStreamingConfig(streaming)) {
     return true;
   }
@@ -107,17 +113,11 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]):
   return streaming.preview?.toolProgress ?? true;
 }
 
-function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["streaming"]): boolean {
+function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput): boolean {
   return (
     resolveMatrixStreamingMode(streaming) !== "off" && resolveMatrixPreviewToolProgress(streaming)
   );
 }
-
-export const testing = {
-  resolveMatrixPreviewToolProgress,
-  resolveMatrixPreviewToolProgressEnabled,
-  resolveMatrixStreamingMode,
-};
 
 const DEFAULT_MEDIA_MAX_MB = 20;
 
@@ -228,7 +228,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let cleanedUp = false;
   let client: MatrixClient | null = null;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  let inboundDeduper: MatrixInboundEventDeduper | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
     logVerboseMessage,
@@ -248,7 +247,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         await monitorTaskRunner.waitForIdle();
       }
       threadBindingManager?.stop();
-      await inboundDeduper?.stop();
       if (client) {
         await releaseSharedClientInstance(client, mode);
       }
@@ -304,7 +302,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const previewToolProgressEnabled = resolveMatrixPreviewToolProgressEnabled(
     accountConfig.streaming,
   );
-  const blockStreamingEnabled = accountConfig.blockStreaming === true;
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(accountConfig) === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
@@ -331,7 +329,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountId: auth.accountId,
     });
     setActiveMatrixClient(client, auth.accountId);
-    inboundDeduper = await createMatrixInboundEventDeduper({
+    const inboundDeduper = createMatrixInboundEventDeduper({
       auth,
       env: process.env,
     });
@@ -553,4 +551,3 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw err;
   }
 }
-export { testing as __testing };

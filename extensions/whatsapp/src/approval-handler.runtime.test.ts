@@ -157,4 +157,30 @@ describe("whatsappApprovalNativeRuntime", () => {
       },
     });
   });
+
+  it("resolves the configured default account before binding native reactions", async () => {
+    await expect(
+      whatsappApprovalNativeRuntime.transport.prepareTarget({
+        cfg: {
+          channels: {
+            whatsapp: {
+              defaultAccount: "work",
+              accounts: { work: {} },
+            },
+          },
+        },
+        plannedTarget: {
+          surface: "origin",
+          reason: "preferred",
+          target: { to: "15551230000@s.whatsapp.net" },
+        },
+      } as never),
+    ).resolves.toEqual({
+      dedupeKey: expect.stringContaining("work:"),
+      target: {
+        to: "+15551230000",
+        accountId: "work",
+      },
+    });
+  });
 });

@@ -307,3 +307,48 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
   });
 });
+
+describe("level directive preserves message text after an invalid level", () => {
+  it("keeps the message when /verbose is followed by prose", () => {
+    const res = parseInlineDirectives("/verbose explain quantum computing");
+    expect(res.hasVerboseDirective).toBe(true);
+    expect(res.verboseLevel).toBeUndefined();
+    expect(res.rawVerboseLevel).toBeUndefined();
+    expect(res.cleaned).toBe("explain quantum computing");
+  });
+
+  it("keeps the next line when /verbose is on its own line", () => {
+    const res = extractVerboseDirective("/verbose\nSummarize this document");
+    expect(res.hasDirective).toBe(true);
+    expect(res.verboseLevel).toBeUndefined();
+    expect(res.cleaned).toBe("Summarize this document");
+  });
+
+  it("keeps the message when /think is followed by prose", () => {
+    const res = extractThinkDirective("/think about my deployment plan");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("about my deployment plan");
+  });
+
+  it("still consumes a valid level argument", () => {
+    const res = extractThinkDirective("/think high");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBe("high");
+    expect(res.cleaned).toBe("");
+  });
+
+  it("still consumes off so it persists rather than clears", () => {
+    const elevated = extractElevatedDirective("hello there /elevated off");
+    expect(elevated.elevatedLevel).toBe("off");
+    expect(elevated.cleaned).toBe("hello there");
+  });
+
+  it("still reports a single unrecognized trailing token", () => {
+    const res = extractElevatedDirective("/elevated maybe");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBeUndefined();
+    expect(res.rawLevel).toBe("maybe");
+  });
+});

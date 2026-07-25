@@ -33,8 +33,7 @@ enum ExecEnvInvocationUnwrapper {
         while idx < command.count {
             let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines)
             if token.isEmpty {
-                idx += 1
-                continue
+                return nil
             }
             if expectsOptionValue {
                 expectsOptionValue = false
@@ -42,7 +41,12 @@ enum ExecEnvInvocationUnwrapper {
                 idx += 1
                 continue
             }
-            if token == "--" || token == "-" {
+            if token == "--" {
+                idx += 1
+                break
+            }
+            if token == "-" {
+                usesModifiers = true
                 idx += 1
                 break
             }
@@ -85,7 +89,10 @@ enum ExecEnvInvocationUnwrapper {
             }
             break
         }
-        guard !expectsOptionValue, idx < command.count else { return nil }
+        guard !expectsOptionValue,
+              idx < command.count,
+              !command[idx].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
         return UnwrapResult(command: Array(command[idx...]), usesModifiers: usesModifiers)
     }
 
@@ -99,7 +106,7 @@ enum ExecEnvInvocationUnwrapper {
             guard ExecCommandToken.basenameLower(token) == "env" else {
                 break
             }
-            guard let unwrapped = self.unwrapWithMetadata(current), !unwrapped.command.isEmpty else {
+            guard let unwrapped = unwrapWithMetadata(current), !unwrapped.command.isEmpty else {
                 break
             }
             if unwrapped.usesModifiers {
@@ -116,8 +123,7 @@ enum ExecEnvInvocationUnwrapper {
         while idx < command.count {
             let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines)
             if token.isEmpty {
-                idx += 1
-                continue
+                return nil
             }
             if token == "--" {
                 idx += 1
@@ -134,7 +140,9 @@ enum ExecEnvInvocationUnwrapper {
             }
             break
         }
-        guard idx < command.count else { return nil }
+        guard idx < command.count,
+              !command[idx].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
         return Array(command[idx...])
     }
 
@@ -148,7 +156,7 @@ enum ExecEnvInvocationUnwrapper {
             guard ExecCommandToken.basenameLower(token) == "env" else {
                 break
             }
-            guard let unwrapped = self.unwrapTransparentEnvInvocation(current), !unwrapped.isEmpty else {
+            guard let unwrapped = unwrapTransparentEnvInvocation(current), !unwrapped.isEmpty else {
                 break
             }
             current = unwrapped

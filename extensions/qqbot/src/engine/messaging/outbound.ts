@@ -33,6 +33,7 @@ export {
   sendVoice,
 } from "./outbound-media-send.js";
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -53,16 +54,12 @@ import {
   buildMediaTarget,
   parseTarget,
   resolveOutboundMediaPath,
+  sendAutoDetectedMedia,
   sendDocument,
   sendPhoto,
   sendVideoMsg,
   sendVoice,
 } from "./outbound-media-send.js";
-import {
-  checkMessageReplyLimit,
-  MESSAGE_REPLY_LIMIT,
-  recordMessageReply,
-} from "./outbound-reply.js";
 import type {
   MediaOutboundContext,
   MediaTargetContext,
@@ -78,6 +75,7 @@ import {
 
 const isImageFile = coreIsImageFile;
 const isVideoFile = coreIsVideoFile;
+
 const mediaPathDecodeLog = {
   info: (message: string) => debugLog(`[qqbot] sendText: ${message}`),
   error: (message: string) => debugError(`[qqbot] sendText: ${message}`),
@@ -91,45 +89,19 @@ const mediaPathDecodeLog = {
  */
 export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   const { to, account } = ctx;
-  let { text, replyToId } = ctx;
-  let fallbackToProactive = false;
+  const { replyToId } = ctx;
+  let { text } = ctx;
 
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   debugLog(
     "[qqbot] sendText ctx:",
     JSON.stringify(
-      { to, text: text?.slice(0, 50), replyToId, accountId: account.accountId },
+      { to, text: truncateUtf16Safe(text, 50), replyToId, accountId: account.accountId },
       null,
       2,
     ),
   );
-
-  if (replyToId) {
-    const limitCheck = checkMessageReplyLimit(replyToId);
-
-    if (!limitCheck.allowed) {
-      if (limitCheck.shouldFallbackToProactive) {
-        debugWarn(
-          `[qqbot] sendText: passive reply unavailable, falling back to proactive send - ${limitCheck.message}`,
-        );
-        fallbackToProactive = true;
-        replyToId = null;
-      } else {
-        debugError(
-          `[qqbot] sendText: passive reply was blocked without a fallback path - ${limitCheck.message}`,
-        );
-        return {
-          channel: "qqbot",
-          error: limitCheck.message,
-        };
-      }
-    } else {
-      debugLog(
-        `[qqbot] sendText: remaining passive replies for ${replyToId}: ${limitCheck.remaining}/${MESSAGE_REPLY_LIMIT}`,
-      );
-    }
-  }
 
   text = normalizeMediaTags(text);
 
@@ -198,7 +170,14 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
     debugLog(`[qqbot] sendText: Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-    const mediaTarget = buildMediaTarget({ to, account, replyToId });
+    const mediaTarget = buildMediaTarget({
+      to,
+      account,
+      replyToId,
+      mediaAccess: ctx.mediaAccess,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+      mediaReadFile: ctx.mediaReadFile,
+    });
     let lastResult: OutboundResult = { channel: "qqbot" };
 
     for (const item of sendQueue) {
@@ -213,16 +192,13 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           const result = await senderSendText(deliveryTarget, item.content, creds, {
             msgId: replyToId ?? undefined,
           });
-          if (replyToId) {
-            recordMessageReply(replyToId);
-          }
           lastResult = {
             channel: "qqbot",
             messageId: result.id,
             timestamp: result.timestamp,
             refIdx: result.ext_info?.ref_idx,
           };
-          debugLog(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
+          debugLog(`[qqbot] sendText: Sent text part: ${truncateUtf16Safe(item.content, 30)}...`);
         } else if (item.type === "image") {
           lastResult = await sendPhoto(mediaTarget, item.content);
         } else if (item.type === "voice") {
@@ -244,6 +220,9 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
             accountId: account.accountId,
             replyToId,
             account,
+            mediaAccess: ctx.mediaAccess,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
           });
         }
       } catch (err) {
@@ -264,13 +243,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         error: "Proactive messages require non-empty content (--message cannot be empty)",
       };
     }
-    if (fallbackToProactive) {
-      debugLog(
-        `[qqbot] sendText: [fallback] sending proactive message to ${to}, length=${text.length}`,
-      );
-    } else {
-      debugLog(`[qqbot] sendText: sending proactive message to ${to}, length=${text.length}`);
-    }
+    debugLog(`[qqbot] sendText: sending proactive message to ${to}, length=${text.length}`);
   }
 
   if (!account.appId || !account.clientSecret) {
@@ -289,9 +262,6 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     const result = await senderSendText(deliveryTarget, text, creds, {
       msgId: replyToId ?? undefined,
     });
-    if (replyToId) {
-      recordMessageReply(replyToId);
-    }
     return {
       channel: "qqbot",
       messageId: result.id,
@@ -317,15 +287,26 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
   }
 
-  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "media", {
-    allowMissingLocalPath: true,
+  const target = buildMediaTarget({
+    to,
+    account,
+    replyToId,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
   });
+  const shouldResolveLocalMediaPath = !ctx.mediaAccess?.readFile && !ctx.mediaReadFile;
+  const resolvedMediaPath = shouldResolveLocalMediaPath
+    ? resolveOutboundMediaPath(ctx.mediaUrl, "media", {
+        allowMissingLocalPath: true,
+        extraLocalRoots: target.mediaLocalRoots ? [...target.mediaLocalRoots] : undefined,
+        workspaceDir: target.mediaAccess?.workspaceDir,
+      })
+    : { ok: true as const, mediaPath: ctx.mediaUrl };
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
   const mediaUrl = resolvedMediaPath.mediaPath;
-
-  const target = buildMediaTarget({ to, account, replyToId });
 
   if (isAudioFile(mediaUrl, mimeType)) {
     const formats =
@@ -364,7 +345,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     !isAudioFile(mediaUrl, mimeType) &&
     !isVideoFile(mediaUrl, mimeType)
   ) {
-    const result = await sendDocument(target, mediaUrl);
+    const result = await sendAutoDetectedMedia(target, mediaUrl);
     if (!result.error && text?.trim()) {
       await sendTextAfterMedia(target, text);
     }

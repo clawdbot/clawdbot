@@ -20,12 +20,9 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 import {
-  getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
   type SubCliDescriptor,
 } from "./subcli-descriptors.js";
-
-export { getSubCliCommandsWithSubcommands };
 
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
@@ -122,12 +119,19 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerModelsCli",
     },
     {
+      commandNames: ["promos"],
+      loadModule: () => import("../promos-cli.js"),
+      exportName: "registerPromosCli",
+    },
+    {
       commandNames: ["infer", "capability"],
       loadModule: () => import("../capability-cli.js"),
       exportName: "registerCapabilityCli",
     },
     {
-      commandNames: ["approvals"],
+      // exec-approvals is a commander alias on the approvals command; the lazy
+      // router only routes names listed here, so the alias must be owned too.
+      commandNames: ["approvals", "exec-approvals"],
       loadModule: () => import("../exec-approvals-cli.js"),
       exportName: "registerExecApprovalsCli",
     },
@@ -151,14 +155,39 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerDevicesCli",
     },
     {
+      commandNames: ["users"],
+      loadModule: () => import("../users-cli.js"),
+      exportName: "registerUsersCli",
+    },
+    {
       commandNames: ["node"],
       loadModule: () => import("../node-cli.js"),
       exportName: "registerNodeCli",
     },
     {
+      commandNames: ["worker"],
+      loadModule: () => import("../worker-cli.js"),
+      exportName: "registerWorkerCli",
+    },
+    {
       commandNames: ["sandbox"],
       loadModule: () => import("../sandbox-cli.js"),
       exportName: "registerSandboxCli",
+    },
+    {
+      commandNames: ["fleet"],
+      loadModule: () => import("../fleet-cli.js"),
+      exportName: "registerFleetCli",
+    },
+    {
+      commandNames: ["worktrees"],
+      loadModule: () => import("../worktrees-cli.js"),
+      exportName: "registerWorktreesCli",
+    },
+    {
+      commandNames: ["attach"],
+      loadModule: () => import("../attach-cli.js"),
+      exportName: "registerAttachCli",
     },
     {
       commandNames: ["tui", "terminal", "chat"],

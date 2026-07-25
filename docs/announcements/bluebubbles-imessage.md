@@ -9,17 +9,17 @@ title: "BlueBubbles removal and the imsg iMessage path"
 
 # BlueBubbles removal and the imsg iMessage path
 
-OpenClaw no longer ships the BlueBubbles channel. iMessage support now runs through the bundled `imessage` plugin, which starts [`imsg`](https://github.com/steipete/imsg) locally or through an SSH wrapper and talks JSON-RPC over stdin/stdout.
+OpenClaw no longer ships the BlueBubbles channel. iMessage support runs through the bundled `imessage` plugin: the Gateway spawns [`imsg`](https://github.com/steipete/imsg) as a child process, locally or through an SSH wrapper, and talks JSON-RPC over stdin/stdout. No server, no webhook, no port.
 
 If your config still contains `channels.bluebubbles`, migrate it to `channels.imessage`. The legacy `/channels/bluebubbles` docs URL redirects to [Coming from BlueBubbles](/channels/imessage-from-bluebubbles), which has the full config translation table and cutover checklist.
 
 ## What changed
 
-- There is no BlueBubbles HTTP server, webhook route, REST password, or BlueBubbles plugin runtime in the supported OpenClaw iMessage path.
+- The supported iMessage path has no BlueBubbles HTTP server, webhook route, REST password, or BlueBubbles plugin runtime.
 - OpenClaw reads and watches Messages through `imsg` on the Mac where Messages.app is signed in.
 - Basic send, receive, history, and media use the normal `imsg` surfaces and macOS permissions.
-- Advanced actions such as threaded replies, tapbacks, edit, unsend, effects, read receipts, typing indicators, and group management require `imsg launch` with the private API bridge available.
-- Linux and Windows gateways can still use iMessage by setting `channels.imessage.cliPath` to an SSH wrapper that runs `imsg` on the signed-in Mac.
+- Advanced actions (threaded replies, tapbacks, edit, unsend, effects, read receipts, typing indicators, group management) need the private API bridge: run `imsg launch`, which requires SIP disabled.
+- Linux and Windows gateways can still use iMessage by pointing `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the signed-in Mac.
 
 ## What to do
 
@@ -65,12 +65,12 @@ If your config still contains `channels.bluebubbles`, migrate it to `channels.im
 
 ## Migration notes
 
-- `channels.bluebubbles.serverUrl` and `channels.bluebubbles.password` have no iMessage equivalent.
-- `channels.bluebubbles.allowFrom`, `groupAllowFrom`, `groups`, `includeAttachments`, attachment roots, media size limits, chunking, and action toggles have iMessage equivalents.
+- `channels.bluebubbles.serverUrl` and `channels.bluebubbles.password` have no iMessage equivalent; there is no server to reach or authenticate.
+- `allowFrom`, `groupAllowFrom`, `groups`, `includeAttachments`, `attachmentRoots`, `mediaMaxMb`, `textChunkLimit`, and `actions.*` keep their meaning under `channels.imessage`.
 - `channels.imessage.includeAttachments` is still off by default. Set it explicitly if you expect inbound photos, voice memos, videos, or files to reach the agent.
-- With `groupPolicy: "allowlist"`, copy the old `groups` block, including any `"*"` wildcard entry. Group sender allowlists and the group registry are separate gates.
-- ACP bindings that matched `channel: "bluebubbles"` must be changed to `channel: "imessage"`.
-- Old BlueBubbles session keys do not become iMessage session keys. Pairing approvals carry over by handle, but conversation history under BlueBubbles session keys does not.
+- With `groupPolicy: "allowlist"`, copy the old `groups` block, including any `"*"` wildcard entry. Group sender allowlists and the group registry are separate gates; a `groups` block with entries but no matching `chat_id` (or no `"*"`) drops the message at runtime, and an empty `groups` block logs a startup warning even though sender filtering still lets messages through.
+- ACP bindings with `match.channel: "bluebubbles"` must change to `"imessage"`.
+- Old BlueBubbles session keys do not become iMessage session keys. Pairing approvals key off sender handles, so copied `allowFrom` entries keep working, but conversation history under BlueBubbles session keys does not carry over.
 
 ## See also
 

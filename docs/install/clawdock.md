@@ -14,14 +14,14 @@ If you have not set up Docker yet, start with [Docker](/install/docker).
 
 ## Install
 
-Use the canonical helper path:
-
 ```bash
 mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/clawdock/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
 echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
 ```
 
-If you previously installed ClawDock from `scripts/shell-helpers/clawdock-helpers.sh`, reinstall from the new `scripts/clawdock/clawdock-helpers.sh` path. The old raw GitHub path was removed.
+If you previously installed ClawDock from `scripts/shell-helpers/clawdock-helpers.sh`, reinstall from the current `scripts/clawdock/clawdock-helpers.sh` path; the old raw GitHub path was removed.
+
+The helpers auto-detect your OpenClaw checkout on first use (checking common paths like `~/openclaw`, `~/projects/openclaw`) and cache the result in `~/.clawdock/config`. Set `CLAWDOCK_DIR` yourself if your checkout lives elsewhere.
 
 ## What you get
 
@@ -53,12 +53,12 @@ If you previously installed ClawDock from `scripts/shell-helpers/clawdock-helper
 
 ### Setup and maintenance
 
-| Command              | Description                                      |
-| -------------------- | ------------------------------------------------ |
-| `clawdock-fix-token` | Configure the gateway token inside the container |
-| `clawdock-update`    | Pull, rebuild, and restart                       |
-| `clawdock-rebuild`   | Rebuild the Docker image only                    |
-| `clawdock-clean`     | Remove containers and volumes                    |
+| Command              | Description                                       |
+| -------------------- | ------------------------------------------------- |
+| `clawdock-fix-token` | Write the gateway token into the container config |
+| `clawdock-update`    | Pull, rebuild, and restart                        |
+| `clawdock-rebuild`   | Rebuild the Docker image only                     |
+| `clawdock-clean`     | Remove containers and volumes                     |
 
 ### Utilities
 
@@ -70,6 +70,7 @@ If you previously installed ClawDock from `scripts/shell-helpers/clawdock-helper
 | `clawdock-config`      | Open `~/.openclaw`                      |
 | `clawdock-show-config` | Print config files with redacted values |
 | `clawdock-workspace`   | Open the workspace directory            |
+| `clawdock-help`        | List all ClawDock commands              |
 
 ## First-time flow
 
@@ -88,14 +89,14 @@ clawdock-approve <request-id>
 
 ## Config and secrets
 
-ClawDock works with the same Docker config split described in [Docker](/install/docker):
+ClawDock reads two separate `.env` files, matching the split described in [Docker](/install/docker):
 
-- `<project>/.env` for Docker-specific values like image name, ports, and the gateway token
-- `~/.openclaw/.env` for env-backed provider keys and bot tokens
-- `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
-- `~/.openclaw/openclaw.json` for behavior config
+- The project `.env` next to `docker-compose.yml`: Docker-specific values like image name, ports, and `OPENCLAW_GATEWAY_TOKEN`. `clawdock-token` reads the token from here.
+- `~/.openclaw/.env` (mounted into the container): env-backed secrets OpenClaw itself manages, alongside `openclaw.json` and `agents/<agentId>/agent/auth-profiles.json`.
 
-Use `clawdock-show-config` when you want to inspect the `.env` files and `openclaw.json` quickly. It redacts `.env` values in its printed output.
+`clawdock-fix-token` copies the token from the project `.env` into the container's `gateway.remote.token` and `gateway.auth.token` config values and restarts the gateway.
+
+Use `clawdock-show-config` to inspect `openclaw.json` and both `.env` files quickly; it redacts `.env` values in its printed output.
 
 ## Related
 

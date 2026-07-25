@@ -16,7 +16,7 @@ type FetchJsonOptions = {
   timeoutMs?: number;
 };
 
-export type McpCodeModeClientFetchLimits = {
+type McpCodeModeClientFetchLimits = {
   bodyMaxBytes: number;
   timeoutMs: number;
 };

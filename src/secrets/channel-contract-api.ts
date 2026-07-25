@@ -18,11 +18,6 @@ import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-sur
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
-type UnsupportedSecretRefConfigCandidate = {
-  path: string;
-  value: unknown;
-};
-
 type BundledChannelContractApi = {
   collectRuntimeConfigAssignments?: (params: {
     config: OpenClawConfig;
@@ -30,10 +25,6 @@ type BundledChannelContractApi = {
     context: ResolverContext;
   }) => void;
   secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-  unsupportedSecretRefSurfacePatterns?: readonly string[];
-  collectUnsupportedSecretRefConfigCandidates?: (
-    raw: Record<string, unknown>,
-  ) => UnsupportedSecretRefConfigCandidate[];
 };
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -63,13 +54,13 @@ function loadBundledChannelPublicArtifact(
   }
 }
 
-export type BundledChannelSecretContractApi = Pick<
+type BundledChannelSecretContractApi = Pick<
   BundledChannelContractApi,
   "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
 >;
 
 /** Loads a bundled channel secret contract from its public artifact bundle. */
-export function loadBundledChannelSecretContractApi(
+function loadBundledChannelSecretContractApi(
   channelId: string,
 ): BundledChannelSecretContractApi | undefined {
   return loadBundledChannelPublicArtifact(channelId, "secret-contract-api.js");
@@ -229,16 +220,4 @@ export function loadChannelSecretContractApiForRecord(
     return loadBundledChannelSecretContractApi(record.id);
   }
   return loadExternalChannelSecretContractFromRecord(record);
-}
-
-export type BundledChannelSecurityContractApi = Pick<
-  BundledChannelContractApi,
-  "unsupportedSecretRefSurfacePatterns" | "collectUnsupportedSecretRefConfigCandidates"
->;
-
-/** Loads bundled channel security metadata used to reject unsupported SecretRef surfaces. */
-export function loadBundledChannelSecurityContractApi(
-  channelId: string,
-): BundledChannelSecurityContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, "security-contract-api.js");
 }

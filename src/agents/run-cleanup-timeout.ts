@@ -3,6 +3,8 @@
  *
  * Bounds cleanup steps so run completion cannot hang forever while preserving late-failure diagnostics.
  */
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
@@ -18,13 +20,6 @@ const CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX = "...[truncated]";
 type AgentCleanupLogger = {
   warn: (message: string) => void;
 };
-
-function normalizeExplicitTimeoutMs(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
-}
 
 function parseTimeoutEnvValue(value: string | undefined): number | undefined {
   const trimmed = value?.trim();
@@ -53,7 +48,7 @@ function truncateCleanupTimeoutDetails(value: string): string {
     0,
     CLEANUP_TIMEOUT_DETAILS_MAX_CHARS - CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length,
   );
-  return `${value.slice(0, prefixLength)}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`;
+  return `${truncateUtf16Safe(value, prefixLength)}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`;
 }
 
 function resolveAgentCleanupStepTimeoutMs(params: {
@@ -61,7 +56,7 @@ function resolveAgentCleanupStepTimeoutMs(params: {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): number {
-  const explicitTimeoutMs = normalizeExplicitTimeoutMs(params.timeoutMs);
+  const explicitTimeoutMs = resolveOptionalIntegerOption(params.timeoutMs, { min: 1 });
   if (explicitTimeoutMs !== undefined) {
     return explicitTimeoutMs;
   }

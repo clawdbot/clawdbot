@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import KeyboardShortcuts
 import Observation
 import OpenClawKit
 import SwiftUI
@@ -10,7 +11,6 @@ struct MenuContent: View {
     @Bindable var state: AppState
     let updater: UpdaterProviding?
     @Bindable private var updateStatus: UpdateStatus
-    private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
@@ -24,7 +24,7 @@ struct MenuContent: View {
     @State private var micRefreshTask: Task<Void, Never>?
     @State private var browserControlEnabled = true
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
+    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
     @AppStorage(debugFileLogEnabledKey) private var appFileLoggingEnabled: Bool = false
 
     init(state: AppState, updater: UpdaterProviding?) {
@@ -36,7 +36,7 @@ struct MenuContent: View {
     private var execApprovalModeBinding: Binding<ExecApprovalQuickMode> {
         Binding(
             get: { self.state.execApprovalMode },
-            set: { self.state.execApprovalMode = $0 })
+            set: { self.state.updateExecApprovalMode($0) })
     }
 
     var body: some View {
@@ -49,18 +49,14 @@ struct MenuContent: View {
                         self.statusLine(label: macNodeStatus.label, color: macNodeStatus.color)
                     }
                     if self.pairingPrompter.pendingCount > 0 {
-                        let repairCount = self.pairingPrompter.pendingRepairCount
-                        let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
-                        self.statusLine(
-                            label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))\(repairSuffix)",
-                            color: .orange)
+                        self.pairingStatusLine(
+                            label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))")
                     }
                     if self.devicePairingPrompter.pendingCount > 0 {
                         let repairCount = self.devicePairingPrompter.pendingRepairCount
                         let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
-                        self.statusLine(
-                            label: "Device pairing pending (\(self.devicePairingPrompter.pendingCount))\(repairSuffix)",
-                            color: .orange)
+                        self.pairingStatusLine(
+                            label: "Device pairing pending (\(self.devicePairingPrompter.pendingCount))\(repairSuffix)")
                     }
                 }
             }
@@ -86,12 +82,34 @@ struct MenuContent: View {
             Toggle(isOn: self.$cameraEnabled) {
                 Label("Allow Camera", systemImage: "camera")
             }
-            Picker(selection: self.execApprovalModeBinding) {
-                ForEach(ExecApprovalQuickMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+            switch self.state.execApprovalPolicyLoadState {
+            case .available:
+                Picker(selection: self.execApprovalModeBinding) {
+                    ForEach(ExecApprovalQuickMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                } label: {
+                    Label("Exec Approvals", systemImage: "terminal")
                 }
-            } label: {
-                Label("Exec Approvals", systemImage: "terminal")
+            case .loading:
+                Label("Loading Exec Approvals…", systemImage: "terminal")
+                    .foregroundStyle(.secondary)
+            case .unavailable:
+                Button {
+                    self.state.retryExecApprovalModeRead()
+                } label: {
+                    Label("Retry Exec Approvals", systemImage: "arrow.clockwise")
+                }
+            }
+            if let error = self.state.execApprovalLoadError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let error = self.state.execApprovalMutationError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
             Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
                 Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")
@@ -119,6 +137,14 @@ struct MenuContent: View {
                 AppNavigationActions.openChat()
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+            }
+            if self.state.quickChatEnabled {
+                Button {
+                    QuickChatController.shared.toggle()
+                } label: {
+                    Label("Quick Chat", systemImage: "text.bubble")
+                }
+                .globalKeyboardShortcut(.toggleQuickChat)
             }
             if self.state.canvasEnabled {
                 Button {
@@ -233,6 +259,13 @@ struct MenuContent: View {
                 } label: {
                     Label("Send Test Heartbeat", systemImage: "waveform.path.ecg")
                 }
+                #if DEBUG
+                Button {
+                    DebugActions.showPairingPanelDemo()
+                } label: {
+                    Label("Show Pairing Panel (Demo)", systemImage: "checkmark.shield")
+                }
+                #endif
                 if self.state.connectionMode == .remote {
                     Button {
                         Task { @MainActor in
@@ -254,7 +287,7 @@ struct MenuContent: View {
                 }
                 Menu {
                     Picker("Verbosity", selection: self.$appLogLevelRaw) {
-                        ForEach(AppLogLevel.allCases) { level in
+                        ForEach(Logger.Level.allCases, id: \.rawValue) { level in
                             Text(level.title).tag(level.rawValue)
                         }
                     }
@@ -324,7 +357,12 @@ struct MenuContent: View {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
 
-        let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile)
+        else {
+            return ("Mac identity unavailable", .red)
+        }
+        let deviceId = identity.deviceId
         if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
             guard entry.isConnected else {
                 return ("Mac capabilities offline", .orange)
@@ -414,6 +452,17 @@ struct MenuContent: View {
         .padding(.top, 2)
     }
 
+    /// Pending-pairing status lines reopen the approval panel (e.g. after "Not Now").
+    private func pairingStatusLine(label: String) -> some View {
+        Button {
+            PairingApprovalCenter.shared.showPanel()
+        } label: {
+            self.statusLine(label: label, color: .orange)
+        }
+        .buttonStyle(.plain)
+        .help("Show pairing requests")
+    }
+
     private var activeBinding: Binding<Bool> {
         Binding(get: { !self.state.isPaused }, set: { self.state.isPaused = !$0 })
     }
@@ -453,42 +502,45 @@ struct MenuContent: View {
     }
 
     private var selectedMicLabel: String {
-        if self.state.voiceWakeMicID.isEmpty { return self.defaultMicLabel }
+        if self.state.voiceWakeMicID.isEmpty {
+            return self.defaultMicLabel
+        }
         if let match = self.availableMics.first(where: { $0.uid == self.state.voiceWakeMicID }) {
             return match.name
         }
-        if !self.state.voiceWakeMicName.isEmpty { return self.state.voiceWakeMicName }
+        if !self.state.voiceWakeMicName.isEmpty {
+            return self.state.voiceWakeMicName
+        }
         return "Unavailable"
     }
 
+    @ViewBuilder
     private var microphoneMenuItems: some View {
-        Group {
-            if self.isSelectedMicUnavailable {
-                Label("Disconnected (using System default)", systemImage: "exclamationmark.triangle")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.secondary)
-                    .disabled(true)
-                Divider()
-            }
+        if self.isSelectedMicUnavailable {
+            Label("Disconnected (using System default)", systemImage: "exclamationmark.triangle")
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.secondary)
+                .disabled(true)
+            Divider()
+        }
+        Button {
+            self.state.voiceWakeMicID = ""
+            self.state.voiceWakeMicName = ""
+        } label: {
+            Label(self.defaultMicLabel, systemImage: self.state.voiceWakeMicID.isEmpty ? "checkmark" : "")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.plain)
+
+        ForEach(self.availableMics) { mic in
             Button {
-                self.state.voiceWakeMicID = ""
-                self.state.voiceWakeMicName = ""
+                self.state.voiceWakeMicID = mic.uid
+                self.state.voiceWakeMicName = mic.name
             } label: {
-                Label(self.defaultMicLabel, systemImage: self.state.voiceWakeMicID.isEmpty ? "checkmark" : "")
+                Label(mic.name, systemImage: self.state.voiceWakeMicID == mic.uid ? "checkmark" : "")
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.plain)
-
-            ForEach(self.availableMics) { mic in
-                Button {
-                    self.state.voiceWakeMicID = mic.uid
-                    self.state.voiceWakeMicName = mic.name
-                } label: {
-                    Label(mic.name, systemImage: self.state.voiceWakeMicID == mic.uid ? "checkmark" : "")
-                        .labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 
@@ -527,7 +579,9 @@ struct MenuContent: View {
             self.loadingMics = false
             return
         }
-        if !force, !self.availableMics.isEmpty { return }
+        if !force, !self.availableMics.isEmpty {
+            return
+        }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],

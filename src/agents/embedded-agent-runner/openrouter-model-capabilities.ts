@@ -18,8 +18,8 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readResponseWithLimit } from "../../infra/http-body.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -64,7 +64,7 @@ interface OpenRouterApiModel {
   };
 }
 
-export interface OpenRouterModelCapabilities {
+interface OpenRouterModelCapabilities {
   name: string;
   input: Array<"text" | "image">;
   reasoning: boolean;
