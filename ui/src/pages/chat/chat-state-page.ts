@@ -3,10 +3,6 @@ import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
-import {
-  updateSidebarSessionActivePanel,
-  updateSidebarSessionLayout,
-} from "./sidebar-layout-persistence.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -27,6 +23,10 @@ import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
+import {
+  updateSidebarSessionActivePanel,
+  updateSidebarSessionLayout,
+} from "./sidebar-layout-persistence.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
