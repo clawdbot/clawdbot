@@ -43,6 +43,44 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 - Target id: nested actions share the request's tab; an explicit nested `targetId` that resolves to a different tab is rejected with `ACT_TARGET_ID_MISMATCH`.
 - Response: `{ "results": [{ "ok": true } | { "ok": false, "error": "..." }, ...] }` in order; with default `stopOnError` the array ends at the first failure. Any failed entry exits nonzero; use `--json` to preserve the full response in scripts.
 
+## Code Mode Loop
+
+When `tools.codeMode` is enabled, call the Browser tool from exec cells:
+
+```javascript
+const browserTool = "openclaw:browser:browser";
+let previousSnapshot = "";
+const callBrowser = async (input) => await tools.call(browserTool, input);
+```
+
+Keep the same labeled tab through the loop, and alternate reads with actions:
+
+```javascript
+const snapshotCall = await callBrowser({
+  action: "snapshot",
+  targetId: "task",
+  refs: "aria",
+  interactive: true,
+});
+const details = snapshotCall?.result?.details ?? {};
+const snapshot = (snapshotCall?.result?.content ?? []).map((block) => block?.text ?? "").join("\n");
+const relevant = snapshot
+  .split("\n")
+  .filter((line) => /submit|dialog|error|\[new\]/i.test(line))
+  .slice(0, 12);
+const changed = snapshot !== previousSnapshot;
+previousSnapshot = snapshot;
+return { targetId: details.targetId, url: details.url, relevant, changed };
+```
+
+- Request interactive-only snapshots and filter them in code before returning.
+- Return only the handful of relevant elements; never return the full tree.
+- Keep `previousSnapshot` between cells when a local diff helps explain a change.
+- Interleave each act with a URL or tabs check before the next dependent act.
+- If a batch returns `aborted`, take a fresh snapshot before continuing.
+- If `[new]` markers appear, inspect those elements first, then update the saved snapshot.
+- Use separate act calls when navigation is expected between steps.
+
 ## Tab Hygiene
 
 Before creating a tab for a named task, list tabs and reuse an existing matching label or URL when it is still usable.

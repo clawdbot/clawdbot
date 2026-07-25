@@ -1,4 +1,5 @@
 // Browser tests cover browser tool plugin behavior.
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const browserClientMocks = vi.hoisted(() => ({
@@ -55,7 +56,7 @@ const browserClientMocks = vi.hoisted(() => ({
 vi.mock("./browser/client.js", () => browserClientMocks);
 
 const browserActionsMocks = vi.hoisted(() => ({
-  browserAct: vi.fn(async () => ({ ok: true })),
+  browserAct: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserArmDialog: vi.fn(async () => ({ ok: true })),
   browserArmFileChooser: vi.fn(async () => ({ ok: true })),
   browserConsoleMessages: vi.fn(async () => ({
@@ -213,7 +214,10 @@ vi.mock("./sdk-setup-tools.js", async () => {
   };
 });
 
-vi.mock("./browser-tool.runtime.js", () => {
+vi.mock("./browser-tool.runtime.js", async () => {
+  const { BrowserToolOutputSchema } = await vi.importActual<
+    typeof import("./browser-tool.schema.js")
+  >("./browser-tool.schema.js");
   const readStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
   const readStringParam = (
     params: Record<string, unknown>,
@@ -233,6 +237,7 @@ vi.mock("./browser-tool.runtime.js", () => {
   return {
     DEFAULT_AI_SNAPSHOT_MAX_CHARS: 40_000,
     DEFAULT_UPLOAD_DIR: "/tmp/openclaw-browser-uploads",
+    BrowserToolOutputSchema,
     BrowserToolSchema: {},
     ...browserActionsMocks,
     ...browserClientMocks,
@@ -486,6 +491,20 @@ function nodeInvokeCall(callIndex: number): {
 function lastNodeInvokeCall(): ReturnType<typeof nodeInvokeCall> {
   return nodeInvokeCall(-1);
 }
+
+describe("browser tool output schema", () => {
+  it("accepts snapshot details", async () => {
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "ai",
+    });
+
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result?.details)).toBe(true);
+  });
+});
 
 describe("browser tool description", () => {
   it("warns agents about existing-session act timeout limits", () => {
@@ -2256,6 +2275,39 @@ describe("browser tool url alias support", () => {
 
 describe("browser tool act compatibility", () => {
   registerBrowserToolAfterEachReset();
+
+  it("adds a clear note when a batch aborts after navigation", async () => {
+    browserActionsMocks.browserAct.mockResolvedValueOnce({
+      ok: true,
+      results: [{ ok: true, navigated: true, url: "https://example.com/next" }],
+      aborted: {
+        reason: "navigation",
+        afterAction: 1,
+        url: "https://example.com/next",
+        skipped: 2,
+      },
+    });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      request: {
+        kind: "batch",
+        actions: [
+          { kind: "click", ref: "1" },
+          { kind: "click", ref: "2" },
+        ],
+      },
+    });
+
+    expect(result?.details).toMatchObject({ aborted: { reason: "navigation", skipped: 2 } });
+    expect(result?.content.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        "Batch aborted after action 1 because the page navigated to https://example.com/next",
+      ),
+    });
+  });
 
   it("accepts flattened act params for backward compatibility", async () => {
     const tool = createBrowserTool();
