@@ -149,8 +149,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           .active=${active.id}
           activation="auto"
           without-scroll-controls
-          @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
-            this.activate(event.detail.name)}
+          @wa-tab-show=${(event: CustomEvent<{ name: string }>) => this.activate(event.detail.name)}
         >
           ${column.panels.map(
             (panel) => html`

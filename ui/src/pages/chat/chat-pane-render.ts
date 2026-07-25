@@ -640,12 +640,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       },
       mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => {
         const target = sidebarLayout.columns.find((column) => column.id === targetColumnId);
-        const merged = mergePanelIntoColumn(
-          sidebarLayout,
-          panelId,
-          targetColumnId,
-          panelIndex,
-        );
+        const merged = mergePanelIntoColumn(sidebarLayout, panelId, targetColumnId, panelIndex);
         if (target) {
           this.commitSidebarPanelMove(merged, panelId, target.side, board);
         }

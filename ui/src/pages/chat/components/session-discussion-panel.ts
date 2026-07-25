@@ -68,11 +68,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   }
 
   protected override updated(changed: Map<string, unknown>) {
-    if (
-      changed.has("sessionKey") ||
-      changed.has("loadInfo") ||
-      changed.has("sourceGeneration")
-    ) {
+    if (changed.has("sessionKey") || changed.has("loadInfo") || changed.has("sourceGeneration")) {
       void this.refresh();
       return;
     }

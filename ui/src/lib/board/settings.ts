@@ -103,9 +103,7 @@ export function updateSidebarSessionLayout(
   return Object.fromEntries(Object.entries(layouts).slice(-MAX_SIDEBAR_SESSION_LAYOUTS));
 }
 
-export function normalizeSidebarSessionActivePanels(
-  value: unknown,
-): SidebarSessionActivePanels {
+export function normalizeSidebarSessionActivePanels(value: unknown): SidebarSessionActivePanels {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
