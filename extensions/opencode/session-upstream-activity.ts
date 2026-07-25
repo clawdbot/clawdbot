@@ -279,14 +279,16 @@ function messagesAfterMarker(
   messages: OpenCodeExportMessage[],
   marker: OpenCodeMarker,
 ): OpenCodeExportMessage[] | undefined {
-  if (marker.messageId === null) {
+  const messageId = marker.messageId;
+  if (messageId === null) {
     return messages;
   }
-  const markerIndex = messages.findIndex((message) => message.id === marker.messageId);
+  const markerIndex = messages.findIndex((message) => message.id === messageId);
   if (markerIndex >= 0) {
     return messages.slice(markerIndex + 1);
   }
-  if (marker.createdAt === null) {
+  const createdAt = marker.createdAt;
+  if (createdAt === null) {
     return undefined;
   }
   // Revert cleanup can delete the marker. OpenCode orders messages by
@@ -294,8 +296,8 @@ function messagesAfterMarker(
   return messages.filter(
     (message) =>
       message.createdAt !== undefined &&
-      (message.createdAt > marker.createdAt ||
-        (message.createdAt === marker.createdAt && message.id > marker.messageId)),
+      (message.createdAt > createdAt ||
+        (message.createdAt === createdAt && message.id > messageId)),
   );
 }
 
