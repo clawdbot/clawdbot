@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import {
   ChromeMcpDocumentUnavailableError,
   clickChromeMcpCoords,

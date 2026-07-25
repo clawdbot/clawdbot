@@ -1,8 +1,5 @@
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach } from "vitest";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../../src/test-utils/openclaw-test-state.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,

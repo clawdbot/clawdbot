@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { createOpenClawTestState } from "../../../../../src/test-utils/openclaw-test-state.js";
 import {
   DEFAULT_MEDIA_SEND_ERROR,
   sendMedia,

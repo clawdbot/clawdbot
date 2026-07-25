@@ -1,8 +1,8 @@
 // Mattermost tests cover reply delivery plugin behavior.
 import path from "node:path";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
-import { createOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import {
   createMattermostReplyDeliveryBarrier,

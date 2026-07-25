@@ -149,8 +149,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: session-discussion binds one external discussion provider to sessions.
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
       // +1: account-aware channel DM policy setup descriptors.
-      // +1: isolated test-state fixture seam for extension tests.
-      143,
+      142,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -179,8 +178,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: typed owner-required error for session store path resolution.
       // +1: native approval messaging target resolver.
       // +1: shared plugin SecretRef setup plan helper.
-      // +3: isolated test-state lifecycle helpers and state contract.
-      4726,
+      4723,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -204,8 +202,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: focused media-local-roots helpers.
       // +3: channel DM policy factory and its account/patch callbacks.
       // +1: native approval messaging target resolver.
-      // +2: isolated test-state lifecycle helpers.
-      2863,
+      2861,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
