@@ -661,6 +661,40 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
   });
 
+  it("does not bypass local cleanup with a model override", async () => {
+    Reflect.set(openAiAdapter, "transport", "local");
+    let releaseClose: () => void = () => {};
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    closeEmbeddingProviderMock.mockImplementationOnce(async () => {
+      await closeGate;
+    });
+    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+
+    const firstPromise = postEmbeddings(
+      { model: "openclaw/default", input: "first" },
+      { "x-openclaw-model": "openai/model-a" },
+    );
+    await vi.waitFor(() =>
+      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
+    );
+    const secondPromise = postEmbeddings(
+      { model: "openclaw/default", input: "second" },
+      { "x-openclaw-model": "openai/model-b" },
+    );
+    await Promise.resolve();
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
+
+    releaseClose();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    Reflect.set(openAiAdapter, "transport", "remote");
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
+  });
+
   it("allows providers without cleanup resources to embed concurrently", async () => {
     let releaseFirstEmbed: () => void = () => {};
     const firstEmbedGate = new Promise<void>((resolve) => {

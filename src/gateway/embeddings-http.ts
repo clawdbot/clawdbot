@@ -444,7 +444,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     });
     return true;
   }
-  const providerScopeKey = JSON.stringify([agentId, target.provider, target.model]);
+  const providerScopeKey = JSON.stringify([agentId, target.provider]);
   const holdProviderForCleanup = isLocalEmbeddingProvider({
     cfg,
     provider: target.provider,
