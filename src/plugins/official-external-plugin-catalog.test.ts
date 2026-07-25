@@ -2006,7 +2006,7 @@ describe("official external plugin catalog", () => {
     expectHosted(seeded);
 
     const changeFetch = vi.fn(async (input: RequestInfo | URL) => {
-      const requestUrl = new URL(String(input));
+      const requestUrl = input instanceof Request ? new URL(input.url) : new URL(input.toString());
       expect(requestUrl.pathname).toBe("/openclaw/feed/changes");
       if (requestUrl.searchParams.has("cursor")) {
         expect([...requestUrl.searchParams.entries()]).toEqual([["cursor", "page-2"]]);
@@ -2215,7 +2215,7 @@ describe("official external plugin catalog", () => {
       .mockReturnValueOnce(new Date("2026-07-24T12:04:59.000Z"))
       .mockReturnValue(new Date("2026-07-24T12:05:01.000Z"));
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-      const requestUrl = new URL(String(input));
+      const requestUrl = input instanceof Request ? new URL(input.url) : new URL(input.toString());
       if (requestUrl.pathname.endsWith("/changes")) {
         return dsseResponse(requestUrl.searchParams.has("cursor") ? terminal.body : first.body);
       }
@@ -2291,7 +2291,8 @@ describe("official external plugin catalog", () => {
         snapshotStore,
         now: () => new Date("2026-07-24T12:01:00.000Z"),
         fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
-          const requestUrl = new URL(String(input));
+          const requestUrl =
+            input instanceof Request ? new URL(input.url) : new URL(input.toString());
           return requestUrl.pathname.endsWith("/changes")
             ? dsseResponse(reset.body, { status: 409 })
             : dsseResponse(rootBody);
@@ -2320,7 +2321,8 @@ describe("official external plugin catalog", () => {
       snapshotStore,
       now: () => new Date("2026-07-24T12:01:00.000Z"),
       fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
-        const requestUrl = new URL(String(input));
+        const requestUrl =
+          input instanceof Request ? new URL(input.url) : new URL(input.toString());
         return requestUrl.pathname.endsWith("/changes")
           ? dsseResponse(reset.body, { status: 409 })
           : new Response(null, { status: 503 });
@@ -2339,7 +2341,8 @@ describe("official external plugin catalog", () => {
       snapshotStore: replaySnapshotStore,
       now: () => new Date("2026-07-24T12:01:00.000Z"),
       fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
-        const requestUrl = new URL(String(input));
+        const requestUrl =
+          input instanceof Request ? new URL(input.url) : new URL(input.toString());
         return requestUrl.pathname.endsWith("/changes")
           ? dsseResponse(expiredReset.body, { status: 409 })
           : dsseResponse(
