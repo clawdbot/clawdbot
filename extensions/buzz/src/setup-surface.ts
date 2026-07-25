@@ -262,7 +262,7 @@ async function noteBuzzAccessInstructions(params: {
       `   Bot npub: ${npub}`,
       `   Bot hex public key: ${hex}`,
       "",
-      "Buzz desktop: open the room -> Members -> Add members -> search the public key -> choose Bot.",
+      "Buzz desktop: open the room -> Members -> Add members -> search for the identity by public key -> when it appears, choose Bot.",
       `Buzz CLI: buzz channels add-member --channel <ROOM_UUID> --pubkey ${hex} --role bot`,
       "",
       "Local `just dev`: relay membership is off by default, so no community-member step is required.",

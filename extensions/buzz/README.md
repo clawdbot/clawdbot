@@ -111,6 +111,9 @@ also require community membership before room membership can be granted.
   policy and sandbox access to the room's trust level.
 - Anyone who obtains the bot private key can impersonate it. Treat the key like
   a password, use a SecretRef when appropriate, and never paste it into Buzz.
+- Treat a hosted relay `authTag` as a delegated reusable secret. Keep it out of
+  logs, screenshots, chat, and source control; prefer a SecretRef and rotate or
+  revoke it when the bot identity or relay authorization changes.
 - Key rotation requires the new public key to be approved for the relay and
   rooms before the old identity is removed.
 

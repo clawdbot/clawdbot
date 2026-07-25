@@ -35,6 +35,12 @@ export async function handleBuzzInbound(params: {
     runtime.channel.mentions.buildMentionRegexes(cfg, route.agentId),
   );
   const wasMentioned = message.mentionedPubkeys.includes(bus.publicKey) || textMention;
+  const shouldComputeCommandAuthorized = runtime.channel.commands.shouldComputeCommandAuthorized(
+    message.text,
+    cfg,
+  );
+  const hasControlCommand =
+    shouldComputeCommandAuthorized && runtime.channel.text.hasControlCommand(message.text, cfg);
   const groupConfig = account.config.groups?.[channelId];
   const access = await resolveStableChannelMessageIngress({
     channelId: "buzz",
@@ -55,6 +61,12 @@ export async function handleBuzzInbound(params: {
         allowTextCommands: true,
       },
     },
+    command: shouldComputeCommandAuthorized
+      ? {
+          allowTextCommands: true,
+          hasControlCommand,
+        }
+      : undefined,
   });
   if (access.ingress.admission !== "dispatch") {
     return;

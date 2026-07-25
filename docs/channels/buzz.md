@@ -234,8 +234,11 @@ export BUZZ_PRIVATE_KEY="nsec1..."
 
 If a hosted workspace operator gives you an identity authorization value, set
 `channels.buzz.authTag` or `BUZZ_AUTH_TAG`. It can use the same plaintext or
-SecretRef forms as the private key. This value is tied to the bot identity, so
-request a new one when rotating keys.
+SecretRef forms as the private key. Treat this delegated, reusable value as a
+secret: keep it out of logs, screenshots, chat, and source control, and prefer a
+SecretRef for persistent deployments. Request a replacement and revoke the old
+value whenever the bot identity or relay authorization changes, or if either
+credential may have been exposed.
 
 Self-hosted operators can generate a key manually for recovery or advanced
 setup:
