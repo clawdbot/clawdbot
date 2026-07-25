@@ -575,7 +575,12 @@ class NewSessionPage extends OpenClawLightDomElement {
       agent: this.selectedAgent(),
       preference,
     });
-    if (this.folder !== this.workspacePath() && !this.execNode && !this.pendingCloud.sessionKey) {
+    if (
+      !this.folderSelectedByUser &&
+      this.folder !== this.workspacePath() &&
+      !this.execNode &&
+      !this.pendingCloud.sessionKey
+    ) {
       this.validateRestoredFolder(this.folder);
     } else {
       this.cancelRestoredFolderValidation();
@@ -753,10 +758,20 @@ class NewSessionPage extends OpenClawLightDomElement {
             kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable",
             repoRoot,
           };
-          if (result?.repositoryStatus === "not_git" && !this.cloudProfileId) {
-            this.worktree = false;
+          if (result?.repositoryStatus === "not_git") {
+            const rejectedWorktree = !this.cloudProfileId && (this.worktree || restoreWorktree);
+            if (!this.cloudProfileId) {
+              this.worktree = false;
+            }
+            this.preferredWorktreeRestore = false;
+            if (rejectedWorktree) {
+              this.persistPreference({ worktree: false });
+            }
+          } else if (restoreWorktree && !this.worktreeSelectedByUser) {
+            // An inconclusive lookup cannot disprove a stored worktree choice.
+            // Keep it visible and pending until retry or explicit user override.
+            this.worktree = true;
           }
-          this.preferredWorktreeRestore = false;
           return;
         }
         this.repository = {
@@ -781,7 +796,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           return;
         }
         this.repository = { kind: "unavailable", repoRoot };
-        this.preferredWorktreeRestore = false;
+        if (restoreWorktree && !this.worktreeSelectedByUser) {
+          this.worktree = true;
+        }
       });
   }
 
@@ -846,6 +863,12 @@ class NewSessionPage extends OpenClawLightDomElement {
       return false;
     }
     if (this.restoredFolderValidation !== "none") {
+      return false;
+    }
+    // Stored model and worktree choices are provisional until their current
+    // Gateway metadata confirms they still exist. Do not let a fast submit
+    // silently replace either preference with the server default.
+    if (this.modelControl.isRestoringPreference() || this.preferredWorktreeRestore) {
       return false;
     }
     if (pendingCloud) {

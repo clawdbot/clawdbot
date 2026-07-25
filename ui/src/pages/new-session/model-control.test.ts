@@ -43,7 +43,59 @@ describe("new-session model runtime", () => {
       preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
     });
 
+    expect(control.isRestoringPreference()).toBe(true);
     await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
+    expect(control.isRestoringPreference()).toBe(false);
+    expect(control.thinkingLevel).toBe("high");
+  });
+
+  it("does not mark ordinary catalog loading as preference restoration", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true);
+
+    expect(control.isRestoringPreference()).toBe(false);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+  });
+
+  it("preserves the remembered pair when metadata validation fails", async () => {
+    const { context, request } = contextWith([]);
+    request.mockRejectedValueOnce(new Error("metadata unavailable"));
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true, {
+      preference: { model: "anthropic/claude-sonnet-4-6", thinkingLevel: "high" },
+    });
+
+    expect(control.isRestoringPreference()).toBe(true);
+    await vi.waitFor(() => expect(control.isRestoringPreference()).toBe(false));
+    expect(control.selected).toBe("anthropic/claude-sonnet-4-6");
+    expect(control.thinkingLevel).toBe("high");
+  });
+
+  it("preserves a live selection when an ordinary metadata refresh fails", async () => {
+    const { context, request } = contextWith([]);
+    const notify = vi.fn();
+    const control = new NewSessionModelControl(notify);
+    control.load(context, "main", true);
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledTimes(2);
+    });
+    control.selected = "anthropic/claude-sonnet-4-6";
+    control.thinkingLevel = "high";
+    request.mockRejectedValueOnce(new Error("metadata unavailable"));
+
+    control.load(context, "main", true);
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(notify).toHaveBeenCalledTimes(4);
+    });
+    expect(control.selected).toBe("anthropic/claude-sonnet-4-6");
     expect(control.thinkingLevel).toBe("high");
   });
 
@@ -52,7 +104,8 @@ describe("new-session model runtime", () => {
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
     ]);
     const notify = vi.fn();
-    const control = new NewSessionModelControl(notify);
+    const onSelectionChange = vi.fn();
+    const control = new NewSessionModelControl(notify, onSelectionChange);
 
     control.load(context, "main", true, {
       preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
@@ -67,13 +120,15 @@ describe("new-session model runtime", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(control.selected).toBe(""));
     expect(control.thinkingLevel).toBe("");
+    expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
   });
 
   it("drops a stored reasoning override when its option is no longer available", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
     ]);
-    const control = new NewSessionModelControl(() => undefined);
+    const onSelectionChange = vi.fn();
+    const control = new NewSessionModelControl(() => undefined, onSelectionChange);
 
     control.load(context, "main", true, {
       preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
@@ -87,6 +142,10 @@ describe("new-session model runtime", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(control.thinkingLevel).toBe(""));
     expect(control.selected).toBe("openai/gpt-5.6-sol");
+    expect(onSelectionChange).toHaveBeenLastCalledWith({
+      model: "openai/gpt-5.6-sol",
+      thinkingLevel: "",
+    });
   });
 
   it("uses model catalog runtime metadata for an explicit cloud target", async () => {

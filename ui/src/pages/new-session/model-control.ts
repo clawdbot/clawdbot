@@ -56,6 +56,7 @@ export class NewSessionModelControl {
   private agentId = "";
   private catalog: ModelCatalogEntry[] = [];
   private loading = false;
+  private restoringPreference = false;
   selected = "";
   thinkingLevel = "";
 
@@ -70,6 +71,7 @@ export class NewSessionModelControl {
   invalidate(resetSelection = false) {
     this.requestToken += 1;
     this.loading = false;
+    this.restoringPreference = false;
     this.catalog = [];
     if (resetSelection) {
       this.agentId = "";
@@ -102,10 +104,14 @@ export class NewSessionModelControl {
     this.catalog = [];
     if (snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
       this.loading = false;
+      this.restoringPreference = false;
       this.notify();
       return;
     }
     this.loading = true;
+    this.restoringPreference = Boolean(
+      options.preference?.model || options.preference?.thinkingLevel,
+    );
     this.notify();
     void client
       .request<{ models?: ModelCatalogEntry[] }>("chat.metadata", {
@@ -122,14 +128,29 @@ export class NewSessionModelControl {
       .catch(() => {
         if (requestId === this.requestToken) {
           this.catalog = [];
+          if (
+            selectionGeneration === this.selectionGeneration &&
+            (options.preference?.model || options.preference?.thinkingLevel)
+          ) {
+            // A transport failure says nothing about current availability.
+            // Preserve the requested pair so sessions.create remains the
+            // authoritative validator instead of silently using defaults.
+            this.selected = options.preference?.model ?? "";
+            this.thinkingLevel = options.preference?.thinkingLevel ?? "";
+          }
         }
       })
       .finally(() => {
         if (requestId === this.requestToken) {
           this.loading = false;
+          this.restoringPreference = false;
           this.notify();
         }
       });
+  }
+
+  isRestoringPreference(): boolean {
+    return this.restoringPreference;
   }
 
   private restorePreference(
@@ -151,6 +172,7 @@ export class NewSessionModelControl {
       preference.model &&
       (!preferredTarget?.entry || preferredTarget.entry.available === false)
     ) {
+      this.onSelectionChange({ model: "", thinkingLevel: "" });
       return;
     }
     this.selected = preferredTarget?.entry
@@ -193,6 +215,8 @@ export class NewSessionModelControl {
     });
     if (thinking.options.some((entry) => entry.value === preference.thinkingLevel)) {
       this.thinkingLevel = preference.thinkingLevel;
+    } else {
+      this.onSelectionChange({ model: this.selected, thinkingLevel: "" });
     }
   }
 
@@ -279,6 +303,7 @@ export class NewSessionModelControl {
       thinkingSession: draftRow,
       onModelSelect: (value) => {
         this.selectionGeneration += 1;
+        this.restoringPreference = false;
         this.selected = value;
         const target = resolveDraftModelTarget(
           value || agentDefaultModel || sourceResult?.defaults.model,
@@ -292,6 +317,7 @@ export class NewSessionModelControl {
       },
       onThinkingSelect: (value) => {
         this.selectionGeneration += 1;
+        this.restoringPreference = false;
         this.thinkingLevel = value;
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
