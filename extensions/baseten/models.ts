@@ -1,10 +1,6 @@
 /**
- * Baseten model catalog, compat metadata, and authenticated live discovery.
+ * Baseten model catalog, compat metadata, and live row projection.
  */
-import {
-  getCachedLiveProviderModelRows,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   buildManifestModelDefinition,
   readManifestProviderDefaultModelRef,
@@ -13,13 +9,9 @@ import type {
   ModelCompatConfig,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const log = createSubsystemLogger("baseten-models");
 const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
-const CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
@@ -245,49 +237,6 @@ export function projectBasetenLiveModels(rows: readonly unknown[]): ModelDefinit
     models.push(model);
   }
   return models;
-}
-
-/** Discovers every model enabled for a Baseten account, with a static fallback. */
-export async function discoverBasetenModels(
-  params: {
-    discoveryApiKey?: string;
-    env?: Record<string, string | undefined>;
-    forceLive?: boolean;
-    fetchGuard?: LiveModelCatalogFetchGuard;
-    signal?: AbortSignal;
-  } = {},
-): Promise<ModelDefinitionConfig[]> {
-  const staticModels = buildStaticBasetenModels();
-  const env = params.env ?? process.env;
-  if (
-    !params.discoveryApiKey?.trim() ||
-    (!params.forceLive && (env.NODE_ENV === "test" || env.VITEST === "true"))
-  ) {
-    return staticModels;
-  }
-
-  try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: "baseten",
-      endpoint: `${BASETEN_BASE_URL}/models`,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
-      timeoutMs: 10_000,
-      ttlMs: CACHE_TTL_MS,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(BASETEN_BASE_URL),
-      auditContext: "baseten-model-discovery",
-      shouldCacheRows: (candidateRows) => projectBasetenLiveModels(candidateRows).length > 0,
-    });
-    const models = projectBasetenLiveModels(rows);
-    if (models.length > 0) {
-      return models;
-    }
-    log.warn("Baseten returned no usable models; using bundled catalog");
-  } catch (error) {
-    log.warn(`Baseten model discovery failed; using bundled catalog: ${String(error)}`);
-  }
-  return staticModels;
 }
 
 /** Resolves a forward-compatible Baseten model id not yet in the bundled catalog. */

@@ -105,6 +105,12 @@ const GATEWAY_SCENARIOS = {
     toolsProfile: "minimal",
     replyText: "RECONNECTED_RUN_COMPLETE",
   },
+  ctrlD: {
+    agentId: "tui-pty-ctrl-d",
+    modelId: "tui-pty-ctrl-d",
+    toolsProfile: "minimal",
+    replyText: "CTRL_D_FORWARD_DELETE_COMPLETE",
+  },
 } as const satisfies Record<string, GatewayScenario>;
 
 type GatewayScenarioId = keyof typeof GATEWAY_SCENARIOS;
@@ -1049,6 +1055,54 @@ describe("TUI PTY real backends", () => {
       it(name, run, timeoutMs);
     });
   }
+
+  registerGatewayTest(
+    "forwards Ctrl+D-edited terminal input through the real Gateway",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("ctrlD", onTestFinished);
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("keepXword", { delay: false });
+        await fixture.run.write("\u001b[D".repeat(5), { delay: false });
+        await fixture.run.write("\u0004", { delay: false });
+        await fixture.run.write("\r", { delay: false });
+
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `Ctrl+D-edited terminal input did not reach the real Gateway\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        const request = JSON.stringify(fixture.mockModel.requests()[0]?.body);
+        expect(request).toContain("keepword");
+        expect(request).not.toContain("keepXword");
+        await fixture.run.waitForOutput("CTRL_D_FORWARD_DELETE_COMPLETE");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
+    "exits the real Gateway terminal when Ctrl+D is pressed with empty input",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("ctrlD", onTestFinished);
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("\u0004", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
 
   registerGatewayTest(
     "preserves a disconnected draft across a real Gateway restart",

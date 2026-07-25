@@ -83,6 +83,7 @@ function createGateway(client: GatewayBrowserClient): MutableGateway {
     client,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",

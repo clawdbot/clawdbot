@@ -705,6 +705,38 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
+    async () => {
+      await fixture.run.write("keepXword", { delay: false });
+      await fixture.run.write("\u001b[D".repeat(5), { delay: false });
+      await fixture.run.write("\u0004", { delay: false });
+      await fixture.run.write("\r", { delay: false });
+
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "keepword"),
+      );
+      expect(sent.payload).toMatchObject({ message: "keepword" });
+      await fixture.run.waitForOutput("PTY_RESPONSE: keepword");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "exits a fresh terminal when Ctrl+D is pressed with empty input",
+    async () => {
+      const emptyFixture = await startTuiFixture();
+      try {
+        await emptyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await emptyFixture.run.write("\u0004", { delay: false });
+        expect((await emptyFixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await emptyFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "presents and resolves workspace skill approval in the TUI",
     async () => {
       await fixture.run.write("skill approval proof\r");
@@ -987,6 +1019,7 @@ describe.sequential("TUI PTY harness", () => {
         (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "after new"),
       );
       expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
+      await fixture.run.waitForOutput("PTY_RESPONSE: after new");
     },
     TEST_TIMEOUT_MS,
   );

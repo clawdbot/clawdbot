@@ -1,8 +1,11 @@
 // Venice tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  buildOpenAICompatibleLiveModelProviderConfig,
+  clearLiveCatalogCacheForTests,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { discoverVeniceModels, VENICE_MODEL_CATALOG } from "./models.js";
+import { VENICE_BASE_URL, VENICE_MODEL_CATALOG, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -93,7 +96,7 @@ function makeModelRow(params: ModelSpecOverride) {
 
 function stubVeniceModelsFetch(rows: ModelSpecOverride[]) {
   const fetchMock = vi.fn(
-    async () =>
+    async (_input: string | URL | Request, _init?: RequestInit) =>
       new Response(
         JSON.stringify({
           data: rows.map((row) => makeModelRow(row)),
@@ -106,6 +109,19 @@ function stubVeniceModelsFetch(rows: ModelSpecOverride[]) {
   );
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   return fetchMock;
+}
+
+async function discoverVeniceModels() {
+  const provider = await buildOpenAICompatibleLiveModelProviderConfig({
+    providerId: "venice",
+    providerConfig: {
+      baseUrl: VENICE_BASE_URL,
+      api: "openai-completions",
+      models: structuredClone(VENICE_MODEL_CATALOG),
+    },
+    modelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
+  });
+  return provider.models;
 }
 
 describe("venice-models", () => {
@@ -181,11 +197,11 @@ describe("venice-models", () => {
     }
   });
 
-  it("retries transient fetch failures before succeeding", async () => {
+  it("uses the shared fallback after a transient fetch failure", async () => {
     let attempts = 0;
     const fetchMock = vi.fn(async () => {
       attempts += 1;
-      if (attempts < 3) {
+      if (attempts === 1) {
         throw Object.assign(new TypeError("fetch failed"), {
           cause: { code: "ECONNRESET", message: "socket hang up" },
         });
@@ -194,13 +210,13 @@ describe("venice-models", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
-    expect(attempts).toBe(3);
-    expect(models.map((m) => m.id)).toContain("zai-org-glm-4.7");
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    expect(attempts).toBe(1);
+    expect(models.map((m) => m.id)).toEqual(VENICE_MODEL_CATALOG.map((m) => m.id));
   });
 
   it("uses API maxCompletionTokens for catalog models when present", async () => {
-    stubVeniceModelsFetch([
+    const fetchMock = stubVeniceModelsFetch([
       {
         id: "zai-org-glm-4.7",
         availableContextTokens: 131072,
@@ -213,9 +229,13 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const glm = models.find((m) => m.id === "zai-org-glm-4.7");
     expect(glm?.maxTokens).toBe(2048);
+    const [input, init] = fetchMock.mock.calls[0] ?? [];
+    const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
+    expect(headers.get("accept")).toBe("application/json");
+    expect(headers.get("authorization")).toBeNull();
   });
 
   it("retains catalog maxTokens when the API omits maxCompletionTokens", async () => {
@@ -231,7 +251,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const qwen = models.find((m) => m.id === "qwen3-235b-a22b-thinking-2507");
     expect(qwen?.maxTokens).toBe(16384);
   });
@@ -255,7 +275,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const newModel = models.find((m) => m.id === "new-model-2026");
     expect(newModel?.maxTokens).toBe(50000);
     expect(newModel?.maxTokens).toBeLessThanOrEqual(newModel?.contextWindow ?? Infinity);
@@ -328,7 +348,7 @@ describe("venice-models", () => {
     expect(newModel?.maxTokens).toBe(2048);
   });
 
-  it("falls back to static catalog after retry budget is exhausted", async () => {
+  it("falls back to static catalog after a discovery failure", async () => {
     const fetchMock = vi.fn(async () => {
       throw Object.assign(new TypeError("fetch failed"), {
         cause: { code: "ENOTFOUND", message: "getaddrinfo ENOTFOUND api.venice.ai" },
@@ -336,8 +356,8 @@ describe("venice-models", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(models).toHaveLength(VENICE_MODEL_CATALOG.length);
     expect(models.map((m) => m.id)).toEqual(VENICE_MODEL_CATALOG.map((m) => m.id));
   });
