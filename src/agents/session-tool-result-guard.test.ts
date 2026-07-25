@@ -484,7 +484,7 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: ({ message }) =>
-        message.role === "toolResult" && message.isError === false ? { block: true } : undefined,
+        message.role === "toolResult" && !message.isError ? { block: true } : undefined,
     });
 
     sm.appendMessage(toolCallMessage);
