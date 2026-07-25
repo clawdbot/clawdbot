@@ -109,6 +109,10 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "marketplaceName", record.marketplaceName);
   setInstallStringField(normalized, "marketplaceSource", record.marketplaceSource);
   setInstallStringField(normalized, "marketplacePlugin", record.marketplacePlugin);
+  // installAttemptToken must survive normalization: failed-install cleanup
+  // compares it against the surviving SQLite record to prove the current
+  // transaction wrote it. Dropping it here would disable that cleanup.
+  setInstallStringField(normalized, "installAttemptToken", record.installAttemptToken);
   return normalized;
 }
 

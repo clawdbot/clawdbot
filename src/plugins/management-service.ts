@@ -1,4 +1,5 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
+import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -8,12 +9,14 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import { collectChangedPaths } from "../config/io.write-prepare.js";
+import { getRuntimeConfig } from "../config/io.runtime.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createAsyncLock } from "../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
@@ -53,20 +56,16 @@ import {
   type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
-import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   formatUninstallActionLabels,
   planPluginUninstall,
-  pluginUninstallTargetExists,
-  prepareConfigForPendingPluginDirectoryRemoval,
 } from "./uninstall.js";
 
 type ManagedPluginCatalogEntry = {
@@ -139,7 +138,9 @@ let officialCatalogCache:
   | { key: string; result: Promise<HostedOfficialExternalPluginCatalogLoadResult> }
   | undefined;
 
-const OFFICIAL_CATALOG_CACHE_KEY = "built-in";
+function officialCatalogCacheKey(config: OpenClawConfig): string {
+  return JSON.stringify(config.marketplaces ?? null);
+}
 
 /** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
 export function clearManagedPluginOfficialCatalogCache(): void {
@@ -276,12 +277,12 @@ function overlayBundledOfficialPluginCatalogMetadata(
   });
 }
 
-async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
-  const key = OFFICIAL_CATALOG_CACHE_KEY;
+async function loadOfficialCatalog(config: OpenClawConfig): Promise<OfficialCatalogResult> {
+  const key = officialCatalogCacheKey(config);
   if (officialCatalogCache?.key !== key) {
     officialCatalogCache = {
       key,
-      result: loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
+      result: loadConfiguredHostedOfficialExternalPluginCatalogEntries(config),
     };
   }
   const result = await officialCatalogCache.result;
@@ -326,10 +327,13 @@ function normalizeFeaturedAt(value: unknown): number | undefined {
 }
 
 function resolveCatalogInstallAction(params: {
+  config: OpenClawConfig;
   entry: OfficialExternalPluginCatalogEntry;
   pluginId: string;
 }): ManagedPluginCatalogEntry["install"] {
-  const install = resolveOfficialExternalPluginInstall(params.entry);
+  const install = resolveOfficialExternalPluginInstall(params.entry, {
+    catalogConfig: params.config.marketplaces,
+  });
   const clawhub = install?.clawhubSpec ? parseClawHubPluginSpec(install.clawhubSpec) : undefined;
   if (clawhub && !clawhub.version) {
     return { source: "clawhub", packageName: clawhub.name };
@@ -556,7 +560,7 @@ export async function resolveManagedPluginIconUrl(params: {
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
   const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
+  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog(params.config));
   return resolvePluginIconUrlFromCatalogFacts({
     metadata,
     officialEntries: officialCatalog.entries,
@@ -613,7 +617,7 @@ export async function listManagedPlugins(params: {
 }): Promise<ManagedPluginCatalog> {
   const env = params.env ?? process.env;
   const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
+  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog(params.config));
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
     const manifest = metadata.byPluginId.get(record.pluginId);
@@ -724,7 +728,7 @@ export async function listManagedPlugins(params: {
       continue;
     }
     const kind = normalizeKinds(entry.kind);
-    const install = resolveCatalogInstallAction({ entry, pluginId });
+    const install = resolveCatalogInstallAction({ config: params.config, entry, pluginId });
     const description = normalizeOptionalString(entry.description);
     const version = normalizeOptionalString(entry.version);
     const featuredAt =
@@ -759,6 +763,8 @@ export async function listManagedPlugins(params: {
     mutationAllowed: !resolveIsNixMode(env),
   };
 }
+
+const withManagedPluginMutationLock = createAsyncLock();
 
 function assertValidConfigSnapshot(
   prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
@@ -834,22 +840,28 @@ function resolveDeclaredOfficialPluginId(
 
 function resolveOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
+  config: OpenClawConfig,
   packageName: string,
 ): OfficialExternalPluginCatalogEntry | undefined {
   // Bundled identities remain the local trust anchor when a hosted feed omits
   // its ClawHub candidate; hosted install/version metadata is never copied back.
   return [...listOfficialExternalPluginCatalogEntries(), ...entries].find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry);
+    const install = resolveOfficialExternalPluginInstall(entry, {
+      catalogConfig: config.marketplaces,
+    });
     return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
   });
 }
 
 function resolveHostedOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
+  config: OpenClawConfig,
   packageName: string,
 ): OfficialExternalPluginCatalogEntry | undefined {
   return entries.find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry);
+    const install = resolveOfficialExternalPluginInstall(entry, {
+      catalogConfig: config.marketplaces,
+    });
     return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
   });
 }
@@ -891,11 +903,17 @@ function installRecordOwnsTarget(
   );
 }
 
-async function cleanupFailedManagedPluginInstall(params: {
+export async function cleanupFailedManagedPluginInstall(params: {
   pluginId: string;
   install: PluginInstallRecord;
   targetDir: string;
   extensionsDir: string;
+  /** Per-attempt token written into the SQLite install record before the
+   *  persistence attempt.  When the surviving record carries the same token
+   *  it is definitive proof that this failed transaction created it — safe
+   *  to remove.  A mismatched or missing token means another process wrote
+   *  the record and the target must be preserved. */
+  attemptToken?: string;
 }): Promise<string[]> {
   let installRecords: Record<string, PluginInstallRecord>;
   try {
@@ -906,6 +924,26 @@ async function cleanupFailedManagedPluginInstall(params: {
     ];
   }
   if (installRecordOwnsTarget(installRecords[params.pluginId], params.targetDir)) {
+    // Only remove the target when the surviving record carries our
+    // per-attempt token — that proves this failed transaction created
+    // the record.  Without a token (or when tokens don't match) we
+    // fall back to conservative behaviour and retain the target.
+    if (
+      params.attemptToken &&
+      installRecords[params.pluginId]?.installAttemptToken === params.attemptToken
+    ) {
+      // The record was written by the current failed transaction and
+      // survived the rollback — this is a stale left-over.  Remove
+      // the target so retries aren't permanently blocked.
+      try {
+        await applyPluginUninstallDirectoryRemoval({ target: params.targetDir });
+      } catch (removalError) {
+        return [
+          `Failed to remove the stale managed install target after an incomplete install of ${params.pluginId}: ${formatErrorMessage(removalError)}`,
+        ];
+      }
+      return [];
+    }
     return [
       `Plugin install persistence reported an error after ${params.targetDir} was recorded; retained the managed target.`,
     ];
@@ -970,22 +1008,52 @@ async function persistManagedPluginInstall(params: {
   targetDir: string;
   extensionsDir: string;
 }): Promise<OpenClawConfig> {
+  // Generate a per-attempt token before persistence so the cleanup path
+  // can tie a surviving SQLite record back to this specific transaction.
+  // A matching token is definitive proof the record is a stale left-over
+  // from this failed attempt; a mismatch means another process wrote it.
+  const attemptToken = crypto.randomUUID();
   try {
     return await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: params.pluginId,
-      install: params.install,
+      // Embed the attempt token in the install record written to SQLite.
+      install: { ...params.install, installAttemptToken: attemptToken },
       invalidateRuntimeCache: false,
       runtime: createSilentRuntime(),
     });
   } catch (error) {
-    const cleanupWarnings = await cleanupFailedManagedPluginInstall({
-      pluginId: params.pluginId,
-      install: params.install,
-      targetDir: params.targetDir,
-      extensionsDir: params.extensionsDir,
-    });
+    // Only run cleanup when we can confirm the config commit failed.
+    // If the config already has this install at the target path, the
+    // error came from a post-commit refresh — the install is valid and
+    // the target must be preserved regardless of token match.
+    const commitFailed = await wasConfigCommitFailed(params);
+    const cleanupWarnings = commitFailed
+      ? await cleanupFailedManagedPluginInstall({
+          pluginId: params.pluginId,
+          install: params.install,
+          targetDir: params.targetDir,
+          extensionsDir: params.extensionsDir,
+          attemptToken,
+        })
+      : [
+          `Plugin install recorded but a post-commit operation failed for ${params.pluginId}; retained the managed target at ${params.targetDir}.`,
+        ];
     return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
+  }
+}
+
+async function wasConfigCommitFailed(params: {
+  pluginId: string;
+  targetDir: string;
+}): Promise<boolean> {
+  try {
+    const current = getRuntimeConfig({ skipPluginValidation: true });
+    const install = current.plugins?.installs?.[params.pluginId];
+    return !install || !installRecordOwnsTarget(install, params.targetDir);
+  } catch {
+    // Can't read config → assume commit failed and run cleanup.
+    return true;
   }
 }
 
@@ -998,17 +1066,24 @@ async function installFromClawHub(params: {
   expectedIntegrity?: string;
 }): Promise<{ pluginId: string; config: OpenClawConfig }> {
   const packageName = params.request.packageName.trim();
-  const official = resolveOfficialEntryByClawHubPackage(params.officialEntries, packageName);
+  const official = resolveOfficialEntryByClawHubPackage(
+    params.officialEntries,
+    params.snapshot.config,
+    packageName,
+  );
   // Pin the runtime id only when the catalog entry declares one; the entry-id
   // fallback is just the package name and would reject legitimate installs,
   // while a declared id must stay enforced even if it equals the package name.
   const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
   const hostedOfficial = resolveHostedOfficialEntryByClawHubPackage(
     params.officialEntries,
+    params.snapshot.config,
     packageName,
   );
   const hostedInstall = hostedOfficial
-    ? resolveOfficialExternalPluginInstall(hostedOfficial)
+    ? resolveOfficialExternalPluginInstall(hostedOfficial, {
+        catalogConfig: params.snapshot.config.marketplaces,
+      })
     : undefined;
   const hostedClawHub = parseClawHubPluginSpec(hostedInstall?.clawhubSpec ?? "");
   const requestMatchesHostedCandidate =
@@ -1066,7 +1141,9 @@ async function installFromOfficialCatalog(params: {
     );
   }
   const pluginId = resolveOfficialExternalPluginId(entry);
-  const install = resolveOfficialExternalPluginInstall(entry);
+  const install = resolveOfficialExternalPluginInstall(entry, {
+    catalogConfig: params.snapshot.config.marketplaces,
+  });
   if (!pluginId || !install) {
     throw new ManagedPluginLifecycleError(
       `official plugin catalog entry is not installable: ${params.request.pluginId}`,
@@ -1132,10 +1209,10 @@ export async function installManagedPlugin(params: {
   request: ManagedPluginInstallRequest;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ plugin: ManagedPluginCatalogEntry; warnings?: string[] }> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async () => {
+  return await withManagedPluginMutationLock(async () => {
+    const env = params.env ?? process.env;
     const snapshot = await readPluginMutationSnapshot(env);
-    const officialCatalog = await loadOfficialCatalog();
+    const officialCatalog = await loadOfficialCatalog(snapshot.config);
     const warnings: string[] = [];
     const installed =
       params.request.source === "clawhub"
@@ -1181,8 +1258,8 @@ export async function setManagedPluginEnabled(params: {
   changedPaths: string[];
   warnings?: string[];
 }> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async () => {
+  return await withManagedPluginMutationLock(async () => {
+    const env = params.env ?? process.env;
     const snapshot = await readPluginMutationSnapshot(env);
     const metadata = loadPluginMetadataSnapshot({ config: snapshot.config, env });
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
@@ -1247,8 +1324,8 @@ export async function uninstallManagedPlugin(params: {
   pluginId: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ pluginId: string; removed: string[]; warnings?: string[] }> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async () => {
+  return await withManagedPluginMutationLock(async () => {
+    const env = params.env ?? process.env;
     const snapshot = await readPluginMutationSnapshot(env);
     const installRecords = await loadInstalledPluginIndexInstallRecords();
     // Mirror the CLI uninstall flow: plan against config carrying install records
@@ -1267,55 +1344,15 @@ export async function uninstallManagedPlugin(params: {
     // planPluginUninstall keeps its plugin-id fallback for channel config keys.
     const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-    const initialPlan = planPluginUninstall({
+    const plan = planPluginUninstall({
       config: configWithRecords,
       pluginId,
       ...(channelIds ? { channelIds } : {}),
       deleteFiles: true,
       extensionsDir,
     });
-    if (!initialPlan.ok) {
-      throw new ManagedPluginLifecycleError(initialPlan.error);
-    }
-    let plan = initialPlan;
-    let finalSnapshot = snapshot;
-    let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
-    if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(
-        snapshot.config,
-        pluginId,
-      );
-      await replaceConfigFile({
-        nextConfig: disabledConfig,
-        baseHash: snapshot.baseHash,
-        writeOptions: {
-          ...snapshot.writeOptions,
-          afterWrite: { mode: "auto" },
-        },
-      });
-      directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-      if (pluginUninstallTargetExists(plan.directoryRemoval.target)) {
-        throw new ManagedPluginLifecycleError(
-          `Failed to remove plugin directory ${plan.directoryRemoval.target}; the plugin remains disabled and tracked so uninstall can be retried.`,
-          { kind: "unavailable" },
-        );
-      }
-      finalSnapshot = await readPluginMutationSnapshot(env);
-      const refreshedConfigWithRecords = withPluginInstallRecords(
-        finalSnapshot.config,
-        installRecords,
-      );
-      const refreshedPlan = planPluginUninstall({
-        config: refreshedConfigWithRecords,
-        pluginId,
-        ...(channelIds ? { channelIds } : {}),
-        deleteFiles: true,
-        extensionsDir,
-      });
-      if (!refreshedPlan.ok) {
-        throw new ManagedPluginLifecycleError(refreshedPlan.error);
-      }
-      plan = refreshedPlan;
+    if (!plan.ok) {
+      throw new ManagedPluginLifecycleError(plan.error);
     }
     const nextConfig = withoutPluginInstallRecords(plan.config);
     const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
@@ -1323,17 +1360,11 @@ export async function uninstallManagedPlugin(params: {
       previousInstallRecords: installRecords,
       nextInstallRecords,
       nextConfig,
-      baseHash: finalSnapshot.baseHash,
-      writeOptions: finalSnapshot.writeOptions,
+      baseHash: snapshot.baseHash,
+      writeOptions: snapshot.writeOptions,
     });
-    const warnings = [
-      ...collectClawPluginUninstallWarnings({
-        pluginId,
-        installRecord: installRecords[pluginId],
-        env,
-      }),
-      ...directoryResult.warnings,
-    ];
+    const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+    const warnings = [...directoryResult.warnings];
     await refreshPluginRegistryAfterConfigMutation({
       config: nextConfig,
       reason: "source-changed",

@@ -91,6 +91,7 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
+  | "installAttemptToken"
 >;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;

@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
-  clawReferenceWarnings: vi.fn(),
   clawhubInstall: vi.fn(),
   commitRecords: vi.fn(),
   installRecords: vi.fn(),
@@ -14,8 +13,10 @@ const mocks = vi.hoisted(() => ({
   persistInstall: vi.fn(),
   preflight: vi.fn(),
   providerAuthChoices: vi.fn(),
+  randomUUID: vi.fn<() => string>(),
   readConfig: vi.fn(),
   recommendedInstalls: vi.fn(),
+  loadConfigResult: vi.fn<() => Record<string, unknown>>(),
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
   planUninstall: vi.fn(),
@@ -26,6 +27,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("node:crypto", () => ({
+  default: { randomUUID: () => mocks.randomUUID() },
+}));
+
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: (params?: { env?: NodeJS.ProcessEnv }) => {
     if (params?.env?.OPENCLAW_NIX_MODE === "1") {
@@ -34,6 +39,10 @@ vi.mock("../config/config.js", () => ({
   },
   readConfigFileSnapshotForWrite: () => mocks.readConfig(),
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
+}));
+
+vi.mock("../config/io.runtime.js", () => ({
+  getRuntimeConfig: () => mocks.loadConfigResult(),
 }));
 
 vi.mock("./install-persistence.js", () => ({
@@ -77,10 +86,6 @@ vi.mock("./uninstall.js", async (importOriginal) => ({
 
 vi.mock("./install-record-commit.js", () => ({
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commitRecords(...args),
-}));
-
-vi.mock("./uninstall-claw-references.js", () => ({
-  collectClawPluginUninstallWarnings: (...args: unknown[]) => mocks.clawReferenceWarnings(...args),
 }));
 
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
@@ -226,7 +231,6 @@ describe("plugin management service", () => {
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.providerAuthChoices.mockReturnValue([]);
     mocks.recommendedInstalls.mockReturnValue([]);
-    mocks.clawReferenceWarnings.mockReturnValue([]);
     mocks.officialCatalog.mockResolvedValue({
       source: "hosted",
       entries: [],
@@ -871,6 +875,7 @@ describe("plugin management service", () => {
   it("retains a failed install target when the durable record already owns it", async () => {
     const persistenceError = new Error("post-commit refresh failed");
     const targetDir = "/tmp/extensions/demo";
+    mocks.randomUUID.mockReturnValue("txn-test-1");
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.clawhubInstall.mockResolvedValue({
       ok: true,
@@ -886,6 +891,8 @@ describe("plugin management service", () => {
       },
     });
     mocks.persistInstall.mockRejectedValue(persistenceError);
+    // Surviving record has no installAttemptToken — it was written by a prior
+    // committed install (or another process).  Token mismatch → preserve.
     mocks.installRecords.mockResolvedValue({
       demo: { source: "clawhub", installPath: targetDir },
     });
@@ -902,6 +909,91 @@ describe("plugin management service", () => {
     });
     expect(mocks.planUninstall).not.toHaveBeenCalled();
     expect(mocks.applyUninstall).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a stale install target when the surviving record carries a matching attempt token", async () => {
+    const persistenceError = new Error("post-commit refresh failed");
+    const targetDir = "/tmp/extensions/demo";
+    const attemptToken = "txn-test-2";
+    mocks.randomUUID.mockReturnValue(attemptToken);
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir,
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockRejectedValue(persistenceError);
+    // Simulate the double-fault: the SQLite record written by this failed
+    // transaction survives the rollback and carries our per-attempt token.
+    mocks.installRecords.mockResolvedValue({
+      demo: { source: "clawhub", installPath: targetDir, installAttemptToken: attemptToken },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/demo" },
+        env: {},
+      }),
+    ).rejects.toBe(persistenceError);
+    // The stale target is removed because the record was created by the current
+    // failed transaction, not by a prior committed install.
+    expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
+  });
+
+  it("preserves target after a post-commit persistence error when config commit succeeded", async () => {
+    // Simulate: persistence throws AFTER config commit succeeded (e.g. a
+    // registry-refresh failure). The config already has the install at the
+    // target path, so cleanup must NOT delete the valid target directory.
+    const postCommitError = new Error("post-commit registry refresh failed");
+    const targetDir = "/tmp/extensions/demo";
+    const attemptToken = "txn-post-commit";
+    mocks.randomUUID.mockReturnValue(attemptToken);
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir,
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockRejectedValue(postCommitError);
+    // Simulate: the SQLite record has the matching token (this txn wrote it),
+    // but the config also has the install — the commit succeeded.
+    mocks.installRecords.mockResolvedValue({
+      demo: { source: "clawhub", installPath: targetDir, installAttemptToken: attemptToken },
+    });
+    // getRuntimeConfig returns the config WITH the install → commitConfirmed
+    mocks.loadConfigResult.mockReturnValue({
+      plugins: { installs: { demo: { source: "clawhub", installPath: targetDir } } },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/demo" },
+        env: {},
+      }),
+    ).rejects.toMatchObject({
+      message: "post-commit registry refresh failed",
+      warning: expect.stringContaining("retained the managed target"),
+      cause: postCommitError,
+    });
+    // ★ CRITICAL: cleanup must NOT delete a target whose config commit succeeded.
+    expect(mocks.applyUninstall).not.toHaveBeenCalled();
+    expect(mocks.planUninstall).not.toHaveBeenCalled();
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {
@@ -1041,9 +1133,6 @@ describe("plugin management service", () => {
     });
     mocks.commitRecords.mockResolvedValue(undefined);
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
-    mocks.clawReferenceWarnings.mockReturnValue([
-      'Warning: plugin "diffs" is referenced by Claw: @acme/review.',
-    ]);
     mocks.refreshRegistry.mockResolvedValue(undefined);
 
     const result = await uninstallManagedPlugin({ pluginId: "diffs", env: {} });
@@ -1067,10 +1156,12 @@ describe("plugin management service", () => {
       )[0].nextConfig.plugins?.installs,
     ).toBeUndefined();
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: "/tmp/extensions/diffs" });
+    expect(mocks.refreshRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "source-changed", installRecords: {} }),
+    );
     expect(result).toMatchObject({
       pluginId: "diffs",
       removed: ["config entry", "install record", "directory"],
-      warnings: ['Warning: plugin "diffs" is referenced by Claw: @acme/review.'],
     });
   });
 

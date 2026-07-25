@@ -2,7 +2,7 @@
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
-    /** Controls prompt mutation via before_prompt_build. */
+    /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;
     /**
      * Controls access to raw conversation content from conversation hooks including
@@ -56,6 +56,10 @@ export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
   marketplaceName?: string;
   marketplaceSource?: string;
   marketplacePlugin?: string;
+  /** Per-attempt UUID used to tie a surviving SQLite record to the install
+   *  transaction that created it.  Cleanup only removes the target when this
+   *  token matches — a mismatch means another process wrote the record. */
+  installAttemptToken?: string;
 };
 
 export type PluginsConfig = {
@@ -68,6 +72,8 @@ export type PluginsConfig = {
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
+  /** @deprecated Shipped upgrade marker accepted for old restrictive allowlist configs. */
+  bundledDiscovery?: "compat" | "allowlist";
   /**
    * Internal transient carrier for plugin install records during command flows.
    * This is intentionally omitted from the config schema and must not be
