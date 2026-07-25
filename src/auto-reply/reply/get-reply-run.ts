@@ -130,7 +130,10 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
+import {
+  prepareFormattedSystemEvents,
+  type PreparedManagedSystemEventDelivery,
+} from "./session-system-events.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
 import {
   buildChannelSourceTurnId,
@@ -936,6 +939,8 @@ export async function runPreparedReply(
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
+  const seenSystemEventBlockKeys = new Set<string>();
+  const managedSystemEventDeliveries = new Map<string, PreparedManagedSystemEventDelivery>();
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
@@ -945,15 +950,24 @@ export async function runPreparedReply(
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
     if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
-      const eventsBlock = await drainFormattedSystemEvents({
+      const preparedEvents = await prepareFormattedSystemEvents({
         cfg,
         sessionKey,
         isMainSession,
         isNewSession,
         suppressHeartbeatOwnedEvents: isHeartbeat,
       });
-      if (eventsBlock) {
-        drainedSystemEventBlocks.push(eventsBlock);
+      for (const delivery of preparedEvents.managedDeliveries) {
+        managedSystemEventDeliveries.set(delivery.id, delivery);
+      }
+      for (const block of preparedEvents.blocks) {
+        if (block.key) {
+          if (seenSystemEventBlockKeys.has(block.key)) {
+            continue;
+          }
+          seenSystemEventBlockKeys.add(block.key);
+        }
+        drainedSystemEventBlocks.push(block.text);
       }
     }
     return buildReplyPromptEnvelope({
@@ -1521,6 +1535,9 @@ export async function runPreparedReply(
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
+          ...(managedSystemEventDeliveries.size > 0
+            ? { sessionDeliveryAckIds: [...managedSystemEventDeliveries.keys()] }
+            : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat
             ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
@@ -1574,6 +1591,34 @@ export async function runPreparedReply(
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
+  const acknowledgeManagedSystemEvents = async () => {
+    let firstError: unknown;
+    for (const delivery of managedSystemEventDeliveries.values()) {
+      try {
+        await delivery.acknowledge();
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    if (firstError !== undefined) {
+      throw firstError;
+    }
+  };
+  const originalTurnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
+  const effectiveTurnAdoptionLifecycle =
+    managedSystemEventDeliveries.size > 0
+      ? {
+          ...originalTurnAdoptionLifecycle,
+          onAdopted: async () => {
+            await acknowledgeManagedSystemEvents();
+            await originalTurnAdoptionLifecycle?.onAdopted();
+          },
+        }
+      : originalTurnAdoptionLifecycle;
+  const effectiveOpts =
+    effectiveTurnAdoptionLifecycle === opts?.turnAdoptionLifecycle
+      ? opts
+      : { ...opts, turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle };
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -1584,7 +1629,7 @@ export async function runPreparedReply(
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
-    turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
+    turnAdoptionLifecycle: effectiveTurnAdoptionLifecycle,
     onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -1740,7 +1785,7 @@ export async function runPreparedReply(
       return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
     },
     isStreaming,
-    opts,
+    opts: effectiveOpts,
     typing,
     sessionEntry: preparedSessionState.sessionEntry,
     sessionStore,

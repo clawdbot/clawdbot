@@ -75,6 +75,7 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   clearInterval(maintenance.healthInterval);
   clearInterval(maintenance.dedupeCleanup);
   clearInterval(maintenance.worktreeCleanup);
+  clearInterval(maintenance.delegateArtifactCleanup);
   if (maintenance.mediaCleanup) {
     clearInterval(maintenance.mediaCleanup);
   }

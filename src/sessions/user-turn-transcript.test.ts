@@ -390,6 +390,43 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("persists managed delivery adoption metadata through transcript hooks", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "managed completion",
+          sessionDeliveryAckIds: ["delivery-1", "delivery-1", "delivery-2"],
+        },
+        beforeMessageWrite: ({ message }) => {
+          const deliveryIds = (
+            message as unknown as {
+              __openclaw?: { sessionDeliveryAckIds?: unknown[] };
+            }
+          ).__openclaw?.sessionDeliveryAckIds;
+          deliveryIds?.splice(0);
+          return castAgentMessage({
+            role: "user",
+            content: message.content,
+            __openclaw: { hookOwned: true },
+          });
+        },
+        target,
+      });
+
+      await recorder.persistApproved();
+
+      expect(await readTranscriptMessages(target)).toEqual([
+        expect.objectContaining({
+          content: "managed completion",
+          __openclaw: {
+            hookOwned: true,
+            sessionDeliveryAckIds: ["delivery-1", "delivery-2"],
+          },
+        }),
+      ]);
+    });
+
     it("appends #99495 media that resolves after the admitted turn reached the provider", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-late-media-");
       const target = createSqliteTranscriptTarget({ dir });
@@ -403,6 +440,7 @@ describe("user turn transcript persistence", () => {
       const resolverStarted = new Promise<void>((resolve) => {
         markResolverStarted = resolve;
       });
+
       const mediaInput = new Promise<UserTurnInput>((resolve) => {
         resolveMedia = resolve;
       });

@@ -223,6 +223,9 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
     ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
     ...senderMeta,
     ...(params.transport ? { transport: params.transport } : {}),
+    ...(params.sessionDeliveryAckIds && params.sessionDeliveryAckIds.length > 0
+      ? { sessionDeliveryAckIds: [...new Set(params.sessionDeliveryAckIds)] }
+      : {}),
   };
   const message = {
     role: "user",
@@ -369,6 +372,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
   const originalTransport = readOpenClawMessageMeta(message)?.transport;
+  const originalSessionDeliveryAckIds = readOpenClawMessageMeta(message)?.sessionDeliveryAckIds;
+  const sessionDeliveryAckIds = Array.isArray(originalSessionDeliveryAckIds)
+    ? [...originalSessionDeliveryAckIds]
+    : undefined;
   const lateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
@@ -387,13 +394,20 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport && !lateMedia) {
+  if (
+    !idempotencyKey &&
+    typeof senderIsOwner !== "boolean" &&
+    !transport &&
+    !Array.isArray(sessionDeliveryAckIds) &&
+    !lateMedia
+  ) {
     return nextUserMessage;
   }
   const protectedMeta = {
     ...readOpenClawMessageMeta(nextUserMessage),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(transport ? { transport } : {}),
+    ...(Array.isArray(sessionDeliveryAckIds) ? { sessionDeliveryAckIds } : {}),
     ...(lateMedia ? { lateMedia: true } : {}),
   };
   return {

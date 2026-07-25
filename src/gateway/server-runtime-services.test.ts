@@ -675,6 +675,7 @@ describe("server-runtime-services", () => {
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.mediaCleanup);
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.worktreeCleanup);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.delegateArtifactCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
@@ -788,6 +789,7 @@ function createMaintenanceHandles() {
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: setInterval(() => undefined, 60_000),
     worktreeCleanup: setInterval(() => undefined, 60_000),
+    delegateArtifactCleanup: setInterval(() => undefined, 60_000),
     skillCuratorCleanup: vi.fn(),
   };
 }

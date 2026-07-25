@@ -11,7 +11,7 @@ import {
 } from "../../agents/delegate-artifacts.js";
 import { replaceManagedDelegateReturnInPrompt } from "../../agents/internal-events.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
@@ -116,16 +116,110 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   );
 }
 
-/** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
-export async function drainFormattedSystemEvents(params: {
+export type PreparedSystemEventBlock = {
+  key?: string;
+  text: string;
+};
+
+export type PreparedManagedSystemEventDelivery = {
+  id: string;
+  acknowledge: () => Promise<void>;
+};
+
+export type PreparedFormattedSystemEvents = {
+  blocks: PreparedSystemEventBlock[];
+  managedDeliveries: PreparedManagedSystemEventDelivery[];
+};
+
+type ManagedDeliverySettlement = {
+  event: SystemEvent;
+  id: string;
+  stateDir?: string;
+  receipt?: NonNullable<SystemEvent["delegateArtifactReceipt"]>;
+  deliveryEligible: boolean;
+};
+
+function readAdoptedSessionDeliveryIds(events: readonly unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const message = (event as { message?: unknown }).message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const metadata = (message as { __openclaw?: unknown }).__openclaw;
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      continue;
+    }
+    const deliveryIds = (metadata as { sessionDeliveryAckIds?: unknown }).sessionDeliveryAckIds;
+    if (!Array.isArray(deliveryIds)) {
+      continue;
+    }
+    for (const id of deliveryIds) {
+      const normalized = normalizeOptionalString(id);
+      if (normalized) {
+        ids.add(normalized);
+      }
+    }
+  }
+  return ids;
+}
+
+async function settleManagedDelivery(
+  sessionKey: string,
+  settlement: ManagedDeliverySettlement,
+): Promise<void> {
+  const options = settlement.stateDir
+    ? { env: { ...process.env, OPENCLAW_STATE_DIR: settlement.stateDir } }
+    : undefined;
+  try {
+    if (settlement.receipt) {
+      const receipt = settlement.receipt;
+      if (settlement.deliveryEligible) {
+        recordDelegateArtifactDeliveryBinding({
+          dispatchId: receipt.dispatchId,
+          recipientSessionKey: receipt.recipientSessionKey,
+          recipientSessionId: receipt.recipientSessionId,
+          phase: "acknowledged",
+          ...(options ? { options } : {}),
+        });
+      } else {
+        markDelegateArtifactDeliveryUnavailable({
+          dispatchId: receipt.dispatchId,
+          recipientSessionKey: receipt.recipientSessionKey,
+          recipientSessionId: receipt.recipientSessionId,
+          reason: "recipient-incarnation-changed",
+          ...(options ? { options } : {}),
+        });
+      }
+    }
+    await ackSessionDelivery(settlement.id, settlement.stateDir);
+    consumeSelectedSystemEventEntries(sessionKey, [settlement.event]);
+  } catch (error) {
+    defaultRuntime.log(
+      `[session-system-events] failed to settle adopted session delivery ${settlement.id}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    throw error;
+  }
+}
+
+/**
+ * Prepare queued system events for one prompt. Managed deliveries remain
+ * pending until the caller durably adopts the resulting user turn.
+ */
+export async function prepareFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
   suppressHeartbeatOwnedEvents?: boolean;
-}): Promise<string | undefined> {
+}): Promise<PreparedFormattedSystemEvents> {
   const summaryLines: string[] = [];
-  const systemLines: string[] = [];
+  const blocks: PreparedSystemEventBlock[] = [];
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const selected = selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey), {
@@ -139,9 +233,25 @@ export async function drainFormattedSystemEvents(params: {
     readConsistency: "latest",
     hydrateSkillPromptRefs: false,
   })?.sessionId;
+  const hasManagedDelivery = selected.some(
+    (event) => event.delegateArtifactReceipt && event.sessionDeliveryAckId,
+  );
+  const adoptedDeliveryIds =
+    currentSessionId && hasManagedDelivery
+      ? readAdoptedSessionDeliveryIds(
+          await loadTranscriptEvents({
+            agentId,
+            sessionId: currentSessionId,
+            sessionKey: params.sessionKey,
+            storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+          }),
+        )
+      : new Set<string>();
   const runtime = resolveContinuationRuntimeConfig(params.cfg);
   const deferredManagedEvents = new Set<SystemEvent>();
-  const terminalManagedKeys = new Set<string>();
+  const pendingManagedKeys = new Set<string>();
+  const terminalManagedSettlements: ManagedDeliverySettlement[] = [];
+  const pendingManagedSettlements: ManagedDeliverySettlement[] = [];
   const refreshedManagedText = new Map<string, string>();
   const managedKey = (event: SystemEvent): string | undefined => {
     const receipt = event.delegateArtifactReceipt;
@@ -187,7 +297,16 @@ export async function drainFormattedSystemEvents(params: {
         reason: "delivery-state-unavailable",
         ...artifactOptions,
       });
-      terminalManagedKeys.add(key);
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          deliveryEligible: false,
+        });
+      }
       continue;
     }
     const prepared = prepareDelegateArtifactDelivery({
@@ -202,7 +321,17 @@ export async function drainFormattedSystemEvents(params: {
       continue;
     }
     if (prepared.status === "acknowledged") {
-      terminalManagedKeys.add(key);
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          receipt,
+          deliveryEligible: true,
+        });
+      }
       continue;
     }
     if (prepared.status === "unavailable") {
@@ -216,7 +345,16 @@ export async function drainFormattedSystemEvents(params: {
             : "recipient-incarnation-changed",
         ...artifactOptions,
       });
-      terminalManagedKeys.add(key);
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          deliveryEligible: false,
+        });
+      }
       continue;
     }
     recordDelegateArtifactDeliveryBinding({
@@ -240,7 +378,17 @@ export async function drainFormattedSystemEvents(params: {
       continue;
     }
     if (refreshed.status === "acknowledged") {
-      terminalManagedKeys.add(key);
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          receipt,
+          deliveryEligible: true,
+        });
+      }
       continue;
     }
     if (refreshed.status === "unavailable") {
@@ -251,80 +399,83 @@ export async function drainFormattedSystemEvents(params: {
         reason: "delivery-state-unavailable",
         ...artifactOptions,
       });
-      terminalManagedKeys.add(key);
+      if (event.sessionDeliveryAckId) {
+        terminalManagedSettlements.push({
+          event,
+          id: event.sessionDeliveryAckId,
+          ...(event.sessionDeliveryAckStateDir
+            ? { stateDir: event.sessionDeliveryAckStateDir }
+            : {}),
+          deliveryEligible: false,
+        });
+      }
       continue;
     }
     refreshedManagedText.set(
       key,
       replaceManagedDelegateReturnInPrompt(event.text, refreshed.projection),
     );
+    const deliveryId = normalizeOptionalString(event.sessionDeliveryAckId);
+    if (!deliveryId) {
+      continue;
+    }
+    const settlement: ManagedDeliverySettlement = {
+      event,
+      id: deliveryId,
+      ...(event.sessionDeliveryAckStateDir ? { stateDir: event.sessionDeliveryAckStateDir } : {}),
+      receipt,
+      deliveryEligible: currentSessionId === receipt.recipientSessionId,
+    };
+    if (adoptedDeliveryIds.has(deliveryId) || !settlement.deliveryEligible) {
+      terminalManagedSettlements.push(settlement);
+    } else {
+      pendingManagedKeys.add(key);
+      pendingManagedSettlements.push(settlement);
+    }
+  }
+  for (const settlement of terminalManagedSettlements) {
+    await settleManagedDelivery(params.sessionKey, settlement);
   }
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
-    selected.filter((event) => !deferredManagedEvents.has(event)),
+    selected.filter((event) => !event.delegateArtifactReceipt && !deferredManagedEvents.has(event)),
   ).map((event) => {
     const key = managedKey(event);
     const text = key ? refreshedManagedText.get(key) : undefined;
     return text ? { ...event, text } : event;
   });
   const deliverable = queued.filter(
-    (event) =>
-      (!event.expectedSessionId || event.expectedSessionId === currentSessionId) &&
-      !terminalManagedKeys.has(managedKey(event) ?? ""),
+    (event) => !event.expectedSessionId || event.expectedSessionId === currentSessionId,
   );
-  const deliverableEvents = new Set(deliverable);
+  const pendingManagedEvents = selected
+    .filter((event) => pendingManagedKeys.has(managedKey(event) ?? ""))
+    .map((event) => {
+      const key = managedKey(event);
+      const text = key ? refreshedManagedText.get(key) : undefined;
+      return text ? { ...event, text } : event;
+    });
+  const promptEvents = [...deliverable, ...pendingManagedEvents];
   const sessionDeliveryAcks = new Map<
     string,
     {
       id: string;
       stateDir?: string;
-      delegateArtifactReceipt?: NonNullable<SystemEvent["delegateArtifactReceipt"]>;
-      deliveryEligible: boolean;
     }
   >();
-  for (const event of queued) {
+  for (const event of selected.filter((entry) => !entry.delegateArtifactReceipt)) {
     const id = normalizeOptionalString(event.sessionDeliveryAckId);
     if (!id) {
       continue;
     }
     const stateDir = normalizeOptionalString(event.sessionDeliveryAckStateDir);
     const dedupeKey = `${id}\u0000${stateDir ?? ""}`;
-    const deliveryEligible = deliverableEvents.has(event);
-    const delegateArtifactReceipt = terminalManagedKeys.has(managedKey(event) ?? "")
-      ? undefined
-      : event.delegateArtifactReceipt;
     sessionDeliveryAcks.set(dedupeKey, {
       id,
       ...(stateDir ? { stateDir } : {}),
-      ...(delegateArtifactReceipt ? { delegateArtifactReceipt } : {}),
-      deliveryEligible,
     });
   }
   for (const ack of sessionDeliveryAcks.values()) {
     try {
-      if (ack.delegateArtifactReceipt) {
-        const receipt = ack.delegateArtifactReceipt;
-        const options = ack.stateDir
-          ? { env: { ...process.env, OPENCLAW_STATE_DIR: ack.stateDir } }
-          : undefined;
-        if (ack.deliveryEligible) {
-          recordDelegateArtifactDeliveryBinding({
-            dispatchId: receipt.dispatchId,
-            recipientSessionKey: receipt.recipientSessionKey,
-            recipientSessionId: receipt.recipientSessionId,
-            phase: "acknowledged",
-            ...(options ? { options } : {}),
-          });
-        } else {
-          markDelegateArtifactDeliveryUnavailable({
-            dispatchId: receipt.dispatchId,
-            recipientSessionKey: receipt.recipientSessionKey,
-            recipientSessionId: receipt.recipientSessionId,
-            reason: "recipient-incarnation-changed",
-            ...(options ? { options } : {}),
-          });
-        }
-      }
       await ackSessionDelivery(ack.id, ack.stateDir);
     } catch (error) {
       defaultRuntime.log(
@@ -334,7 +485,7 @@ export async function drainFormattedSystemEvents(params: {
       );
     }
   }
-  const sessionStateTargets = deliverable
+  const sessionStateTargets = promptEvents
     .map((event) =>
       event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
     )
@@ -342,27 +493,31 @@ export async function drainFormattedSystemEvents(params: {
   if (sessionStateTargets.length > 0) {
     acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
   }
-  const drainedContinuationCount = deliverable.filter((event) =>
+  const drainedContinuationCount = promptEvents.filter((event) =>
     event.text.startsWith("[continuation:"),
   ).length;
-  const traceparent = deliverable.find((event) => event.traceparent)?.traceparent;
+  const traceparent = promptEvents.find((event) => event.traceparent)?.traceparent;
   emitContinuationQueueDrainSpan({
-    drainedCount: deliverable.length,
+    drainedCount: promptEvents.length,
     drainedContinuationCount,
     ...(traceparent ? { traceparent } : {}),
     log: (message) => defaultRuntime.log(message),
   });
-  for (const event of deliverable) {
+  for (const event of promptEvents) {
     const compacted = compactSystemEvent(event.text);
     if (!compacted) {
       continue;
     }
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-    let index = 0;
-    for (const subline of compacted.split("\n")) {
-      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-      index += 1;
-    }
+    const lines = compacted
+      .split("\n")
+      .map((subline, index) => `System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+    blocks.push({
+      ...(event.sessionDeliveryAckId
+        ? { key: `session-delivery:${event.sessionDeliveryAckId}` }
+        : {}),
+      text: lines.join("\n"),
+    });
   }
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
@@ -374,13 +529,27 @@ export async function drainFormattedSystemEvents(params: {
       }
     }
   }
-  if (summaryLines.length === 0 && systemLines.length === 0) {
-    return undefined;
+  if (summaryLines.length > 0) {
+    blocks.unshift({ key: "session-summary", text: summaryLines.join("\n") });
   }
+  return {
+    blocks,
+    managedDeliveries: pendingManagedSettlements.map((settlement) => ({
+      id: settlement.id,
+      acknowledge: () => settleManagedDelivery(params.sessionKey, settlement),
+    })),
+  };
+}
 
-  // Each sub-line gets its own prefix so continuation lines can't be mistaken
-  // for regular user content.
-  return summaryLines.length > 0
-    ? [...summaryLines, ...systemLines].join("\n")
-    : systemLines.join("\n");
+/** Drain queued system events and immediately acknowledge prepared deliveries. */
+export async function drainFormattedSystemEvents(
+  params: Parameters<typeof prepareFormattedSystemEvents>[0],
+): Promise<string | undefined> {
+  const prepared = await prepareFormattedSystemEvents(params);
+  for (const delivery of prepared.managedDeliveries) {
+    await delivery.acknowledge();
+  }
+  return prepared.blocks.length > 0
+    ? prepared.blocks.map((block) => block.text).join("\n")
+    : undefined;
 }

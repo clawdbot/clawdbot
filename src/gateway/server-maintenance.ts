@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { purgeExpiredDelegateArtifacts } from "../agents/delegate-artifacts.js";
 import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -37,6 +38,7 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+const DELEGATE_ARTIFACT_GC_INTERVAL_MS = 60 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -82,6 +84,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
+  runDelegateArtifactGc?: () => Promise<unknown> | unknown;
   enableSkillCurator?: boolean;
   runSkillCuratorSweep?: () => Promise<unknown>;
   registerSkillUsageTracking?: () => () => void;
@@ -91,6 +94,7 @@ export function startGatewayMaintenanceTimers(params: {
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
   worktreeCleanup: ReturnType<typeof setInterval>;
+  delegateArtifactCleanup: ReturnType<typeof setInterval>;
   skillCuratorCleanup: () => void;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
@@ -166,6 +170,31 @@ export function startGatewayMaintenanceTimers(params: {
     return deliveryQueueMediaGcInFlight;
   };
   void performDeliveryQueueMediaGc();
+
+  const runDelegateArtifactGc =
+    params.runDelegateArtifactGc ?? (() => purgeExpiredDelegateArtifacts());
+  let delegateArtifactGcInFlight: Promise<void> | null = null;
+  const performDelegateArtifactGc = () => {
+    if (delegateArtifactGcInFlight) {
+      return delegateArtifactGcInFlight;
+    }
+    delegateArtifactGcInFlight = Promise.resolve()
+      .then(async () => {
+        await runDelegateArtifactGc();
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`delegate artifact cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        delegateArtifactGcInFlight = null;
+      });
+    return delegateArtifactGcInFlight;
+  };
+  const delegateArtifactCleanup = setInterval(
+    () => void performDelegateArtifactGc(),
+    DELEGATE_ARTIFACT_GC_INTERVAL_MS,
+  );
+  void performDelegateArtifactGc();
 
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
@@ -372,6 +401,7 @@ export function startGatewayMaintenanceTimers(params: {
       dedupeCleanup,
       mediaCleanup: null,
       worktreeCleanup,
+      delegateArtifactCleanup,
       skillCuratorCleanup,
     };
   }
@@ -406,6 +436,7 @@ export function startGatewayMaintenanceTimers(params: {
     dedupeCleanup,
     mediaCleanup,
     worktreeCleanup,
+    delegateArtifactCleanup,
     skillCuratorCleanup,
   };
 }

@@ -758,27 +758,29 @@ describe("scheduleRestartSentinelWake", () => {
     });
     mocks.replaceManagedDelegateReturnInPrompt.mockReturnValue("refreshed managed return");
 
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      entry: {
-        id: "session-delivery-managed",
-        kind: "systemEvent",
-        sessionKey: "agent:main:main",
-        text: "stored managed return",
-        enqueuedAt: 1,
-        retryCount: 0,
-        expectedSessionId: "session-1",
-        managedDelegateArtifactDelivery: {
-          receipt: {
-            kind: "delegate-artifact",
-            dispatchId: "dispatch-1",
-            recipientSessionKey: "agent:main:main",
-            recipientSessionId: "session-1",
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-managed",
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "stored managed return",
+          enqueuedAt: 1,
+          retryCount: 0,
+          expectedSessionId: "session-1",
+          managedDelegateArtifactDelivery: {
+            receipt: {
+              kind: "delegate-artifact",
+              dispatchId: "dispatch-1",
+              recipientSessionKey: "agent:main:main",
+              recipientSessionId: "session-1",
+            },
+            projection,
           },
-          projection,
         },
-      },
-    });
+      }),
+    ).rejects.toThrow("managed delegate return is awaiting durable recipient adoption");
 
     expect(mocks.prepareDelegateArtifactDelivery).toHaveBeenCalledWith(
       expect.objectContaining({

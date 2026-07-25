@@ -26,6 +26,8 @@ export type UserTurnInput = {
   media?: readonly PersistedUserTurnMediaInput[] | null;
   timestamp?: number;
   idempotencyKey?: string;
+  /** Private durable receipts for managed system events adopted by this turn. */
+  sessionDeliveryAckIds?: readonly string[];
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
   /** Durable participant attribution. Callers must opt in at the product boundary. */

@@ -20,6 +20,7 @@ export const DELEGATE_ARTIFACT_MAX_COUNT = 8;
 export const DELEGATE_ARTIFACT_MAX_BYTES = 16 * 1024 * 1024;
 export const DELEGATE_ARTIFACT_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 export const DELEGATE_ARTIFACT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const DELEGATE_ARTIFACT_PURGE_BATCH_SIZE = 100;
 
 const MIME_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
 const ALLOWED_MIME_PATTERNS = [
@@ -1418,6 +1419,37 @@ export function listDelegateArtifactsForRecipient(params: {
         });
         return { outcome: "unauthorized" };
       }
+      const policy = executeSqliteQueryTakeFirstSync(
+        db,
+        kdb
+          .selectFrom("delegate_artifact_policies")
+          .select("retention_deadline")
+          .where("flow_id", "=", authorized.flow_id),
+      );
+      if (!policy) {
+        auditOperation({
+          db,
+          action: "list",
+          outcome: "corrupt",
+          flowId: authorized.flow_id,
+          recipientSessionKey: params.recipientSessionKey,
+          recipientSessionId: params.recipientSessionId,
+          now,
+        });
+        return { outcome: "corrupt" };
+      }
+      if (policy.retention_deadline <= now) {
+        auditOperation({
+          db,
+          action: "list",
+          outcome: "expired",
+          flowId: authorized.flow_id,
+          recipientSessionKey: params.recipientSessionKey,
+          recipientSessionId: params.recipientSessionId,
+          now,
+        });
+        return { outcome: "expired" };
+      }
       const bindings = executeSqliteQuerySync(
         db,
         kdb
@@ -1944,6 +1976,9 @@ export function recordDelegateArtifactDeliveryBinding(params: {
       if (params.phase === "acknowledged" && recipientOutcome.first_delivery_at === null) {
         throw new Error("delegate artifact delivery cannot be acknowledged before its attempt");
       }
+      if (params.phase === "acknowledged" && recipientOutcome.delivery_acknowledged_at !== null) {
+        return;
+      }
       if (params.phase !== "acknowledged" && recipientOutcome.delivery_acknowledged_at !== null) {
         return;
       }
@@ -2044,7 +2079,8 @@ export function purgeExpiredDelegateArtifacts(
           .select("delegate_artifact_policies.flow_id")
           .distinct()
           .where("delegate_artifact_policies.retention_deadline", "<=", now)
-          .where("delegate_artifact_claims.status", "!=", "purged"),
+          .where("delegate_artifact_claims.status", "!=", "purged")
+          .limit(DELEGATE_ARTIFACT_PURGE_BATCH_SIZE),
       ).rows;
       for (const policy of expiredPolicies) {
         executeSqliteQuerySync(

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   ackSessionDelivery: vi.fn(async () => undefined),
   loadPendingSessionDelivery: vi.fn(),
   loadSessionEntry: vi.fn(),
+  loadTranscriptEvents: vi.fn<() => Promise<unknown[]>>(async () => []),
   markDelegateArtifactDeliveryUnavailable: vi.fn(),
   prepareDelegateArtifactDelivery: vi.fn(),
   recordDelegateArtifactDeliveryBinding: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("../../agents/internal-events.js", () => ({
 }));
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
+  loadTranscriptEvents: mocks.loadTranscriptEvents,
 }));
 vi.mock("../continuation/config.js", () => ({
   resolveContinuationRuntimeConfig: mocks.resolveContinuationRuntimeConfig,
@@ -66,7 +68,8 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-const { drainFormattedSystemEvents } = await import("./session-system-events.js");
+const { drainFormattedSystemEvents, prepareFormattedSystemEvents } =
+  await import("./session-system-events.js");
 
 describe("drainFormattedSystemEvents trace context", () => {
   beforeEach(() => {
@@ -77,6 +80,7 @@ describe("drainFormattedSystemEvents trace context", () => {
     mocks.ackSessionDelivery.mockClear();
     mocks.loadPendingSessionDelivery.mockReset();
     mocks.loadSessionEntry.mockReset().mockReturnValue({ sessionId: "current-session" });
+    mocks.loadTranscriptEvents.mockReset().mockResolvedValue([]);
     mocks.markDelegateArtifactDeliveryUnavailable.mockClear();
     mocks.prepareDelegateArtifactDelivery.mockReset();
     mocks.recordDelegateArtifactDeliveryBinding.mockClear();
@@ -288,6 +292,7 @@ describe("drainFormattedSystemEvents trace context", () => {
       kind: "systemEvent",
       managedDelegateArtifactDelivery: { receipt, projection },
     });
+
     mocks.prepareDelegateArtifactDelivery.mockReturnValue({
       status: "ready",
       projection,
@@ -310,6 +315,159 @@ describe("drainFormattedSystemEvents trace context", () => {
       phase: "acknowledged",
     });
     expect(mocks.ackSessionDelivery).toHaveBeenCalledWith("delivery-1", undefined);
+  });
+
+  it("replays the same managed completion until the recipient turn adopts it", async () => {
+    const receipt = {
+      kind: "delegate-artifact" as const,
+      dispatchId: "dispatch-1",
+      recipientSessionKey: "main",
+      recipientSessionId: "current-session",
+    };
+    const projection = {
+      artifacts: [],
+      arrivalContext: {
+        deliveryClass: "delegate result" as const,
+        deliveryMode: "announced" as const,
+        dispatchId: "dispatch-1",
+        producer: { sessionKey: "child", runId: "run-1" },
+        completionId: "completion-1",
+        binding: {
+          recipientSessionKey: "main",
+          recipientSessionId: "current-session",
+        },
+        dispatchAcceptedAt: 1,
+        completedAt: 2,
+        deliveredAt: 3,
+        replayedAt: 4,
+        policyVersion: 1 as const,
+        availability: "available" as const,
+      },
+    };
+    const event: SystemEvent = {
+      text: "stored managed return",
+      ts: 1,
+      expectedSessionId: "current-session",
+      sessionDeliveryAckId: "delivery-1",
+      delegateArtifactReceipt: receipt,
+    };
+    mocks.peekSystemEventEntries.mockReturnValue([event]);
+    mocks.consumeSelectedSystemEventEntries.mockReturnValue([]);
+    mocks.loadPendingSessionDelivery.mockResolvedValue({
+      kind: "systemEvent",
+      managedDelegateArtifactDelivery: { receipt, projection },
+    });
+    mocks.prepareDelegateArtifactDelivery.mockReturnValue({
+      status: "ready",
+      projection,
+    });
+    mocks.replaceManagedDelegateReturnInPrompt.mockReturnValue("refreshed managed return");
+
+    const first = await prepareFormattedSystemEvents({
+      cfg: {},
+      sessionKey: "main",
+      isMainSession: false,
+      isNewSession: false,
+    });
+    const replay = await prepareFormattedSystemEvents({
+      cfg: {},
+      sessionKey: "main",
+      isMainSession: false,
+      isNewSession: false,
+    });
+
+    expect(replay.blocks).toEqual(first.blocks);
+    expect(replay.managedDeliveries.map((delivery) => delivery.id)).toEqual(["delivery-1"]);
+    expect(mocks.ackSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.recordDelegateArtifactDeliveryBinding).not.toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "acknowledged" }),
+    );
+
+    await first.managedDeliveries[0]?.acknowledge();
+
+    expect(mocks.recordDelegateArtifactDeliveryBinding).toHaveBeenCalledWith({
+      dispatchId: "dispatch-1",
+      recipientSessionKey: "main",
+      recipientSessionId: "current-session",
+      phase: "acknowledged",
+    });
+    expect(mocks.ackSessionDelivery).toHaveBeenCalledWith("delivery-1", undefined);
+    expect(mocks.consumeSelectedSystemEventEntries).toHaveBeenCalledWith("main", [event]);
+  });
+
+  it("settles an already-adopted managed delivery without creating another prompt", async () => {
+    const receipt = {
+      kind: "delegate-artifact" as const,
+      dispatchId: "dispatch-1",
+      recipientSessionKey: "main",
+      recipientSessionId: "current-session",
+    };
+    const projection = {
+      artifacts: [],
+      arrivalContext: {
+        deliveryClass: "delegate result" as const,
+        deliveryMode: "announced" as const,
+        dispatchId: "dispatch-1",
+        producer: { sessionKey: "child", runId: "run-1" },
+        completionId: "completion-1",
+        binding: {
+          recipientSessionKey: "main",
+          recipientSessionId: "current-session",
+        },
+        dispatchAcceptedAt: 1,
+        completedAt: 2,
+        deliveredAt: 3,
+        policyVersion: 1 as const,
+        availability: "available" as const,
+      },
+    };
+    const event: SystemEvent = {
+      text: "stored managed return",
+      ts: 1,
+      expectedSessionId: "current-session",
+      sessionDeliveryAckId: "delivery-1",
+      delegateArtifactReceipt: receipt,
+    };
+    mocks.peekSystemEventEntries.mockReturnValue([event]);
+    mocks.consumeSelectedSystemEventEntries.mockImplementation(
+      (_sessionKey: string, selected: SystemEvent[]) => selected,
+    );
+    mocks.loadTranscriptEvents.mockResolvedValue([
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "adopted prompt",
+          __openclaw: { sessionDeliveryAckIds: ["delivery-1"] },
+        },
+      },
+    ]);
+    mocks.loadPendingSessionDelivery.mockResolvedValue({
+      kind: "systemEvent",
+      managedDelegateArtifactDelivery: { receipt, projection },
+    });
+    mocks.prepareDelegateArtifactDelivery.mockReturnValue({
+      status: "ready",
+      projection,
+    });
+    mocks.replaceManagedDelegateReturnInPrompt.mockReturnValue("refreshed managed return");
+
+    const replay = await prepareFormattedSystemEvents({
+      cfg: {},
+      sessionKey: "main",
+      isMainSession: false,
+      isNewSession: false,
+    });
+
+    expect(replay).toEqual({ blocks: [], managedDeliveries: [] });
+    expect(mocks.recordDelegateArtifactDeliveryBinding).toHaveBeenCalledWith({
+      dispatchId: "dispatch-1",
+      recipientSessionKey: "main",
+      recipientSessionId: "current-session",
+      phase: "acknowledged",
+    });
+    expect(mocks.ackSessionDelivery).toHaveBeenCalledWith("delivery-1", undefined);
+    expect(mocks.consumeSelectedSystemEventEntries).toHaveBeenCalledWith("main", [event]);
   });
 
   it("terminalizes a managed return that becomes unavailable during prompt refresh", async () => {

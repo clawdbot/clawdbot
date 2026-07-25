@@ -373,10 +373,23 @@ describe("managed delegate artifact claims", () => {
     if (preparedReplay.status !== "ready") {
       throw new Error("expected prepared replay");
     }
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare(
+          "SELECT delivery_acknowledged_at FROM delegate_artifact_bindings WHERE recipient_session_key = ?",
+        )
+        .get("agent:main:parent"),
+    ).toEqual({ delivery_acknowledged_at: null });
     recordDelegateArtifactDelivery({
       projection: preparedReplay.projection,
       phase: "acknowledged",
       now: 20_200,
+      options,
+    });
+    recordDelegateArtifactDelivery({
+      projection: preparedReplay.projection,
+      phase: "acknowledged",
+      now: 20_500,
       options,
     });
     expect(
@@ -1383,6 +1396,139 @@ describe("managed delegate artifact claims", () => {
         options: expiryOptions,
       }),
     ).toEqual({ outcome: "expired" });
+  });
+
+  it("purges backing bytes after restart without losing recipient isolation or provenance", () => {
+    const options = stateOptions();
+    createDelegateArtifactPolicy(policy(), options);
+    publish(options);
+    const finalized = finalize(options);
+    if (finalized.status !== "finalized") {
+      throw new Error("expected finalized claims");
+    }
+    for (const projection of finalized.projections.values()) {
+      recordDelegateArtifactDelivery({
+        projection,
+        phase: "attempt",
+        now: 9_900,
+        options,
+      });
+      recordDelegateArtifactDelivery({
+        projection,
+        phase: "acknowledged",
+        now: 9_950,
+        options,
+      });
+    }
+    const claimId = finalized.projections.get("agent:main:parent")?.artifacts[0]?.id;
+    if (!claimId) {
+      throw new Error("expected finalized claim");
+    }
+    expect(
+      discardDelegateArtifactForRecipient({
+        claimId,
+        recipientSessionKey: "agent:main:parent",
+        recipientSessionId: "parent-session-1",
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        now: 10_000,
+        options,
+      }),
+    ).toEqual({ outcome: "available" });
+    expect(
+      inspectDelegateArtifactForRecipient({
+        claimId,
+        recipientSessionKey: "agent:main:parent",
+        recipientSessionId: "parent-session-1",
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        now: 10_000,
+        options,
+      }),
+    ).toEqual({ outcome: "revoked" });
+    expect(
+      readDelegateArtifactForMaterialization({
+        claimId,
+        recipientSessionKey: "agent:main:target",
+        recipientSessionId: "target-session-1",
+        runtimeEnabled: true,
+        crossSessionEnabled: true,
+        now: 10_000,
+        options,
+      }),
+    ).toMatchObject({ outcome: "available" });
+
+    const db = openOpenClawStateDatabase(options).db;
+    const auditBeforeRestart = db
+      .prepare("SELECT * FROM delegate_artifact_audit ORDER BY sequence")
+      .all();
+    closeOpenClawStateDatabaseForTest();
+
+    const expiredAt = 1_000 + DELEGATE_ARTIFACT_RETENTION_MS;
+    expect(purgeExpiredDelegateArtifacts(expiredAt, options)).toBe(1);
+    expect(purgeExpiredDelegateArtifacts(expiredAt, options)).toBe(0);
+    closeOpenClawStateDatabaseForTest();
+
+    for (const recipient of [
+      {
+        sessionKey: "agent:main:parent",
+        sessionId: "parent-session-1",
+      },
+      {
+        sessionKey: "agent:main:target",
+        sessionId: "target-session-1",
+      },
+    ]) {
+      expect(
+        inspectDelegateArtifactForRecipient({
+          claimId,
+          recipientSessionKey: recipient.sessionKey,
+          recipientSessionId: recipient.sessionId,
+          runtimeEnabled: true,
+          crossSessionEnabled: true,
+          now: expiredAt,
+          options,
+        }),
+      ).toEqual({ outcome: "expired" });
+      expect(
+        listDelegateArtifactsForRecipient({
+          recipientSessionKey: recipient.sessionKey,
+          recipientSessionId: recipient.sessionId,
+          runtimeEnabled: true,
+          crossSessionEnabled: true,
+          now: expiredAt,
+          options,
+        }),
+      ).toEqual({ outcome: "expired" });
+      expect(
+        readDelegateArtifactForMaterialization({
+          claimId,
+          recipientSessionKey: recipient.sessionKey,
+          recipientSessionId: recipient.sessionId,
+          runtimeEnabled: true,
+          crossSessionEnabled: true,
+          now: expiredAt,
+          options,
+        }),
+      ).toEqual({ outcome: "expired" });
+    }
+
+    const reopened = openOpenClawStateDatabase(options).db;
+    expect(
+      reopened
+        .prepare("SELECT status, backing FROM delegate_artifact_claims WHERE claim_id = ?")
+        .get(claimId),
+    ).toEqual({ status: "purged", backing: null });
+    expect(
+      reopened.prepare("SELECT count(*) AS count FROM delegate_artifact_policies").get(),
+    ).toEqual({ count: 1 });
+    expect(
+      reopened.prepare("SELECT count(*) AS count FROM delegate_artifact_recipient_outcomes").get(),
+    ).toEqual({ count: 2 });
+    const auditAfterRestart = reopened
+      .prepare("SELECT * FROM delegate_artifact_audit ORDER BY sequence")
+      .all();
+    expect(auditAfterRestart.slice(0, auditBeforeRestart.length)).toEqual(auditBeforeRestart);
   });
 
   it("constructs the exact seven-field projection and rejects unsafe scalars", () => {

@@ -43,6 +43,7 @@ function createMaintenanceTimerDeps() {
     ...createGatewayMaintenanceStateForTest(),
     runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
+    runDelegateArtifactGc: vi.fn(async () => undefined),
   };
 }
 
@@ -111,12 +112,14 @@ function stopMaintenanceTimers(timers: {
   dedupeCleanup: NodeJS.Timeout;
   mediaCleanup: NodeJS.Timeout | null;
   worktreeCleanup: NodeJS.Timeout;
+  delegateArtifactCleanup: NodeJS.Timeout;
   skillCuratorCleanup: () => void;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
   clearInterval(timers.worktreeCleanup);
+  clearInterval(timers.delegateArtifactCleanup);
   if (timers.mediaCleanup) {
     clearInterval(timers.mediaCleanup);
   }
@@ -170,6 +173,24 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
 
     stopMaintenanceTimers(timers);
+  });
+
+  it("purges expired delegate artifacts at startup, after restart, and hourly", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const first = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(2);
+    stopMaintenanceTimers(first);
+
+    const restarted = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDelegateArtifactGc).toHaveBeenCalledTimes(3);
+    stopMaintenanceTimers(restarted);
   });
 
   it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {

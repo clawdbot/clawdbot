@@ -340,6 +340,13 @@ export async function deliverQueuedSessionDelivery(params: {
       params.entry.expectedSessionId,
       params.entry.managedDelegateArtifactDelivery?.receipt,
     );
+    if (managedDelivery) {
+      // In-memory enqueue only makes the prompt eligible. The durable queue row
+      // remains pending until transcript admission adopts and acknowledges it.
+      throw new SessionDeliveryDeferredError(
+        "managed delegate return is awaiting durable recipient adoption",
+      );
+    }
     return;
   }
 
