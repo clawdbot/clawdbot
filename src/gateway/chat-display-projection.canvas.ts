@@ -1,11 +1,6 @@
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
-import {
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  truncateChatHistoryText,
-} from "./chat-display-projection.helpers.js";
+import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
 export function isToolHistoryBlockType(type: unknown): boolean {

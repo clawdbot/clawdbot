@@ -1,7 +1,6 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  extractProjectedText,
   isAssistantTextContentType,
 } from "./chat-display-projection.helpers.js";
 import {
