@@ -6,7 +6,6 @@ export {
   resolveImageFallbackDefaultProvider,
   resolveModelCandidateChain,
 } from "./model-fallback-candidates.js";
-export { probeThrottleInternals } from "./model-fallback-cooldown.js";
 export {
   isFallbackSummaryError,
   type ModelFallbackResultClassification,

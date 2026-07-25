@@ -37,12 +37,12 @@ import {
   type SessionSuspensionParams,
 } from "./session-suspension.js";
 
-export type FailoverAttribution = {
+type FailoverAttribution = {
   sessionId?: string;
   lane?: string;
 };
 
-export class FallbackSummaryError extends Error {
+class FallbackSummaryError extends Error {
   readonly attempts: FallbackAttempt[];
   readonly soonestCooldownExpiry: number | null;
   readonly sessionId?: string;
@@ -73,7 +73,7 @@ export type ModelFallbackRunOptions = {
   isFinalFallbackAttempt?: boolean;
 };
 
-export type ModelFallbackRuntimeContext = {
+type ModelFallbackRuntimeContext = {
   cfg?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
@@ -181,7 +181,7 @@ function isTerminalAbortCandidate(candidate: unknown): boolean {
   );
 }
 
-export function isTerminalAbort(signal: AbortSignal | undefined): boolean {
+function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   if (!signal?.aborted) {
     return false;
   }
@@ -191,7 +191,7 @@ export function isTerminalAbort(signal: AbortSignal | undefined): boolean {
     : isTerminalAbortCandidate(reason);
 }
 
-export function isTerminalAbortFromError(err: unknown): boolean {
+function isTerminalAbortFromError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
@@ -208,7 +208,7 @@ export function isTerminalAbortFromError(err: unknown): boolean {
   return isOpenClawAbortableWrapper(err) && causeCandidates.some(isTerminalAbortCandidate);
 }
 
-export function isCallerAbortSignal(signal: AbortSignal | undefined): boolean {
+function isCallerAbortSignal(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 

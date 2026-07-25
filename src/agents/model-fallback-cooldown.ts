@@ -136,7 +136,7 @@ export const probeThrottleInternals = {
   markProbeAttempt,
 } as const;
 
-export type CooldownDecision =
+type CooldownDecision =
   | { type: "skip"; reason: FailoverReason; error: string }
   | { type: "attempt"; reason: FailoverReason; markProbe: boolean }
   | { type: "suspend_lanes"; reason: FailoverReason; leaderCandidate?: ModelCandidate };
