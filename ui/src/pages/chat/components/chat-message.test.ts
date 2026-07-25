@@ -16,6 +16,7 @@ import {
 } from "./chat-message.ts";
 
 const localStorageValues = new Map<string, string>();
+const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
 );
@@ -1903,21 +1904,31 @@ describe("grouped chat rendering", () => {
     expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
   });
 
-  it("renders multiline system notices as plain centered rows", () => {
+  it("renders multiline system notices as sanitized markdown", () => {
     const container = document.createElement("div");
+    markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
     render(
       renderChatNotice({
         kind: "notice",
         key: "notice:command",
-        text: "first line\n  second line",
+        text: "**first line**\nsecond line\n<img src=x onerror=alert(1)><script>alert(1)</script>",
         timestamp: 1000,
       }),
       container,
     );
 
     const notice = container.querySelector<HTMLElement>(".chat-notice");
-    expect(notice?.textContent?.trim()).toBe("first line\n  second line");
+    expect(notice?.querySelector("strong")?.textContent).toBe("first line");
+    expect(notice?.textContent).not.toContain("**");
+    expect(notice?.querySelector("br")).not.toBeNull();
+    expect(notice?.textContent).toContain("first line");
+    expect(notice?.textContent).toContain("second line");
+    expect(notice?.querySelector("script")).toBeNull();
+    expect(notice?.querySelector("img[onerror]")).toBeNull();
     expect(notice?.dataset.chatRowKey).toBe("notice:command");
+    expect(markdownRenderMock).toHaveBeenCalledWith(expect.any(String), {
+      codeBlockChrome: "none",
+    });
   });
 
   it("uses the current profile display name for the signed-in user's historical messages", () => {

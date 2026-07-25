@@ -460,11 +460,11 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
 
   </Accordion>
   <Accordion title="Stop and abort">
-    - Click **Stop** (calls `chat.abort`).
+    - Click **Stop**. Runs with an exact local run ID call `chat.abort`; when selected-session state reports active work but the Control UI has no local run ID, it calls `sessions.abort` instead. For non-global sessions, that selected-session path also discards queued follow-ups so they cannot restart work after the stop.
     - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. Steering rejection also falls back to that queue. Click **Steer** on a queued message to inject it manually.
     - **Settings → Appearance → Chat → Follow-ups while the agent is working** can override that server default for the current browser. The page marks an override explicitly and offers **Reset to server default**. `Steer into the active run` sends follow-ups immediately, while `Queue until the run ends` holds them until the run finishes.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
-    - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
+    - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session. The Control UI uses `sessions.abort` when it has no local run ID.
 
   </Accordion>
   <Accordion title="Abort partial retention">
@@ -484,7 +484,8 @@ realtime/session actions pause until the connection returns; **Retry now** in th
 immediate attempt. Chat remains editable: ordinary text and attachment sends are kept in the
 current tab's gateway/session-scoped browser storage, shown as waiting for reconnect, and sent
 automatically when the Gateway returns. Live controls and slash commands remain unavailable while
-offline.
+offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
+is not replayed because newer work may start in that session before the connection returns.
 
 When this browser already holds credentials (a configured token/password or an approved device
 token), first opens and reloads show a small animated OpenClaw mark while the connection is

@@ -45,7 +45,6 @@ import {
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
   loadStoredSidebarSessionsShowCron,
-  SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -276,12 +275,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
   };
 
-  /**
-   * Zone partition with the visible-page limit applied only to expanded
-   * sections: collapsed zones keep full rows (true header counts) but do not
-   * consume the page budget, so a collapsed Coding zone cannot crowd threads
-   * out of the first page.
-   */
+  /** Collapsed zones keep full rows for true header counts and status dots. */
   protected zonedVisibleSections(rows: SidebarRecentSession[]): SidebarVisibleSections {
     return partitionSidebarVisibleSections({
       rows,
@@ -290,7 +284,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       collapsedSections: this.collapsedSessionSections,
       hideEmptyCreatorFilteredGroup: (category, rowCount) =>
         this.hideEmptyCreatorFilteredGroup(category, rowCount),
-      visibleSessionLimit: this.sessionData.visibleSessionLimit,
+      visibleSessionLimits: this.sessionData.visibleSessionLimits,
     });
   }
 
@@ -421,7 +415,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
     this.clearSessionSelection();
     this.expandedChildSessionKeys = new Set();
-    this.sessionData.setVisibleSessionLimit(SIDEBAR_SESSION_PAGE_SIZE);
+    this.sessionData.visibleSessionLimits.clear();
     context.agentSelection.set(nextAgentId);
     void this.sessionData.refreshSidebarSessions(nextAgentId);
   };

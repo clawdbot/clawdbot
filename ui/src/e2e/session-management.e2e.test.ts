@@ -1227,8 +1227,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
-      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(10);
-      await page.getByRole("button", { name: "Load more threads" }).click();
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
@@ -1541,7 +1539,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.locator('[data-session-section="work"] .sidebar-session-group-toggle').click();
-      const loadMore = page.getByRole("button", { name: "Load more threads" });
+      const loadMore = page
+        .locator('[data-session-section="ungrouped"]')
+        .getByRole("button", { name: "Show more" });
       for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
         await loadMore.click();
       }

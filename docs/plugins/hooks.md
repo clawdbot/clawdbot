@@ -651,7 +651,8 @@ runtime generation.
 Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
-  `messageId`, `senderId`, optional run/session correlation, and metadata.
+  `messageId`, `senderId`, optional run/session correlation, ordered `media`,
+  and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return
@@ -677,6 +678,20 @@ first-class fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
+
+Inbound claim and message-received events expose `media?:
+PluginHookMediaFact[]` as the canonical attachment API. Each fact can carry
+`path`, `url`, `contentType`, `kind`, `transcribed`, `messageId`, and
+`workspaceDir`; array position is attachment identity. When a remote attachment
+has not been staged locally yet, `media` is omitted,
+`mediaStagingPending: true`, and `originalMedia` contains the provider-side
+facts. Do not treat `originalMedia.path` as locally readable until a later
+staged event supplies `media`.
+
+The singular/plural `mediaPath`, `mediaUrl`, `mediaType`, `mediaPaths`,
+`mediaUrls`, `mediaTypes`, and matching `originalMedia*` metadata properties are
+deprecated compatibility aliases. New hooks should use the typed top-level
+arrays.
 
 Decision rules:
 

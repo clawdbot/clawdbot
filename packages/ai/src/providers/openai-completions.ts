@@ -63,6 +63,10 @@ import {
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import {
+  resolveOpenAICompletionsResponseFormat,
+  shouldOmitOllamaCompatResponseFormat,
+} from "./openai-response-format.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
   projectOpenAITools,
@@ -727,9 +731,10 @@ function buildParams(
 
   type ChatCompletionRequestParams = Omit<
     OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-    "reasoning_effort"
+    "reasoning_effort" | "response_format"
   > & {
     reasoning_effort?: string;
+    response_format?: Record<string, unknown>;
     stream_options?: { include_usage: boolean };
     max_tokens?: number;
     prompt_cache_key?: string;
@@ -782,6 +787,24 @@ function buildParams(
 
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop = options.stop;
+  }
+
+  const requestedResponseFormat = options?.responseFormat;
+  const responseFormat =
+    requestedResponseFormat === undefined
+      ? undefined
+      : resolveOpenAICompletionsResponseFormat(
+          shouldOmitOllamaCompatResponseFormat({
+            provider: model.provider,
+            baseUrl: model.baseUrl,
+            hasTools: () => Boolean(context.tools?.length),
+          })
+            ? undefined
+            : requestedResponseFormat,
+          compat.supportsJsonSchemaResponseFormat,
+        );
+  if (responseFormat !== undefined) {
+    params.response_format = responseFormat;
   }
 
   let toolProjection: OpenAIToolProjection | undefined;

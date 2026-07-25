@@ -25,7 +25,9 @@ final class OnboardingAISetupModel {
             OnboardingController.shared.busyReason = if self.phase == .testing {
                 "OpenClaw is testing your AI connection."
             } else if self.activeAuthOption != nil {
-                "OpenClaw is completing provider sign-in."
+                self.isPreparingModel
+                    ? "OpenClaw is preparing a local model."
+                    : "OpenClaw is completing provider sign-in."
             } else {
                 nil
             }
@@ -37,14 +39,18 @@ final class OnboardingAISetupModel {
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
     private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var prepareAvailable = false
     private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
+    private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
     private(set) var authBusy = false {
         didSet {
             if self.activeAuthOption != nil {
-                OnboardingController.shared.busyReason = "OpenClaw is completing provider sign-in."
+                OnboardingController.shared.busyReason = self.isPreparingModel
+                    ? "OpenClaw is preparing a local model."
+                    : "OpenClaw is completing provider sign-in."
             } else if self.phase != .testing {
                 OnboardingController.shared.busyReason = nil
             }
@@ -76,6 +82,19 @@ final class OnboardingAISetupModel {
 
     var selectedManualProvider: ManualProvider? {
         self.manualProviders.first { $0.id == self.manualProviderID }
+    }
+
+    var prepareOptions: [PrepareOption] {
+        guard self.prepareAvailable else { return [] }
+        return Self.prepareOptions(
+            candidates: self.candidates,
+            manualProviders: self.manualProviders,
+            authOptions: self.authOptions,
+            recommendedInstalls: self.recommendedInstalls)
+    }
+
+    var isPreparingModel: Bool {
+        self.providerWizardKind == .prepare
     }
 
     var connected: Bool {
@@ -609,8 +628,10 @@ final class OnboardingAISetupModel {
         self.manualProviders = []
         self.authOptions = []
         self.recommendedInstalls = []
+        self.prepareAvailable = false
         self.candidatePresentation = [:]
         self.activeAuthOption = nil
+        self.providerWizardKind = nil
         self.authStep = nil
         self.authError = nil
         self.authBusy = false
@@ -681,7 +702,15 @@ extension OnboardingAISetupModel {
                   !Task.isCancelled
             else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
+            let prepareAvailable = await self.gateway.supportsServerMethod(
+                "openclaw.setup.prepare.start",
+                ifCurrentServerLease: lease) == true
+            guard await self.gateway.isCurrentServerLease(lease),
+                  self.isCurrentAttempt(context),
+                  !Task.isCancelled
+            else { return }
             self.serverLease = lease
+            self.prepareAvailable = prepareAvailable
             self.lastDetectedActivationState = result.persistedActivationState
             let manualProviders = result.manualProviders ?? []
             let authOptions = result.authOptions ?? []
@@ -1076,8 +1105,27 @@ extension OnboardingAISetupModel {
 
 extension OnboardingAISetupModel {
     func startProviderAuth(_ option: AuthOption) {
+        self.startProviderWizard(option, kind: .auth)
+    }
+
+    func startProviderPrepare(_ option: PrepareOption) {
+        self.startProviderWizard(
+            AuthOption(
+                id: option.id,
+                label: option.label,
+                hint: option.hint,
+                groupLabel: nil,
+                icon: option.icon,
+                website: option.website,
+                kind: "prepare",
+                featured: false),
+            kind: .prepare)
+    }
+
+    private func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
         guard !self.isBusy, self.activeAuthOption == nil, let serverLease else { return }
         self.activeAuthOption = option
+        self.providerWizardKind = kind
         self.authStep = nil
         self.authError = nil
         self.authText = ""
@@ -1091,7 +1139,7 @@ extension OnboardingAISetupModel {
         Task {
             do {
                 let data = try await self.gateway.request(
-                    method: "openclaw.setup.auth.start",
+                    method: kind.startMethod,
                     params: [
                         "sessionId": AnyCodable(authSessionID),
                         "authChoice": AnyCodable(option.id),
@@ -1276,7 +1324,7 @@ extension OnboardingAISetupModel {
             return
         }
         if done || status == "done" {
-            self.providerAuthReconciliationPending = true
+            self.providerAuthReconciliationPending = self.providerWizardKind == .auth
             self.clearProviderAuth()
             self.scheduleDetection()
             return
@@ -1343,6 +1391,7 @@ extension OnboardingAISetupModel {
 
     private func clearProviderAuth() {
         self.activeAuthOption = nil
+        self.providerWizardKind = nil
         self.authSessionID = nil
         self.authStep = nil
         self.authError = nil

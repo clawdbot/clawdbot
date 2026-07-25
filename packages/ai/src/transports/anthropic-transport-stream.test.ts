@@ -1520,6 +1520,8 @@ describe("anthropic transport stream", () => {
 
   it.each([
     ["claude-fable-5", "Claude Fable 5", "anthropic"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic"],
+    ["claude-opus-5", "Claude Opus 5", "anthropic-vertex"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex"],
   ])("surfaces structured %s streaming refusals for %s", async (id, name, provider) => {
@@ -4004,6 +4006,7 @@ describe("anthropic transport stream", () => {
   });
 
   it.each([
+    { canonicalModelId: "claude-opus-5", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
   ] as const)(
@@ -4027,6 +4030,50 @@ describe("anthropic transport stream", () => {
       expect(latestAnthropicRequest().payload.temperature).toBe(expectedTemperature);
     },
   );
+
+  it.each([
+    {
+      name: "defaults to adaptive high",
+      reasoning: undefined,
+      thinking: { type: "adaptive", display: "summarized" },
+      effort: { effort: "high" },
+      toolChoice: { type: "auto" },
+    },
+    {
+      name: "allows explicit off",
+      reasoning: "off" as const,
+      thinking: { type: "disabled" },
+      effort: undefined,
+      toolChoice: { type: "any" },
+    },
+  ])("supports Claude Opus 5 transport: $name", async (testCase) => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      maxTokens: 128_000,
+    });
+
+    await runTransportStream(model, makeSonnet5PrefillContext(), {
+      apiKey: "sk-ant-api",
+      reasoning: testCase.reasoning,
+      temperature: 0.2,
+      toolChoice: "any",
+    } as AnthropicStreamOptions);
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload).toMatchObject({
+      max_tokens: 128_000,
+      messages: [{ role: "user" }],
+      thinking: testCase.thinking,
+      tool_choice: testCase.toolChoice,
+    });
+    expect(payload).not.toHaveProperty("temperature");
+    if (testCase.effort) {
+      expect(payload.output_config).toEqual(testCase.effort);
+    } else {
+      expect(payload).not.toHaveProperty("output_config");
+    }
+  });
 
   it.each([
     {

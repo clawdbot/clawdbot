@@ -35,7 +35,6 @@ export {
   buildProbeChannelStatusSummary,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/channel-status";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export { createReplyPrefixContext } from "openclaw/plugin-sdk/channel-outbound";
 export {

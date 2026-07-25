@@ -102,7 +102,7 @@ export interface SessionListHost {
   finishSessionGroupDrag(): void;
   toggleSection(sectionId: string): void;
   openNewSession(): void;
-  setVisibleSessionLimit(limit: number): void;
+  setVisibleSessionLimit(sectionId: string, limit: number): void;
   clearSessionSelection(): void;
   handleSessionListDragOver(event: DragEvent): void;
   handleSessionListDragLeave(event: DragEvent): void;

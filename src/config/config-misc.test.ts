@@ -1028,6 +1028,7 @@ describe("model compat config schema", () => {
                   compat: {
                     supportsUsageInStreaming: true,
                     supportsStrictMode: false,
+                    supportsJsonSchemaResponseFormat: true,
                     requiresStringContent: true,
                     thinkingFormat,
                     requiresToolResultName: true,

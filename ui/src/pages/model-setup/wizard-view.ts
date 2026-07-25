@@ -5,6 +5,7 @@ import { copyToClipboard } from "../../lib/clipboard.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 
 type WizardViewProps = {
+  mode: "auth" | "prepare";
   state: ModelSetupWizardState;
   value: unknown;
   onValueChange: (value: unknown) => void;
@@ -241,7 +242,11 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
     props.state.phase === "done";
   return html`
     <openclaw-modal-dialog
-      label=${t("modelSetup.wizard.dialogLabel")}
+      label=${t(
+        props.mode === "prepare"
+          ? "modelSetup.wizard.prepareDialogLabel"
+          : "modelSetup.wizard.dialogLabel",
+      )}
       @modal-cancel=${canCancel ? props.onCancel : props.onClose}
     >
       <div class="model-setup-wizard">
@@ -249,12 +254,22 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
           <h2>
             ${props.state.phase === "step" && props.state.step.title
               ? props.state.step.title
-              : t("modelSetup.wizard.title")}
+              : t(
+                  props.mode === "prepare"
+                    ? "modelSetup.wizard.prepareTitle"
+                    : "modelSetup.wizard.title",
+                )}
           </h2>
         </div>
         <div class="model-setup-wizard__body">
           ${props.state.phase === "starting"
-            ? html`<div role="status">${t("modelSetup.wizard.starting")}</div>`
+            ? html`<div role="status">
+                ${t(
+                  props.mode === "prepare"
+                    ? "modelSetup.wizard.prepareStarting"
+                    : "modelSetup.wizard.starting",
+                )}
+              </div>`
             : props.state.phase === "done"
               ? html`<div role="status">${t("modelSetup.wizard.checking")}</div>`
               : props.state.phase === "error" || props.state.phase === "cancelled"

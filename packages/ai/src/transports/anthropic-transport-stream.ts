@@ -34,11 +34,12 @@ import {
   applyAnthropicRefusal,
   findActiveAnthropicToolTurnAssistantIndex,
   omitFoundryBearerCredentialHeaders,
-  prepareClaudeSonnet5RequestContext,
+  prepareClaudeNoPrefillRequestContext,
   projectAnthropicTools,
   reconcileAnthropicToolChoice,
   requiresClaudeAdaptiveThinking,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   resolveOriginalAnthropicToolName,
   readAnthropicFallbackBoundary,
@@ -1176,7 +1177,11 @@ function resolveAnthropicTransportOptions(
     modelContextWindow: model.contextWindow,
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
-    useModelDefault: resolveClaudeSonnet5ModelIdentity(model) !== undefined,
+    // Claude 5 defaults thinking on; the clamped 32k baseline starves thinking
+    // plus response output, so these models keep their full catalog cap.
+    useModelDefault:
+      resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined,
   });
   if (baseMaxTokens === undefined) {
     throw new Error(
@@ -1273,7 +1278,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(`No API key for provider: ${model.provider}`);
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
-        const requestContext = prepareClaudeSonnet5RequestContext(model, context);
+        const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
         const { client, isOAuthToken } = createAnthropicTransportClient({
           model,
           context: requestContext,

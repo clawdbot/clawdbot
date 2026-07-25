@@ -359,6 +359,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",
+    "supportsJsonSchemaResponseFormat",
     "requiresStringContent",
     "strictMessageKeys",
     "requiresToolResultName",

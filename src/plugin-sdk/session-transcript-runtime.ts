@@ -334,7 +334,9 @@ export async function appendAssistantMirrorMessageByIdentity(
 }
 
 /**
- * Appends a transcript message by scoped transcript target.
+ * Appends an already-canonical transcript message by scoped transcript target.
+ * Media-bearing user turns use ordered `message.__openclaw.media` facts; this
+ * low-level API does not infer deprecated top-level Media* projections.
  */
 export async function appendSessionTranscriptMessageByIdentity<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage>,
