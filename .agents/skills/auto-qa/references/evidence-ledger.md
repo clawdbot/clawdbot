@@ -8,8 +8,9 @@ Record campaign-wide facts:
 - Exact current `origin/main` SHA and refresh time.
 - The single refresh coordinator; native-operation pauses and proof that each post-merge fetched baseline contains the recorded merge SHA.
 - At least ten named, meaningfully distinct active subsystem lanes.
+- Independently observed child PID, durable supervisor, exact-checkout guard, and observation time for each currently running CLI worker; completed and stale waves are separate historical evidence.
 - Owned gateway ports, isolated state, health, CPU/memory/load, and remote lease state.
-- Actual live provider and selected model without credential material.
+- Actual live provider, configured `agents.list`, selected existing agent, and selected model without credential material; record separate delivered-final and persisted-session evidence.
 - Soak start, elapsed time, pass/fail/skip counts, and whether completion was actually reached.
 - Both current author-limit workflows, complete author count, and actual author, repository-role, bot/app, branch-prefix, or override exemption, if one is proved.
 
@@ -40,4 +41,4 @@ merged main SHA: <verified canonical full SHA>
 risk: low; autonomous landing explicitly authorized
 ```
 
-Do not accept a symptom-only guard, one-sided workaround, compatibility shim, duplicate count, mere workflow dispatch, queued CI, old-head success, a green summary with zero executed scenarios, mocked model responses, stale screenshots, a test skipped for missing credentials, or a GitHub merge request without verified canonical main state. Stop the count at the actual number of verified root-cause merges; never round up toward the user-requested target.
+Do not accept a symptom-only guard, one-sided workaround, compatibility shim, duplicate count, mere workflow dispatch, queued CI, old-head success, a green summary with zero executed scenarios, mocked model responses, screenshots containing `GatewayRequestError` or `UNKNOWN_AGENT`, a test skipped for missing credentials, or a GitHub merge request without verified canonical main state. Stop the count at the actual number of verified root-cause merges; never round up toward the user-requested target.

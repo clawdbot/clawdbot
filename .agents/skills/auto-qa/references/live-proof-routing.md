@@ -16,9 +16,12 @@ selection and passing prompt, tool, file, or image checks for the capability
 being claimed.
 
 Use an isolated authorized OpenAI credential. Never emit its value, persist it
-in reports, or assume that a passing mock proves a real provider. Preserve
-redacted artifact paths, provider/model identity, exact command, run ID, and
-the actual executed/passed/skipped counts.
+in reports, or assume that a passing mock proves a real provider. Inspect the
+real configured `agents.list`; resolve an agent that actually exists before
+claiming gateway or model success. Prove the delivered model-final response and
+the independently persisted session or transcript as separate product paths.
+Preserve redacted artifact paths, provider/model identity, exact command, run
+ID, and the actual executed/passed/skipped counts.
 
 A standard `pnpm build` intentionally excludes private QA plugins. Run QA from
 the source checkout or explicitly build with `OPENCLAW_BUILD_PRIVATE_QA=1`.
@@ -30,6 +33,15 @@ Start only campaign-owned gateways with distinct unused ports and an isolated
 state directory. Probe the actual public route or protocol, not a fixture that
 bypasses the transport. Never bind the operator's port or change a running
 launchd/systemd service.
+
+Inspect the rendered page before accepting visual evidence. A screenshot,
+successful navigation, or HTTP response is not a passing Control UI proof when
+the page displays `GatewayRequestError`, `UNKNOWN_AGENT`, or another gateway
+failure. Preserve only screenshots that show the requested working surface.
+
+Keep existing long-running campaign gateways on their independently recorded
+immutable source and live process. Starting a newer main-review wave does not
+authorize restarting, rebuilding, or replacing an in-progress soak.
 
 For packaging or Git-plugin claims, exercise a newly built real package and
 the complete install/update scenario. Preserve real command exits and avoid
