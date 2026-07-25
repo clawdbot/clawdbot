@@ -194,7 +194,7 @@ function normalizeMSTeamsMentionTags(
   botId?: string | null,
   botName?: string | null,
 ): string {
-  const mentionsByTag = new Map<string, Array<{ id?: string; name: string }>>();
+  const mentions: Array<{ id?: string; name: string }> = [];
   const botMentionNames = new Set<string>();
   for (const entity of entities) {
     if (
@@ -208,15 +208,13 @@ function normalizeMSTeamsMentionTags(
     if (mentionedId && botId && mentionedId === botId) {
       botMentionNames.add(entity.mentioned.name.trim());
     }
-    const mentions = mentionsByTag.get(entity.text) ?? [];
     mentions.push({
       id: mentionedId,
       name: entity.mentioned.name,
     });
-    mentionsByTag.set(entity.text, mentions);
   }
   return text.replace(/<at\b[^>]*>.*?<\/at>/gis, (tag) => {
-    const mention = mentionsByTag.get(tag)?.shift();
+    const mention = mentions.shift();
     if (mention?.id && botId && mention.id === botId) {
       return "";
     }

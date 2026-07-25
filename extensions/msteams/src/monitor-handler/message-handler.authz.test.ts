@@ -1543,7 +1543,7 @@ describe("msteams monitor handler authz", () => {
         id: "dm-quote-1",
         text: "what about this?",
         from: { id: "user-id", aadObjectId: "user-aad", name: "User" },
-        conversation: { id: "19:dm@thread.v2", conversationType: "personal" },
+        conversation: { id: "a:dm-conversation", conversationType: "personal" },
         attachments: [
           {
             contentType: "text/html",
@@ -1559,7 +1559,7 @@ describe("msteams monitor handler authz", () => {
     expect(deps.tokenProvider.getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
     expect(graphThreadMockState.fetchChatMessageText).toHaveBeenCalledWith(
       "token",
-      "19:dm@thread.v2",
+      "19:user-aad_test-app@unq.gbl.spaces",
       "message-1",
       expect.objectContaining({
         label: "MS Teams inbound preprocessing",

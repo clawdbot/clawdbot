@@ -112,7 +112,7 @@ describe("msteams inbound", () => {
     it("matches duplicate rendered mention tags by entity occurrence", () => {
       expect(
         buildMSTeamsNormalizedText({
-          text: "<at>Bot</at> <at>Bot</at> please check this",
+          text: '<at id="0">Bot</at> <at>Bot</at> please check this',
           botId: "bot-id",
           botName: "Bot",
           entities: [

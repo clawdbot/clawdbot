@@ -48,6 +48,7 @@ import {
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
+  translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
 import { createMSTeamsInboundDeadline, withMSTeamsRequestDeadline } from "../request-timeout.js";
@@ -663,7 +664,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // and channel quotes retain their visibility-filtered preview.
     let quoteBodyFull: string | undefined;
     const quoteMessageId = quoteInfo?.id;
-    if (quoteMessageId && isDirectMessage && conversationId.startsWith("19:")) {
+    const graphConversationId = translateMSTeamsDmConversationIdForGraph({
+      isDirectMessage,
+      conversationId,
+      aadObjectId,
+      appId,
+    });
+    if (quoteMessageId && isDirectMessage && graphConversationId.startsWith("19:")) {
       try {
         const graphToken = await withMSTeamsRequestDeadline({
           deadline: preprocessingDeadline,
@@ -674,7 +681,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           deadline: preprocessingDeadline,
           label: "MS Teams quote lookup",
           work: () =>
-            fetchChatMessageText(graphToken, conversationId, quoteMessageId, preprocessingDeadline),
+            fetchChatMessageText(
+              graphToken,
+              graphConversationId,
+              quoteMessageId,
+              preprocessingDeadline,
+            ),
         });
       } catch (err) {
         log.debug?.("failed to fetch full quoted message text", {
