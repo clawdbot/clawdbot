@@ -302,7 +302,9 @@ class LocalEmbeddingWorkerClient {
     options?: EmbeddingProviderCallOptions,
     allowClosed = false,
   ): Promise<number[] | number[][] | undefined> {
-    await this.shutdownPromise;
+    while (this.shutdownPromise) {
+      await this.shutdownPromise;
+    }
     if (this.closed && !allowClosed) {
       throw new Error("Local embedding worker client has been closed");
     }
