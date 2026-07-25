@@ -930,7 +930,8 @@ describe.sequential("TUI PTY harness", () => {
     async ({ sessionKey, message }) => {
       await fixture.run.write(`/session ${sessionKey}\r`, { delay: false });
       await fixture.waitForLogEntry(
-        (entry) => entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
+        (entry) =>
+          entry.method === "loadHistory" && objectFieldEquals(entry, "sessionKey", sessionKey),
       );
 
       await fixture.run.write(`${message}\r`, { delay: false });

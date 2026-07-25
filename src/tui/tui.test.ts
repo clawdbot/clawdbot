@@ -200,6 +200,10 @@ describe("resolveTuiSessionKey", () => {
       expected: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org:thread:$EventAbCdEf",
     },
     {
+      raw: "Agent:Ops:Matrix:Channel:!MixedRoomAbCdEf:example.org",
+      expected: "agent:ops:matrix:channel:!MixedRoomAbCdEf:example.org",
+    },
+    {
       raw: "agent:main:signal:group:AbC123=",
       expected: "agent:main:signal:group:AbC123=",
     },
