@@ -65,8 +65,15 @@ export async function resolveAgentRunSessionTarget(params: {
     !targetSessionKey && !suppliedSessionKey && sessionKey === compatibilitySessionKey;
   const suppliedKeyAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
   const compatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
+  const hasCompleteTypedTarget = Boolean(
+    normalizeOptionalString(sessionTarget?.agentId) &&
+    normalizeOptionalString(sessionTarget?.sessionId) &&
+    normalizeOptionalString(sessionTarget?.sessionKey) &&
+    normalizeOptionalString(sessionTarget?.storePath),
+  );
   if (
     legacyMarker &&
+    !hasCompleteTypedTarget &&
     ((params.agentId && params.agentId !== legacyMarker.agentId) ||
       (suppliedKeyAgentId && suppliedKeyAgentId !== legacyMarker.agentId) ||
       params.sessionId !== legacyMarker.sessionId)

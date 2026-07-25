@@ -118,6 +118,28 @@ describe("agent run session target", () => {
     });
   });
 
+  it("ignores a stale legacy marker when a complete typed target is present", async () => {
+    const storePath = path.join(tempDir, "target", "sessions.json");
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "old-session",
+        sessionFile: `sqlite:helper:old-session:${path.join(tempDir, "old.json")}`,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "target-session",
+          sessionKey: "agent:main:target-session",
+          storePath,
+        },
+      }),
+    ).resolves.toMatchObject({
+      agentId: "main",
+      sessionId: "target-session",
+      sessionKey: "agent:main:target-session",
+      storePath,
+    });
+  });
+
   it("prefers typed runtime target identity", async () => {
     const storePath = path.join(tempDir, "target-store", "sessions.json");
 
