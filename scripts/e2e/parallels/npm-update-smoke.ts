@@ -879,7 +879,7 @@ export class NpmUpdateSmoke {
           hostedTarballPath,
         )}`;
         this.updateTargetEffective = this.targetTarballVersion;
-        this.freshTargetSpec = this.updateTargetTarball;
+        this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`;
         this.updateExpectedNeedle = this.targetTarballVersion;
         this.updateTargetPackageVersion = this.targetTarballVersion;
         this.updateTargetBuildCommit = this.artifact.buildCommitShort ?? "";

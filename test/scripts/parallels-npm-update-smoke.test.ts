@@ -267,7 +267,7 @@ exit 1
     expect(script).toContain("startNpmRegistryServer");
     expect(script).toContain("...this.targetRegistryPackages");
     expect(script).toContain("this.updateTargetEffective = this.targetTarballVersion");
-    expect(script).toContain("this.freshTargetSpec = this.updateTargetTarball");
+    expect(script).toContain("this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`");
     expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
     expect(script).toContain('readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)');
   });
