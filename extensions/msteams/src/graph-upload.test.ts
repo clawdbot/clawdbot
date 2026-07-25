@@ -156,13 +156,44 @@ describe("graph upload helpers", () => {
 
     expectGraphUploadFetch(
       fetchFn,
-      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content",
+      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content?@microsoft.graph.conflictBehavior=rename",
     );
     expect(result).toEqual({
       id: "item-2",
       webUrl: "https://example.com/2",
       name: "b.txt",
     });
+  });
+
+  it("uploads with conflictBehavior=rename and surfaces the name SharePoint assigns", async () => {
+    // Regression: openclaw-runtime image assets reuse names (image-1.png). Graph's default
+    // replace overwrote the prior file and Teams (caching cards by driveItem URL) showed the
+    // stale image; rename mints a distinct item, so callers use the returned name, not the request.
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "item-9",
+            webUrl: "https://example.com/9",
+            name: "image-1 1.png",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const result = await uploadToSharePoint({
+      buffer: Buffer.from("img"),
+      filename: "image-1.png",
+      siteId: "site-123",
+      tokenProvider,
+      fetchFn: withFetchPreconnect(fetchFn),
+    });
+
+    expectGraphUploadFetch(
+      fetchFn,
+      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/image-1.png:/content?@microsoft.graph.conflictBehavior=rename",
+    );
+    expect(result.name).toBe("image-1 1.png");
   });
 
   it("rejects upload responses missing required fields", async () => {
