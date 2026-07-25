@@ -1,10 +1,9 @@
 import { execFileSync } from "node:child_process";
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   buildReleaseCandidateState,
@@ -34,6 +33,9 @@ import {
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
@@ -570,7 +572,7 @@ describe("release candidate checklist", () => {
   });
 
   it("binds Parallels registry packages to plugin preflight manifests", () => {
-    const artifactDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-preflight-"));
+    const artifactDir = tempDirs.make("openclaw-plugin-preflight-");
     const tarballName = "openclaw-codex-2026.7.1-beta.3.tgz";
     const tarballPath = join(artifactDir, tarballName);
     const sourceDir = join(artifactDir, "source");
@@ -597,50 +599,46 @@ describe("release candidate checklist", () => {
     };
     writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
 
-    try {
-      expect(
-        validateParallelsRegistryPackageArtifact(artifactDir, {
-          targetSha: "candidate-sha",
-          targetVersion: "2026.7.1-beta.3",
-        }),
-      ).toMatchObject({
-        artifactName: "plugin-npm-package-codex",
-        packageName: "@openclaw/codex",
-        packageVersion: "2026.7.1-beta.3",
-        tarballPath,
-        tarballSha256,
-      });
-      mkdirSync(packageDir, { recursive: true });
-      writeFileSync(
-        join(packageDir, "package.json"),
-        `${JSON.stringify({ name: "@openclaw/matrix", version: "2026.7.1-beta.3" })}\n`,
-      );
-      execFileSync("tar", ["-czf", tarballPath, "-C", sourceDir, "package"]);
-      rmSync(sourceDir, { force: true, recursive: true });
-      const mismatchedSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
-      writeFileSync(
-        manifestPath,
-        `${JSON.stringify({
-          ...manifest,
-          artifact: { ...manifest.artifact, sha256: mismatchedSha256 },
-        })}\n`,
-      );
-      expect(() =>
-        validateParallelsRegistryPackageArtifact(artifactDir, {
-          targetSha: "candidate-sha",
-          targetVersion: "2026.7.1-beta.3",
-        }),
-      ).toThrow("tarball identity mismatch");
-      writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, targetSha: "other-sha" })}\n`);
-      expect(() =>
-        validateParallelsRegistryPackageArtifact(artifactDir, {
-          targetSha: "candidate-sha",
-          targetVersion: "2026.7.1-beta.3",
-        }),
-      ).toThrow("artifact identity is invalid");
-    } finally {
-      rmSync(artifactDir, { force: true, recursive: true });
-    }
+    expect(
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toMatchObject({
+      artifactName: "plugin-npm-package-codex",
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.7.1-beta.3",
+      tarballPath,
+      tarballSha256,
+    });
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      join(packageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/matrix", version: "2026.7.1-beta.3" })}\n`,
+    );
+    execFileSync("tar", ["-czf", tarballPath, "-C", sourceDir, "package"]);
+    rmSync(sourceDir, { force: true, recursive: true });
+    const mismatchedSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({
+        ...manifest,
+        artifact: { ...manifest.artifact, sha256: mismatchedSha256 },
+      })}\n`,
+    );
+    expect(() =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toThrow("tarball identity mismatch");
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, targetSha: "other-sha" })}\n`);
+    expect(() =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha: "candidate-sha",
+        targetVersion: "2026.7.1-beta.3",
+      }),
+    ).toThrow("artifact identity is invalid");
   });
 
   it("requires exact dependency tarball metadata in npm preflight manifests", () => {

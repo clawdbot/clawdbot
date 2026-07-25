@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
@@ -308,7 +308,7 @@ function readJson(path, label) {
 }
 
 export function validateParallelsRegistryPackageArtifact(artifactDir, params) {
-  const resolvedDir = resolve(artifactDir);
+  const resolvedDir = resolvePath(artifactDir);
   const manifestPath = join(resolvedDir, "plugin-publication-manifest.json");
   const manifest = readJson(manifestPath, "plugin npm preflight manifest");
   const artifactName = manifest.artifact?.name;
@@ -330,8 +330,9 @@ export function validateParallelsRegistryPackageArtifact(artifactDir, params) {
     throw new Error(`plugin npm preflight artifact identity is invalid: ${resolvedDir}`);
   }
   const tarballPath = join(resolvedDir, tarballName);
-  const files = readdirSync(resolvedDir).toSorted();
-  const expectedFiles = [basename(manifestPath), tarballName].toSorted();
+  const compareFileNames = (left, right) => left.localeCompare(right);
+  const files = readdirSync(resolvedDir).toSorted(compareFileNames);
+  const expectedFiles = [basename(manifestPath), tarballName].toSorted(compareFileNames);
   if (!isDeepStrictEqual(files, expectedFiles) || !existsSync(tarballPath)) {
     throw new Error(`plugin npm preflight artifact inventory is invalid: ${resolvedDir}`);
   }
