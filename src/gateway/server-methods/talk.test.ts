@@ -459,6 +459,59 @@ describe("talk.catalog handler", () => {
     expect(responsePayload).not.toContain("live-key");
   });
 
+  it("uses the bridge surface for gateway-relay catalog resolution", async () => {
+    const isConfigured = vi.fn(() => true);
+    const resolveCapabilities = vi.fn(() => ({
+      transports: ["gateway-relay"],
+      supportsToolCalls: true,
+    }));
+    const provider = {
+      id: "relay",
+      label: "Relay Voice",
+      isConfigured,
+      resolveCapabilities,
+      createBridge: vi.fn(),
+    };
+    mocks.listRealtimeVoiceProviders.mockReturnValue([provider] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: {},
+    } as never);
+    const respond = vi.fn();
+
+    await expectDefined(
+      talkHandlers["talk.catalog"],
+      'talkHandlers["talk.catalog"] test invariant',
+    )({
+      req: { type: "req", id: "relay-catalog", method: "talk.catalog" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "relay",
+                transport: "gateway-relay",
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: "bridge" }),
+    );
+    expect(resolveCapabilities).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: "bridge" }),
+    );
+    expect(isConfigured).toHaveBeenCalledWith(expect.objectContaining({ surface: "bridge" }));
+    const catalog = expectRespondOk(respond);
+    expect(catalog.realtime).toEqual(expect.objectContaining({ ready: true }));
+  });
+
   it("reports the runtime-selected automatic providers instead of registry row order", async () => {
     const transcriptionSlow = {
       id: "transcription-slow",
@@ -3239,6 +3292,47 @@ describe("talk.client.create handler", () => {
     expect(mocks.createOrResumeClientVoiceSession).not.toHaveBeenCalled();
     expectRespondError(respond, {
       message: "Error: Realtime browser session expired during startup; try again",
+    });
+  });
+
+  it("cancels a minted browser session rejected for transport mismatch", async () => {
+    const browserSession = {
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "mismatched-secret",
+    };
+    const cancelBrowserSession = vi.fn();
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: {
+        id: "openai",
+        label: "OpenAI Realtime",
+        isConfigured: () => true,
+        createBrowserSession: vi.fn(async () => browserSession),
+        cancelBrowserSession,
+        createBridge: vi.fn(),
+      },
+      providerConfig: {},
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
+      req: { type: "req", id: "transport-mismatch", method: "talk.client.create" },
+      params: { sessionKey: "main", transport: "provider-websocket" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig } as never,
+    });
+
+    expect(cancelBrowserSession).toHaveBeenCalledWith(expect.any(Object), browserSession);
+    expect(mocks.ensureClientVoiceAgentSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.createOrResumeClientVoiceSession).not.toHaveBeenCalled();
+    expectRespondError(respond, {
+      message:
+        'Realtime provider "openai" does not support requested browser transport "provider-websocket"',
     });
   });
 

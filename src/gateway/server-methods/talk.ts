@@ -243,6 +243,8 @@ function buildTalkCatalog(config: OpenClawConfig) {
   );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
+  const realtimeSurface =
+    realtimeConfig.transport === "gateway-relay" ? "bridge" : "browser-session";
   const realtimeSelection = resolveCatalogProviderSelection(
     canonicalizeRealtimeVoiceProviderId(realtimeConfig.provider, config),
     () =>
@@ -251,7 +253,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
         defaultModel: realtimeConfig.model,
-        surface: "browser-session",
+        surface: realtimeSurface,
       }).provider.id,
   );
   const activeRealtimeProvider = realtimeSelection.activeProvider;
@@ -352,7 +354,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
           provider,
           providerConfig,
           cfg: config,
-          surface: "browser-session",
+          surface: realtimeSurface,
         });
         const entry: Record<string, unknown> = {
           id: provider.id,
@@ -361,7 +363,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
             provider.isConfigured({
               cfg: config,
               providerConfig,
-              surface: "browser-session",
+              surface: realtimeSurface,
             }),
           ),
           modes: ["realtime"],

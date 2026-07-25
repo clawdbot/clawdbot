@@ -361,6 +361,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           respond(true, { ...session, voiceSessionId }, undefined);
           return;
         }
+        try {
+          await resolution.provider.cancelBrowserSession?.(browserSessionRequest, session);
+        } catch (cancelError) {
+          context.logGateway.warn(
+            `talk browser session cleanup failed: ${formatForLog(cancelError)}`,
+          );
+        }
         if (transport) {
           respond(
             false,
