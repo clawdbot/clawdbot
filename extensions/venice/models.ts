@@ -3,7 +3,7 @@ import {
   LiveModelCatalogHttpError,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
-  buildManifestModelProviderConfig,
+  buildManifestModelDefinition,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -12,13 +12,9 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const log = createSubsystemLogger("venice-models");
+const VENICE_MANIFEST_CATALOG = manifest.modelCatalog.providers.venice;
 
-const VENICE_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: "venice",
-  catalog: manifest.modelCatalog.providers.venice,
-});
-
-export const VENICE_BASE_URL = VENICE_MANIFEST_PROVIDER.baseUrl;
+export const VENICE_BASE_URL = VENICE_MANIFEST_CATALOG.baseUrl;
 export const VENICE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "venice")!;
 const VENICE_ALLOWED_HOSTNAMES = ["api.venice.ai"];
 
@@ -51,11 +47,7 @@ const VENICE_DISCOVERY_RETRYABLE_NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 
-export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = VENICE_MANIFEST_PROVIDER.models;
-
-type VeniceCatalogEntry = ModelDefinitionConfig;
-
-export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefinitionConfig {
+function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
   return {
     id: entry.id,
     name: entry.name,
@@ -70,6 +62,15 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     },
   };
 }
+
+/** Venice's decorated network-free fallback catalog. */
+export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = VENICE_MANIFEST_CATALOG.models.map(
+  buildManifestModelDefinition({
+    providerId: "venice",
+    catalog: VENICE_MANIFEST_CATALOG,
+    decorate: decorateVeniceModelDefinition,
+  }),
+);
 
 interface VeniceModelSpec {
   name: string;
@@ -86,10 +87,6 @@ interface VeniceModelSpec {
 interface VeniceModel {
   id: string;
   model_spec?: VeniceModelSpec;
-}
-
-function staticVeniceModelDefinitions(): ModelDefinitionConfig[] {
-  return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
 }
 
 function hasRetryableNetworkCode(err: unknown): boolean {
@@ -177,7 +174,7 @@ export async function discoverVeniceModels(
   options: VeniceModelDiscoveryOptions = {},
 ): Promise<ModelDefinitionConfig[]> {
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
-    return staticVeniceModelDefinitions();
+    return structuredClone(VENICE_MODEL_CATALOG);
   }
 
   try {
@@ -203,11 +200,11 @@ export async function discoverVeniceModels(
 
     if (data.length === 0) {
       log.warn("No models found from API, using static catalog");
-      return staticVeniceModelDefinitions();
+      return structuredClone(VENICE_MODEL_CATALOG);
     }
 
-    const catalogById = new Map<string, VeniceCatalogEntry>(
-      VENICE_MODEL_CATALOG.map((m) => [m.id, m]),
+    const catalogById = new Map<string, ModelDefinitionConfig>(
+      structuredClone(VENICE_MODEL_CATALOG).map((model) => [model.id, model]),
     );
     const models: ModelDefinitionConfig[] = [];
 
@@ -219,7 +216,12 @@ export async function discoverVeniceModels(
       });
       const apiSupportsTools = resolveApiSupportsTools(apiModel);
       if (catalogEntry) {
-        const definition = buildVeniceModelDefinition(catalogEntry);
+        const definition: ModelDefinitionConfig = {
+          ...catalogEntry,
+          input: [...catalogEntry.input],
+          cost: { ...catalogEntry.cost },
+          ...(catalogEntry.compat ? { compat: { ...catalogEntry.compat } } : {}),
+        };
         if (apiMaxTokens !== undefined) {
           definition.maxTokens = apiMaxTokens;
         }
@@ -258,13 +260,13 @@ export async function discoverVeniceModels(
       }
     }
 
-    return models.length > 0 ? models : staticVeniceModelDefinitions();
+    return models.length > 0 ? models : structuredClone(VENICE_MODEL_CATALOG);
   } catch (error) {
     if (error instanceof LiveModelCatalogHttpError) {
       log.warn(`Failed to discover models: HTTP ${error.status}, using static catalog`);
-      return staticVeniceModelDefinitions();
+      return structuredClone(VENICE_MODEL_CATALOG);
     }
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
-    return staticVeniceModelDefinitions();
+    return structuredClone(VENICE_MODEL_CATALOG);
   }
 }

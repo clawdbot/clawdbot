@@ -40,6 +40,7 @@ import {
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+  LAZY_ADDITIVE_STATE_TABLES,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
@@ -135,6 +136,31 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 
+function executeCanonicalStateSchema(
+  database: DatabaseSync,
+  options: { includeLazyAdditiveTables: boolean },
+): void {
+  if (options.includeLazyAdditiveTables) {
+    database.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    return;
+  }
+
+  // Current-version databases may lack lazy cache tables, but the remaining
+  // canonical DDL must still run so doctor can restore indexes and triggers.
+  let eagerSchema = OPENCLAW_STATE_SCHEMA_SQL;
+  for (const tableName of LAZY_ADDITIVE_STATE_TABLES) {
+    const startMarker = `CREATE TABLE IF NOT EXISTS ${tableName} (`;
+    const start = eagerSchema.indexOf(startMarker);
+    const endMarker = "\n) STRICT;";
+    const end = start >= 0 ? eagerSchema.indexOf(endMarker, start) : -1;
+    if (start < 0 || end < 0) {
+      throw new Error(`lazy additive state schema block is missing for ${tableName}`);
+    }
+    eagerSchema = `${eagerSchema.slice(0, start)}${eagerSchema.slice(end + endMarker.length)}`;
+  }
+  database.exec(eagerSchema);
+}
+
 export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
   changes: string[];
   warnings: string[];
@@ -163,7 +189,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
           }
           // Current-schema doctor repair may normalize recognized columns or
           // table options, but it must never recreate a missing table empty.
-          assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL);
+          assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
+          });
         }
         if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
@@ -189,7 +217,9 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
         assertCanonicalStateSchemaShape(db, pathname);
         if (tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
-          db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+          executeCanonicalStateSchema(db, {
+            includeLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+          });
           if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
             repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           }
@@ -279,7 +309,9 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
-        db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+        executeCanonicalStateSchema(db, {
+          includeLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
+        });
         migrateLegacyCronRunLogsToTaskRuns(db);
         if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
           repairLegacyGatewayRestartHandoffsForStrictMigration(db);
@@ -548,6 +580,19 @@ export function runOpenClawStateWriteTransaction<T>(
     // callers never retry an operation that is durable in SQLite.
   }
   return result;
+}
+
+/**
+ * Return a shared state handle this process already holds open, if any.
+ *
+ * Read-only callers use this to avoid opening a connection per call; it never
+ * creates, repairs, or registers a handle.
+ */
+export function getOpenClawStateDatabaseIfOpen(
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawStateDatabase | undefined {
+  const cached = cachedDatabases.get(resolveDatabasePath(options));
+  return cached?.db.isOpen ? cached : undefined;
 }
 
 /** Close one cached shared state database handle by exact pathname. */

@@ -352,6 +352,11 @@ function renderSessionListBody(params: {
   codingTrailingPresent?: boolean;
 }) {
   const { host } = params;
+  // Categorized threads still need the global sort and new-thread actions,
+  // which belong to Threads even when that section has no rows of its own.
+  const hasCategorizedThreads = params.sections.some(
+    (section) => Boolean(section.category) && section.totalRowCount > 0,
+  );
   return html`
     ${params.sections.map((section) => {
       const showDraft = section.id === "ungrouped" && params.showDraft;
@@ -367,12 +372,13 @@ function renderSessionListBody(params: {
           trailing: params.codingTrailing ?? nothing,
         });
       }
-      // Threads hides its bare empty header unless it owns the collaborative
-      // creator filter; custom categories stay visible as drop targets.
+      // Hide an empty Threads header only when it does not own reachable
+      // actions for categorized threads, collaborators, or an active drag.
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !showDraft &&
+        !hasCategorizedThreads &&
         !host.sessionOwnershipVisible &&
         host.sessionsStatusFilter === "active" &&
         host.sessionOrganizer.draggingSessionKey === null

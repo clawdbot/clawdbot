@@ -1427,6 +1427,7 @@ describe("gateway server chat", () => {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
+              tools: { swarm: { enabled: true } },
             },
           },
         },
@@ -1451,9 +1452,11 @@ describe("gateway server chat", () => {
       const metadata = await rpcReq<{
         commands?: Array<{ name?: string; textAliases?: string[] }>;
         models?: Array<{ id?: string; provider?: string }>;
+        swarmEnabled?: boolean;
       }>(ws, "chat.metadata", { agentId: "work" });
 
       expect(metadata.ok).toBe(true);
+      expect(metadata.payload?.swarmEnabled).toBe(true);
       expect(metadata.payload?.models).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
