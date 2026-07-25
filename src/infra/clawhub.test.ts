@@ -1693,6 +1693,95 @@ describe("clawhub helpers", () => {
     }
   });
 
+  it("blocks off-registry resolver archive URLs that target internal addresses even with a configured token", async () => {
+    process.env.CLAWHUB_TOKEN = "env-token-123";
+    const payload = Buffer.from([1, 2, 3, 4]);
+    let hits = 0;
+    let sawAuthorization = false;
+    const server = createServer((request, response) => {
+      hits += 1;
+      sawAuthorization = sawAuthorization || Boolean(request.headers.authorization);
+      response.writeHead(200, { "content-type": "application/zip" });
+      response.end(payload);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (server.address() as AddressInfo).port;
+    try {
+      await expect(
+        downloadClawHubSkillArchiveUrl({
+          baseUrl: "https://clawhub.ai",
+          url: `http://127.0.0.1:${port}/skill.zip`,
+          token: "explicit-token-456",
+        }),
+      ).rejects.toThrow();
+      expect(hits).toBe(0);
+      expect(sawAuthorization).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("does not send a configured ClawHub token to off-registry resolver archive URLs", async () => {
+    process.env.CLAWHUB_TOKEN = "env-token-123";
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+
+    const archive = await downloadClawHubSkillArchiveUrl({
+      baseUrl: "https://clawhub.ai",
+      url: "https://downloads.example.com/skill.zip",
+      token: "explicit-token-456",
+      fetchImpl: vi.fn(async (input, init) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        requestedInit = init;
+        return new Response(new Uint8Array([5, 6]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        });
+      }),
+    });
+
+    try {
+      expect(requestedUrl).toBe("https://downloads.example.com/skill.zip");
+      expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([5, 6]));
+    } finally {
+      await archive.cleanup();
+    }
+  });
+
+  it("still sends the configured token for archive URLs served from the registry origin", async () => {
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+
+    const archive = await downloadClawHubSkillArchiveUrl({
+      baseUrl: "https://clawhub.ai",
+      url: "https://clawhub.ai/api/v1/download?slug=weather",
+      token: "explicit-token-456",
+      fetchImpl: vi.fn(async (input, init) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        requestedInit = init;
+        return new Response(new Uint8Array([3, 3]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        });
+      }),
+    });
+
+    try {
+      expect(requestedUrl).toBe("https://clawhub.ai/api/v1/download?slug=weather");
+      expect(new Headers(requestedInit?.headers).get("Authorization")).toBe(
+        "Bearer explicit-token-456",
+      );
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([3, 3]));
+    } finally {
+      await archive.cleanup();
+    }
+  });
+
   it("still downloads archive URLs served from the configured registry origin", async () => {
     const payload = Buffer.from([9, 8, 7, 6]);
     let hits = 0;

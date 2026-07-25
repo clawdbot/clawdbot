@@ -1582,8 +1582,7 @@ export async function downloadClawHubSkillArchiveUrl(params: {
   const explicitToken = normalizeOptionalString(params.token);
   const requestUrl = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
   const registryOrigin = new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
-  const skipAuth = explicitToken == null && requestUrl.origin !== registryOrigin;
-  if (skipAuth) {
+  if (requestUrl.origin !== registryOrigin) {
     return await downloadUntrustedClawHubSkillArchiveUrl({
       url: requestUrl.href,
       timeoutMs: params.timeoutMs,
@@ -1596,7 +1595,7 @@ export async function downloadClawHubSkillArchiveUrl(params: {
     token: explicitToken,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
-    skipAuth,
+    skipAuth: false,
   });
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
