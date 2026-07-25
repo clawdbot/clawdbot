@@ -164,7 +164,10 @@ function createAccountPlugin(id: "slack" | "telegram", accountIds: string[]): Ch
     capabilities: { chatTypes: ["direct", "group"], media: true },
     config: {
       listAccountIds: () => accountIds,
-      resolveAccount: () => ({ enabled: true }),
+      inspectAccount: () => ({ enabled: true }),
+      resolveAccount: () => {
+        throw new Error("raw account credentials must not resolve during planning");
+      },
     },
   };
 }

@@ -154,7 +154,23 @@ export function resolveMessageBroadcastAccountPlan(params: {
         channel: plugin.id,
         accountId,
         plugin,
+        checkResolvedAccount: false,
       });
+      // Prefer the SecretRef-safe metadata view. Legacy plugins without it keep
+      // their existing resolver contract; a resolver that cannot read refs fails closed.
+      const accountForEnablement =
+        plugin.config.inspectAccount?.(params.cfg, accountId) ??
+        plugin.config.resolveAccount(params.cfg, accountId);
+      if (
+        accountForEnablement === undefined ||
+        !resolveChannelAccountEnabled({
+          plugin,
+          account: accountForEnablement,
+          cfg: params.cfg,
+        })
+      ) {
+        throw new Error(`Account "${accountId}" for channel ${plugin.id} is disabled.`);
+      }
       return [plugin.id];
     } catch {
       return [];

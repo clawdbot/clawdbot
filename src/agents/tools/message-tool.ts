@@ -1560,6 +1560,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
       const requestedAccountId = readStringParam(params, "accountId");
+      const requestedScope = resolveMessageSecretScope({
+        channel: params.channel,
+        target: params.target,
+        targets: params.targets,
+        accountId: requestedAccountId,
+      });
       const scope = resolveMessageSecretScope({
         channel: params.channel,
         target: params.target,
@@ -1568,9 +1574,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         accountId: requestedAccountId,
         fallbackAccountId: agentAccountId,
       });
+      const unscopedExplicitBroadcast =
+        action === "broadcast" && !requestedScope.channel && requestedAccountId !== undefined;
       const explicitAccountId = validateExplicitMessageAccountSelection({
         cfg: rawConfig,
-        channel: scope.channel,
+        channel: unscopedExplicitBroadcast ? undefined : scope.channel,
         accountId: requestedAccountId,
         checkResolvedAccount: false,
       });
@@ -1579,7 +1587,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params.accountId = explicitAccountId;
       }
       const broadcastAccountPlan =
-        action === "broadcast" && !scope.channel && explicitAccountId
+        unscopedExplicitBroadcast && explicitAccountId
           ? resolveMessageBroadcastAccountPlan({
               cfg: rawConfig,
               accountId: explicitAccountId,
@@ -1587,7 +1595,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           : undefined;
       const scopedTargets = getScopedSecretTargetsForTool({
         config: rawConfig,
-        channel: scope.channel,
+        channel: broadcastAccountPlan ? undefined : scope.channel,
         ...(broadcastAccountPlan ? { channels: broadcastAccountPlan.secretChannels } : {}),
         accountId: scope.accountId,
       });
