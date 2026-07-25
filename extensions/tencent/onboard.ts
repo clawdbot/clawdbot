@@ -4,8 +4,6 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
-  buildTokenHubModelDefinition,
-  buildTokenPlanModelDefinition,
   TOKENHUB_BASE_URL,
   TOKENHUB_MODEL_CATALOG,
   TOKENHUB_PROVIDER_ID,
@@ -27,7 +25,7 @@ const tokenHubPresetAppliers = createModelCatalogPresetAppliers({
     providerId: TOKENHUB_PROVIDER_ID,
     api: "openai-completions",
     baseUrl: TOKENHUB_BASE_URL,
-    catalogModels: TOKENHUB_MODEL_CATALOG.map(buildTokenHubModelDefinition),
+    catalogModels: structuredClone(TOKENHUB_MODEL_CATALOG),
     aliases: [
       { modelRef: TOKENHUB_DEFAULT_MODEL_REF, alias: "Hy3 (TokenHub)" },
       { modelRef: TOKENHUB_PREVIEW_MODEL_REF, alias: "Hy3 preview (TokenHub)" },
@@ -50,7 +48,7 @@ const tokenPlanPresetAppliers = createModelCatalogPresetAppliers({
     providerId: TOKENPLAN_PROVIDER_ID,
     api: "openai-completions",
     baseUrl: TOKENPLAN_BASE_URL,
-    catalogModels: TOKENPLAN_MODEL_CATALOG.map(buildTokenPlanModelDefinition),
+    catalogModels: structuredClone(TOKENPLAN_MODEL_CATALOG),
     aliases: [{ modelRef: TOKENPLAN_DEFAULT_MODEL_REF, alias: "Hy3 (TokenPlan)" }],
   }),
 });

@@ -3,11 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
-import {
-  buildChutesModelDefinition,
-  CHUTES_MODEL_CATALOG,
-  discoverChutesModels,
-} from "./models.js";
+import { CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
 import { applyChutesConfig, CHUTES_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -102,9 +98,9 @@ describe("chutes-models", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("buildChutesModelDefinition returns config with required fields", () => {
+  it("builds static definitions with required fields", () => {
     const entry = expectDefined(CHUTES_MODEL_CATALOG[0], "first Chutes catalog model");
-    const def = buildChutesModelDefinition(entry);
+    const def = entry;
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
     expect(def.reasoning).toBe(entry.reasoning);
@@ -126,7 +122,7 @@ describe("chutes-models", () => {
       if (!model) {
         throw new Error(`expected ${id}`);
       }
-      expect(buildChutesModelDefinition(model).input).toContain("image");
+      expect(model.input).toContain("image");
     }
   });
 

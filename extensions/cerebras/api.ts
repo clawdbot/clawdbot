@@ -2,6 +2,7 @@
  * Public Cerebras provider plugin API exports.
  */
 export {
+  buildCerebrasCatalogModels,
   buildCerebrasModelDefinition,
   CEREBRAS_BASE_URL,
   CEREBRAS_MODEL_CATALOG,

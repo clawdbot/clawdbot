@@ -1,8 +1,7 @@
 /**
  * Cohere model catalog helpers derived from the plugin manifest.
  */
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -25,19 +24,12 @@ export function isModernCohereModelId(modelId: string): boolean {
   return COHERE_MODERN_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
 
-export function buildCohereCatalogModels(): ModelDefinitionConfig[] {
-  return buildManifestModelProviderConfig({
-    providerId: "cohere",
-    catalog: COHERE_MANIFEST_CATALOG,
-  }).models;
-}
+/** @deprecated Use buildManifestModelDefinition. */
+export const buildCohereModelDefinition = buildManifestModelDefinition({
+  providerId: "cohere",
+  catalog: COHERE_MANIFEST_CATALOG,
+});
 
-export function buildCohereModelDefinition(
-  model: (typeof COHERE_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  const providerConfig = buildManifestModelProviderConfig({
-    providerId: "cohere",
-    catalog: { ...COHERE_MANIFEST_CATALOG, models: [model] },
-  });
-  return expectDefined(providerConfig.models.at(0), "normalized Cohere manifest model");
+export function buildCohereCatalogModels(): ModelDefinitionConfig[] {
+  return COHERE_MODEL_CATALOG.map(buildCohereModelDefinition);
 }

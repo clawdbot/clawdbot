@@ -2,11 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildVeniceModelDefinition,
-  discoverVeniceModels,
-  VENICE_MODEL_CATALOG,
-} from "./models.js";
+import { discoverVeniceModels, VENICE_MODEL_CATALOG } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -119,9 +115,9 @@ describe("venice-models", () => {
     restoreDiscoveryEnv();
   });
 
-  it("buildVeniceModelDefinition returns config with required fields", () => {
+  it("builds static definitions with required fields", () => {
     const entry = expectDefined(VENICE_MODEL_CATALOG[0], "first Venice catalog model");
-    const def = buildVeniceModelDefinition(entry);
+    const def = entry;
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
     expect(def.reasoning).toBe(entry.reasoning);
@@ -241,9 +237,7 @@ describe("venice-models", () => {
   });
 
   it("keeps tools enabled for DeepSeek V3.2", () => {
-    const model = buildVeniceModelDefinition(
-      VENICE_MODEL_CATALOG.find((entry) => entry.id === "deepseek-v3.2")!,
-    );
+    const model = VENICE_MODEL_CATALOG.find((entry) => entry.id === "deepseek-v3.2")!;
     expect(model.compat?.supportsTools).toBeUndefined();
   });
 
