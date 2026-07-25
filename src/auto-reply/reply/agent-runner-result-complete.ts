@@ -241,9 +241,9 @@ export async function completeReplyAgentRun(input: {
   const sessionUsage =
     traceAuthorized && activeSessionEntry?.traceLevel === "raw"
       ? await accumulateSessionUsageFromTranscript({
-          agentId: followupRun.run.sessionTarget?.agentId ?? followupRun.run.agentId,
+          agentId: followupRun.run.agentId,
           sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
-          sessionKey: followupRun.run.sessionTarget?.sessionKey ?? followupRun.run.sessionKey,
+          sessionKey: followupRun.run.sessionKey,
           storePath,
           sessionFile: followupRun.run.sessionFile,
         })
