@@ -519,8 +519,46 @@ class LocalEmbeddingWorkerClient {
   }
 }
 
+const FAILED_CONSTRUCTION_CLIENTS = new Set<LocalEmbeddingWorkerClient>();
+let workerProviderCreationTail: Promise<void> = Promise.resolve();
+
+async function drainFailedConstructionClients(): Promise<void> {
+  let firstError: unknown;
+  let closeFailed = false;
+  for (const client of FAILED_CONSTRUCTION_CLIENTS) {
+    try {
+      await client.close();
+      FAILED_CONSTRUCTION_CLIENTS.delete(client);
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+    }
+  }
+  if (closeFailed) {
+    throw firstError;
+  }
+}
+
 /** Create the public local embedding provider backed by the child worker client. */
 export async function createLocalEmbeddingWorkerProvider(
+  options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
+): Promise<EmbeddingProvider> {
+  const create = async () => {
+    await drainFailedConstructionClients();
+    return await createLocalEmbeddingWorkerProviderOnce(options, runtimeOptions);
+  };
+  const creation = workerProviderCreationTail.then(create, create);
+  workerProviderCreationTail = creation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return await creation;
+}
+
+async function createLocalEmbeddingWorkerProviderOnce(
   options: EmbeddingProviderOptions,
   runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
@@ -532,7 +570,11 @@ export async function createLocalEmbeddingWorkerProvider(
   try {
     await client.initialize(workerOptions);
   } catch (err) {
-    await client.close().catch(() => {});
+    try {
+      await client.close();
+    } catch {
+      FAILED_CONSTRUCTION_CLIENTS.add(client);
+    }
     throw err;
   }
   let closed = false;
