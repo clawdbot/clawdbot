@@ -181,6 +181,10 @@ describe("runtime tool fixture", () => {
     );
     const createdKeys: string[] = [];
     const promptKeys: string[] = [];
+    const promptEvidence: Array<{
+      requireSuccessfulTranscriptToolResult?: boolean;
+      transcriptToolName?: string;
+    }> = [];
     const readEffectiveTools = vi.fn(async (_env, sessionKey: string) => {
       expect(sessionKey).toBe("agent:qa:runtime-tool:read:happy");
       return new Set(["read"]);
@@ -203,6 +207,10 @@ describe("runtime tool fixture", () => {
         readEffectiveTools,
         runAgentPrompt: vi.fn(async (_env, params) => {
           promptKeys.push(params.sessionKey);
+          promptEvidence.push({
+            transcriptToolName: params.transcriptToolName,
+            requireSuccessfulTranscriptToolResult: params.requireSuccessfulTranscriptToolResult,
+          });
           return {};
         }),
         fetchJson: vi.fn(),
@@ -217,6 +225,10 @@ describe("runtime tool fixture", () => {
     expect(promptKeys).toEqual([
       "agent:qa:runtime-tool:read:happy",
       "agent:qa:runtime-tool:read:failure",
+    ]);
+    expect(promptEvidence).toEqual([
+      { transcriptToolName: "read", requireSuccessfulTranscriptToolResult: true },
+      { transcriptToolName: "read", requireSuccessfulTranscriptToolResult: undefined },
     ]);
   });
 

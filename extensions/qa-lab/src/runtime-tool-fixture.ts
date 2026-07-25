@@ -70,6 +70,8 @@ type QaRuntimeToolFixtureDeps = {
       sessionKey: string;
       message: string;
       timeoutMs?: number;
+      transcriptToolName?: string;
+      requireSuccessfulTranscriptToolResult?: boolean;
     },
   ) => Promise<unknown>;
   fetchJson: (url: string) => Promise<unknown>;
@@ -676,11 +678,15 @@ export async function runRuntimeToolFixture(
     sessionKey: happySessionKey,
     message: happyPrompt,
     timeoutMs: liveTurnTimeoutMs(env, 45_000),
+    ...(happyPathOutputRequired
+      ? { transcriptToolName: toolName, requireSuccessfulTranscriptToolResult: true }
+      : {}),
   });
   await deps.runAgentPrompt(env, {
     sessionKey: failureSessionKey,
     message: failurePrompt,
     timeoutMs: liveTurnTimeoutMs(env, 45_000),
+    transcriptToolName: toolName,
   });
 
   if (!env.mock) {
