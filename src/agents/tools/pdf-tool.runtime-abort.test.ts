@@ -71,8 +71,8 @@ describe("PDF tool prepared-runtime cancellation", () => {
           agentDir,
           config: cfg,
           // Cancellation releases this late lease before its stores can be used.
-          createStores: () => ({ authStorage: {}, modelRegistry }) as never,
-        },
+          createStores: () => ({ authStorage: {}, modelRegistry }),
+        } as never,
         release,
       });
       await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
