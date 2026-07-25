@@ -21,25 +21,55 @@ type BrowserMockBundle = {
   browserClose: ReturnType<typeof vi.fn>;
 };
 
-function makeBrowser(targetId: string, url: string): BrowserMockBundle {
+function makeBrowserWithPages(
+  entries: Array<{
+    targetId: string;
+    url: string;
+    pageTitle?: () => Promise<string>;
+    sessionDetach?: () => Promise<void>;
+    targetRead?: () => Promise<unknown>;
+    targetTitle?: string;
+  }>,
+): BrowserMockBundle {
   const browserClose = vi.fn(async () => {});
-  const page = {
-    on: vi.fn(),
-    context: () => context,
-    title: vi.fn(async () => `title:${targetId}`),
-    url: vi.fn(() => url),
-  } as unknown as import("playwright-core").Page;
-
+  const pages: import("playwright-core").Page[] = [];
+  const targetInfoByPage = new Map<
+    import("playwright-core").Page,
+    { targetId: string; title: string }
+  >();
   const context: import("playwright-core").BrowserContext = {
-    pages: () => [page],
+    pages: () => pages,
     on: vi.fn(),
-    newCDPSession: vi.fn(async () => ({
-      send: vi.fn(async (method: string) =>
-        method === "Target.getTargetInfo" ? { targetInfo: { targetId } } : {},
-      ),
-      detach: vi.fn(async () => {}),
-    })),
+    newCDPSession: vi.fn(async (page: import("playwright-core").Page) => {
+      const entry = entries.find(
+        (candidate) => candidate.targetId === targetInfoByPage.get(page)?.targetId,
+      );
+      return {
+        send: vi.fn(async (method: string) => {
+          if (method !== "Target.getTargetInfo") {
+            return {};
+          }
+          return entry?.targetRead
+            ? await entry.targetRead()
+            : { targetInfo: targetInfoByPage.get(page) };
+        }),
+        detach: vi.fn(entry?.sessionDetach ?? (async () => {})),
+      };
+    }),
   } as unknown as import("playwright-core").BrowserContext;
+  for (const entry of entries) {
+    const page = {
+      on: vi.fn(),
+      context: () => context,
+      title: vi.fn(entry.pageTitle ?? (async () => `runtime-title:${entry.targetId}`)),
+      url: vi.fn(() => entry.url),
+    } as unknown as import("playwright-core").Page;
+    targetInfoByPage.set(page, {
+      targetId: entry.targetId,
+      title: entry.targetTitle ?? `title:${entry.targetId}`,
+    });
+    pages.push(page);
+  }
 
   const browser = {
     contexts: () => [context],
@@ -49,6 +79,10 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
   } as unknown as import("playwright-core").Browser;
 
   return { browser, browserClose };
+}
+
+function makeBrowser(targetId: string, url: string): BrowserMockBundle {
+  return makeBrowserWithPages([{ targetId, url }]);
 }
 
 function makeEmptyBrowser(): BrowserMockBundle {
@@ -492,6 +526,121 @@ describe("pw-session connection scoping", () => {
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     await vi.waitFor(() => expect(stale.browserClose).toHaveBeenCalledTimes(1));
     expect(refreshed.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("enumerates target metadata without waiting for a stuck page Runtime or detach", async () => {
+    const stuckPageTitle = vi.fn(() => new Promise<string>(() => {}));
+    const stuckSessionDetach = vi.fn(() => new Promise<void>(() => {}));
+    const healthyPageTitle = vi.fn(async () => "Runtime Healthy");
+    const browser = makeBrowserWithPages([
+      {
+        targetId: "STUCK",
+        url: "https://stuck.example",
+        pageTitle: stuckPageTitle,
+        sessionDetach: stuckSessionDetach,
+        targetTitle: "",
+      },
+      {
+        targetId: "HEALTHY",
+        url: "https://healthy.example",
+        pageTitle: healthyPageTitle,
+        targetTitle: "Healthy",
+      },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(browser.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const pages = await listPagesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      timeoutMs: 250,
+    });
+
+    expect(pages).toEqual([
+      {
+        targetId: "STUCK",
+        title: "",
+        url: "https://stuck.example",
+        type: "page",
+      },
+      {
+        targetId: "HEALTHY",
+        title: "Healthy",
+        url: "https://healthy.example",
+        type: "page",
+      },
+    ]);
+    expect(stuckPageTitle).not.toHaveBeenCalled();
+    expect(healthyPageTitle).not.toHaveBeenCalled();
+    expect(stuckSessionDetach).toHaveBeenCalledOnce();
+    expect(browser.browserClose).not.toHaveBeenCalled();
+
+    await expect(
+      listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        timeoutMs: 250,
+      }),
+    ).resolves.toEqual(pages);
+    expect(stuckSessionDetach).toHaveBeenCalledOnce();
+    expect(browser.browser.contexts()[0]?.newCDPSession).toHaveBeenCalledTimes(3);
+  });
+
+  it("selects a healthy target after a page whose session detach stays stuck", async () => {
+    const stuckSessionDetach = vi.fn(() => new Promise<void>(() => {}));
+    const browser = makeBrowserWithPages([
+      {
+        targetId: "STUCK",
+        url: "https://stuck.example",
+        sessionDetach: stuckSessionDetach,
+      },
+      {
+        targetId: "HEALTHY",
+        url: "https://healthy.example",
+      },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(browser.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const page = await getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "HEALTHY",
+    });
+
+    expect(page.url()).toBe("https://healthy.example");
+    expect(stuckSessionDetach).toHaveBeenCalledOnce();
+  });
+
+  it("does not accumulate sessions when target metadata fails and detach stays stuck", async () => {
+    const targetRead = vi.fn(async () => {
+      throw new Error("Target metadata unavailable");
+    });
+    const sessionDetach = vi.fn(() => new Promise<void>(() => {}));
+    const browser = makeBrowserWithPages([
+      {
+        targetId: "STUCK",
+        url: "https://stuck.example",
+        targetRead,
+        sessionDetach,
+      },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(browser.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        timeoutMs: 250,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        timeoutMs: 250,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(targetRead).toHaveBeenCalledOnce();
+    expect(sessionDetach).toHaveBeenCalledOnce();
+    expect(browser.browser.contexts()[0]?.newCDPSession).toHaveBeenCalledOnce();
   });
 
   it("times out stuck page enumeration and evicts the scoped connection", async () => {

@@ -11,6 +11,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import {
+  EXTENSION_RELAY_CAPABILITY_PROBE_V1,
   type ExtensionToRelayMessage,
   PAGE_SHARE_MAX_NOTE_CHARS,
   PAGE_SHARE_MAX_TITLE_CHARS,
@@ -27,6 +28,8 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 
 /** Default timeout for commands forwarded to the extension. */
 const EXTENSION_COMMAND_TIMEOUT_MS = 15_000;
+/** Leave response overhead inside the extension profile's default 1.5s HTTP budget. */
+const EXTENSION_PROBE_TIMEOUT_MS = 1_000;
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
 const PAGE_SHARE_MAX_BODY_CHARS = 300_000;
@@ -80,6 +83,7 @@ type ExtensionIdentity = {
   userAgent: string;
   browserVersion: string;
   extensionVersion: string;
+  capabilities: ReadonlySet<string>;
 };
 
 function toErrorPayload(
@@ -143,6 +147,32 @@ export class ExtensionRelayBridge {
     return this.clients.size;
   }
 
+  /**
+   * Verify the MV3 worker can still query Chrome, rather than treating a
+   * half-open socket or the relay's synthetic CDP replies as browser health.
+   * Pre-capability extensions retain their shipped hello-based readiness.
+   */
+  async probeExtension(): Promise<boolean> {
+    if (!this.extension) {
+      return false;
+    }
+    if (!this.extension.identity.capabilities.has(EXTENSION_RELAY_CAPABILITY_PROBE_V1)) {
+      return true;
+    }
+    try {
+      const result = (await this.callExtension({ type: "probe" }, EXTENSION_PROBE_TIMEOUT_MS)) as {
+        sharedTabCount?: unknown;
+      } | null;
+      return (
+        typeof result?.sharedTabCount === "number" &&
+        Number.isSafeInteger(result.sharedTabCount) &&
+        result.sharedTabCount >= 0
+      );
+    } catch {
+      return false;
+    }
+  }
+
   // ---------------------------------------------------------------------
   // Extension side
   // ---------------------------------------------------------------------
@@ -178,6 +208,11 @@ export class ExtensionRelayBridge {
             userAgent: msg.userAgent,
             browserVersion: msg.browserVersion,
             extensionVersion: msg.extensionVersion,
+            capabilities: new Set(
+              Array.isArray(msg.capabilities)
+                ? msg.capabilities.filter((capability) => typeof capability === "string")
+                : [],
+            ),
           },
         };
         this.syncTabs(msg.tabs);

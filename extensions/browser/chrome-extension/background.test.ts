@@ -173,6 +173,7 @@ async function loadBackground({ deferSocketClose = false }: { deferSocketClose?:
     messageListener,
     setBadgeText,
     sockets,
+    tabGroupsQuery: chromeMock.tabGroups.query,
     tabsGet: chromeMock.tabs.get,
   };
 }
@@ -259,6 +260,35 @@ describe("relay opening deadline", () => {
     vi.setSystemTime(START_TIME_MS + 60_000);
     harness.alarmListener({ name: RELAY_OPENING_DEADLINE_ALARM });
     expect(socket?.close).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver a delayed probe reply through a replacement socket", async () => {
+    const harness = await loadBackground();
+    const first = harness.sockets[0];
+    expect(first).toBeDefined();
+    first?.open();
+    await vi.waitFor(() => expect(first?.send).toHaveBeenCalled());
+
+    let resolveProbe!: (groups: []) => void;
+    harness.tabGroupsQuery.mockReturnValueOnce(
+      new Promise<[]>((resolve) => {
+        resolveProbe = resolve;
+      }),
+    );
+    first?.receive({ type: "probe", seq: 77 });
+    first?.close();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const replacement = harness.sockets[1];
+    expect(replacement).toBeDefined();
+    replacement?.open();
+    await vi.waitFor(() => expect(replacement?.send).toHaveBeenCalled());
+
+    resolveProbe([]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const replacementMessages = replacement?.send.mock.calls.map(([raw]) => String(raw)) ?? [];
+    expect(replacementMessages.some((raw) => raw.includes('"seq":77'))).toBe(false);
   });
 });
 

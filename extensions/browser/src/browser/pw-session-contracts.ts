@@ -83,6 +83,7 @@ export type ArmedDialogResponse = {
 export type TargetInfoResponse = {
   targetInfo?: {
     targetId?: string;
+    title?: string;
   };
 };
 

@@ -118,22 +118,15 @@ async function getCopilotConfig() {
 // Tab group management (the consent boundary)
 // ---------------------------------------------------------------------------
 
-async function findOpenClawGroups() {
-  try {
-    return await chrome.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
-  } catch {
-    return [];
-  }
+function findOpenClawGroups(options = {}) {
+  const query = chrome.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
+  return options.throwOnError ? query : query.catch(() => []);
 }
 
-async function listSharedTabs() {
-  const groups = await findOpenClawGroups();
-  const tabs = [];
-  for (const group of groups) {
-    const groupTabs = await chrome.tabs.query({ groupId: group.id });
-    tabs.push(...groupTabs);
-  }
-  return tabs.filter((tab) => typeof tab.id === "number");
+async function listSharedTabs(options) {
+  const groups = await findOpenClawGroups(options);
+  const tabs = await Promise.all(groups.map((group) => chrome.tabs.query({ groupId: group.id })));
+  return tabs.flat().filter((tab) => typeof tab.id === "number");
 }
 
 async function addTabToOpenClawGroup(tabId) {
@@ -343,9 +336,9 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 // Relay connection
 // ---------------------------------------------------------------------------
 
-function send(message) {
-  if (relayWs && relayWs.readyState === WebSocket.OPEN) {
-    relayWs.send(JSON.stringify(message));
+function send(message, socket = relayWs) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(message));
   }
 }
 
@@ -359,21 +352,26 @@ function armRelayOpeningDeadline() {
   chrome.alarms.create(RELAY_OPENING_DEADLINE_ALARM, { when: relayOpeningDeadlineAt });
 }
 
-async function handleRelayCommand(msg) {
+async function handleRelayCommand(msg, socket) {
   const { seq } = msg;
   try {
     switch (msg.type) {
       case "ping":
-        send({ type: "pong" });
+        send({ type: "pong" }, socket);
         return;
+      case "probe": {
+        const shared = await listSharedTabs({ throwOnError: true });
+        send({ type: "result", seq, result: { sharedTabCount: shared.length } }, socket);
+        return;
+      }
       case "attach": {
         const result = await attachDebugger(msg.tabId);
-        send({ type: "result", seq, result });
+        send({ type: "result", seq, result }, socket);
         return;
       }
       case "detach": {
         await detachDebugger(msg.tabId);
-        send({ type: "result", seq, result: {} });
+        send({ type: "result", seq, result: {} }, socket);
         return;
       }
       case "cdp": {
@@ -381,7 +379,7 @@ async function handleRelayCommand(msg) {
           ? { tabId: msg.tabId, sessionId: msg.sessionId }
           : { tabId: msg.tabId };
         const result = await chrome.debugger.sendCommand(target, msg.method, msg.params ?? {});
-        send({ type: "result", seq, result: result ?? {} });
+        send({ type: "result", seq, result: result ?? {} }, socket);
         return;
       }
       case "createTab": {
@@ -391,30 +389,31 @@ async function handleRelayCommand(msg) {
           await focusWindowForTab(tab);
         }
         scheduleTabsSync();
-        send({ type: "result", seq, result: { tabId: tab.id } });
+        send({ type: "result", seq, result: { tabId: tab.id } }, socket);
         return;
       }
       case "closeTab": {
         await detachDebugger(msg.tabId);
         await chrome.tabs.remove(msg.tabId);
-        send({ type: "result", seq, result: {} });
+        send({ type: "result", seq, result: {} }, socket);
         return;
       }
       case "activateTab": {
         const tab = await chrome.tabs.get(msg.tabId);
         await chrome.tabs.update(msg.tabId, { active: true });
         await focusWindowForTab(tab);
-        send({ type: "result", seq, result: {} });
+        send({ type: "result", seq, result: {} }, socket);
         return;
       }
       default:
         if (typeof seq === "number") {
-          send({ type: "error", seq, message: `unknown relay command: ${msg.type}` });
+          send({ type: "error", seq, message: `unknown relay command: ${msg.type}` }, socket);
         }
     }
   } catch (err) {
     if (typeof seq === "number") {
-      send({ type: "error", seq, message: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      send({ type: "error", seq, message }, socket);
     }
   }
 }
@@ -428,6 +427,7 @@ async function sendHello() {
     browserVersion: uaMatch ? uaMatch[0] : "Chrome/unknown",
     extensionVersion: chrome.runtime.getManifest().version,
     tabs: shared.map(toRelayTabInfo),
+    capabilities: ["probe-v1"],
   });
 }
 
@@ -476,7 +476,7 @@ async function connectRelay() {
       pageShareRelay.settle(ws, msg);
       return;
     }
-    void handleRelayCommand(msg);
+    void handleRelayCommand(msg, ws);
   });
   ws.addEventListener("close", () => {
     pageShareRelay.rejectSocket(ws);

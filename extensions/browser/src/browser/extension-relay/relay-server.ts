@@ -154,16 +154,28 @@ export async function startExtensionRelayServer(params: {
         );
         return;
       }
-      const identity = bridge.identity;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          Browser: identity?.browserVersion ?? "Chrome/unknown",
-          "Protocol-Version": "1.3",
-          "User-Agent": identity?.userAgent ?? "unknown",
-          webSocketDebuggerUrl: `ws://127.0.0.1:${resolvedPort()}/cdp`,
-        }),
-      );
+      void bridge.probeExtension().then((responsive) => {
+        if (!responsive) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error:
+                "OpenClaw Chrome extension is connected but not responding. Reload the extension and try again.",
+            }),
+          );
+          return;
+        }
+        const identity = bridge.identity;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            Browser: identity?.browserVersion ?? "Chrome/unknown",
+            "Protocol-Version": "1.3",
+            "User-Agent": identity?.userAgent ?? "unknown",
+            webSocketDebuggerUrl: `ws://127.0.0.1:${resolvedPort()}/cdp`,
+          }),
+        );
+      });
       return;
     }
     if (req.method === "GET" && (path === "/json" || path === "/json/list")) {

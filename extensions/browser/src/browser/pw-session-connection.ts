@@ -40,6 +40,14 @@ import {
 
 const { chromium } = playwrightCore;
 
+type PageTargetInfo = { targetId: string | null; title: string };
+
+// Keep one target-info read per Page while Playwright is still detaching its
+// temporary CDP session. A wedged renderer can leave detach pending forever;
+// reusing the resolved metadata prevents every later tool call from attaching
+// another stuck session to the same page.
+const pageTargetInfoReads = new WeakMap<Page, Promise<PageTargetInfo>>();
+
 function resolveCdpConnectRetryDelayMs(attempt: number): number {
   return 250 + attempt * 250;
 }
@@ -522,15 +530,49 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
   return { accessible, blockedCount };
 }
 
-export async function pageTargetId(page: Page): Promise<string | null> {
-  const session = await page.context().newCDPSession(page);
-  try {
-    const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
-    const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
-    return targetId || null;
-  } finally {
-    await session.detach().catch(() => {});
+export async function pageTargetInfo(page: Page): Promise<PageTargetInfo> {
+  const cached = pageTargetInfoReads.get(page);
+  if (cached) {
+    return await cached;
   }
+
+  let detachScheduled = false;
+  const read: Promise<PageTargetInfo> = (async () => {
+    const session = await page.context().newCDPSession(page);
+    try {
+      const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
+      const targetId = normalizeOptionalString(info?.targetInfo?.targetId) ?? "";
+      const title = typeof info?.targetInfo?.title === "string" ? info.targetInfo.title : "";
+      return { targetId: targetId || null, title };
+    } finally {
+      // Playwright first sends Runtime.runIfWaitingForDebugger while detaching.
+      // Do not make target discovery depend on a renderer that may be wedged.
+      detachScheduled = true;
+      void session
+        .detach()
+        .catch(() => {})
+        .finally(() => {
+          if (pageTargetInfoReads.get(page) === read) {
+            pageTargetInfoReads.delete(page);
+          }
+        });
+    }
+  })();
+  pageTargetInfoReads.set(page, read);
+  try {
+    return await read;
+  } catch (err) {
+    // Once a session exists, keep even a rejected read cached until its detach
+    // settles. This caps a wedged page at one auxiliary session per connection.
+    if (!detachScheduled && pageTargetInfoReads.get(page) === read) {
+      pageTargetInfoReads.delete(page);
+    }
+    throw err;
+  }
+}
+
+export async function pageTargetId(page: Page): Promise<string | null> {
+  return (await pageTargetInfo(page)).targetId;
 }
 
 async function getPageForTargetIdOnce(opts: {

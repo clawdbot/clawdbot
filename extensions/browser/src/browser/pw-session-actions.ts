@@ -29,6 +29,7 @@ import {
   isBlockedPageRef,
   isBlockedTarget,
   isRecoverablePlaywrightDisconnectError,
+  pageTargetInfo,
   pageTargetId,
   retirePlaywrightBrowserConnectionExact,
   takeCachedPlaywrightBrowserConnection,
@@ -347,24 +348,18 @@ async function readPagesViaPlaywright(
         if (isBlockedPageRef(opts.cdpUrl, page)) {
           continue;
         }
-        let tid: string | null;
+        let targetInfo: { targetId: string | null; title: string } | null;
         try {
-          tid = await pageTargetId(page);
+          targetInfo = await pageTargetInfo(page);
         } catch (err) {
           if (isRecoverablePlaywrightDisconnectError(err)) {
             throw err;
           }
-          tid = null;
+          targetInfo = null;
         }
+        const tid = targetInfo?.targetId;
+        const title = targetInfo?.title ?? "";
         if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
-          let title = "";
-          try {
-            title = await page.title();
-          } catch (err) {
-            if (isRecoverablePlaywrightDisconnectError(err)) {
-              throw err;
-            }
-          }
           let url = "";
           try {
             url = page.url();
@@ -375,6 +370,8 @@ async function readPagesViaPlaywright(
           }
           results.push({
             targetId: tid,
+            // Target metadata is already available from CDP and does not require
+            // a Runtime command, which can remain pending forever on a wedged tab.
             title,
             url,
             type: "page",

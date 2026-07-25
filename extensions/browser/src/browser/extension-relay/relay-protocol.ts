@@ -13,6 +13,9 @@ export type RelayTabInfo = {
   active: boolean;
 };
 
+/** Additive hello capability for the sequenced worker/tab-query health probe. */
+export const EXTENSION_RELAY_CAPABILITY_PROBE_V1 = "probe-v1";
+
 export const PAGE_SHARE_MAX_NOTE_CHARS = 2_000;
 export const PAGE_SHARE_MAX_TITLE_CHARS = 500;
 export const PAGE_SHARE_MAX_URL_CHARS = 2_000;
@@ -37,6 +40,7 @@ type ExtensionHelloMessage = {
   browserVersion: string;
   extensionVersion: string;
   tabs: RelayTabInfo[];
+  capabilities?: string[];
 };
 
 /** Full refresh of shared tabs; sent on any group membership or tab change. */
@@ -101,6 +105,8 @@ export type ExtensionToRelayMessage =
  * correlate the extension's result/error reply.
  */
 export type RelayCommandBody =
+  /** Verify the extension worker and shared-tab query are responsive. */
+  | { type: "probe" }
   /** Forward a CDP command into an attached tab (or one of its child sessions). */
   | { type: "cdp"; tabId: number; sessionId?: string; method: string; params?: unknown }
   /** Attach chrome.debugger to a shared tab. Result: { targetId: string }. */
