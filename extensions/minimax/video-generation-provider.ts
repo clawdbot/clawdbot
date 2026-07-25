@@ -1,5 +1,6 @@
 // Minimax provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -33,7 +34,6 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 120;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const MINIMAX_MODEL_ALLOWED_DURATIONS: Readonly<Record<string, readonly number[]>> = {
   "MiniMax-Hailuo-2.3": [6, 10],
   "MiniMax-Hailuo-02": [6, 10],
@@ -94,14 +94,6 @@ function resolveMinimaxVideoBaseUrl(
   } catch {
     return DEFAULT_MINIMAX_VIDEO_BASE_URL;
   }
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: string): void {
@@ -570,6 +562,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         });
         const videoUrl = normalizeOptionalString(completed.video_url);
         const fileId = normalizeOptionalString(completed.file_id);
+        const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
         const video = videoUrl
           ? await downloadVideoFromUrl({
               url: videoUrl,
@@ -578,7 +571,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
                 defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
               }),
               fetchFn,
-              maxBytes: resolveGeneratedVideoMaxBytes(req),
+              maxBytes: maxVideoBytes,
               policy: requestPolicy,
             })
           : fileId
@@ -591,7 +584,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
                 }),
                 baseUrl,
                 fetchFn,
-                maxBytes: resolveGeneratedVideoMaxBytes(req),
+                maxBytes: maxVideoBytes,
                 policy: requestPolicy,
               })
             : (() => {
