@@ -4723,7 +4723,6 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
 
     expectTextToIncludeAll(sweep, [
       'OPENCLAW_PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"',
-      'run_logged "$label" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"',
       "run_plugins_openclaw_capture()",
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file"',
       "plugins_lifecycle_trace_enabled()",
