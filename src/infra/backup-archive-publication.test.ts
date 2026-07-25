@@ -132,6 +132,21 @@ describe("backup archive publication", () => {
     await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("racer");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preserves a concurrently published hard link to the prepared archive",
+    async () => {
+      const { outputPath, plan } = await createPublication("openclaw-backup-hardlink-race-");
+      const prepared = await prepareArchive(plan);
+      await fs.link(prepared.archivePath, outputPath);
+
+      await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
+        /Refusing to overwrite existing backup archive/iu,
+      );
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("complete archive");
+      await expect(fs.lstat(prepared.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("rejects a replaced staging pathname without publishing replacement bytes", async () => {
     const { outputPath, plan } = await createPublication("openclaw-backup-staging-race-");
     const prepared = await prepareArchive(plan);

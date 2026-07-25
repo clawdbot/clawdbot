@@ -271,11 +271,17 @@ export async function publishPreparedBackupArchive(params: {
   const { plan, prepared } = params;
   let preparedHandle: FileHandle | undefined;
   let publishedIdentity: Stats | undefined;
+  let publicationCollision = false;
   let committed = false;
   try {
     await assertPublicationParentUnchanged(plan);
     preparedHandle = await openPreparedArchive(plan, prepared);
-    await assertTargetAbsent(plan.canonicalOutputPath);
+    try {
+      await assertTargetAbsent(plan.canonicalOutputPath);
+    } catch (error) {
+      publicationCollision = true;
+      throw error;
+    }
     try {
       const publication = await publishFileNoClobber(
         prepared.archivePath,
@@ -288,6 +294,7 @@ export async function publishPreparedBackupArchive(params: {
       publishedIdentity = publication.identity;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        publicationCollision = true;
         throw new Error(
           `Refusing to overwrite existing backup archive: ${plan.requestedOutputPath}`,
           { cause: error },
@@ -346,7 +353,7 @@ export async function publishPreparedBackupArchive(params: {
     await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
   } catch (error) {
     if (!committed) {
-      if (!publishedIdentity) {
+      if (!publishedIdentity && !publicationCollision) {
         const currentTargetIdentity = await fs
           .lstat(plan.canonicalOutputPath)
           .catch(() => undefined);
