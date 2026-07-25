@@ -10,6 +10,7 @@ import {
 } from "../../../auto-reply/tokens.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import {
@@ -220,6 +221,25 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
     hasAsyncStartedToolActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0,
   );
+}
+
+/**
+ * Builds a specific auth-failure message when the assistant profile failed due
+ * to an authentication error. Non-auth failures fall through to the generic
+ * incomplete-turn warning.
+ */
+export function resolveAuthFailurePayloadText(params: {
+  assistantProfileFailureReason?: AuthProfileFailureReason | null;
+  provider: string;
+  modelId: string;
+}): string | undefined {
+  if (
+    params.assistantProfileFailureReason !== "auth" &&
+    params.assistantProfileFailureReason !== "auth_permanent"
+  ) {
+    return undefined;
+  }
+  return `Authentication failed for model ${params.provider}/${params.modelId}. Please check your API key or switch to a different model.`;
 }
 
 /**

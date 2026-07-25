@@ -29,6 +29,7 @@ import {
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   isIncompleteTerminalAssistantTurn,
+  resolveAuthFailurePayloadText,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
   resolveReasoningOnlyRetryInstruction,
   resolveReplayInvalidFlag,
@@ -39,7 +40,6 @@ import {
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
-import { resolveAuthFailurePayloadText } from "./run/terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
