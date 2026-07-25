@@ -857,6 +857,8 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.write("/help\r", { delay: false });
       await fixture.run.waitForOutput("Slash commands:");
       await fixture.run.waitForOutput("/help");
+      await fixture.run.waitForOutput("/verbose <on|off|full>");
+      await fixture.run.waitForOutput("/reasoning <on|off|stream>");
       await fixture.run.waitForOutput("/exit");
     },
     TEST_TIMEOUT_MS,
@@ -893,6 +895,23 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.run.waitForOutput("→ status");
       await fixture.run.write("\r", { delay: false });
       await fixture.run.waitForOutput("fast mode: off");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    { command: "verbose", level: "full", field: "verboseLevel" },
+    { command: "reasoning", level: "stream", field: "reasoningLevel" },
+  ])(
+    "submits the canonical /$command $level terminal completion with one Enter",
+    async ({ command, level, field }) => {
+      await fixture.run.write(`/${command} ${level}`, { delay: false });
+      await fixture.run.waitForOutput(`→ ${level}`);
+      await fixture.run.write("\r", { delay: false });
+
+      await fixture.waitForLogEntry(
+        (entry) => entry.method === "patchSession" && objectFieldEquals(entry, field, level),
+      );
     },
     TEST_TIMEOUT_MS,
   );

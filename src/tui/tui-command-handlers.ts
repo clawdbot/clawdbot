@@ -19,7 +19,12 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
+import {
+  formatTuiLevelCommandUsage,
+  helpText,
+  isSharedTextCommand,
+  parseCommand,
+} from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -570,7 +575,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "verbose":
         if (!args) {
-          chatLog.addSystem("usage: /verbose <on|off>");
+          chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("verbose")}`);
           break;
         }
         try {
@@ -630,7 +635,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "reasoning":
         if (!args) {
-          chatLog.addSystem("usage: /reasoning <on|off>");
+          chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("reasoning")}`);
           break;
         }
         try {
