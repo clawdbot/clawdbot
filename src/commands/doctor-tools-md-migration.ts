@@ -119,7 +119,9 @@ async function readToolsMd(
         return undefined;
       }
       if (claims.length > 1) {
-        throw new Error("multiple interrupted TOOLS.md migration claims require manual recovery");
+        throw new Error("multiple interrupted TOOLS.md migration claims require manual recovery", {
+          cause: error,
+        });
       }
       const claimPath = path.join(workspaceDir, claims[0]!);
       const claimStat = await fs.lstat(claimPath);
@@ -132,10 +134,14 @@ async function readToolsMd(
         Date.now() - claimStat.mtimeMs < ACTIVE_CLAIM_MAX_AGE_MS &&
         isProcessAlive(ownerPid)
       ) {
-        throw new Error(`TOOLS.md migration claim is held by running process ${ownerPid}`);
+        throw new Error(`TOOLS.md migration claim is held by running process ${ownerPid}`, {
+          cause: error,
+        });
       }
       if (!options?.recoverClaims) {
-        throw new Error("an interrupted TOOLS.md migration claim requires doctor --fix");
+        throw new Error("an interrupted TOOLS.md migration claim requires doctor --fix", {
+          cause: error,
+        });
       }
       await restoreClaimNoClobber(claimPath, toolsPath);
       stat = await fs.lstat(toolsPath);
@@ -227,32 +233,36 @@ function appendWithSpacing(before: string, addition: string, after = ""): string
 
 export function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): string {
   const hadLegacyGuidance = agentsContent.includes(LEGACY_AGENTS_TOOLS_GUIDANCE);
-  agentsContent = agentsContent.replace(
+  let mergedAgentsContent = agentsContent.replace(
     LEGACY_AGENTS_TOOLS_GUIDANCE,
     CURRENT_AGENTS_TOOLS_GUIDANCE,
   );
   if (hadLegacyGuidance) {
-    agentsContent = ensureLocalNotesHeading(agentsContent);
+    mergedAgentsContent = ensureLocalNotesHeading(mergedAgentsContent);
   }
-  if (agentsContent.includes(MIGRATED_SUBSECTION_HEADING)) {
-    if (agentsContent.includes(toolsContent)) {
-      return agentsContent;
+  if (mergedAgentsContent.includes(MIGRATED_SUBSECTION_HEADING)) {
+    if (mergedAgentsContent.includes(toolsContent)) {
+      return mergedAgentsContent;
     }
-    const headingIndex = agentsContent.indexOf(MIGRATED_SUBSECTION_HEADING);
+    const headingIndex = mergedAgentsContent.indexOf(MIGRATED_SUBSECTION_HEADING);
     const insertAt = headingIndex + MIGRATED_SUBSECTION_HEADING.length;
     return appendWithSpacing(
-      agentsContent.slice(0, insertAt),
+      mergedAgentsContent.slice(0, insertAt),
       toolsContent,
-      agentsContent.slice(insertAt),
+      mergedAgentsContent.slice(insertAt),
     );
   }
   const block = migratedBlock(toolsContent);
-  const toolsSection = findToolsSection(agentsContent);
+  const toolsSection = findToolsSection(mergedAgentsContent);
   if (!toolsSection) {
-    return appendWithSpacing(agentsContent, `## Tools\n\n${block}`);
+    return appendWithSpacing(mergedAgentsContent, `## Tools\n\n${block}`);
   }
   const insertAt = toolsSection.insertAt;
-  return appendWithSpacing(agentsContent.slice(0, insertAt), block, agentsContent.slice(insertAt));
+  return appendWithSpacing(
+    mergedAgentsContent.slice(0, insertAt),
+    block,
+    mergedAgentsContent.slice(insertAt),
+  );
 }
 
 function findToolsSection(content: string): { headingEnd: number; insertAt: number } | undefined {
@@ -312,7 +322,7 @@ async function writeAgentsAtomically(params: {
   expected: string;
   content: string;
 }): Promise<void> {
-  const current = await fs.readFile(params.agentsPath, "utf8").catch((error) => {
+  const current = await fs.readFile(params.agentsPath, "utf8").catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return "";
     }
@@ -321,7 +331,7 @@ async function writeAgentsAtomically(params: {
   if (current !== params.expected) {
     throw new Error("AGENTS.md changed during TOOLS.md migration");
   }
-  const stat = await fs.lstat(params.agentsPath).catch((error) => {
+  const stat = await fs.lstat(params.agentsPath).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
@@ -378,7 +388,6 @@ async function writeAgentsAtomically(params: {
       } catch (pathError) {
         if ((pathError as NodeJS.ErrnoException).code === "ENOENT") {
           await restoreClaimNoClobber(backupPath, params.agentsPath);
-          claimed = false;
         }
       }
     }
