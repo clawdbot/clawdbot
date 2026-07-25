@@ -376,12 +376,20 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    const fallbackResult = await createEmbeddingProvider({
-      config: this.cfg,
-      agentDir: resolveAgentDir(this.cfg, this.agentId),
-      ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
-      ...fallbackRequest,
-    });
+    let fallbackResult;
+    try {
+      fallbackResult = await createEmbeddingProvider({
+        config: this.cfg,
+        agentDir: resolveAgentDir(this.cfg, this.agentId),
+        ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
+        ...fallbackRequest,
+      });
+    } catch (err) {
+      // Retirement already removed the primary before fallback construction.
+      // Make the configured provider retryable instead of stranding FTS-only mode.
+      this.resetProviderInitializationForRetry();
+      throw err;
+    }
 
     const fallbackState = applyMemoryFallbackProviderState({
       current: currentState,

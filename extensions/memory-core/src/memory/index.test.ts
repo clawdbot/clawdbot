@@ -2244,6 +2244,39 @@ describe("memory index", () => {
     await expect(manager.search("alpha")).resolves.toBeDefined();
   });
 
+  it("retries the optional primary after fallback initialization fails", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerCreationFailure = "fallback-provider";
+    const callsBeforeSearch = providerCalls.length;
+
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+
+    providerCreationFailure = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+      "openai",
+    ]);
+    expect(fields.provider?.id).toBe("mock");
+  });
+
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
