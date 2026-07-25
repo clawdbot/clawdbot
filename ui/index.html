@@ -13,6 +13,10 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <script>
+      // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
+      globalThis.__zod_globalConfig ??= {};
+      globalThis.__zod_globalConfig.jitless = true;
+
       (function () {
         var THEMES = { claw: 1, knot: 1, dash: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
