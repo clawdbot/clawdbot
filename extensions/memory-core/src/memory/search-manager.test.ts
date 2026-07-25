@@ -1180,6 +1180,49 @@ describe("getMemorySearchManager caching", () => {
     expect(fallbackSearch).toHaveBeenCalledTimes(2);
   });
 
+  it("joins and closes builtin fallback creation during wrapper teardown", async () => {
+    const agentId = "fallback-create-close-race";
+    const { manager } = await createFailedQmdSearchHarness({
+      agentId,
+      errorMessage: "qmd query failed",
+    });
+    const fallbackGate = createDeferred<typeof fallbackManager>();
+    mockMemoryIndexGet.mockImplementationOnce(async () => await fallbackGate.promise);
+
+    const searchPromise = manager.search("hello");
+    await vi.waitFor(() => expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1));
+    const closePromise = manager.close?.() ?? Promise.resolve();
+    fallbackGate.resolve(fallbackManager);
+
+    await closePromise;
+    await expect(searchPromise).rejects.toThrow("memory search manager is closed");
+    expect(fallbackManager.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start fallback creation after wrapper teardown begins", async () => {
+    const agentId = "fallback-after-close-race";
+    const primarySearchGate = createDeferred<void>();
+    mockPrimary.search.mockImplementationOnce(async () => {
+      await primarySearchGate.promise;
+      throw new Error("qmd query failed");
+    });
+    const cfg = createQmdCfg(agentId);
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId }));
+    const primaryCloseGate = createDeferred<void>();
+    mockPrimary.close.mockImplementation(async () => await primaryCloseGate.promise);
+
+    const searchPromise = manager.search("hello");
+    await vi.waitFor(() => expect(mockPrimary.search).toHaveBeenCalledTimes(1));
+    const closePromise = manager.close?.() ?? Promise.resolve();
+    primarySearchGate.resolve();
+    await vi.waitFor(() => expect(mockPrimary.close).toHaveBeenCalled());
+
+    primaryCloseGate.resolve();
+    await closePromise;
+    await expect(searchPromise).rejects.toThrow("memory search manager is closed");
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+  });
+
   it("gives same-call qmd-to-builtin fallback a fresh default deadline", async () => {
     vi.useFakeTimers();
     try {

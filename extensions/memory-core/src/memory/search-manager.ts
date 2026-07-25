@@ -699,6 +699,7 @@ async function closeMemorySearchManagerWithinLifecycle(params: {
 
 class FallbackMemoryManager implements MemorySearchManager {
   private fallback: Maybe<MemorySearchManager> = null;
+  private fallbackInitPromise: Promise<Maybe<MemorySearchManager>> | null = null;
   private primaryFailed = false;
   private lastError?: string;
   private cacheEvicted = false;
@@ -883,8 +884,11 @@ class FallbackMemoryManager implements MemorySearchManager {
 
   private async closeOnce(): Promise<void> {
     this.closed = true;
+    const pendingFallback = this.fallbackInitPromise;
     await this.deps.primary.close?.();
+    await pendingFallback;
     await this.fallback?.close?.();
+    this.fallback = null;
     this.evictCacheEntry();
   }
 
@@ -894,23 +898,49 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   private async ensureFallback(): Promise<Maybe<MemorySearchManager>> {
+    this.ensureOpen();
     if (this.fallback) {
       return this.fallback;
     }
-    let fallback: Maybe<MemorySearchManager>;
-    try {
-      fallback = await this.deps.fallbackFactory();
-      if (!fallback) {
-        log.warn("memory fallback requested but builtin index is unavailable");
+    const pending = this.fallbackInitPromise;
+    if (pending) {
+      const fallback = await pending;
+      this.ensureOpen();
+      return fallback;
+    }
+    const initialization = (async (): Promise<Maybe<MemorySearchManager>> => {
+      let fallback: Maybe<MemorySearchManager>;
+      try {
+        fallback = await this.deps.fallbackFactory();
+        if (!fallback) {
+          log.warn("memory fallback requested but builtin index is unavailable");
+          return null;
+        }
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        log.warn(`memory fallback unavailable: ${message}`);
         return null;
       }
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      log.warn(`memory fallback unavailable: ${message}`);
-      return null;
+      this.fallback = fallback;
+      if (this.closed) {
+        await fallback.close?.();
+        if (this.fallback === fallback) {
+          this.fallback = null;
+        }
+        return null;
+      }
+      return fallback;
+    })();
+    this.fallbackInitPromise = initialization;
+    try {
+      const fallback = await initialization;
+      this.ensureOpen();
+      return fallback;
+    } finally {
+      if (this.fallbackInitPromise === initialization) {
+        this.fallbackInitPromise = null;
+      }
     }
-    this.fallback = fallback;
-    return this.fallback;
   }
 
   private ensureOpen(): void {
