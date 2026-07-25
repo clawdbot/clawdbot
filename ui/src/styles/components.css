@@ -217,7 +217,7 @@ openclaw-session-owner-chip {
 .login-gate__failure-title {
   font-size: 14px;
   font-weight: 700;
-  color: var(--fg);
+  color: var(--text);
 }
 
 .login-gate__failure-summary {
@@ -267,7 +267,7 @@ openclaw-session-owner-chip {
 .login-gate__help-title {
   font-weight: 600;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text);
 }
 
 .login-gate__steps {
@@ -295,7 +295,7 @@ openclaw-session-owner-chip {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  color: var(--fg);
+  color: var(--text);
   user-select: all;
 }
 
@@ -308,7 +308,7 @@ openclaw-session-owner-chip {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  color: var(--fg);
+  color: var(--text);
   cursor: copy;
 }
 
@@ -2918,7 +2918,7 @@ td.data-table-key-col {
   min-height: 30px;
   padding: 3px 5px 3px 10px;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--muted);
 }
 
@@ -2974,7 +2974,7 @@ td.data-table-key-col {
   flex-shrink: 0;
   padding: 1px 7px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -3071,8 +3071,8 @@ td.data-table-key-col {
 }
 
 .chat-queue__remove:hover {
-  color: var(--fg);
-  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .chat-queue__remove svg {
@@ -3255,7 +3255,7 @@ td.data-table-key-col {
   border-radius: 3px;
   padding: 0 2px;
   background: color-mix(in srgb, #f97316 34%, transparent);
-  color: var(--fg);
+  color: var(--text);
 }
 
 .exec-approval-meta {
