@@ -40,7 +40,7 @@ type OfficialExternalPluginCatalogEnvelopeVerificationError = {
   authenticatedPayload?: unknown;
 };
 
-export type OfficialExternalPluginCatalogEnvelopePayloadVerificationResult =
+type OfficialExternalPluginCatalogEnvelopePayloadVerificationResult =
   | {
       ok: true;
       payloadType: string;
@@ -63,6 +63,7 @@ type OfficialExternalPluginCatalogEnvelopeVerificationResult =
       threshold?: number;
     }
   | OfficialExternalPluginCatalogEnvelopeVerificationError;
+
 function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   payloadType: string;
   payloadBytes: Buffer;

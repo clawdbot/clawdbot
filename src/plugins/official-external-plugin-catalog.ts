@@ -744,6 +744,7 @@ async function parseHostedCatalogFeedBody(params: {
       OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
       OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
       verifyOfficialExternalPluginCatalogEnvelopePayload,
+      verifyOfficialExternalPluginCatalogSignedEnvelope,
     } = await import("./official-external-plugin-catalog-envelope.js");
     const {
       parseOfficialExternalPluginCatalogShardedSnapshot,
@@ -755,15 +756,30 @@ async function parseHostedCatalogFeedBody(params: {
     const wireBody = snapshot?.rootBody ?? params.body;
     const raw = snapshot ? (JSON.parse(snapshot.rootBody) as unknown) : document;
     const threshold = params.verification.threshold ?? 1;
-    const verification = verifyOfficialExternalPluginCatalogEnvelopePayload(raw, {
-      trustedKeys: params.verification.keys,
-      acceptedPayloadTypes: new Set([
-        OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
-        OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
-      ]),
-      threshold,
-      ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
-    });
+    const verification =
+      isRecord(raw) && raw.payloadType === OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE
+        ? (() => {
+            const feedVerification = verifyOfficialExternalPluginCatalogSignedEnvelope(raw, {
+              trustedKeys: params.verification.keys,
+              threshold,
+              ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
+            });
+            return feedVerification.ok
+              ? {
+                  ...feedVerification,
+                  payloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+                  payload: feedVerification.feed,
+                }
+              : feedVerification;
+          })()
+        : verifyOfficialExternalPluginCatalogEnvelopePayload(raw, {
+            trustedKeys: params.verification.keys,
+            acceptedPayloadTypes: new Set([
+              OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
+            ]),
+            threshold,
+            ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
+          });
     if (!verification.ok) {
       const invalidTimestampSequence =
         verification.error === "invalid-payload" && "authenticatedPayload" in verification
@@ -809,7 +825,11 @@ async function parseHostedCatalogFeedBody(params: {
       if (!shardBodies) {
         throw new Error("hosted catalog shard set is unavailable");
       }
-      feed = validateOfficialExternalPluginCatalogShardSet(root, shardBodies);
+      const shardedFeed = validateOfficialExternalPluginCatalogShardSet(root, shardBodies);
+      if (!isOfficialExternalPluginCatalogFeed(shardedFeed)) {
+        throw new Error("hosted catalog shard set contains an invalid feed");
+      }
+      feed = shardedFeed;
       snapshotBody =
         snapshot === null
           ? serializeOfficialExternalPluginCatalogShardedSnapshot({

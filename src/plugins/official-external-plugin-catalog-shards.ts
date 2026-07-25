@@ -1,19 +1,15 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "../utils.js";
-import type {
-  OfficialExternalPluginCatalogEntry,
-  OfficialExternalPluginCatalogFeed,
-} from "./official-external-plugin-catalog.js";
 
-export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_MAX_BYTES = 1024 * 1024;
-export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_MAX_ENTRIES = 10_000;
+const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_MAX_BYTES = 1024 * 1024;
+const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_MAX_ENTRIES = 10_000;
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_MAX_BYTES = 1024 * 1024;
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_MAX_SHARDS = 1024;
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_MAX_ENTRIES = 1_000_000;
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_SET_MAX_BYTES = 256 * 1024 * 1024;
 const SHARDED_SNAPSHOT_KIND = "official-external-plugin-catalog-shards-v1";
 
-export type OfficialExternalPluginCatalogShardDescriptor = {
+type OfficialExternalPluginCatalogShardDescriptor = {
   index: number;
   url: string;
   sha256: string;
@@ -32,15 +28,30 @@ export type OfficialExternalPluginCatalogShardRoot = {
   shards: readonly OfficialExternalPluginCatalogShardDescriptor[];
 };
 
+type OfficialExternalPluginCatalogShardEntry = Record<string, unknown> & {
+  type: "plugin";
+  id: string;
+};
+
 type OfficialExternalPluginCatalogShard = {
   schemaVersion: 1;
   feedId: string;
   sequence: number;
   index: number;
-  entries: readonly OfficialExternalPluginCatalogEntry[];
+  entries: readonly OfficialExternalPluginCatalogShardEntry[];
 };
 
-export type OfficialExternalPluginCatalogShardedSnapshot = {
+type OfficialExternalPluginCatalogShardedFeed = {
+  schemaVersion: 1;
+  id: string;
+  sequence: number;
+  generatedAt: string;
+  expiresAt: string;
+  description?: string;
+  entries: readonly OfficialExternalPluginCatalogShardEntry[];
+};
+
+type OfficialExternalPluginCatalogShardedSnapshot = {
   kind: typeof SHARDED_SNAPSHOT_KIND;
   rootBody: string;
   shardBodies: readonly string[];
@@ -254,7 +265,7 @@ function parseShard(value: unknown): OfficialExternalPluginCatalogShard {
   ) {
     throw new Error("hosted catalog shard entry count is invalid");
   }
-  const entries: OfficialExternalPluginCatalogEntry[] = [];
+  const entries: OfficialExternalPluginCatalogShardEntry[] = [];
   let previousId: string | undefined;
   for (const entry of value.entries) {
     if (
@@ -269,7 +280,7 @@ function parseShard(value: unknown): OfficialExternalPluginCatalogShard {
       throw new Error("hosted catalog shard entries must use deterministic id ordering");
     }
     previousId = entry.id;
-    entries.push(entry);
+    entries.push(entry as OfficialExternalPluginCatalogShardEntry);
   }
   return { schemaVersion: 1, feedId: value.feedId, sequence, index, entries };
 }
@@ -277,11 +288,11 @@ function parseShard(value: unknown): OfficialExternalPluginCatalogShard {
 export function validateOfficialExternalPluginCatalogShardSet(
   root: OfficialExternalPluginCatalogShardRoot,
   shardBodies: readonly string[],
-): OfficialExternalPluginCatalogFeed {
+): OfficialExternalPluginCatalogShardedFeed {
   if (shardBodies.length !== root.shards.length) {
     throw new Error("hosted catalog shard set is incomplete");
   }
-  const entries: OfficialExternalPluginCatalogEntry[] = [];
+  const entries: OfficialExternalPluginCatalogShardEntry[] = [];
   const identities = new Set<string>();
   let previousId: string | undefined;
   for (const [index, body] of shardBodies.entries()) {
@@ -317,10 +328,10 @@ export function validateOfficialExternalPluginCatalogShardSet(
         throw new Error("hosted catalog shard set identity is duplicated");
       }
       identities.add(identity);
-      if (previousId !== undefined && previousId.localeCompare(entry.id as string) >= 0) {
+      if (previousId !== undefined && previousId.localeCompare(entry.id) >= 0) {
         throw new Error("hosted catalog shard set ordering is invalid");
       }
-      previousId = entry.id as string;
+      previousId = entry.id;
       entries.push(entry);
     }
   }
