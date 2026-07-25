@@ -4,13 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   resolveOutboundDurableFinalDeliverySupport: vi.fn(),
   sendDurableMessageBatch: vi.fn(),
-  preparePendingModelSpendAlertBestEffort: vi.fn(),
+  preparePrivateOwnerModelSpendAlertBestEffort: vi.fn(),
   markModelSpendAlertsQueued: vi.fn(),
   releasePreparedModelSpendAlertsBestEffort: vi.fn(),
 }));
 
+vi.mock("../../agents/model-spend-alert-delivery.js", () => ({
+  preparePrivateOwnerModelSpendAlertBestEffort: mocks.preparePrivateOwnerModelSpendAlertBestEffort,
+}));
+
 vi.mock("../../agents/model-spend-alerts.js", () => ({
-  preparePendingModelSpendAlertBestEffort: mocks.preparePendingModelSpendAlertBestEffort,
   markModelSpendAlertsQueued: mocks.markModelSpendAlertsQueued,
   releasePreparedModelSpendAlertsBestEffort: mocks.releasePreparedModelSpendAlertsBestEffort,
 }));
@@ -91,7 +94,7 @@ describe("durable inbound reply delivery", () => {
   beforeEach(() => {
     mocks.resolveOutboundDurableFinalDeliverySupport.mockReset();
     mocks.sendDurableMessageBatch.mockReset();
-    mocks.preparePendingModelSpendAlertBestEffort.mockReset();
+    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReset();
     mocks.markModelSpendAlertsQueued.mockReset();
     mocks.releasePreparedModelSpendAlertsBestEffort.mockReset();
     mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
@@ -153,7 +156,7 @@ describe("durable inbound reply delivery", () => {
   });
 
   it("appends pending spend alerts to the final payload and serializes their completion", async () => {
-    mocks.preparePendingModelSpendAlertBestEffort.mockReturnValueOnce({
+    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
       alertIds: ["alert-1"],
       deliveryIntentId: "model-spend-claim-1",
       text: "Warning: deepseek reached $1.40.",
@@ -193,7 +196,7 @@ describe("durable inbound reply delivery", () => {
       alertIds: ["alert-1"],
       deliveryIntentId: "model-spend-claim-1",
     };
-    mocks.preparePendingModelSpendAlertBestEffort.mockReturnValueOnce({
+    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
       ...completion,
       text: "Warning: deepseek reached $1.40.",
     });
@@ -238,7 +241,7 @@ describe("durable inbound reply delivery", () => {
       ctxPayload: ctxPayload({ ChatType: "direct", OriginatingTo: "chat-2" }),
     });
 
-    expect(mocks.preparePendingModelSpendAlertBestEffort).not.toHaveBeenCalled();
+    expect(mocks.preparePrivateOwnerModelSpendAlertBestEffort).toHaveBeenCalledTimes(2);
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(2);
   });
 

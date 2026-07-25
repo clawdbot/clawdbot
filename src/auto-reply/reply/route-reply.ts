@@ -10,9 +10,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
+import { preparePrivateOwnerModelSpendAlertBestEffort } from "../../agents/model-spend-alert-delivery.js";
 import {
   markModelSpendAlertsQueued,
-  preparePendingModelSpendAlertBestEffort,
   releasePreparedModelSpendAlertsBestEffort,
 } from "../../agents/model-spend-alerts.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -24,7 +24,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { isPrivateOwnerRouteTarget } from "../../routing/private-owner-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -239,15 +238,15 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   });
   // Agent-wide billing totals are private operator data. Leave alerts pending
   // until a final reply targets a configured owner in an explicit direct chat.
-  const canDeliverSpendAlert =
-    outboundSession?.conversationKind === "direct" &&
-    isPrivateOwnerRouteTarget({ cfg, channel: channelId, to });
   const spendAlert =
-    params.replyKind === "final" && canDeliverSpendAlert
-      ? preparePendingModelSpendAlertBestEffort({
+    params.replyKind === "final"
+      ? preparePrivateOwnerModelSpendAlertBestEffort({
           cfg,
           agentId: effectiveAgentId,
           sessionKey: params.sessionKey,
+          channel: channelId,
+          to,
+          chatType: outboundSession?.conversationKind,
         })
       : undefined;
 

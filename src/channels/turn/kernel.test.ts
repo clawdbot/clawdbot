@@ -48,9 +48,27 @@ const dispatchReplyWithBufferedBlockDispatcherCore = vi.hoisted(() => vi.fn());
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
 const emitMessageSent = vi.hoisted(() => vi.fn());
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
+const preparePrivateOwnerModelSpendAlertBestEffort = vi.hoisted(() => vi.fn());
+const markModelSpendAlertsDeliveredBestEffort = vi.hoisted(() => vi.fn());
+const markModelSpendAlertsUnknownBestEffort = vi.hoisted(() => vi.fn());
+const releasePreparedModelSpendAlertsBestEffort = vi.hoisted(() => vi.fn());
 const createMessageSentEmitter = vi.hoisted(() =>
   vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
 );
+
+vi.mock("../../agents/model-spend-alert-delivery.js", () => ({
+  preparePrivateOwnerModelSpendAlertBestEffort,
+  markModelSpendAlertsDeliveredBestEffort,
+  markModelSpendAlertsUnknownBestEffort,
+}));
+
+vi.mock("../../agents/model-spend-alerts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-spend-alerts.js")>();
+  return {
+    ...actual,
+    releasePreparedModelSpendAlertsBestEffort,
+  };
+});
 
 vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
   const actual =
@@ -960,6 +978,128 @@ describe("channel turn kernel", () => {
     const delivered = deliveryResult(deliveredResult);
     expect(delivered.messageIds).toEqual(["local-1"]);
     expect(delivered.visibleReplySent).toBe(true);
+  });
+
+  it("delivers pending spend alerts through compatibility channel delivery", async () => {
+    preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
+      alertIds: ["alert-1"],
+      deliveryIntentId: "model-spend-claim-1",
+      text: "Warning: Model spend alert: [redacted]",
+    });
+    const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
+
+    await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "qa-channel",
+      agentId: "main",
+      routeSessionKey: "agent:main:qa-channel:direct:owner",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        ChatType: "direct",
+        OriginatingTo: "   ",
+        To: "dm:owner",
+        SessionKey: "agent:main:qa-channel:direct:owner",
+      }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
+      delivery: { deliver },
+    });
+
+    expect(preparePrivateOwnerModelSpendAlertBestEffort).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      sessionKey: "agent:main:qa-channel:direct:owner",
+      channel: "qa-channel",
+      to: "dm:owner",
+      chatType: "direct",
+    });
+    expect(deliver).toHaveBeenCalledWith(
+      { text: "reply\n\nWarning: Model spend alert: [redacted]" },
+      { kind: "final" },
+    );
+    expect(markModelSpendAlertsDeliveredBestEffort).toHaveBeenCalledWith({
+      agentId: "main",
+      alertIds: ["alert-1"],
+      deliveryIntentId: "model-spend-claim-1",
+    });
+    expect(releasePreparedModelSpendAlertsBestEffort).not.toHaveBeenCalled();
+  });
+
+  it("releases compatibility delivery spend alerts when the provider rejects the send", async () => {
+    preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
+      alertIds: ["alert-1"],
+      deliveryIntentId: "model-spend-claim-1",
+      text: "Warning: Model spend alert: [redacted]",
+    });
+    const deliver = vi.fn(async () => {
+      throw new Error("provider rejected send");
+    });
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "qa-channel",
+        agentId: "main",
+        routeSessionKey: "agent:main:qa-channel:direct:owner",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({
+          ChatType: "direct",
+          OriginatingTo: "dm:owner",
+          SessionKey: "agent:main:qa-channel:direct:owner",
+        }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
+        delivery: { deliver },
+      }),
+    ).rejects.toThrow("provider rejected send");
+
+    expect(releasePreparedModelSpendAlertsBestEffort).toHaveBeenCalledWith({
+      agentId: "main",
+      alertIds: ["alert-1"],
+      deliveryIntentId: "model-spend-claim-1",
+    });
+    expect(markModelSpendAlertsDeliveredBestEffort).not.toHaveBeenCalled();
+    expect(markModelSpendAlertsUnknownBestEffort).not.toHaveBeenCalled();
+  });
+
+  it("marks compatibility delivery spend alerts unknown after a partial send", async () => {
+    preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
+      alertIds: ["alert-1"],
+      deliveryIntentId: "model-spend-claim-1",
+      text: "Warning: Model spend alert: [redacted]",
+    });
+    const deliver = vi.fn(async () => {
+      throw Object.assign(new Error("second chunk failed"), {
+        sentBeforeError: true,
+        visibleReplySent: true,
+      });
+    });
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "qa-channel",
+        agentId: "main",
+        routeSessionKey: "agent:main:qa-channel:direct:owner",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({
+          ChatType: "direct",
+          OriginatingTo: "dm:owner",
+          SessionKey: "agent:main:qa-channel:direct:owner",
+        }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
+        delivery: { deliver },
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(markModelSpendAlertsUnknownBestEffort).toHaveBeenCalledWith({
+      agentId: "main",
+      alertIds: ["alert-1"],
+      deliveryIntentId: "model-spend-claim-1",
+    });
+    expect(releasePreparedModelSpendAlertsBestEffort).not.toHaveBeenCalled();
+    expect(markModelSpendAlertsDeliveredBestEffort).not.toHaveBeenCalled();
   });
 
   it("observes provider-finalized content and identity after deferred delivery settles", async () => {

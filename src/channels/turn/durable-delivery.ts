@@ -1,8 +1,8 @@
 // Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { preparePrivateOwnerModelSpendAlertBestEffort } from "../../agents/model-spend-alert-delivery.js";
 import {
   markModelSpendAlertsQueued,
-  preparePendingModelSpendAlertBestEffort,
   releasePreparedModelSpendAlertsBestEffort,
 } from "../../agents/model-spend-alerts.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -17,7 +17,6 @@ import {
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { isPrivateOwnerRouteTarget } from "../../routing/private-owner-route.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import { sendDurableMessageBatch } from "../message/send.js";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
@@ -212,16 +211,14 @@ export async function deliverInboundReplyWithMessageSendContext(
   });
   // Agent-wide billing totals are private operator data. Leave alerts pending
   // until a final reply targets a configured owner in an explicit direct chat.
-  const canDeliverSpendAlert =
-    session?.conversationKind === "direct" &&
-    isPrivateOwnerRouteTarget({ cfg: params.cfg, channel, to });
-  const spendAlert = canDeliverSpendAlert
-    ? preparePendingModelSpendAlertBestEffort({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        sessionKey: params.ctxPayload.SessionKey,
-      })
-    : undefined;
+  const spendAlert = preparePrivateOwnerModelSpendAlertBestEffort({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.ctxPayload.SessionKey,
+    channel,
+    to,
+    chatType: session?.conversationKind,
+  });
   const deliveryPayload = spendAlert
     ? {
         ...params.payload,

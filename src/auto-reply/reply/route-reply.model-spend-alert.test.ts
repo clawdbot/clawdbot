@@ -3,13 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
-  preparePendingModelSpendAlertBestEffort: vi.fn(),
+  preparePrivateOwnerModelSpendAlertBestEffort: vi.fn(),
   markModelSpendAlertsQueued: vi.fn(),
   releasePreparedModelSpendAlertsBestEffort: vi.fn(),
 }));
 
+vi.mock("../../agents/model-spend-alert-delivery.js", () => ({
+  preparePrivateOwnerModelSpendAlertBestEffort: mocks.preparePrivateOwnerModelSpendAlertBestEffort,
+}));
+
 vi.mock("../../agents/model-spend-alerts.js", () => ({
-  preparePendingModelSpendAlertBestEffort: mocks.preparePendingModelSpendAlertBestEffort,
   markModelSpendAlertsQueued: mocks.markModelSpendAlertsQueued,
   markModelSpendAlertsDelivered: vi.fn(),
   markModelSpendAlertsUnknown: vi.fn(),
@@ -50,13 +53,13 @@ describe("routeReply model spend alerts", () => {
   beforeEach(() => {
     mocks.deliverOutboundPayloads.mockReset();
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
-    mocks.preparePendingModelSpendAlertBestEffort.mockReset();
+    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReset();
     mocks.markModelSpendAlertsQueued.mockReset();
     mocks.releasePreparedModelSpendAlertsBestEffort.mockReset();
   });
 
   it("keeps owner-DM spend alerts out of mirrored model text with durable completion", async () => {
-    mocks.preparePendingModelSpendAlertBestEffort.mockReturnValueOnce({
+    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
       alertIds: ["alert-1"],
       deliveryIntentId: "model-spend-claim-1",
       text: "Warning: deepseek reached $1.40.",
@@ -118,7 +121,7 @@ describe("routeReply model spend alerts", () => {
       cfg,
     });
 
-    expect(mocks.preparePendingModelSpendAlertBestEffort).not.toHaveBeenCalled();
+    expect(mocks.preparePrivateOwnerModelSpendAlertBestEffort).toHaveBeenCalledTimes(2);
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 });

@@ -12,6 +12,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { preparePrivateOwnerModelSpendAlertBestEffort } from "./model-spend-alert-delivery.js";
 import {
   markModelSpendAlertsDelivered,
   markModelSpendAlertsQueued,
@@ -679,10 +680,33 @@ describe("model spend alerts", () => {
           chatType: "direct",
         },
       });
-      const globalAlerts = preparePendingModelSpendAlert({
+      expect(
+        preparePrivateOwnerModelSpendAlertBestEffort({
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:telegram:group",
+          channel: "telegram",
+          to: "owner-b",
+          chatType: "group",
+        }),
+      ).toBeUndefined();
+      expect(
+        preparePrivateOwnerModelSpendAlertBestEffort({
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:telegram:non-owner",
+          channel: "telegram",
+          to: "user-x",
+          chatType: "direct",
+        }),
+      ).toBeUndefined();
+      const globalAlerts = preparePrivateOwnerModelSpendAlertBestEffort({
         cfg,
         agentId: "main",
         sessionKey: "agent:main:telegram:b",
+        channel: "telegram",
+        to: "owner-b",
+        chatType: "direct",
       });
       expect(globalAlerts?.alertIds).toHaveLength(2);
       expect(globalAlerts?.alertIds.some((id) => id.endsWith(":group"))).toBe(true);
