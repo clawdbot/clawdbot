@@ -1090,5 +1090,4 @@ ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts
 ui/src/pages/workboard/view.test.ts
-ui/src/pages/workboard/view.ts
 ui/src/test-helpers/control-ui-e2e.ts
