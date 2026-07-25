@@ -4004,7 +4004,7 @@ export const tr: TranslationMap = {
     followUpModeUsingServer: "Sunucu varsayılanı kullanılıyor ({mode})",
     followUpModeOverriding: "Sunucu varsayılanı geçersiz kılınıyor ({mode})",
     followUpModeReset: "Sunucu varsayılanına sıfırla",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Harici oturumları şurada aç",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Kurulum sırasında devre dışı",

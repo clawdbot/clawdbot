@@ -3977,7 +3977,7 @@ export const fa: TranslationMap = {
     followUpModeUsingServer: "استفاده از پیش‌فرض سرور ({mode})",
     followUpModeOverriding: "بازنویسی پیش‌فرض سرور ({mode})",
     followUpModeReset: "بازنشانی به پیش‌فرض سرور",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "باز کردن نشست‌های خارجی در",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "در طول راه‌اندازی غیرفعال است",

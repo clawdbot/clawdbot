@@ -3984,7 +3984,7 @@ export const id: TranslationMap = {
     followUpModeUsingServer: "Menggunakan default server ({mode})",
     followUpModeOverriding: "Menimpa default server ({mode})",
     followUpModeReset: "Setel ulang ke default server",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Buka sesi eksternal di",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Dinonaktifkan selama penyiapan",

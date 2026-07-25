@@ -4003,7 +4003,7 @@ export const ja_JP: TranslationMap = {
     followUpModeUsingServer: "サーバーのデフォルトを使用中 ({mode})",
     followUpModeOverriding: "サーバーのデフォルトを上書き中 ({mode})",
     followUpModeReset: "サーバーの既定値にリセット",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "外部セッションを開く場所",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "セットアップ中は無効",

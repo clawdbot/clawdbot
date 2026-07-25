@@ -3960,7 +3960,7 @@ export const ko: TranslationMap = {
     followUpModeUsingServer: "서버 기본값 사용 중 ({mode})",
     followUpModeOverriding: "서버 기본값 재정의 중 ({mode})",
     followUpModeReset: "서버 기본값으로 재설정",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "외부 세션을 열 위치",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "설정 중에는 비활성화됨",

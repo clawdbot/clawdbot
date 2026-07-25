@@ -3875,7 +3875,7 @@ export const zh_CN: TranslationMap = {
     followUpModeUsingServer: "使用服务器默认（{mode}）",
     followUpModeOverriding: "覆盖服务器默认（{mode}）",
     followUpModeReset: "重置为服务器默认值",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "在以下位置打开外部会话",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "引导期间禁用",

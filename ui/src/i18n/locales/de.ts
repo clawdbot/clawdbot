@@ -4038,7 +4038,7 @@ export const de: TranslationMap = {
     followUpModeUsingServer: "Server-Standard wird verwendet ({mode})",
     followUpModeOverriding: "Server-Standard wird überschrieben ({mode})",
     followUpModeReset: "Auf Serverstandard zurücksetzen",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Externe Sitzungen öffnen in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Während der Einrichtung deaktiviert",

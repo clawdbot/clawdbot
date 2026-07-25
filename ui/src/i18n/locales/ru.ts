@@ -4019,7 +4019,7 @@ export const ru: TranslationMap = {
     followUpModeUsingServer: "Используется значение по умолчанию на сервере ({mode})",
     followUpModeOverriding: "Переопределение значения по умолчанию на сервере ({mode})",
     followUpModeReset: "Сбросить к серверному значению по умолчанию",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Открывать внешние сеансы в",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Терминал",
     onboardingDisabled: "Отключено во время настройки",

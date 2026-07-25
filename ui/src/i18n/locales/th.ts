@@ -3906,7 +3906,7 @@ export const th: TranslationMap = {
     followUpModeUsingServer: "ใช้ค่าเริ่มต้นของเซิร์ฟเวอร์ ({mode})",
     followUpModeOverriding: "แทนที่ค่าเริ่มต้นของเซิร์ฟเวอร์ ({mode})",
     followUpModeReset: "รีเซ็ตเป็นค่าเริ่มต้นของเซิร์ฟเวอร์",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "เปิดเซสชันภายนอกใน",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "ปิดใช้งานระหว่างการตั้งค่า",

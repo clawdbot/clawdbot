@@ -4033,7 +4033,7 @@ export const es: TranslationMap = {
     followUpModeUsingServer: "Usando el valor predeterminado del servidor ({mode})",
     followUpModeOverriding: "Anulando el valor predeterminado del servidor ({mode})",
     followUpModeReset: "Restablecer al valor predeterminado del servidor",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Abrir sesiones externas en",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Deshabilitado durante el inicio guiado",

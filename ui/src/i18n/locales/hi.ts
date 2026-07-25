@@ -3936,7 +3936,7 @@ export const hi: TranslationMap = {
     followUpModeUsingServer: "सर्वर डिफ़ॉल्ट ({mode}) का उपयोग कर रहे हैं",
     followUpModeOverriding: "सर्वर डिफ़ॉल्ट ({mode}) को ओवरराइड कर रहे हैं",
     followUpModeReset: "सर्वर डिफ़ॉल्ट पर रीसेट करें",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "बाहरी सत्र इसमें खोलें",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "टर्मिनल",
     onboardingDisabled: "सेटअप के दौरान अक्षम",

@@ -3940,7 +3940,7 @@ export const ar: TranslationMap = {
     followUpModeUsingServer: "استخدام الإعداد الافتراضي للخادم ({mode})",
     followUpModeOverriding: "تجاوز الإعداد الافتراضي للخادم ({mode})",
     followUpModeReset: "إعادة التعيين إلى الوضع الافتراضي للخادم",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "فتح الجلسات الخارجية في",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "معطل أثناء الإعداد",

@@ -3998,7 +3998,7 @@ export const uk: TranslationMap = {
     followUpModeUsingServer: "Використовується типове значення сервера ({mode})",
     followUpModeOverriding: "Перевизначення типового значення сервера ({mode})",
     followUpModeReset: "Скинути до типового значення сервера",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Відкривати зовнішні сеанси в",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Вимкнено під час налаштування",

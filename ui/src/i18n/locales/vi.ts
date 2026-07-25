@@ -3984,7 +3984,7 @@ export const vi: TranslationMap = {
     followUpModeUsingServer: "Đang dùng mặc định của máy chủ ({mode})",
     followUpModeOverriding: "Đang ghi đè mặc định của máy chủ ({mode})",
     followUpModeReset: "Đặt lại về mặc định máy chủ",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Mở các phiên bên ngoài trong",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Đã tắt trong quá trình thiết lập",

@@ -4007,7 +4007,7 @@ export const nl: TranslationMap = {
     followUpModeUsingServer: "Serverstandaard gebruiken ({mode})",
     followUpModeOverriding: "Serverstandaard overschrijven ({mode})",
     followUpModeReset: "Terugzetten naar serverstandaard",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "Externe sessies openen in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Uitgeschakeld tijdens configuratie",

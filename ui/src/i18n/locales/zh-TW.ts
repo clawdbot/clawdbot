@@ -3884,7 +3884,7 @@ export const zh_TW: TranslationMap = {
     followUpModeUsingServer: "使用伺服器預設值（{mode}）",
     followUpModeOverriding: "覆寫伺服器預設值（{mode}）",
     followUpModeReset: "重設為伺服器預設值",
-    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTarget: "在以下位置開啟外部工作階段",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "引導期間禁用",
