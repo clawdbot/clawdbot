@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,6 +39,12 @@ function withPackedPackage(
   try {
     mkdirSync(packageRoot, { recursive: true });
     const version = "2026.7.2";
+    const typescriptRoot = resolve("node_modules/typescript");
+    const typescriptVersion = (
+      JSON.parse(readFileSync(join(typescriptRoot, "package.json"), "utf8")) as {
+        version: string;
+      }
+    ).version;
     writeFixtureFile(
       packageRoot,
       "package.json",
@@ -39,7 +54,11 @@ function withPackedPackage(
         type: "module",
         ...(options.postinstall === false
           ? {}
-          : { scripts: { postinstall: "node scripts/postinstall-bundled-plugins.mjs" } }),
+          : {
+              scripts: { postinstall: "node scripts/postinstall-bundled-plugins.mjs" },
+              dependencies: { typescript: typescriptVersion },
+              bundledDependencies: ["typescript"],
+            }),
       }),
     );
     writeFixtureFile(
@@ -49,7 +68,21 @@ function withPackedPackage(
         name: "openclaw",
         version,
         lockfileVersion: 3,
-        packages: { "": { name: "openclaw", version } },
+        packages: {
+          "": {
+            name: "openclaw",
+            version,
+            ...(options.postinstall === false
+              ? {}
+              : {
+                  dependencies: { typescript: typescriptVersion },
+                  bundledDependencies: ["typescript"],
+                }),
+          },
+          ...(options.postinstall === false
+            ? {}
+            : { "node_modules/typescript": { version: typescriptVersion, inBundle: true } }),
+        },
       }),
     );
     writeFixtureFile(packageRoot, "dist/postinstall-inventory.json", JSON.stringify(inventory));
@@ -72,11 +105,19 @@ function withPackedPackage(
     }
     for (const relativePath of [
       "scripts/postinstall-bundled-plugins.mjs",
+      "scripts/lib/guard-inventory-utils.mjs",
       "scripts/lib/package-dist-imports.mjs",
     ]) {
       const destination = join(packageRoot, relativePath);
       mkdirSync(dirname(destination), { recursive: true });
       copyFileSync(resolve(relativePath), destination);
+    }
+    if (options.postinstall !== false) {
+      // Offline npm must exercise the same bundled TypeScript AST dependency
+      // that the real postinstall uses to preserve its complete import graph.
+      cpSync(typescriptRoot, join(packageRoot, "node_modules/typescript"), {
+        recursive: true,
+      });
     }
 
     const packed = spawnSync(
