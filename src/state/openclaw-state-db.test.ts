@@ -139,6 +139,13 @@ function replaceManagedImageRecordsWithLegacyTable(
 const LEGACY_SESSION_WATCH_SCHEMA_VERSION = 3;
 const LEGACY_AMBIENT_WATCH_PREFIX = "ambient-group-watch:";
 
+function markStateDatabaseAsV5(database: DatabaseSync): void {
+  database.exec(`
+    PRAGMA user_version = 5;
+    UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
+  `);
+}
+
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
   ambientTarget: string;
   bomTarget: string;
@@ -1791,6 +1798,112 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual([{ task_id: "task-index-repair" }]);
   });
 
+  it("rejects a missing current-schema table instead of recreating it empty", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec("DROP TABLE auth_profile_stores;");
+    drifted.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
+  it("rejects a missing stable v5 table before the v6 migration", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const damaged = new DatabaseSync(databasePath);
+    damaged.exec("DROP TABLE auth_profile_stores;");
+    markStateDatabaseAsV5(damaged);
+    damaged.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_stores'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
+  it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec(`
+      DROP TABLE diagnostic_events;
+      CREATE TABLE diagnostic_events (
+        scope TEXT NOT NULL UNIQUE,
+        event_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        sequence INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (scope, event_key)
+      ) STRICT;
+      CREATE INDEX idx_diagnostic_events_scope_sequence
+        ON diagnostic_events(scope, sequence, event_key);
+    `);
+    drifted.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /unexpected unique index on diagnostic_events/iu,
+    );
+  });
+
+  it("rejects primary-key collation drift in a current-schema table", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec(`
+      DROP TABLE auth_profile_stores;
+      CREATE TABLE auth_profile_stores (
+        store_key TEXT COLLATE NOCASE NOT NULL PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+    `);
+    drifted.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /column definitions differ for auth_profile_stores/iu,
+    );
+  });
+
   it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
     const stateDir = createTempStateDir();
     const databasePath = createLegacyAuditStateDatabase(stateDir);
@@ -2630,6 +2743,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason");
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -2676,6 +2790,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE claw_package_refs DROP COLUMN updated_at_ms");
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -2705,6 +2820,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
       ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
     `);
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -2774,6 +2890,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       DROP TABLE worker_transcript_commits;
       DROP TABLE worker_transcript_commit_heads;
     `);
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -2840,6 +2957,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       DROP INDEX idx_operator_approvals_resolution_ref;
       ALTER TABLE operator_approvals DROP COLUMN resolution_ref;
     `);
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
@@ -3018,6 +3136,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         ('alpha', 'tie-second', '{}', 10),
         ('beta', 'only', '{}', 30);
     `);
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase(options);
@@ -3058,6 +3177,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE apns_registrations DROP COLUMN relay_origin");
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase(options);
@@ -3205,6 +3325,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         110,
         110,
       );
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -3372,6 +3493,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
       ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
     `);
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -3404,6 +3526,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec("ALTER TABLE task_runs DROP COLUMN detail_json");
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     const reopened = openOpenClawStateDatabase({
@@ -3466,6 +3589,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         100,
         100,
       );
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     expect(() =>
