@@ -109,7 +109,12 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
   } else if (sessionIdUsed !== previousSessionId && nextSessionTarget) {
     const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
     if (marker) {
-      sessionPromptState.sessionFile = formatSqliteSessionFileMarker(nextSessionTarget);
+      sessionPromptState.sessionFile = formatSqliteSessionFileMarker({
+        agentId: nextSessionTarget.agentId ?? marker.agentId,
+        sessionId: nextSessionTarget.sessionId ?? marker.sessionId,
+        sessionKey: nextSessionTarget.sessionKey ?? marker.sessionKey,
+        storePath: nextSessionTarget.storePath ?? marker.storePath,
+      });
     }
   }
   sessionPromptState.sessionTarget = nextSessionTarget;

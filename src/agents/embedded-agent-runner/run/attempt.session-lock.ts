@@ -4,6 +4,7 @@ import type {
   OwnedSessionTranscriptCacheSnapshot,
   OwnedSessionTranscriptWriteOptions,
 } from "../../../config/sessions/transcript-write-context.js";
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import type {
   PromptReleasedSessionEntry,
