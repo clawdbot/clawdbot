@@ -29,7 +29,7 @@ let createEmbeddingProviderMock: ReturnType<
         model: string;
         embedQuery: (text: string) => Promise<number[]>;
         embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void> | void;
+        close?: () => Promise<void> | void;
       };
     }>
   >
@@ -654,5 +654,43 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
+  });
+
+  it("allows providers without cleanup resources to embed concurrently", async () => {
+    let releaseFirstEmbed: () => void = () => {};
+    const firstEmbedGate = new Promise<void>((resolve) => {
+      releaseFirstEmbed = resolve;
+    });
+    const firstEmbed = vi.fn(async () => {
+      await firstEmbedGate;
+      return [[1, 2]];
+    });
+    const secondEmbed = vi.fn(async () => [[3, 4]]);
+    createEmbeddingProviderMock
+      .mockResolvedValueOnce({
+        provider: {
+          id: "openai",
+          model: "text-embedding-3-small",
+          embedQuery: async () => [1, 2],
+          embedBatch: firstEmbed,
+        },
+      })
+      .mockResolvedValueOnce({
+        provider: {
+          id: "openai",
+          model: "text-embedding-3-small",
+          embedQuery: async () => [3, 4],
+          embedBatch: secondEmbed,
+        },
+      });
+
+    const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
+    await vi.waitFor(() => expect(firstEmbed).toHaveBeenCalledTimes(1));
+    const second = await postEmbeddings({ model: "openclaw/default", input: "second" });
+    expect(second.status).toBe(200);
+    expect(secondEmbed).toHaveBeenCalledTimes(1);
+
+    releaseFirstEmbed();
+    expect((await firstPromise).status).toBe(200);
   });
 });

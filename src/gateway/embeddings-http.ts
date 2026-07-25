@@ -70,24 +70,38 @@ type MemorySearchEmbeddingConfig = Pick<
 const EMBEDDING_PROVIDER_RETIREMENTS = new Map<string, Set<MemoryEmbeddingProvider>>();
 const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
 
-async function runEmbeddingProviderAdmission<T>(
+async function acquireEmbeddingProviderLease(
   scopeKey: string,
-  operation: () => Promise<T>,
-): Promise<T> {
+  create: () => Promise<MemoryEmbeddingProvider>,
+): Promise<{ provider: MemoryEmbeddingProvider; release: () => void }> {
   const previous = EMBEDDING_PROVIDER_ADMISSION_TAILS.get(scopeKey) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
-  const tail = result.then(
-    () => undefined,
-    () => undefined,
-  );
+  const createLease = async () => {
+    await drainEmbeddingProviderRetirements(scopeKey);
+    const provider = await create();
+    if (!provider.close) {
+      return { provider, lifecycle: Promise.resolve(), release: () => {} };
+    }
+    let release: () => void = () => {};
+    const lifecycle = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { provider, lifecycle, release };
+  };
+  const acquired = previous.then(createLease, createLease);
+  const tail = acquired
+    .then(async ({ lifecycle }) => await lifecycle)
+    .then(
+      () => undefined,
+      () => undefined,
+    );
   EMBEDDING_PROVIDER_ADMISSION_TAILS.set(scopeKey, tail);
-  try {
-    return await result;
-  } finally {
+  void tail.then(() => {
     if (EMBEDDING_PROVIDER_ADMISSION_TAILS.get(scopeKey) === tail) {
       EMBEDDING_PROVIDER_ADMISSION_TAILS.delete(scopeKey);
     }
-  }
+  });
+  const { provider, release } = await acquired;
+  return { provider, release };
 }
 
 async function drainEmbeddingProviderRetirements(scopeKey: string): Promise<void> {
@@ -398,51 +412,54 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const providerScopeKey = JSON.stringify([agentId, target.provider, target.model]);
 
   try {
-    await runEmbeddingProviderAdmission(providerScopeKey, async () => {
-      await drainEmbeddingProviderRetirements(providerScopeKey);
-      const provider = await createConfiguredEmbeddingProvider({
-        cfg,
-        agentDir,
-        provider: target.provider,
-        model: target.model,
-        memorySearch: memorySearch
-          ? {
-              ...memorySearch,
-              outputDimensionality:
-                typeof payload.dimensions === "number" && payload.dimensions > 0
-                  ? Math.floor(payload.dimensions)
-                  : memorySearch.outputDimensionality,
-            }
-          : undefined,
-      });
-      try {
-        const embeddings = await provider.embedBatch(texts);
-        const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
+    const { provider, release } = await acquireEmbeddingProviderLease(
+      providerScopeKey,
+      async () =>
+        await createConfiguredEmbeddingProvider({
+          cfg,
+          agentDir,
+          provider: target.provider,
+          model: target.model,
+          memorySearch: memorySearch
+            ? {
+                ...memorySearch,
+                outputDimensionality:
+                  typeof payload.dimensions === "number" && payload.dimensions > 0
+                    ? Math.floor(payload.dimensions)
+                    : memorySearch.outputDimensionality,
+              }
+            : undefined,
+        }),
+    );
+    try {
+      const embeddings = await provider.embedBatch(texts);
+      const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
 
-        sendJson(res, 200, {
-          object: "list",
-          data: embeddings.map((embedding, index) => ({
-            object: "embedding",
-            index,
-            embedding: encodingFormat === "base64" ? encodeEmbeddingBase64(embedding) : embedding,
-          })),
-          model: requestModel,
-          usage: {
-            prompt_tokens: 0,
-            total_tokens: 0,
-          },
-        });
+      sendJson(res, 200, {
+        object: "list",
+        data: embeddings.map((embedding, index) => ({
+          object: "embedding",
+          index,
+          embedding: encodingFormat === "base64" ? encodeEmbeddingBase64(embedding) : embedding,
+        })),
+        model: requestModel,
+        usage: {
+          prompt_tokens: 0,
+          total_tokens: 0,
+        },
+      });
+    } finally {
+      try {
+        await provider.close?.();
+      } catch (closeErr) {
+        retainEmbeddingProviderForRetirement(providerScopeKey, provider);
+        logWarn(
+          `openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`,
+        );
       } finally {
-        try {
-          await provider.close?.();
-        } catch (closeErr) {
-          retainEmbeddingProviderForRetirement(providerScopeKey, provider);
-          logWarn(
-            `openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`,
-          );
-        }
+        release();
       }
-    });
+    }
   } catch (err) {
     logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
     sendJson(res, 500, {
