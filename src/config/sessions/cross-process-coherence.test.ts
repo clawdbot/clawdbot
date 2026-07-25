@@ -36,14 +36,9 @@ describe("session store cross-process cache coherence", () => {
     const db = database.db;
 
     const insertSession = db.prepare(
-      `INSERT OR IGNORE INTO sessions
-        (session_id, session_key, session_scope, created_at, updated_at, status, chat_type)
-       VALUES (?, ?, 'conversation', ?, ?, 'running', 'direct')`,
-    );
-    const insertEntry = db.prepare(
-      `INSERT OR IGNORE INTO session_entries
-        (session_key, session_id, entry_json, updated_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO session_nodes
+        (session_key, current_session_id, entry_json, updated_at, status, created_at)
+       VALUES (?, ?, ?, ?, 'running', ?)`,
     );
 
     db.exec("BEGIN IMMEDIATE");
@@ -51,11 +46,11 @@ describe("session store cross-process cache coherence", () => {
       for (let i = 0; i < 5; i++) {
         const sessionKey = `agent:main:s-${i}`;
         const now = Date.now() - (5 - i) * 60_000;
-        insertSession.run(`s-${i}`, sessionKey, now, now);
-        insertEntry.run(
+        insertSession.run(
           sessionKey,
           `s-${i}`,
           JSON.stringify({ sessionId: `s-${i}`, updatedAt: now }),
+          now,
           now,
         );
       }
@@ -81,12 +76,8 @@ describe("session store cross-process cache coherence", () => {
     // 3. Simulate a foreign process writing to the SAME SQLite file
     const foreignDb = new DatabaseSync(dbPath);
     foreignDb.exec(
-      `INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at, status, chat_type)
-       VALUES ('foreign-1', 'agent:main:foreign', 'conversation', ${Date.now()}, ${Date.now()}, 'running', 'direct')`,
-    );
-    foreignDb.exec(
-      `INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
-       VALUES ('agent:main:foreign', 'foreign-1', '${JSON.stringify({ sessionId: "foreign-1", updatedAt: Date.now() }).replace(/'/g, "''")}', ${Date.now()})`,
+      `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, status, created_at)
+       VALUES ('agent:main:foreign', 'foreign-1', '${JSON.stringify({ sessionId: "foreign-1", updatedAt: Date.now() }).replace(/'/g, "''")}', ${Date.now()}, 'running', ${Date.now()})`,
     );
 
     foreignDb.close();
@@ -110,14 +101,9 @@ describe("session store cross-process cache coherence", () => {
     const db = database.db;
 
     const insertSession = db.prepare(
-      `INSERT OR IGNORE INTO sessions
-        (session_id, session_key, session_scope, created_at, updated_at, status, chat_type)
-       VALUES (?, ?, 'conversation', ?, ?, 'running', 'direct')`,
-    );
-    const insertEntry = db.prepare(
-      `INSERT OR IGNORE INTO session_entries
-        (session_key, session_id, entry_json, updated_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO session_nodes
+        (session_key, current_session_id, entry_json, updated_at, status, created_at)
+       VALUES (?, ?, ?, ?, 'running', ?)`,
     );
 
     db.exec("BEGIN IMMEDIATE");
@@ -125,11 +111,11 @@ describe("session store cross-process cache coherence", () => {
       for (let i = 0; i < 5; i++) {
         const sessionKey = `agent:main:d-${i}`;
         const now = Date.now() - (5 - i) * 60_000;
-        insertSession.run(`d-${i}`, sessionKey, now, now);
-        insertEntry.run(
+        insertSession.run(
           sessionKey,
           `d-${i}`,
           JSON.stringify({ sessionId: `d-${i}`, updatedAt: now }),
+          now,
           now,
         );
       }
@@ -148,8 +134,7 @@ describe("session store cross-process cache coherence", () => {
 
     // 3. Foreign process deletes one session
     const foreignDb = new DatabaseSync(dbPath);
-    foreignDb.exec("DELETE FROM sessions WHERE session_id = 'd-2'");
-    foreignDb.exec("DELETE FROM session_entries WHERE session_id = 'd-2'");
+    foreignDb.exec("DELETE FROM session_nodes WHERE current_session_id = 'd-2'");
     foreignDb.close();
 
     // 4. Read again — should have 4 entries, no sign of d-2

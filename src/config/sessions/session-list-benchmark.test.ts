@@ -28,14 +28,9 @@ function seedSessions(params: SeedSessionOptions): void {
   });
   const db = database.db;
   const insertSession = db.prepare(
-    `INSERT OR IGNORE INTO sessions
-      (session_id, session_key, session_scope, created_at, updated_at, status, chat_type)
-     VALUES (?, ?, 'conversation', ?, ?, 'running', 'direct')`,
-  );
-  const insertEntry = db.prepare(
-    `INSERT OR IGNORE INTO session_entries
-      (session_key, session_id, entry_json, updated_at)
-     VALUES (?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO session_nodes
+      (session_key, current_session_id, entry_json, updated_at, status, created_at)
+     VALUES (?, ?, ?, ?, 'running', ?)`,
   );
 
   db.exec("BEGIN IMMEDIATE");
@@ -58,8 +53,7 @@ function seedSessions(params: SeedSessionOptions): void {
           : {}),
       });
 
-      insertSession.run(sessionId, sessionKey, createdAt, updatedAt);
-      insertEntry.run(sessionKey, sessionId, entryJson, updatedAt);
+      insertSession.run(sessionKey, sessionId, entryJson, updatedAt, createdAt);
     }
     db.exec("COMMIT");
   } catch (error) {
@@ -124,19 +118,14 @@ describe("session list benchmark (5k sessions)", () => {
 
     db2
       .prepare(
-        `INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at, status, chat_type)
-       VALUES (?, ?, 'conversation', ?, ?, 'running', 'direct')`,
-      )
-      .run("brand-new-session", "agent:main:brand-new", now, now);
-    db2
-      .prepare(
-        `INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
-       VALUES (?, ?, ?, ?)`,
+        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, status, created_at)
+       VALUES (?, ?, ?, ?, 'running', ?)`,
       )
       .run(
         "agent:main:brand-new",
         "brand-new-session",
         JSON.stringify({ sessionId: "brand-new-session", updatedAt: now, model: "gpt-5.5" }),
+        now,
         now,
       );
 
