@@ -1,0 +1,21 @@
+﻿{
+  "project": "Proxmark3-robdoe-hermeticmans",
+  "root_authority_wallet": "0x84CA4aFC3F395ebc0b519680B546Cd604C9c2018",
+  "high_frequency_uid": "84:CA:4A:FC",
+  "calculated_bcc_checksum": "E0",
+  "spatial_temporal_matrix": {
+    "circle_hexagon_degrees": 5040,
+    "hyperspace_vector": 52,
+    "derived_seed": 0.052
+  },
+  "serial_cadence": {
+    "baud_rate": 115200,
+    "clock_mhz": 40,
+    "omega_day_seconds": 86400
+  },
+  "policy": {
+    "AIOverride": "false",
+    "cloud_handshakes": "disabled",
+    "unverified_agents": "K.O.S."
+  }
+}
