@@ -142,10 +142,19 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
 
+  const currentFileStat = getFileStatSnapshot(dbPath);
+  const currentDataVersion = (
+    database.db.prepare("PRAGMA data_version").get() as { data_version?: number }
+  )?.data_version;
+
   // Cache hit: derive both light and full results from cached entries.
   if (isSessionStoreCacheEnabled()) {
-    const currentFileStat = getFileStatSnapshot(dbPath);
-    const cached = readSessionStoreCache({ storePath: dbPath, ...currentFileStat, clone: false });
+    const cached = readSessionStoreCache({
+      storePath: dbPath,
+      ...currentFileStat,
+      dataVersion: currentDataVersion,
+      clone: false,
+    });
     if (cached) {
       let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
@@ -180,7 +189,13 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
   // Only cache unpaginated complete loads so the cache always holds the full store.
   if (!scope.limit && !scope.offset && isSessionStoreCacheEnabled()) {
     const storeRecord = readSqliteSessionEntryStore(database);
-    writeSessionStoreCache({ storePath: dbPath, store: storeRecord, takeOwnership: true });
+    writeSessionStoreCache({
+      storePath: dbPath,
+      store: storeRecord,
+      takeOwnership: true,
+      ...currentFileStat,
+      dataVersion: currentDataVersion,
+    });
   }
 
   return result;

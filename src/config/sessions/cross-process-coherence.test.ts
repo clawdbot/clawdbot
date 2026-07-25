@@ -9,7 +9,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { listSessionEntries } from "./session-accessor.js";
-import { invalidateSessionStoreCache } from "./store-cache.js";
 
 describe("session store cross-process cache coherence", () => {
   let tempDir: string;
@@ -31,10 +30,10 @@ describe("session store cross-process cache coherence", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("detects foreign writes via file stat mismatch and returns fresh data", () => {
-    // 1. Seed 5 sessions, close all connections to ensure WAL is checkpointed
-    let database = openOpenClawAgentDatabase({ agentId: "main", env, path: dbPath });
-    let db = database.db;
+  it("detects foreign writes via PRAGMA data_version and returns fresh data", () => {
+    // 1. Seed 5 sessions, close all connections
+    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: dbPath });
+    const db = database.db;
 
     const insertSession = db.prepare(
       `INSERT OR IGNORE INTO sessions
@@ -90,12 +89,10 @@ describe("session store cross-process cache coherence", () => {
        VALUES ('agent:main:foreign', 'foreign-1', '${JSON.stringify({ sessionId: "foreign-1", updatedAt: Date.now() }).replace(/'/g, "''")}', ${Date.now()})`,
     );
 
-    // Force checkpoint to push WAL frames into the main file, updating mtime/size
-    foreignDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     foreignDb.close();
 
-    // 4. Read again — cache read should stat the file, see changed metadata,
-    //    invalidate the cache, and fall through to a fresh DB query
+    // 4. Read again — PRAGMA data_version has changed after the foreign commit,
+    //    so the cache detects staleness and falls through to a fresh DB query
     const thirdRead = listSessionEntries(listScope);
     expect(thirdRead).toHaveLength(6);
 
@@ -107,10 +104,10 @@ describe("session store cross-process cache coherence", () => {
     expect(thirdRead.filter((e) => e.sessionKey.startsWith("agent:main:s-"))).toHaveLength(5);
   });
 
-  it("invalidates cache after a foreign delete", () => {
+  it("invalidates cache after a foreign delete detected via data_version", () => {
     // 1. Seed 5 sessions, close all
-    let database = openOpenClawAgentDatabase({ agentId: "main", env, path: dbPath });
-    let db = database.db;
+    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: dbPath });
+    const db = database.db;
 
     const insertSession = db.prepare(
       `INSERT OR IGNORE INTO sessions
@@ -153,7 +150,6 @@ describe("session store cross-process cache coherence", () => {
     const foreignDb = new DatabaseSync(dbPath);
     foreignDb.exec("DELETE FROM sessions WHERE session_id = 'd-2'");
     foreignDb.exec("DELETE FROM session_entries WHERE session_id = 'd-2'");
-    foreignDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     foreignDb.close();
 
     // 4. Read again — should have 4 entries, no sign of d-2
