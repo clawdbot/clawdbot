@@ -194,9 +194,11 @@ describe("Google image-generation provider", () => {
         },
       });
 
-      expect(fetchRequest(fetchMock).url).toBe(
+      const request = fetchRequest(fetchMock);
+      expect(request.url).toBe(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
       );
+      expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
     },
   );
 

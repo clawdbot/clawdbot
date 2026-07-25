@@ -80,8 +80,9 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   capability: "image" | "audio" | "video";
   transport: "http" | "media-understanding";
 }) {
+  const baseUrl = resolveTrustedGoogleGenerativeAiBaseUrl(params.baseUrl);
   return resolveProviderHttpRequestConfig({
-    baseUrl: resolveTrustedGoogleGenerativeAiBaseUrl(params.baseUrl),
+    baseUrl,
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
     allowPrivateNetwork: params.request?.allowPrivateNetwork,
     headers: params.headers,
@@ -89,7 +90,7 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
     defaultHeaders: {
       ...parseGeminiAuth(params.apiKey).headers,
       ...resolveGoogleApiClientHeaders({
-        baseUrl: params.baseUrl,
+        baseUrl,
         api: "google-generative-ai",
         capability: params.capability,
         transport: params.transport,
