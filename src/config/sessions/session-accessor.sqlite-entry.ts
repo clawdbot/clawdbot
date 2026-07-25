@@ -258,8 +258,9 @@ function listSqliteSessionEntriesFromDatabase(
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
 
   // Paginate in JS after filtering hidden/invalid rows, consistent with cache path.
-  const sliceOffset = offset ?? 0;
-  const sliceEnd = limit !== undefined ? sliceOffset + limit : undefined;
+  const sliceOffset = Math.max(0, offset ?? 0);
+  const safeLimit = limit !== undefined ? Math.max(0, limit) : undefined;
+  const sliceEnd = safeLimit !== undefined ? sliceOffset + safeLimit : undefined;
   return entries.slice(sliceOffset, sliceEnd);
 }
 
