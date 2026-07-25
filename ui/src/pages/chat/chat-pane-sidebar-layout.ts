@@ -106,9 +106,9 @@ export function createSidebarFullMessageLoader(
   };
 }
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  type DetailFullMessageResult,
-  type SidebarFullMessageRequest,
+import type {
+  DetailFullMessageResult,
+  SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;

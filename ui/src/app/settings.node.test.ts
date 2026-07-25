@@ -871,12 +871,10 @@ describe("loadSettings default gateway URL derivation", () => {
     const sidebarSessionLayouts = {
       "agent:main:main": openSlot({ columns: [] }, "discussion"),
     };
-    const sidebarSessionActivePanels = { "agent:main:main": "discussion" };
 
-    saveSettings({ ...settings, sidebarSessionLayouts, sidebarSessionActivePanels });
+    saveSettings({ ...settings, sidebarSessionLayouts });
 
     expect(loadSettings().sidebarSessionLayouts).toEqual(sidebarSessionLayouts);
-    expect(loadSettings().sidebarSessionActivePanels).toEqual(sidebarSessionActivePanels);
   });
 
   it("normalizes corrupt stored sidebar layouts to empty columns", () => {
