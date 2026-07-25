@@ -601,6 +601,7 @@ export class NpmUpdateSmoke {
   private targetDependencyPackages: NpmRegistryPackage[] = [];
   private targetRegistryPackages: NpmRegistryPackage[] = [];
   private targetTarballVersion = "";
+  private targetRegistryHostUrl = "";
   private targetRegistryUrl = "";
   private macosVm = macosVmDefault;
   private linuxVm = linuxVmDefault;
@@ -819,8 +820,8 @@ export class NpmUpdateSmoke {
       ...env,
       ...(phase === "fresh-target" && this.targetRegistryUrl
         ? {
-            NPM_CONFIG_REGISTRY: this.targetRegistryUrl,
-            npm_config_registry: this.targetRegistryUrl,
+            NPM_CONFIG_REGISTRY: this.targetRegistryHostUrl,
+            npm_config_registry: this.targetRegistryHostUrl,
           }
         : {}),
     };
@@ -883,6 +884,7 @@ export class NpmUpdateSmoke {
             ...this.targetRegistryPackages,
           ],
         });
+        this.targetRegistryHostUrl = this.registryServer.hostUrl;
         this.targetRegistryUrl = this.registryServer.url;
         this.updateTargetTarball = `${this.registryServer.url}/openclaw/-/${path.basename(
           hostedTarballPath,
