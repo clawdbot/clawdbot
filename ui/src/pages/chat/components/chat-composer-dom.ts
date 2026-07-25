@@ -34,8 +34,9 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   // The owning surface declares its cap in CSS. Retain the historical fallback
   // for detached/test controls whose computed max-height is not a pixel value.
-  const computedMaxHeight = Number.parseFloat(getComputedStyle(el).maxHeight);
-  const maxHeight = Number.isFinite(computedMaxHeight) ? computedMaxHeight : 150;
+  const computedMaxHeight = getComputedStyle(el).maxHeight.trim();
+  const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
+  const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
   el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   updateTextareaOverflow(el);
 }

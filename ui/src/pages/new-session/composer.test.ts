@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController, renderNewSessionDraftComposer } from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
@@ -81,6 +82,18 @@ afterEach(() => {
 });
 
 describe("new-session composer sizing lifecycle", () => {
+  it("keeps the shared fallback for non-pixel CSS caps", () => {
+    const textarea = document.createElement("textarea");
+    Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 500 });
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      maxHeight: "50vh",
+    } as CSSStyleDeclaration);
+
+    adjustTextareaHeight(textarea);
+
+    expect(textarea.style.height).toBe("150px");
+  });
+
   it("keeps one observer across controlled updates and remeasures programmatic drafts", async () => {
     const observe = vi.fn();
     const disconnect = vi.fn();
