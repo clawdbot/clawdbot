@@ -1,4 +1,8 @@
-import { walkRootDirectory, type RootWalkEntry } from "openclaw/plugin-sdk/root-walk";
+import {
+  walkRootDirectory,
+  type RootWalkEntry,
+  type RootWalkOptions,
+} from "openclaw/plugin-sdk/root-walk";
 
 export const MEMORY_WIKI_WALK_MAX_DEPTH = 128;
 export const MEMORY_WIKI_WALK_MAX_ENTRIES = 20_000;
@@ -6,6 +10,8 @@ export const MEMORY_WIKI_WALK_MAX_ENTRIES = 20_000;
 type MemoryWikiWalkLimits = {
   maxDepth?: number;
   maxEntries?: number;
+  entryFilter?: RootWalkOptions["entryFilter"];
+  onDirectoryError?: RootWalkOptions["onDirectoryError"];
 };
 
 export async function walkMemoryWikiDirectory(
@@ -20,6 +26,8 @@ export async function walkMemoryWikiDirectory(
       maxEntries: limits.maxEntries ?? MEMORY_WIKI_WALK_MAX_ENTRIES,
       symlinkPolicy: "skip",
       limitBehavior: "throw",
+      ...(limits.entryFilter ? { entryFilter: limits.entryFilter } : {}),
+      ...(limits.onDirectoryError ? { onDirectoryError: limits.onDirectoryError } : {}),
     })) {
       entries.push(entry);
     }

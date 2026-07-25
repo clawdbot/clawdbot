@@ -34,4 +34,35 @@ describe("walkMemoryWikiDirectory", () => {
 
     await expect(walkMemoryWikiDirectory(root, "missing")).resolves.toEqual([]);
   });
+
+  it("prunes ignored subtrees before their descendants consume the budget", async () => {
+    const root = await createTempDir();
+    await fs.mkdir(path.join(root, "node_modules"));
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        fs.writeFile(path.join(root, "node_modules", `ignored-${index}.md`), "ignored"),
+      ),
+    );
+    await fs.writeFile(path.join(root, "visible.md"), "visible");
+
+    await expect(
+      walkMemoryWikiDirectory(root, "", {
+        maxEntries: 2,
+        entryFilter: (entry) =>
+          entry.kind === "directory" && path.basename(entry.relativePath) === "node_modules"
+            ? "skip-subtree"
+            : "include",
+      }),
+    ).resolves.toEqual([expect.objectContaining({ relativePath: "visible.md", kind: "file" })]);
+  });
+
+  it("reports directory failures when partial scans are requested", async () => {
+    const root = await createTempDir();
+
+    await expect(
+      walkMemoryWikiDirectory(root, "missing", { onDirectoryError: "skip-and-report" }),
+    ).resolves.toEqual([
+      expect.objectContaining({ relativePath: "missing", kind: "directory-error" }),
+    ]);
+  });
 });
