@@ -144,7 +144,9 @@ export function buildSidebarSessionNavigationState(input: {
       category: normalizeOptionalString(row.category),
       channel: channelInfo.channel,
       channelSession: channelInfo.channelSession,
-      workSession: Boolean(row.worktree || row.execNode),
+      workSession:
+        Boolean(row.worktree || row.execNode) ||
+        context?.sessions.isPreparedWorkSession(row.key) === true,
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
       placementState: row.placement?.state,
