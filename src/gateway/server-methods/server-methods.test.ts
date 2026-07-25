@@ -2178,30 +2178,9 @@ describe("projectRecentChatDisplayMessages", () => {
 
   it.each([
     {
-      name: "legacy-only",
-      message: { MediaPath: "/tmp/openclaw/legacy.png", MediaType: "image/png" },
-      expectedPath: "/tmp/openclaw/legacy.png",
-    },
-    {
       name: "facts-only",
       message: { __openclaw: { media: [{ path: "/tmp/openclaw/fact.png" }] } },
       expectedPath: "/tmp/openclaw/fact.png",
-    },
-    {
-      name: "both-equal",
-      message: {
-        MediaPath: "/tmp/openclaw/equal.png",
-        __openclaw: { media: [{ path: "/tmp/openclaw/equal.png" }] },
-      },
-      expectedPath: "/tmp/openclaw/equal.png",
-    },
-    {
-      name: "both-conflict",
-      message: {
-        MediaPath: "/tmp/openclaw/legacy-conflict.png",
-        __openclaw: { media: [{ path: "/tmp/openclaw/canonical.png" }] },
-      },
-      expectedPath: "/tmp/openclaw/canonical.png",
     },
     {
       name: "sparse",
@@ -2219,7 +2198,7 @@ describe("projectRecentChatDisplayMessages", () => {
       message: { __openclaw: { media: [{ path: "/tmp/openclaw/media-only.png" }] } },
       expectedPath: "/tmp/openclaw/media-only.png",
     },
-  ])("keeps $name media-only users through facts-first display projection", (testCase) => {
+  ])("keeps $name media-only users through canonical display projection", (testCase) => {
     const result = projectRecentChatDisplayMessages([
       { role: "user", content: "", timestamp: 1, ...testCase.message },
       { role: "user", content: "", timestamp: 2 },

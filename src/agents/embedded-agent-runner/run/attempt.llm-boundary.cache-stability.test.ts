@@ -477,7 +477,11 @@ describe("append-only late media (issue #99495)", () => {
     const normalized = normalizeMessagesForLlmBoundary([merged], { timezone: TZ });
 
     expect(normalized).toHaveLength(1);
-    expect(merged).toMatchObject({ MediaPath: "media://inbound/image.jpg" });
+    expect(merged).toMatchObject({
+      __openclaw: {
+        media: [expect.objectContaining({ path: "media://inbound/image.jpg" })],
+      },
+    });
   });
 });
 

@@ -107,7 +107,7 @@ describe("normalizeAssistantReplayContent", () => {
       legacyOnly,
     ]);
 
-    expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly, legacyOnly]);
+    expect(out).toEqual([blankString, { ...blankArray, content: "" }, urlOnly]);
   });
 
   it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {

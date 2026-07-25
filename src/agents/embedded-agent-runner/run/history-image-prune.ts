@@ -1,6 +1,6 @@
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import {
-  readPersistedMediaFactsWithLegacyFallback,
+  readPersistedMediaFacts,
   readRuntimePromptMediaFacts,
   stripLegacyMediaContextFields,
   type MediaFact,
@@ -80,7 +80,7 @@ function resolveMessageMediaFacts(message: AgentMessage): MediaFact[] {
   if (runtimeMedia) {
     return runtimeMedia;
   }
-  return readPersistedMediaFactsWithLegacyFallback(message) ?? [];
+  return readPersistedMediaFacts(message) ?? [];
 }
 
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
