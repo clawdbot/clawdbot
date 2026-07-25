@@ -3921,7 +3921,7 @@ export const en: TranslationMap = {
     followUpModeUsingServer: "Using server default ({mode})",
     followUpModeOverriding: "Overriding server default ({mode})",
     followUpModeReset: "Reset to server default",
-    catalogOpenTarget: "Open Codex/Claude threads in",
+    catalogOpenTarget: "Open external sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Disabled during setup",
