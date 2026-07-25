@@ -140,7 +140,7 @@ function writeNativeHookRelayBridgeRecordForRegistration(
   writeNativeHookRelayBridgeRecord({ record, stateDbPath: bridge.stateDbPath });
 }
 
-export function resolveNativeHookRelayBridgeRecord(
+function resolveNativeHookRelayBridgeRecord(
   registration: ActiveNativeHookRelayRegistration,
   bridge: NativeHookRelayBridgeRegistration,
   expiresAtMs = registration.expiresAtMs,

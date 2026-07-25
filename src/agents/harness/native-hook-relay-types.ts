@@ -5,19 +5,6 @@ import type {
   BeforeToolCallFailureDisposition,
   DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
-import type {
-  NativeHookRelayEvent,
-  NativeHookRelayProcessResponse,
-  NativeHookRelayProvider,
-  NativeHookRelayRegistrationHandle,
-} from "./native-hook-relay.js";
-
-export type {
-  NativeHookRelayEvent,
-  NativeHookRelayProcessResponse,
-  NativeHookRelayProvider,
-  NativeHookRelayRegistrationHandle,
-} from "./native-hook-relay.js";
 
 export type JsonValue =
   | null
@@ -26,6 +13,18 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+const NATIVE_HOOK_RELAY_EVENTS = [
+  "pre_tool_use",
+  "post_tool_use",
+  "permission_request",
+  "before_agent_finalize",
+] as const;
+
+const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
+
+export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
+export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
 
 export type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
@@ -47,6 +46,13 @@ export type NativeHookRelayInvocation = {
   toolUseId?: string;
   rawPayload: JsonValue;
   receivedAt: string;
+};
+
+export type NativeHookRelayProcessResponse = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
 export type NativeHookRelayRegistration = {
@@ -72,6 +78,17 @@ export type NativeHookRelayRegistration = {
   }) => void | Promise<void>;
 };
 
+type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
+  generation?: string;
+  shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
+  commandForEvent: (
+    event: NativeHookRelayEvent,
+    options?: NativeHookRelayCommandForEventOptions,
+  ) => string;
+  renew: (ttlMs?: number) => void;
+  unregister: () => void;
+};
+
 export type RegisterNativeHookRelayParams = {
   provider: NativeHookRelayProvider;
   relayId?: string;
@@ -93,7 +110,7 @@ export type RegisterNativeHookRelayParams = {
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
-export type NativeHookRelayCommandOptions = {
+type NativeHookRelayCommandOptions = {
   executable?: string;
   nice?: number | false;
   nodeExecutable?: string;
@@ -135,7 +152,7 @@ export type NativeHookRelayInvocationMetadata = Partial<
   >
 >;
 
-export type NativeHookRelayPermissionDecision = "allow" | "deny";
+type NativeHookRelayPermissionDecision = "allow" | "deny";
 
 export type NativeHookRelayProviderAdapter = {
   normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
