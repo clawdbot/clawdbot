@@ -246,6 +246,19 @@ fields, `accounts.default`, removed or unresolvable accounts, and mixed changes
 that can affect inheritance are promoted to a whole-channel restart. Plugins
 that do not opt in always use the whole-channel path.
 
+#### Account-index reload paths
+
+If a channel keeps a channel-owned account index outside `channels.<channel>.accounts`,
+declare each exact reload marker in `reload.accountIndexReloadPaths`. The Gateway
+treats those plugin-declared paths as channel hot-reload triggers and, when no
+other `channels.<channel>.*` config path changed in the same diff, restarts the
+channel with the known-account safety net so existing runtimes are not dropped
+while the refreshed index is reconciled.
+
+Do not use this for ordinary account config edits. Account edits belong under
+`reload.configPrefixes` and should restart from the candidate config without
+unioning stale known accounts.
+
 For channels using the durable ingress drain, the account monitor's stop path
 must first settle all accepted transport admissions, then dispose and await its
 drain. Starting the account opens the same account-keyed queue, whose initial

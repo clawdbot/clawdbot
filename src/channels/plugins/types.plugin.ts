@@ -70,6 +70,13 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     configPrefixes: string[];
     noopPrefixes?: string[];
     /**
+     * Exact config diff paths that represent a channel-owned account index
+     * refresh rather than an account configuration change. When one of these
+     * paths is the only changed path under `channels.<id>`, the Gateway may
+     * preserve already-known account runtimes across the whole-channel restart.
+     */
+    accountIndexReloadPaths?: string[];
+    /**
      * Opt into restarting only the changed non-default named account.
      * Set only when sibling account resolution and lifecycle state are isolated and
      * account stop fully settles owned work. Shared, default, removed, or unresolved

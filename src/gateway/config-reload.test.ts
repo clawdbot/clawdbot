@@ -196,6 +196,7 @@ describe("buildGatewayReloadPlan", () => {
     reload: {
       configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
       noopPrefixes: ["channels.whatsapp"],
+      accountIndexReloadPaths: ["channels.whatsapp.channelConfigUpdatedAt"],
     },
   };
   const mattermostPlugin: ChannelPlugin = {
@@ -532,6 +533,16 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set());
     expect(plan.noopPaths).toEqual([path]);
+  });
+
+  it("uses plugin-declared account-index reload paths as channel hot reloads", () => {
+    const path = "channels.whatsapp.channelConfigUpdatedAt";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toEqual([path]);
+    expect(plan.noopPaths).toStrictEqual([]);
   });
 
   it("refreshes channel rules when the tracked channel registry changes", () => {

@@ -9,8 +9,13 @@ import type { GatewayReloadPlan } from "./config-reload.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
 
+function getChannelAccountIndexReloadPaths(channel: ChannelKind): ReadonlySet<string> {
+  const paths = getChannelPlugin(channel)?.reload?.accountIndexReloadPaths ?? [];
+  return new Set(paths);
+}
+
 function isChannelAccountIndexReloadPath(path: string, channel: ChannelKind): boolean {
-  return path === `channels.${channel}.channelConfigUpdatedAt`;
+  return getChannelAccountIndexReloadPaths(channel).has(path);
 }
 
 function isChannelPath(path: string, channel: ChannelKind): boolean {

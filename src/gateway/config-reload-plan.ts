@@ -179,7 +179,11 @@ function listReloadRules(): ReloadRule[] {
     const restartAction = plugin.reload?.accountScopedRestart
       ? (`restart-channel-account:${plugin.id}` as ReloadAction)
       : (`restart-channel:${plugin.id}` as ReloadAction);
-    return (plugin.reload?.configPrefixes ?? [])
+    const hotPrefixes = [
+      ...(plugin.reload?.configPrefixes ?? []),
+      ...(plugin.reload?.accountIndexReloadPaths ?? []),
+    ];
+    return hotPrefixes
       .map((prefix): ReloadRule => {
         const rule: ReloadRule = {
           prefix,
