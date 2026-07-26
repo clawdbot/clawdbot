@@ -261,7 +261,7 @@ describe("extractTextFromMessage", () => {
       role: "user",
       content: `Hello world
 
-Context:
+${markInboundContextLabel("Context:")}
 <<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>
 Source: Channel metadata
 ---

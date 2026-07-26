@@ -1,12 +1,13 @@
-/** Appends channel-supplied prompt context to the user-role body under a plain label. */
+/** Appends channel-supplied prompt context to the user-role body under a marked label. */
 import { truncateUtf16Safe } from "../../utils.js";
+import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 /**
- * The `Context:` header is a plain label, not a guardrail: trust guidance travels
- * with each entry instead (`buildChannelMetadata` wraps entries in
- * `wrapExternalContent`, whose SECURITY NOTICE carries the do-not-obey clause).
- * Do not reintroduce trust wording here — a user-role label is forgeable.
+ * The fixed marker lets strippers recognize OpenClaw-injected context; it is not
+ * a trust guardrail. Trust guidance travels with each entry instead
+ * (`buildChannelMetadata` wraps entries in `wrapExternalContent`, whose SECURITY
+ * NOTICE carries the do-not-obey clause).
  */
 export function appendChannelPromptContext(base: string, channelPromptContext?: string[]): string {
   if (!Array.isArray(channelPromptContext) || channelPromptContext.length === 0) {
@@ -18,7 +19,7 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
   if (entries.length === 0) {
     return base;
   }
-  const header = "Context:";
+  const header = markInboundContextLabel("Context:");
   const block = [header, ...entries].join("\n");
   return [base, block].filter(Boolean).join("\n\n");
 }

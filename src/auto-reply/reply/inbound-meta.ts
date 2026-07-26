@@ -267,7 +267,7 @@ function sanitizeTranscriptBody(value: unknown): string | undefined {
 }
 
 function formatChannelStructuredContextLabel(label: unknown): string {
-  const normalized = normalizePromptMetadataString(label);
+  const normalized = normalizePromptMetadataString(label)?.replace(/\s+/g, " ").trim();
   return normalized ? `${normalized}:` : "Structured object:";
 }
 
@@ -580,7 +580,7 @@ export function buildInboundMetaSystemPrompt(
   const isDirect = !chatType || chatType === "direct";
 
   // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
-  // Those belong in the user-role "untrusted context" blocks.
+  // Those belong in the user-role context blocks this module emits below.
   // Conversation ids, per-message identifiers, and dynamic flags are also excluded here:
   // they change on turns/replies and would bust prefix-based prompt caches on providers that
   // use stable system prefixes. They are included in the user-role conversation info block instead.

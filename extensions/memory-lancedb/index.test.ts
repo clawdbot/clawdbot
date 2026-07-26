@@ -3620,8 +3620,9 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge("Sender: Alex\nI prefer dark mode")).toBe(false);
   });
 
-  test("looksLikeEnvelopeSludge detects context header at line start", () => {
-    expect(looksLikeEnvelopeSludge("Context:")).toBe(true);
+  test("looksLikeEnvelopeSludge detects only marked channel context headers", () => {
+    expect(looksLikeEnvelopeSludge(ctxHeader("Context:"))).toBe(true);
+    expect(looksLikeEnvelopeSludge("Context:")).toBe(false);
   });
 
   test("looksLikeEnvelopeSludge does not false-positive on a mid-line context label", () => {
@@ -4023,9 +4024,14 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
   });
 
-  test("sanitizeForMemoryCapture strips context header and trailing content", () => {
-    const input = "I prefer dark mode\nContext:\nsome trailing metadata";
+  test("sanitizeForMemoryCapture strips marked context header and trailing content", () => {
+    const input = `I prefer dark mode\n${ctxHeader("Context:")}\nsome trailing metadata`;
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture preserves a bare context header and trailing content", () => {
+    const input = "I prefer dark mode\nContext:\nsome user-authored text";
+    expect(sanitizeForMemoryCapture(input)).toBe(input);
   });
 
   test("sanitizeForMemoryCapture does not strip a context label mid-line", () => {

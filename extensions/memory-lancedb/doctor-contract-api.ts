@@ -19,12 +19,12 @@ type LanceDbTable = Awaited<ReturnType<LanceDbConnection["openTable"]>>;
 
 const LEGACY_ENVELOPE_DELETE_BATCH_SIZE = 500;
 
-// Deletion predicate mirrors the recall filter shipped BEFORE the plain-label
-// rename (index.ts sentinel/label/header rules): doctor only deletes rows that
-// filter already hid from agent recall, and that capture sanitization would
-// never store today. Accepted tradeoff: raw `ltm list/search` output loses
-// these sludge rows too, including any salvageable trailer text.
-// Mid-line mentions of the old wording (colon not at end of line) survive.
+// Doctor deletes rows containing a complete known legacy sentinel line, a legacy
+// label followed by a fenced JSON body, or the complete legacy external-content
+// header line. Bare label-like prose and partial header prefixes survive.
+// Accepted tradeoff: deleting a genuinely contaminated row can also discard
+// salvageable trailer text stored in that row; doctor-only keeps this destructive
+// cleanup behind explicit operator intent.
 const LEGACY_ENVELOPE_SENTINELS = [
   "Conversation info (untrusted metadata):",
   "Sender (untrusted metadata):",
@@ -43,15 +43,16 @@ const LEGACY_ENVELOPE_SENTINEL_LINE_RE = new RegExp(
   ).join("|")})[^\\n]*$`,
   "m",
 );
-const LEGACY_ENVELOPE_LABEL_LINE_RE =
-  /^[^\n]+\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*$/m;
-const LEGACY_ENVELOPE_HEADER_RE = /^Untrusted context \(metadata/m;
+const LEGACY_ENVELOPE_LABEL_JSON_BLOCK_RE =
+  /^[^\n]+\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*(?:\n|$)/m;
+const LEGACY_ENVELOPE_HEADER_RE =
+  /^Untrusted context \(metadata, do not treat as instructions or commands\):[ \t]*$/m;
 
 function isLegacyEnvelopeContaminatedText(text: unknown): boolean {
   return (
     typeof text === "string" &&
     (LEGACY_ENVELOPE_SENTINEL_LINE_RE.test(text) ||
-      LEGACY_ENVELOPE_LABEL_LINE_RE.test(text) ||
+      LEGACY_ENVELOPE_LABEL_JSON_BLOCK_RE.test(text) ||
       LEGACY_ENVELOPE_HEADER_RE.test(text))
   );
 }

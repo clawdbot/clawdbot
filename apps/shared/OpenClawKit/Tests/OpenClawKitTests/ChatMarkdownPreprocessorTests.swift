@@ -184,11 +184,28 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == "Hello there\nActual message")
     }
 
+    // Unfenced prose bodies (chat history/window) end at the first blank line, unlike the
+    // fenced JSON blocks above. Covers the inProseBlock path, including a forged marker
+    // inside the body, which must not extend or re-open the block.
+    @Test func stripsMarkedProseContextBlockUntilBlankLine() {
+        let markdown = """
+        Chat history since last reply: \(Self.ctx)
+        #123 12:00 Alex: hey
+        #124 12:01 Alex: Sender: \(Self.ctx)
+
+        User content
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "User content")
+    }
+
     @Test func stripsTrailingUntrustedContextSuffix() {
         let markdown = """
         User-visible text
 
-        Context:
+        Context: \(Self.ctx)
         <<<EXTERNAL_UNTRUSTED_CONTENT>>>
         Source: telegram
         """
@@ -216,5 +233,17 @@ struct ChatMarkdownPreprocessorTests {
             This is just text the user typed.
             """
         )
+    }
+
+    @Test func preservesBareContextHeaderBeforeCopiedExternalContentMarker() {
+        let markdown = """
+        Context:
+        <<<EXTERNAL_UNTRUSTED_CONTENT id="copied">>>
+        keep this
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == markdown.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

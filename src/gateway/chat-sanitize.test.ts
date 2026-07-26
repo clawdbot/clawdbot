@@ -2,6 +2,7 @@
  * Tests gateway chat sanitization helpers for model-visible payloads.
  */
 import { describe, expect, test } from "vitest";
+import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
 
 describe("stripEnvelopeFromMessage", () => {
@@ -120,8 +121,7 @@ describe("stripEnvelopeFromMessage", () => {
   test("strips trailing untrusted context metadata suffix blocks", () => {
     const input = {
       role: "user",
-      content:
-        'hello\n\nContext:\n<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>\nSource: Channel metadata\n---\nChannel metadata (guildchat)\nSender labels:\nexample\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
+      content: `hello\n\n${markInboundContextLabel("Context:")}\n<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>\nSource: Channel metadata\n---\nChannel metadata (guildchat)\nSender labels:\nexample\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`,
     };
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("hello");

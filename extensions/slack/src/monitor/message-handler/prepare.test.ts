@@ -489,7 +489,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     assertPrepared(prepared);
-    expect(prepared.ctxPayload.UntrustedStructuredContext).toEqual([
+    expect(prepared.ctxPayload.ChannelStructuredContext).toEqual([
       {
         label: "Slack active context",
         source: "slack",
@@ -523,7 +523,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     assertPrepared(prepared);
-    expect(prepared.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+    expect(prepared.ctxPayload.ChannelStructuredContext).toBeUndefined();
   });
 
   it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {

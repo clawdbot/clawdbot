@@ -106,6 +106,9 @@ export type BuildChannelInboundEventContextAsyncParams = BuildChannelInboundEven
   ChannelInboundSupplementalResolutionOptions;
 
 type ChannelStructuredContextEntries = NonNullable<FinalizedMsgContext["ChannelStructuredContext"]>;
+type ChannelStructuredContextResolution =
+  | { kind: "absent" }
+  | { kind: "present"; entries: ChannelStructuredContextEntries };
 
 export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   Body: string;
@@ -335,11 +338,15 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
     supplemental: params.supplemental,
     extra: baseContext,
   });
+  const structuredContextField =
+    channelStructuredContext.kind === "present"
+      ? { ChannelStructuredContext: channelStructuredContext.entries }
+      : {};
   const finalize = params.finalize ?? finalizeCoreInboundContext;
   const context = finalize(
     {
       ...baseContext,
-      ChannelStructuredContext: channelStructuredContext,
+      ...structuredContextField,
     },
     params.finalizeOptions,
   ) as T & FinalizedMsgContext;
@@ -413,18 +420,18 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
 function resolveChannelStructuredContext(params: {
   supplemental?: SupplementalContextFacts;
   extra?: Record<string, unknown>;
-}): ChannelStructuredContextEntries | undefined {
+}): ChannelStructuredContextResolution {
   const entries: ChannelStructuredContextEntries = [];
   const extraEntries =
     params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
     entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(
-    ...(params.supplemental?.channelStructuredContext ??
-      params.supplemental?.untrustedContext ??
-      []),
-  );
+  const supplementalEntries =
+    params.supplemental?.channelStructuredContext ?? params.supplemental?.untrustedContext;
+  if (supplementalEntries !== undefined) {
+    entries.push(...supplementalEntries);
+  }
 
   // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
   // Keeping it with untrusted context preserves its user-role boundary.
@@ -439,7 +446,9 @@ function resolveChannelStructuredContext(params: {
     });
   }
 
-  return entries.length > 0 ? entries : undefined;
+  const contextProvided =
+    extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
+  return contextProvided ? { kind: "present", entries } : { kind: "absent" };
 }
 
 function resolveChannelCommandContext(params: {

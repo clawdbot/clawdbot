@@ -6,7 +6,7 @@ enum ChatMarkdownPreprocessor {
     private static let inboundContextMarker = "\u{27E6}openclaw:ctx\u{27E7}"
 
     private static let contextHeader =
-        "Context:"
+        "Context: \(inboundContextMarker)"
     private static let envelopeChannels = [
         "WebChat",
         "WhatsApp",
@@ -130,8 +130,7 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func stripInboundContextBlocks(_ raw: String) -> String {
-        guard raw.contains(self.inboundContextMarker) || raw.contains(self.contextHeader)
-        else {
+        guard raw.contains(self.inboundContextMarker) else {
             return raw
         }
 
@@ -204,22 +203,7 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func shouldStripTrailingUntrustedContext(lines: [String], index: Int) -> Bool {
-        guard lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == self.contextHeader else {
-            return false
-        }
-        // Mirror core stripInboundMetadata: only the external-content envelope
-        // marker (unforgeable per-call id) qualifies a trailing Context: block.
-        // Its sole producer wraps every entry with that marker as the first line,
-        // so `Source:`/`Channel metadata (` only ever appear inside it. Match the
-        // marker as the first non-empty line, so a bare Context: the user typed —
-        // even one followed by `Source: <url>` prose — cannot truncate their message.
-        let endIndex = min(lines.count, index + 8)
-        for probe in (index + 1)..<endIndex {
-            let trimmed = lines[probe].trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { continue }
-            return trimmed.hasPrefix("<<<EXTERNAL_UNTRUSTED_CONTENT")
-        }
-        return false
+        lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == self.contextHeader
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {

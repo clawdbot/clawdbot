@@ -67,7 +67,7 @@ const LEADING_CURRENT_MESSAGE_CONTEXT_RE = /^\s*Current message:[ \t]*(?:\n|$)/;
 const LEADING_CURRENT_MESSAGE_REPLY_LINE_RE = /^\s*\[Replying to:[^\n]{0,1000}\]\s*\n/;
 const LEADING_CURRENT_MESSAGE_ID_SENDER_RE = /^#\d+\s+[^\n:]{1,100}:\s*/;
 
-const CONTEXT_HEADER_RE = /^Context:[ \t]*$/m;
+const CONTEXT_HEADER_RE = /^Context:[ \t]*⟦openclaw:ctx⟧[ \t]*$/m;
 
 /**
  * Matches JSON blobs that look like OpenClaw transport envelope metadata.
@@ -199,12 +199,6 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
   // hot-path callers (capture gating, recall filtering) do not pay a regex
   // compile per invocation.
   if (MARKER_HEADER_LINE_RE.test(text)) {
-    return true;
-  }
-
-  // Check for the "Context:" header alone at the start of a line
-  // to avoid false-positives on user messages that quote the phrase mid-line.
-  if (CONTEXT_HEADER_RE.test(text)) {
     return true;
   }
 
@@ -545,10 +539,8 @@ export function sanitizeForMemoryCapture(text: string): string {
   strippedInjectedContext ||= afterActiveMemoryContext !== cleaned;
   cleaned = afterActiveMemoryContext;
 
-  // Strip the "Context:" header and everything after it, but only when it
-  // appears alone at the start of a line to avoid false positives on user
-  // content that happens to quote the phrase mid-line.
-  const untrustedLineMatch = /^Context:[ \t]*$/m.exec(cleaned);
+  // Strip the marked channel-context header and everything after it.
+  const untrustedLineMatch = CONTEXT_HEADER_RE.exec(cleaned);
   if (untrustedLineMatch) {
     strippedInjectedContext = true;
     cleaned = cleaned.slice(0, untrustedLineMatch.index);

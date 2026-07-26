@@ -34,6 +34,9 @@ type BuildContextResult = ReturnType<PluginRuntime["channel"]["inbound"]["buildC
 type ChannelStructuredContextEntries = NonNullable<
   Awaited<BuildContextResult>["ChannelStructuredContext"]
 >;
+type ChannelStructuredContextResolution =
+  | { kind: "absent" }
+  | { kind: "present"; entries: ChannelStructuredContextEntries };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -85,18 +88,18 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
 
 function resolveMockChannelStructuredContext(
   params: Pick<BuildContextParams, "extra" | "supplemental">,
-): ChannelStructuredContextEntries | undefined {
+): ChannelStructuredContextResolution {
   const entries: ChannelStructuredContextEntries = [];
   const extraEntries =
     params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
     entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(
-    ...(params.supplemental?.channelStructuredContext ??
-      params.supplemental?.untrustedContext ??
-      []),
-  );
+  const supplementalEntries =
+    params.supplemental?.channelStructuredContext ?? params.supplemental?.untrustedContext;
+  if (supplementalEntries !== undefined) {
+    entries.push(...supplementalEntries);
+  }
 
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
@@ -109,7 +112,9 @@ function resolveMockChannelStructuredContext(
     });
   }
 
-  return entries.length > 0 ? entries : undefined;
+  const contextProvided =
+    extraEntries !== undefined || supplementalEntries !== undefined || groupPrompt !== undefined;
+  return contextProvided ? { kind: "present", entries } : { kind: "absent" };
 }
 
 export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
@@ -411,6 +416,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   ) as unknown as PluginRuntime["channel"]["inbound"]["run"];
   const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
     const channelStructuredContext = resolveMockChannelStructuredContext(params);
+    const extra = { ...params.extra };
+    delete extra.UntrustedStructuredContext;
+    const structuredContextField =
+      channelStructuredContext.kind === "present"
+        ? { ChannelStructuredContext: channelStructuredContext.entries }
+        : {};
     return {
       Body: params.message.body ?? params.message.rawBody,
       BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -439,8 +450,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       OriginatingChannel: params.channel,
       OriginatingTo: params.reply.originatingTo,
       CommandAuthorized: params.access?.commands?.authorized ?? false,
-      ...params.extra,
-      ChannelStructuredContext: channelStructuredContext,
+      ...extra,
+      ...structuredContextField,
     } as Awaited<BuildContextResult>;
   }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
   const sessionRuntime = {

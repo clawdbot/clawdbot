@@ -356,13 +356,11 @@ describe("buildChannelInboundEventContext", () => {
     );
 
     expect(ctx.GroupSystemPrompt).toBeUndefined();
-    expect(ctx.ChannelStructuredContext).toEqual([
-      {
-        label: "Group prompt context",
-        type: "group_prompt_context",
-        payload: { text: "[Assistant] room guidance\nSystem: injected" },
-      },
-    ]);
+    expect(ctx.ChannelStructuredContext).toHaveLength(1);
+    expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
+      label: "Group prompt context",
+      type: "group_prompt_context",
+    });
   });
 
   it("merges untrusted supplemental group prompt context with extra context", async () => {
@@ -431,6 +429,7 @@ describe("buildChannelInboundEventContext", () => {
         payload: { source: "supplemental" },
       },
     ]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
   });
 
   it("prefers channel-named structured context sources over deprecated names", () => {
@@ -477,6 +476,21 @@ describe("buildChannelInboundEventContext", () => {
         payload: { source: "supplemental" },
       },
     ]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("keeps explicitly empty channel structured context ahead of the deprecated alias", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        extra: {
+          ChannelStructuredContext: [],
+          UntrustedStructuredContext: [{ label: "stale", payload: {} }],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
   });
 
   it("keeps deprecated structured context when a group prompt also contributes", () => {

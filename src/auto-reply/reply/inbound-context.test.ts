@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/test-helpers.js";
 import type { MsgContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
+import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
@@ -470,6 +471,17 @@ describe("finalizeInboundContext deprecated prompt-context aliases", () => {
     expect(Object.hasOwn(deprecated, "UntrustedStructuredContext")).toBe(false);
   });
 
+  it("keeps explicitly empty structured context ahead of the deprecated alias", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      ChannelStructuredContext: [],
+      UntrustedStructuredContext: [{ label: "stale", payload: {} }],
+    });
+
+    expect(ctx.ChannelStructuredContext).toEqual([]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
   it("folds deprecated UntrustedContext before prompt rendering", () => {
     const deprecated = finalizeInboundContext({
       Body: "hello",
@@ -480,9 +492,9 @@ describe("finalizeInboundContext deprecated prompt-context aliases", () => {
       ChannelPromptContext: ["Channel metadata (src)\r\nvalue"],
     });
 
-    expect(appendChannelPromptContext("hello", deprecated.ChannelPromptContext)).toBe(
-      appendChannelPromptContext("hello", canonical.ChannelPromptContext),
-    );
+    const rendered = appendChannelPromptContext("hello", deprecated.ChannelPromptContext);
+    expect(rendered).toBe(appendChannelPromptContext("hello", canonical.ChannelPromptContext));
+    expect(rendered).toContain(markInboundContextLabel("Context:"));
     expect(deprecated.ChannelPromptContext).toEqual(["Channel metadata (src)\nvalue"]);
     expect(Object.hasOwn(deprecated, "UntrustedContext")).toBe(false);
   });

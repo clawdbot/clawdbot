@@ -9,6 +9,7 @@ import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
+  hasInboundMetadataSentinel,
   stripInboundMetadata,
   stripLeadingInboundMetadata,
 } from "./strip-inbound-meta.js";
@@ -42,7 +43,7 @@ const REPLY_BLOCK = `${markInboundContextLabel("Reply target of current user mes
 }
 \`\`\``;
 
-const UNTRUSTED_CONTEXT_BLOCK = `Context:
+const UNTRUSTED_CONTEXT_BLOCK = `${markInboundContextLabel("Context:")}
 <<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>
 Source: Channel metadata
 ---
@@ -77,6 +78,14 @@ describe("stripInboundMetadata", () => {
 
   it("fast-path: returns empty string unchanged", () => {
     expect(stripInboundMetadata("")).toBe("");
+  });
+
+  it.each([
+    ["Context header text", "\nContext: my project uses TypeScript\n"],
+    ["mid-line Context mention", "\nSee the Context: section below\n"],
+  ])("fast-path: preserves ordinary %s byte-identically", (_name, input) => {
+    expect(hasInboundMetadataSentinel(input)).toBe(false);
+    expect(stripInboundMetadata(input)).toBe(input);
   });
 
   it("strips a single Conversation info block", () => {
@@ -159,6 +168,7 @@ Actual user message`;
 
   it("strips trailing Untrusted context metadata suffix blocks", () => {
     const input = `Actual message body\n\n${UNTRUSTED_CONTEXT_BLOCK}`;
+    expect(hasInboundMetadataSentinel(input)).toBe(true);
     expect(stripInboundMetadata(input)).toBe("Actual message body");
   });
 
@@ -174,15 +184,18 @@ This is plain user text`;
   });
 
   it("preserves a bare Context: block whose body only mentions Source:", () => {
-    // Regression: only the external-content envelope marker qualifies a trailing
-    // `Context:` block for stripping. A bare `Context:` a user typed, followed by
-    // prose that merely contains `Source: <url>`, must survive intact.
     const input = `Context:\nHere is the situation I need help with.\nSource: https://example.com/incident\nPlease summarize the root cause.`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("preserves a bare Context: block followed by a copied external-content marker", () => {
+    const input = `Context:\n<<<EXTERNAL_UNTRUSTED_CONTENT id="copied">>>\nkeep this`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
   it("strips a leading active-memory prompt prefix block from visible user text", () => {
     const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
+    expect(hasInboundMetadataSentinel(input)).toBe(true);
     expect(stripInboundMetadata(input)).toBe("What should I grab on the way?");
   });
 
@@ -352,6 +365,24 @@ Hello from user`;
 });
 
 describe("builder compatibility", () => {
+  it("collapses structured-context label newlines before emitting and stripping", () => {
+    const prefix = buildInboundUserContextPrefix({
+      ChannelStructuredContext: [
+        {
+          label: "Plugin supplied\nlabel",
+          source: "test",
+          type: "custom",
+          payload: { value: "context" },
+        },
+      ],
+    } as TemplateContext);
+    const input = `${prefix}\n\nActual user message`;
+
+    expect(prefix).toContain(markInboundContextLabel("Plugin supplied label:"));
+    expect(prefix).not.toContain("Plugin supplied\nlabel");
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
   it("strips generated inbound metadata blocks that contain fence-like payload text", () => {
     const input = `${buildInboundUserContextPrefix({
       ChatType: "group",

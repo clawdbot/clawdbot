@@ -1,5 +1,5 @@
-import { PLUGIN_COMPAT_RECORDS } from "./registry-records.js";
 // Plugin compatibility registry exposes known plugin compatibility metadata to doctor/update flows.
+import { PLUGIN_COMPAT_RECORDS } from "./registry-records.js";
 import type { PluginCompatRecord } from "./types.js";
 
 export type PluginCompatCode = (typeof PLUGIN_COMPAT_RECORDS)[number]["code"];

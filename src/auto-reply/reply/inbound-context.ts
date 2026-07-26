@@ -128,9 +128,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   foldDeprecatedPromptContextFields(normalized);
   applySupplementalContext(normalized);
 
-  normalized.Body = normalizeInboundTextNewlines(
-    typeof normalized.Body === "string" ? normalized.Body : "",
-  );
+  normalized.Body = normalizeTextField(normalized.Body) ?? "";
   normalized.RawBody = normalizeTextField(normalized.RawBody);
   normalized.CommandBody = normalizeTextField(normalized.CommandBody);
   normalized.Transcript = normalizeTextField(normalized.Transcript);
@@ -139,8 +137,8 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   normalized.GroupSystemPrompt = normalizeTextField(normalized.GroupSystemPrompt);
   if (Array.isArray(normalized.ChannelPromptContext)) {
     const normalizedChannelPromptContext = normalized.ChannelPromptContext.map((entry) =>
-      normalizeInboundTextNewlines(entry),
-    ).filter((entry) => Boolean(entry));
+      normalizeTextField(entry),
+    ).filter((entry): entry is string => Boolean(entry));
     normalized.ChannelPromptContext = normalizedChannelPromptContext;
   }
 

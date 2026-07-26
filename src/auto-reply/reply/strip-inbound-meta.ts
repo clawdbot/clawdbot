@@ -26,7 +26,8 @@ import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
-const CONTEXT_HEADER = "Context:";
+const CHANNEL_CONTEXT_HEADER = `Context: ${INBOUND_CONTEXT_MARKER}`;
+const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 
@@ -37,12 +38,17 @@ function isInboundContextHeaderLine(line: string): boolean {
 }
 
 // Pre-compiled fast-path regex — avoids line-by-line parse when no blocks present.
-// Key on the marker (escaped) as the fast-path probe, plus Context: and delivery hints.
-const MARKER_ESCAPED = INBOUND_CONTEXT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Active-memory's bare Context: sentinel is valid only as a complete line.
+const SENTINEL_SUBSTRING_ALTERNATIVES = [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS]
+  .map((sentinel) => sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+const ACTIVE_MEMORY_HEADER_ESCAPED = ACTIVE_MEMORY_CONTEXT_HEADER.replace(
+  /[.*+?^${}()|[\]\\]/g,
+  "\\$&",
+);
 const SENTINEL_FAST_RE = new RegExp(
-  [MARKER_ESCAPED, ...MESSAGE_TOOL_DELIVERY_HINTS, CONTEXT_HEADER]
-    .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join("|"),
+  `${SENTINEL_SUBSTRING_ALTERNATIVES}|^[ \t]*${ACTIVE_MEMORY_HEADER_ESCAPED}[ \t]*$`,
+  "m",
 );
 
 /** Fast check for whether text contains any inbound metadata sentinel. */
@@ -140,24 +146,7 @@ function firstNonEmptyString(...values: unknown[]): string | null {
 }
 
 function shouldStripTrailingContextBlock(lines: string[], index: number): boolean {
-  if (lines[index]?.trim() !== CONTEXT_HEADER) {
-    return false;
-  }
-  // Only OpenClaw-injected channel context qualifies. Its sole producer wraps
-  // every entry with `wrapExternalContent`, whose opening marker carries a
-  // per-call random id and cannot be forged by inbound text; `Source:`/`Channel
-  // metadata (` only ever appear *inside* that envelope. Match the marker as the
-  // first non-empty line, never those weaker cues, so a bare `Context:` a user
-  // typed — even one followed by `Source: <url>` prose — cannot truncate their
-  // own message.
-  for (let probe = index + 1; probe < Math.min(lines.length, index + 8); probe += 1) {
-    const trimmed = lines[probe]?.trim() ?? "";
-    if (trimmed === "") {
-      continue;
-    }
-    return trimmed.startsWith("<<<EXTERNAL_UNTRUSTED_CONTENT");
-  }
-  return false;
+  return lines[index]?.trim() === CHANNEL_CONTEXT_HEADER;
 }
 
 function stripTrailingContextBlockSuffix(lines: string[]): string[] {
@@ -182,7 +171,10 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
     if (line === undefined) {
       break;
     }
-    if (line.trim() === CONTEXT_HEADER && lines[index + 1]?.trim() === ACTIVE_MEMORY_OPEN_TAG) {
+    if (
+      line.trim() === ACTIVE_MEMORY_CONTEXT_HEADER &&
+      lines[index + 1]?.trim() === ACTIVE_MEMORY_OPEN_TAG
+    ) {
       let closeIndex = -1;
       for (let probe = index + 2; probe < lines.length; probe += 1) {
         if (lines[probe]?.trim() === ACTIVE_MEMORY_CLOSE_TAG) {

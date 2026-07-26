@@ -517,7 +517,7 @@ describe("sanitizeUserFacingText", () => {
       "",
       "Pong",
       "",
-      "Context:",
+      markInboundContextLabel("Context:"),
       '<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
       "Source: External",
       "---",
