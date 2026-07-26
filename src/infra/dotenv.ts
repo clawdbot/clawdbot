@@ -187,21 +187,14 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 // `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
 // in addition to the bare MATRIX_HOMESERVER listed above.
 const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_ENDPOINT", "_HOMESERVER"];
-const BLOCKED_WORKSPACE_DOTENV_NAME_FRAGMENTS = [
-  "_DANGEROUSLY_",
-  "_DISABLE_AUTH",
-  "_DISABLE_CERT",
-  "_DISABLE_SIGNATURE",
-  "_DISABLE_SSL",
-  "_DISABLE_TLS",
-  "_SKIP_AUTH",
-  "DANGEROUSLY_",
-  "DISABLE_AUTH",
-  "DISABLE_CERT",
-  "DISABLE_SIGNATURE",
-  "DISABLE_SSL",
-  "DISABLE_TLS",
-  "SKIP_AUTH",
+const BLOCKED_WORKSPACE_DOTENV_TOKEN_SEQUENCES = [
+  ["DANGEROUSLY"],
+  ["DISABLE", "AUTH"],
+  ["DISABLE", "CERT"],
+  ["DISABLE", "SIGNATURE"],
+  ["DISABLE", "SSL"],
+  ["DISABLE", "TLS"],
+  ["SKIP", "AUTH"],
 ];
 const BLOCKED_WORKSPACE_DOTENV_ACCESS_CONTROL_SUFFIXES = ["_ALLOWED_USER_IDS", "_ALLOWED_USERS"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
@@ -222,6 +215,18 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
 
 function shouldBlockWorkspaceRuntimeDotEnvKey(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+}
+
+function hasBlockedWorkspaceDotEnvTokenSequence(key: string): boolean {
+  const tokens = key.split("_").filter(Boolean);
+  return BLOCKED_WORKSPACE_DOTENV_TOKEN_SEQUENCES.some((sequence) => {
+    for (let index = 0; index <= tokens.length - sequence.length; index += 1) {
+      if (sequence.every((token, offset) => tokens[index + offset] === token)) {
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 function buildProviderAuthWorkspaceDotEnvBlocklist(): ReadonlySet<string> {
@@ -247,7 +252,7 @@ function shouldBlockWorkspaceDotEnvKey(
     BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper) ||
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
     BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
-    BLOCKED_WORKSPACE_DOTENV_NAME_FRAGMENTS.some((fragment) => upper.includes(fragment)) ||
+    hasBlockedWorkspaceDotEnvTokenSequence(upper) ||
     BLOCKED_WORKSPACE_DOTENV_ACCESS_CONTROL_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
     getProviderAuthBlockedKeys().has(upper)
   );

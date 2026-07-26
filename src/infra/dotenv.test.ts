@@ -1071,18 +1071,31 @@ describe("workspace .env blocklist completeness", () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "MY_APP_KEY=user-value\nAPP_GITHUB_REPO=openclaw/openclaw\nDATABASE_URL_CUSTOM=pg://localhost\n",
+          [
+            "MY_APP_KEY=user-value",
+            "APP_GITHUB_REPO=openclaw/openclaw",
+            "APP_URL=https://project.example.com",
+            "DATABASE_URL_CUSTOM=pg://localhost",
+            "MY_SKIP_AUTHORS=notes",
+            "VITE_DISABLE_AUTHENTICATION=false",
+          ].join("\n"),
         );
 
         delete process.env.MY_APP_KEY;
         delete process.env.APP_GITHUB_REPO;
+        delete process.env.APP_URL;
         delete process.env.DATABASE_URL_CUSTOM;
+        delete process.env.MY_SKIP_AUTHORS;
+        delete process.env.VITE_DISABLE_AUTHENTICATION;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.MY_APP_KEY).toBe("user-value");
         expect(process.env.APP_GITHUB_REPO).toBe("openclaw/openclaw");
+        expect(process.env.APP_URL).toBe("https://project.example.com");
         expect(process.env.DATABASE_URL_CUSTOM).toBe("pg://localhost");
+        expect(process.env.MY_SKIP_AUTHORS).toBe("notes");
+        expect(process.env.VITE_DISABLE_AUTHENTICATION).toBe("false");
       });
     });
   });
