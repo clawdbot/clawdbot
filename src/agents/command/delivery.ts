@@ -48,6 +48,10 @@ import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
+import {
+  collectHandoffOwnedMediaUrls,
+  enforceHandoffMediaDeliveryOwnership,
+} from "../handoff-media-delivery-ownership.js";
 import { isNestedAgentLane } from "../lanes.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -832,10 +836,16 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
         })
       : { payloads: rawFilteredReplyPayloads };
-  const mediaNormalizedReplyPayloads = await filterDeliveredPayloads(
-    mediaNormalization.payloads,
-    mediaNormalization.normalizeMediaPaths,
-  );
+  const mediaNormalizedReplyPayloads = enforceHandoffMediaDeliveryOwnership({
+    payloads: await filterDeliveredPayloads(
+      mediaNormalization.payloads,
+      mediaNormalization.normalizeMediaPaths,
+    ),
+    // Completion handoffs hand the resumed agent the generated media by name, so
+    // a noncompliant reply can echo the same artifact through several payloads.
+    // The prompt contract cannot prevent that; this batch can.
+    handoffMediaUrls: collectHandoffOwnedMediaUrls(opts.internalEvents),
+  });
   params.assertDeliveryCurrent?.();
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);

@@ -473,6 +473,60 @@ describe("deliverAgentCommandResult payload normalization", () => {
     ]);
   });
 
+  it("delivers generated-media handoff artifacts once when the resumed reply re-attaches them", async () => {
+    // The completion handoff names the artifact in the internal event, so a model
+    // that ignores the caption-only instruction can echo it as a MEDIA line and as
+    // a structured attachment. Delivery, not the prompt, keeps it single-owned.
+    deliverOutboundPayloadsMock.mockResolvedValue([]);
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    await deliverAgentCommandResult({
+      cfg: {
+        agents: { list: [{ id: "tester", workspace: "/tmp/agent-workspace" }] },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "image generation task finished",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "image_generation",
+            childSessionKey: "image_generate:task-1",
+            announceType: "image generation task",
+            taskLabel: "proof dog image",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "Generated 1 image.",
+            mediaUrls: ["/tmp/generated-dog.png"],
+            attachments: [{ type: "image", path: "/tmp/generated-dog.png" }],
+            replyInstruction: "caption only",
+          },
+        ],
+      } as AgentCommandOpts,
+      outboundSession: { key: "agent:tester:slack:direct:alice", agentId: "tester" } as never,
+      sessionEntry: undefined,
+      payloads: [
+        { text: "Here is your dog!", mediaUrls: ["/tmp/generated-dog.png"] },
+        { mediaUrl: "/tmp/generated-dog.png" },
+      ],
+      result: createResult(),
+    });
+
+    const deliverArgs = latestOutboundDeliveryArgs();
+    const deliveredMediaUrls: string[] = [];
+    for (const payload of deliverArgs.payloads) {
+      if (payload.mediaUrl) {
+        deliveredMediaUrls.push(payload.mediaUrl);
+      }
+      deliveredMediaUrls.push(...(payload.mediaUrls ?? []));
+    }
+    expect(deliveredMediaUrls).toStrictEqual(["/tmp/generated-dog.png"]);
+  });
+
   it("reports successful requested delivery", async () => {
     deliverOutboundPayloadsMock.mockResolvedValue([]);
 

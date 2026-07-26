@@ -40,6 +40,11 @@ vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliv
 vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => cronContinuationCleanupMocks);
 
 import {
+  collectHandoffOwnedMediaUrls,
+  enforceHandoffMediaDeliveryOwnership,
+} from "../handoff-media-delivery-ownership.js";
+import type { AgentInternalEvent } from "../internal-events.js";
+import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
   shouldDetachMediaGenerationTask,
@@ -1152,6 +1157,64 @@ describe("createMediaGenerationTaskLifecycle", () => {
     expect(replyInstruction).toMatch(/message\(action=["']send["']\)/i);
     expect(replyInstruction).toMatch(/short caption and no attachments/i);
     expect(replyInstruction).toMatch(/short normal final reply caption/i);
+  });
+
+  it("delivers the handoff media once even when the resumed reply ignores the instruction", async () => {
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+      path: "direct",
+    });
+    const lifecycle = createImageMediaLifecycle();
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-image-noncompliant",
+          runId: "tool:image_generate:noncompliant",
+          requesterSessionKey: "agent:main:telegram:direct:123",
+          taskLabel: "proof dog image",
+          requesterOrigin: { channel: "telegram", to: "telegram:123" },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Generated 1 image.\nMEDIA:/tmp/generated-dog.png",
+        mediaUrls: ["/tmp/generated-dog.png"],
+        attachments: [
+          {
+            type: "image",
+            path: "/tmp/generated-dog.png",
+            mimeType: "image/png",
+            name: "generated-dog.png",
+          },
+        ],
+      }),
+    ).resolves.toEqual({ status: "delivered" });
+
+    const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock
+      .calls[0]?.[0] as { internalEvents?: AgentInternalEvent[] } | undefined;
+    const handoffMediaUrls = collectHandoffOwnedMediaUrls(announceParams?.internalEvents);
+    expect(handoffMediaUrls).toEqual(["/tmp/generated-dog.png"]);
+
+    // The resumed agent ignores the caption-only instruction and echoes the
+    // handoff artifact as a MEDIA line and again as a structured attachment.
+    const deliveredPayloads = enforceHandoffMediaDeliveryOwnership({
+      payloads: [
+        { text: "Here is your dog!", mediaUrls: ["/tmp/generated-dog.png"] },
+        { mediaUrl: "/tmp/generated-dog.png" },
+      ],
+      handoffMediaUrls,
+    });
+
+    const deliveredMediaCount = deliveredPayloads
+      .flatMap((payload) => [
+        ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+        ...(payload.mediaUrls ?? []),
+      ])
+      .filter((url) => url === "/tmp/generated-dog.png").length;
+    expect(deliveredMediaCount).toBe(1);
+    expect(deliveredPayloads).toEqual([
+      { text: "Here is your dog!", mediaUrls: ["/tmp/generated-dog.png"] },
+    ]);
   });
 
   it("does not direct-deliver generated media after requester abandonment", async () => {
