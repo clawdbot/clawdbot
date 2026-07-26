@@ -1128,10 +1128,22 @@ function trackTranscriptRenderDependencies(
   return dependencies;
 }
 
-function guardChatRenderItems(state: ChatThreadState, render: (item: ChatRenderItem) => unknown) {
+function guardChatRenderItems(
+  state: ChatThreadState,
+  // Turn status ownership is decided by sibling rows, not by the owning row's
+  // own content: an unchanged reply that gains or loses the embedded working
+  // row / recap must re-render, or the stale copy stacks with the new owner.
+  statusOwnership: (item: ChatRenderItem) => string,
+  render: (item: ChatRenderItem) => unknown,
+) {
   return (item: ChatRenderItem) =>
-    guard([...chatRenderItemGuardDependencies(item), state.transcriptRenderContext], () =>
-      render(item),
+    guard(
+      [
+        ...chatRenderItemGuardDependencies(item),
+        state.transcriptRenderContext,
+        statusOwnership(item),
+      ],
+      () => render(item),
     );
 }
 
@@ -1305,7 +1317,19 @@ function renderChatThreadContents(
       turnRecap: turnRecapByGroupKey.get(item.key),
     });
   };
-  const renderItem = guardChatRenderItems(state, (item) => {
+  const statusOwnershipSignature = (item: ChatRenderItem): string => {
+    if (item.kind !== "group") {
+      return "";
+    }
+    const continuation = activeContinuationByGroupKey.get(item.key);
+    const recap = turnRecapByGroupKey.get(item.key);
+    // Part keys stand in for the continuation: its options mirror props that
+    // already invalidate every row through the shared render context.
+    return `${continuation?.parts.map((part) => part.key).join(" ") ?? ""}|${
+      recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : ""
+    }`;
+  };
+  const renderItem = guardChatRenderItems(state, statusOwnershipSignature, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
     }
