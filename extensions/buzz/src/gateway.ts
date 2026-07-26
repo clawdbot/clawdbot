@@ -80,6 +80,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         onDedupeError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz replay state failed: ${error.message}`);
         },
+        onPresenceError: (error) => {
+          ctx.log?.warn?.(
+            `[${account.accountId}] Buzz presence heartbeat failed: ${error.message}`,
+          );
+        },
         onProfilePublished: () => {
           ctx.log?.info?.(`[${account.accountId}] Buzz bot profile published as "${profileName}"`);
         },

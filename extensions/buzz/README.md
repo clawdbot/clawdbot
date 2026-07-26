@@ -83,6 +83,9 @@ must add the identity to each room with the **Bot** role.
 After the Gateway connects, OpenClaw publishes the Buzz channel account name as
 the bot's Buzz display name. The default is `OpenClaw`. A configured NIP-OA
 `authTag` is preserved in that profile so Buzz can display its verified owner.
+While the Gateway remains connected, OpenClaw also refreshes the bot's Buzz
+presence so room members see it as online. Buzz clears that presence when the
+last Gateway connection for the bot identity closes.
 
 OpenClaw immediately attempts authenticated room discovery. If room access is
 not ready, add the bot in Buzz and retry without leaving setup. You can also

@@ -10,6 +10,8 @@ import { authenticateBuzzRelay, createBuzzAuthSigner, parseBuzzAuthTag } from ".
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
 const MESSAGE_KIND = 9;
+const PRESENCE_KIND = 20_001;
+const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 const REPLAY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REPLAY_MAX_ENTRIES = 10_000;
 const REPLAY_STATE_MAX_ENTRIES = 50_000;
@@ -42,6 +44,61 @@ function buildBuzzTextEvent(params: {
     },
     params.secretKey,
   );
+}
+
+function buildBuzzPresenceEvent(secretKey: Uint8Array): Event {
+  return finalizeEvent(
+    {
+      kind: PRESENCE_KIND,
+      content: "online",
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [],
+    },
+    secretKey,
+  );
+}
+
+function startBuzzPresenceHeartbeat(params: {
+  relay: Relay;
+  secretKey: Uint8Array;
+  onError?: (error: Error) => void;
+}): () => void {
+  let stopped = false;
+  let publishInFlight = false;
+  let errorReported = false;
+
+  const publishOnline = async () => {
+    if (stopped || publishInFlight) {
+      return;
+    }
+    publishInFlight = true;
+    try {
+      await params.relay.publish(buildBuzzPresenceEvent(params.secretKey));
+      errorReported = false;
+    } catch (error) {
+      if (!stopped && !errorReported) {
+        errorReported = true;
+        params.onError?.(
+          error instanceof Error
+            ? error
+            : new Error("Buzz presence heartbeat failed", { cause: error }),
+        );
+      }
+    } finally {
+      publishInFlight = false;
+    }
+  };
+
+  void publishOnline();
+  const timer = setInterval(() => {
+    void publishOnline();
+  }, PRESENCE_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 async function connectAuthenticatedBuzzRelay(params: {
@@ -101,6 +158,7 @@ export async function startBuzzBus(options: {
   onMessageError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onDedupeError?: (error: Error) => void;
+  onPresenceError?: (error: Error) => void;
   profileName?: string;
   onProfilePublished?: (eventId: string) => void;
   onProfileError?: (error: Error) => void;
@@ -131,6 +189,7 @@ export async function startBuzzBus(options: {
     signal: options.signal,
   });
   let subscriptions: Array<ReturnType<Relay["subscribe"]>> = [];
+  let stopPresenceHeartbeat = () => {};
   const bus: BuzzBus = {
     publicKey,
     sendText: async ({ channelId, text, threadId, replyToId }) => {
@@ -139,6 +198,7 @@ export async function startBuzzBus(options: {
       return event.id;
     },
     close: async () => {
+      stopPresenceHeartbeat();
       for (const subscription of subscriptions) {
         subscription.close("shutdown");
       }
@@ -184,6 +244,13 @@ export async function startBuzzBus(options: {
         },
       ),
     );
+    // Buzz presence is a separate ephemeral protocol, not a property of the
+    // authenticated socket. The relay clears it when the final socket closes.
+    stopPresenceHeartbeat = startBuzzPresenceHeartbeat({
+      relay,
+      secretKey,
+      onError: options.onPresenceError,
+    });
     // Profile metadata is presentation-only. Synchronize it after message
     // subscriptions are live so a slow profile query cannot delay Gateway readiness.
     if (options.profileName?.trim()) {

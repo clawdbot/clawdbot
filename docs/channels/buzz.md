@@ -112,6 +112,11 @@ owner attestation. This does not mean room access failed. When
 `channels.buzz.authTag` is configured, OpenClaw includes that attestation in the
 published profile so Buzz can show the verified human owner.
 
+While the Gateway is connected, OpenClaw publishes and refreshes the bot's
+ephemeral Buzz presence every 30 seconds. Buzz removes the presence when the
+last authenticated Gateway connection for that bot identity closes, so
+multiple Gateway instances do not incorrectly mark one another offline.
+
 The local Buzz `just dev` relay does not require separate relay membership by
 default. A hosted or closed relay may require the bot public key to be added to
 the workspace community first. Adding community membership grants relay access;
