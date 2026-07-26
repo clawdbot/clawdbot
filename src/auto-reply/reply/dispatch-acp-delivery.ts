@@ -16,7 +16,11 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+} from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -458,7 +462,23 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.accumulatedFinalText += rawFinalText;
     }
 
-    const policyResult = await applyAcpOperationalReplyPolicy(visiblePayload);
+    const payloadMetadata = getReplyPayloadMetadata(visiblePayload);
+    // Bare tool errors are tool output, not host-owned runtime notices.
+    // Explicit delivery metadata keeps real runtime failures in the policy lane.
+    const isExplicitOperationalToolPayload =
+      kind !== "tool" ||
+      visiblePayload.isError !== true ||
+      payloadMetadata?.deliverDespiteSourceReplySuppression === true ||
+      payloadMetadata?.nonTerminalToolErrorWarning === true;
+    const isOperationalReply =
+      isExplicitOperationalToolPayload &&
+      isOperationalReplyPayload({
+        payload: visiblePayload,
+        explicitCommandTurn: false,
+      });
+    const policyResult = isOperationalReply
+      ? await applyAcpOperationalReplyPolicy(visiblePayload)
+      : ({ shouldDeliver: true } as const);
     let policySettled = false;
     const settleOperationalPolicy = (delivered: boolean): Promise<void> | undefined => {
       policySettled = true;
@@ -470,11 +490,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (!policyResult.shouldDeliver) {
         return false;
       }
-      const isOperationalReply = isOperationalReplyPayload({
-        payload: visiblePayload,
-        explicitCommandTurn: false,
-      });
-
       if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
         await startReplyLifecycleOnce();
       } else {

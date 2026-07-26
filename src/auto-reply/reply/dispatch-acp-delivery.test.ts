@@ -801,6 +801,55 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps bare ACP tool errors private in message-tool-only mode", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      suppressUserDelivery: true,
+      suppressUserDeliveryBySourceReplyPolicy: true,
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("tool", {
+      text: "private failed tool output",
+      isError: true,
+    });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("does not silence visible bare ACP tool errors with operational reply policy", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { operationalReplies: { policy: "silent" } },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+    const toolError = { text: "visible failed tool output", isError: true };
+
+    const delivered = await coordinator.deliver("tool", toolError);
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(toolError);
+  });
+
   it("keeps parent-owned background ACP child delivery silent while preserving accumulated output", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({
