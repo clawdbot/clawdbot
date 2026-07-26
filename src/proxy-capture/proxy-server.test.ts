@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import {
   request as httpRequest,
   createServer as createHttpServer,
-  type IncomingMessage,
+  IncomingMessage,
+  ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -264,6 +265,64 @@ describe("startDebugProxyServer", () => {
         captureTruncated: true,
       });
     } finally {
+      await proxy.stop();
+      await origin.stop();
+    }
+  });
+
+  it("pauses the upstream response while downstream forwarding is backpressured", async () => {
+    const settings = await makeSettings();
+    const responseBody = `pressure-${"x".repeat(1024)}`;
+    const origin = await startLargeBodyOrigin(responseBody);
+    const proxy = await startDebugProxyServer({ settings });
+    const originalWrite = ServerResponse.prototype.write as (...args: unknown[]) => boolean;
+    const originalPause = IncomingMessage.prototype.pause;
+    const originalResume = IncomingMessage.prototype.resume;
+    let forcedBackpressure = false;
+    let upstreamPauseCount = 0;
+    let upstreamResumeCount = 0;
+
+    ServerResponse.prototype.write = function patchedWrite(
+      this: ServerResponse,
+      ...args: unknown[]
+    ): boolean {
+      const wrote = originalWrite.apply(this, args);
+      const requestUrl = (this as ServerResponse & { req?: IncomingMessage }).req?.url ?? "";
+      if (!forcedBackpressure && requestUrl.startsWith("http://") && args[0] instanceof Buffer) {
+        forcedBackpressure = true;
+        setTimeout(() => this.emit("drain"), 10);
+        return false;
+      }
+      return wrote;
+    } as typeof ServerResponse.prototype.write;
+    IncomingMessage.prototype.pause = function patchedPause(
+      this: IncomingMessage,
+    ): IncomingMessage {
+      if (forcedBackpressure && this.statusCode === 200) {
+        upstreamPauseCount++;
+      }
+      return originalPause.call(this);
+    };
+    IncomingMessage.prototype.resume = function patchedResume(
+      this: IncomingMessage,
+    ): IncomingMessage {
+      if (forcedBackpressure && this.statusCode === 200) {
+        upstreamResumeCount++;
+      }
+      return originalResume.call(this);
+    };
+
+    try {
+      const forwarded = await getThroughProxy(proxy.proxyUrl, origin.url);
+
+      expect(forcedBackpressure).toBe(true);
+      expect(forwarded).toMatchObject({ body: responseBody, complete: true, statusCode: 200 });
+      expect(upstreamPauseCount).toBeGreaterThanOrEqual(1);
+      expect(upstreamResumeCount).toBeGreaterThanOrEqual(1);
+    } finally {
+      ServerResponse.prototype.write = originalWrite as typeof ServerResponse.prototype.write;
+      IncomingMessage.prototype.pause = originalPause;
+      IncomingMessage.prototype.resume = originalResume;
       await proxy.stop();
       await origin.stop();
     }
