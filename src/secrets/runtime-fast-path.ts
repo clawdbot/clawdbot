@@ -196,14 +196,14 @@ function isKeylessHostProxiedWebSearchSurface(
   if (
     plugins &&
     (plugins.enabled === false ||
-      (Array.isArray(plugins.allow) && plugins.allow.some((pluginId) => pluginId !== providerId)) ||
-      (Array.isArray(plugins.deny) && plugins.deny.length > 0) ||
-      (isRecord(plugins.load) &&
-        Array.isArray(plugins.load.paths) &&
-        plugins.load.paths.length > 0))
+      (Array.isArray(plugins.allow) && !plugins.allow.includes(providerId)) ||
+      (Array.isArray(plugins.deny) && plugins.deny.includes(providerId)))
   ) {
     return false;
   }
+  // Unrelated plugin load paths are safe here: the loop below rejects any
+  // additional web provider surface, and the outer fast-path guard still scans
+  // the complete config for credential-bearing SecretRefs.
   let matchedKeylessProvider = false;
   for (const [pluginId, entry] of Object.entries(entries)) {
     if (!isRecord(entry)) {

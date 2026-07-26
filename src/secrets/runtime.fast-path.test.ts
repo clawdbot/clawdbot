@@ -200,6 +200,43 @@ describe("secrets runtime fast path", () => {
     expect(snapshot.webTools.search.providerSource).toBe("none");
   });
 
+  it("uses the fast path with the host's unrelated plugin loadout", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: { web: { search: { provider: "webiq" } } },
+        plugins: {
+          enabled: true,
+          allow: ["workiq-code-mode", "tools-code-mode", "webiq", "diagnostics-otel"],
+          load: {
+            paths: [
+              "/app/plugins/workiq-code-mode",
+              "/app/plugins/tools-code-mode",
+              "/app/plugins/webiq",
+              "/usr/lib/node_modules/@openclaw/diagnostics-otel",
+            ],
+          },
+          entries: {
+            "workiq-code-mode": { config: { enabledNamespaces: ["m365", "search"] } },
+            "tools-code-mode": { enabled: true },
+            webiq: {
+              enabled: true,
+              config: { webSearch: { omitAuth: true, region: "US" } },
+            },
+            "diagnostics-otel": { enabled: true },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+    expect(snapshot.webTools.search.providerSource).toBe("none");
+  });
+
   it.each([
     {
       name: "credential-bearing keyless provider config",
@@ -357,7 +394,7 @@ describe("secrets runtime fast path", () => {
       },
     },
     {
-      name: "custom plugin load path",
+      name: "allowlist that omits the selected provider",
       config: {
         tools: {
           web: {
@@ -367,9 +404,31 @@ describe("secrets runtime fast path", () => {
           },
         },
         plugins: {
-          load: {
-            paths: ["/tmp/custom-search-plugin"],
+          allow: ["different-plugin"],
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
           },
+        },
+      },
+    },
+    {
+      name: "denylist containing the selected provider",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          deny: ["host-proxy-search"],
           entries: {
             "host-proxy-search": {
               config: {
