@@ -366,6 +366,11 @@ function materializePolicyRuntimePricing({
   pricedProviderModelKeys,
 }) {
   for (const [providerId, policy] of policies) {
+    for (const key of hostedPricing.keys()) {
+      if (key.startsWith(`${providerId}/`)) {
+        hostedPricing.delete(key);
+      }
+    }
     if (policy?.external === false) {
       continue;
     }
@@ -534,7 +539,7 @@ export async function enrichModelCatalogPricing(options) {
         .map((candidate) => liteLlmCatalog.get(candidate))
         .find(Boolean);
       const cost = mergePricing(openRouterPricing, liteLlmPricing);
-      if (cost) {
+      if (cost && hasKnownPricing(cost)) {
         model.cost = cost;
         enriched += 1;
       }

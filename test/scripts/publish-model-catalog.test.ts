@@ -129,6 +129,7 @@ describe("publish model catalog", () => {
     anthropic.models[0] = { id: "claude-3-5-sonnet" };
     const openai = fixtureProvider("gpt", 100);
     openai.models[0] = { id: "gpt-special" };
+    openai.models[1] = { id: "zero-upstream", cost: { input: 5, output: 6 } };
     const manifests = [
       {
         pluginId: "anthropic",
@@ -159,6 +160,17 @@ describe("publish model catalog", () => {
           },
         },
       },
+      {
+        pluginId: "mapped",
+        manifestPath: "mapped.json",
+        manifest: {
+          modelPricing: {
+            providers: {
+              mapped: { openRouter: { provider: "approved-source" }, liteLLM: false },
+            },
+          },
+        },
+      },
     ];
     const bundle = await assembleModelCatalogBundle({
       manifests,
@@ -181,6 +193,7 @@ describe("publish model catalog", () => {
             { id: "openai/gpt-2", pricing: { prompt: "-1", completion: "0.000004" } },
             { id: "unknown/new-model", pricing: { prompt: "1", completion: "1" } },
             { id: "custom/secondary-wins", pricing: { prompt: "0", completion: "0" } },
+            { id: "mapped/wrong-source", pricing: { prompt: "0.000013", completion: "0.000014" } },
           ],
         });
       }
@@ -215,12 +228,17 @@ describe("publish model catalog", () => {
           input_cost_per_token: 0.000011,
           output_cost_per_token: 0.000012,
         },
+        "zero-upstream": {
+          litellm_provider: "openai",
+          input_cost_per_token: 0,
+          output_cost_per_token: 0,
+        },
       });
     };
 
     await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
       modelsEnriched: 2,
-      pricingEntries: 10,
+      pricingEntries: 11,
     });
     expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
     expect(bundle.providers.openai?.models[0]?.cost).toMatchObject({
@@ -228,6 +246,7 @@ describe("publish model catalog", () => {
       output: 4,
       tieredPricing: [{ input: 5, output: 6, range: [1000] }],
     });
+    expect(bundle.providers.openai?.models[1]?.cost).toEqual({ input: 5, output: 6 });
     expect(bundle.providers.openai?.models[2]?.cost).toBeUndefined();
     expect(bundle.pricing).toEqual({
       "anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
@@ -236,18 +255,20 @@ describe("publish model catalog", () => {
       "external-model": { input: 7, output: 8 },
       "forbidden-model": { input: 9, output: 10 },
       "openrouter/anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
+      "openrouter/mapped/wrong-source": { input: 13, output: 14 },
       "openrouter/openai/gpt-special": { input: 3, output: 4 },
       "openrouter/unknown/new-model": { input: 1_000_000, output: 1_000_000 },
       "secondary-wins": { input: 11, output: 12 },
       "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
     });
     expect(bundle.pricing).not.toHaveProperty("openrouter/forbidden-model");
+    expect(bundle.pricing).not.toHaveProperty("mapped/wrong-source");
     expect(bundle.pricing).not.toHaveProperty("gpt-special");
     expect(bundle.pricing).not.toHaveProperty("openai/gpt-special");
     expect(summarizeModelCatalogBundle(bundle)).toMatchObject({
       models: 200,
-      costModels: 2,
-      pricingEntries: 10,
+      costModels: 3,
+      pricingEntries: 11,
     });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });
