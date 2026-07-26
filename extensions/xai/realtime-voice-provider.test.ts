@@ -595,6 +595,44 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("reports malformed base64 audio deltas through onError without emitting audio", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio,
+      onError,
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const socket = requireSocket();
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.output_audio.delta",
+          item_id: "item_1",
+          delta: "%%%not-base64!!",
+        }),
+      ),
+    );
+    bridge.close();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect((onError.mock.calls[0]?.[0] as Error).message).toBe(
+      "xAI realtime voice stream returned malformed base64 audio data",
+    );
+    expect(onAudio).not.toHaveBeenCalled();
+  });
+
   it("truncates queued playback on server-VAD barge-in without cancelling xAI", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const provider = buildXaiRealtimeVoiceProvider();
