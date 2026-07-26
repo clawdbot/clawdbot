@@ -381,6 +381,8 @@ type PluginAgentEventSubscriptionRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   subscription: PluginAgentEventSubscriptionRegistration;
+  origin?: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   source: string;
   rootDir?: string;
 };

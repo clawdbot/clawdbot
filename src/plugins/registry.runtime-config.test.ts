@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimePluginScope,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -213,6 +216,110 @@ describe("plugin registry runtime config scope", () => {
     expect(invokeScope).toMatchObject({
       pluginId: "google-meet",
       pluginSource: "/plugins/google-meet/index.js",
+    });
+  });
+
+  it("runs runtime event listeners with the owning plugin and payload agent scopes", async () => {
+    let agentEventListener: Parameters<PluginRuntime["events"]["onAgentEvent"]>[0] | undefined;
+    let transcriptUpdateListener:
+      | Parameters<PluginRuntime["events"]["onSessionTranscriptUpdate"]>[0]
+      | undefined;
+    const runtime = createPluginRuntime();
+    runtime.events = {
+      onAgentEvent: vi.fn((listener) => {
+        agentEventListener = listener;
+        return () => undefined;
+      }),
+      onSessionTranscriptUpdate: vi.fn((listener) => {
+        transcriptUpdateListener = listener;
+        return () => undefined;
+      }),
+    };
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "event-monitor",
+      name: "Event Monitor",
+      source: "/plugins/event-monitor/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    const observedAgentEventScopes: Array<ReturnType<typeof getPluginRuntimeGatewayRequestScope>> =
+      [];
+    let resolveAgentEventScopes: (
+      scopes: Array<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>,
+    ) => void;
+    const agentEventScopes = new Promise<
+      Array<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>
+    >((resolve) => {
+      resolveAgentEventScopes = resolve;
+    });
+    let resolveTranscriptScope: (
+      scope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>,
+    ) => void;
+    const transcriptScope = new Promise<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>(
+      (resolve) => {
+        resolveTranscriptScope = resolve;
+      },
+    );
+    api.runtime.events.onAgentEvent(() => {
+      void Promise.resolve().then(() => {
+        observedAgentEventScopes.push(getPluginRuntimeGatewayRequestScope());
+        if (observedAgentEventScopes.length === 2) {
+          resolveAgentEventScopes(observedAgentEventScopes);
+        }
+      });
+    });
+    api.runtime.events.onSessionTranscriptUpdate(() => {
+      void Promise.resolve().then(() => {
+        resolveTranscriptScope(getPluginRuntimeGatewayRequestScope());
+      });
+    });
+
+    await withPluginRuntimePluginScope(
+      { pluginId: "ambient-plugin", agentId: "ambient-agent" },
+      async () => {
+        agentEventListener?.({
+          runId: "run-1",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          data: {},
+          agentId: "event-agent",
+        });
+        agentEventListener?.({
+          runId: "run-without-agent",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          data: {},
+        });
+        transcriptUpdateListener?.({
+          target: {
+            agentId: "transcript-agent",
+            sessionId: "session-1",
+            sessionKey: "agent:transcript-agent:main",
+          },
+        });
+      },
+    );
+
+    const [scopedAgentEvent, unscopedAgentEvent] = await agentEventScopes;
+    expect(scopedAgentEvent).toMatchObject({
+      pluginId: "event-monitor",
+      pluginSource: "/plugins/event-monitor/index.js",
+      agentId: "event-agent",
+    });
+    expect(unscopedAgentEvent).toMatchObject({
+      pluginId: "event-monitor",
+      pluginSource: "/plugins/event-monitor/index.js",
+    });
+    expect(unscopedAgentEvent?.agentId).toBeUndefined();
+    await expect(transcriptScope).resolves.toMatchObject({
+      pluginId: "event-monitor",
+      pluginSource: "/plugins/event-monitor/index.js",
+      agentId: "transcript-agent",
     });
   });
 

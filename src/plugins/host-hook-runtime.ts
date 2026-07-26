@@ -15,6 +15,7 @@ import {
   type PluginSessionSchedulerJobRegistration,
 } from "./host-hooks.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 
 type PluginRunContextNamespaces = Map<string, PluginJsonValue>;
 type PluginRunContextByPlugin = Map<string, PluginRunContextNamespaces>;
@@ -328,7 +329,16 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     };
     try {
       const pending = Promise.resolve(
-        registration.subscription.handle(structuredClone(params.event), ctx),
+        withPluginRuntimePluginScope(
+          {
+            pluginId,
+            agentId: params.event.agentId ?? null,
+            pluginSource: registration.source,
+            pluginOrigin: registration.origin,
+            pluginTrustedOfficialInstall: registration.trustedOfficialInstall,
+          },
+          () => registration.subscription.handle(structuredClone(params.event), ctx),
+        ),
       )
         .catch((error: unknown) => {
           logAgentEventSubscriptionFailure({

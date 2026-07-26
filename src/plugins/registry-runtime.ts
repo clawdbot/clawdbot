@@ -452,7 +452,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
-        const runWithPluginScope = <T>(run: () => T): T => {
+        const runWithPluginScope = <T>(run: () => T, agentId?: string | null): T => {
           const record =
             pluginRuntimeRecordById.get(pluginId) ??
             registry.plugins.find((entry) => entry.id === pluginId);
@@ -460,13 +460,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ? withPluginRuntimePluginScope(
                 {
                   pluginId,
+                  ...(agentId !== undefined ? { agentId } : {}),
                   pluginSource: record.source,
                   pluginOrigin: record.origin,
                   pluginTrustedOfficialInstall: record.trustedOfficialInstall,
                 },
                 run,
               )
-            : withPluginRuntimePluginScope({ pluginId }, run);
+            : withPluginRuntimePluginScope(
+                { pluginId, ...(agentId !== undefined ? { agentId } : {}) },
+                run,
+              );
         };
         const getRuntimeProperty = () => {
           try {
@@ -574,6 +578,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             replaceConfigFile: (params) =>
               runWithPluginScope(() => config.replaceConfigFile(params)),
           } satisfies PluginRuntime["config"];
+        }
+        if (prop === "events") {
+          const events: PluginRuntime["events"] = getRuntimeProperty();
+          return {
+            onAgentEvent: (listener) =>
+              events.onAgentEvent((event) =>
+                runWithPluginScope(() => listener(event), event.agentId ?? null),
+              ),
+            onSessionTranscriptUpdate: (listener) =>
+              events.onSessionTranscriptUpdate((update) =>
+                runWithPluginScope(() => listener(update), update.target.agentId),
+              ),
+          } satisfies PluginRuntime["events"];
         }
         if (prop === "llm") {
           const llm = getRuntimeProperty();

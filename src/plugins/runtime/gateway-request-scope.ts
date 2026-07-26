@@ -21,7 +21,8 @@ type PluginRuntimeGatewayRequestScope = {
 
 type PluginRuntimePluginScope = {
   pluginId: string;
-  agentId?: string;
+  /** `null` clears inherited identity for host events without an agent owner. */
+  agentId?: string | null;
   pluginSource?: string;
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
@@ -59,7 +60,9 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
         pluginId: scope.pluginId,
         isWebchatConnect: () => false,
       };
-  if (scope.agentId !== undefined) {
+  if (scope.agentId === null) {
+    delete scoped.agentId;
+  } else if (scope.agentId !== undefined) {
     scoped.agentId = scope.agentId;
   }
   if (scope.pluginSource !== undefined) {

@@ -538,6 +538,8 @@ export function createHostRegistrars(state: PluginRegistryState) {
       pluginId: record.id,
       pluginName: record.name,
       subscription: { ...subscription, id, ...(streams !== undefined ? { streams } : {}) },
+      origin: record.origin,
+      trustedOfficialInstall: record.trustedOfficialInstall,
       source: record.source,
       rootDir: record.rootDir,
     });
