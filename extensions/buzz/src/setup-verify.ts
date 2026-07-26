@@ -12,6 +12,11 @@ type BuzzStatusPayload = {
   >;
 };
 
+type GatewayConfigPayload = {
+  appliedConfigHash?: string | null;
+  configRevisionHash?: string;
+};
+
 function hasSuccessfulBuzzProbe(payload: unknown, accountId: string, target: string): boolean {
   const accounts = (payload as BuzzStatusPayload | undefined)?.channelAccounts?.buzz;
   return Boolean(
@@ -47,12 +52,6 @@ function isGatewayNotRunningError(error: unknown): boolean {
   return identifiesMissingListener;
 }
 
-function isGatewayReloadTransitionError(error: unknown): boolean {
-  const message =
-    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return isGatewayNotRunningError(error) || /unknown channel:?\s+buzz\b/u.test(message);
-}
-
 export async function verifyBuzzAfterSetup(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -63,34 +62,49 @@ export async function verifyBuzzAfterSetup(params: {
   try {
     const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
     const reloadDeadline = Date.now() + GATEWAY_RELOAD_WAIT_MS;
-    let reloadWaitLogged = false;
-    let status: unknown;
+    let reloadPending = false;
     while (true) {
       try {
-        status = await callGatewayFromCli(
-          "channels.status",
-          { timeout: "15000", json: true },
-          { channel: "buzz", probe: true, timeoutMs: 10_000 },
+        const configState = (await callGatewayFromCli(
+          "config.get",
+          { timeout: "5000", json: true },
+          {},
           { expectFinal: false, progress: false },
-        );
-        break;
+        )) as GatewayConfigPayload;
+        if (!configState.configRevisionHash) {
+          throw new Error("Gateway config status did not include a saved revision hash");
+        }
+        if (configState.appliedConfigHash === configState.configRevisionHash) {
+          break;
+        }
+        if (!reloadPending) {
+          params.runtime.log("Buzz config saved. Waiting for the Gateway to apply it...");
+          reloadPending = true;
+        }
       } catch (error) {
-        const remainingMs = reloadDeadline - Date.now();
-        if (!isGatewayReloadTransitionError(error) || remainingMs <= 0) {
+        // A listener handoff is expected only after the Gateway has confirmed
+        // that the saved revision is newer than its active runtime revision.
+        if (!reloadPending || !isGatewayNotRunningError(error)) {
           throw error;
         }
-        if (!reloadWaitLogged) {
-          params.runtime.log("Buzz config saved. Waiting for the Gateway to load Buzz...");
-          reloadWaitLogged = true;
-        }
-        // Config writes and Gateway plugin reloads are asynchronous. Retry only
-        // while the old registry or the brief listener handoff is still visible.
-        await sleep(Math.min(GATEWAY_RELOAD_POLL_MS, remainingMs));
       }
+      const remainingMs = reloadDeadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `Gateway did not apply the saved Buzz configuration within ${GATEWAY_RELOAD_WAIT_MS / 1000} seconds`,
+        );
+      }
+      await sleep(Math.min(GATEWAY_RELOAD_POLL_MS, remainingMs));
     }
+    const status = await callGatewayFromCli(
+      "channels.status",
+      { timeout: "15000", json: true },
+      { channel: "buzz", probe: true, timeoutMs: 10_000 },
+      { expectFinal: false, progress: false },
+    );
     if (!hasSuccessfulBuzzProbe(status, params.accountId, params.target)) {
       params.runtime.log(
-        `Buzz config was saved, but the Gateway did not confirm authenticated membership in ${params.target}. Wait for config reload, then run \`openclaw channels status --probe\` before sending.`,
+        `Buzz config was saved and applied, but the Gateway did not confirm authenticated membership in ${params.target}. Run \`openclaw channels status --probe\` before sending.`,
       );
       return;
     }
