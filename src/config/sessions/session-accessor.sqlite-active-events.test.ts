@@ -13,6 +13,7 @@ import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -199,6 +200,30 @@ describe("SQLite active transcript event projection", () => {
         )
         .get(scope.sessionId),
     ).toEqual({ active_message_count: 1, needs_rebuild: 0 });
+  });
+
+  it("skips oversized tail rows before materializing a bounded message page", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "small", parentId: null, message: { role: "user", content: "keep" } },
+        {
+          eventId: "oversized",
+          parentId: "small",
+          message: { role: "assistant", content: "x".repeat(16_384) },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: 512,
+      maxMessages: 10,
+      offset: 0,
+    });
+
+    expect(page.scannedMessages).toBe(2);
+    expect(page.serializedBytes).toBeLessThanOrEqual(512);
+    expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual(["small"]);
   });
 
   it("fails fast and schedules maintenance when out-of-band state is dirty", async () => {

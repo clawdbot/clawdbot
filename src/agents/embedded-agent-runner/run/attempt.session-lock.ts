@@ -96,7 +96,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let reloadFailed = false;
   let reloadFailure: unknown;
   let disposePromise: Promise<void> | undefined;
-  const activeWriteOperations = new Set<Promise<void>>();
+  type ActiveWriteOperation = {
+    settlement?: Promise<void>;
+    started: boolean;
+  };
+  const activeWriteOperations = new Set<ActiveWriteOperation>();
+  const activeWriteOperation = new AsyncLocalStorage<ActiveWriteOperation>();
   type LifecycleOwner = {
     active: boolean;
     nestedPending: number;
@@ -226,18 +231,24 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed) {
         throw new Error("attempt disposed before transcript write");
       }
+      const writeOperation: ActiveWriteOperation = { started: false };
       const operation = serializeLifecycle(async () => {
+        if (disposed) {
+          throw new Error("attempt disposed before transcript write");
+        }
         if (reloadFailed) {
           throw reloadFailure;
         }
-        return await run();
+        writeOperation.started = true;
+        return await activeWriteOperation.run(writeOperation, async () => await run());
       });
       const settlement = operation.then(
         () => undefined,
         () => undefined,
       );
-      activeWriteOperations.add(settlement);
-      void settlement.then(() => activeWriteOperations.delete(settlement));
+      writeOperation.settlement = settlement;
+      activeWriteOperations.add(writeOperation);
+      void settlement.then(() => activeWriteOperations.delete(writeOperation));
       return await operation;
     },
     acquireForCleanup: async () => {
@@ -258,6 +269,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover: () => takeoverDetected,
     dispose: async () => {
+      if (activeWriteOperation.getStore()) {
+        throw new Error("cannot dispose an attempt from inside a transcript write callback");
+      }
       disposePromise ??= (async () => {
         disposed = true;
         promptAborted = true;
@@ -265,13 +279,30 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         let timeout: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            Promise.all([promptSettled, serializeLifecycle(() => {})]),
+            (async () => {
+              await Promise.all([promptSettled, serializeLifecycle(() => {})]);
+              while (true) {
+                const pendingWrites = [...activeWriteOperations].flatMap((operation) =>
+                  operation.settlement ? [operation.settlement] : [],
+                );
+                if (pendingWrites.length === 0) {
+                  break;
+                }
+                await Promise.all(pendingWrites);
+              }
+            })(),
             new Promise<void>((resolve) => {
               timeout = setTimeout(resolve, PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
             }),
           ]);
-          while (activeWriteOperations.size > 0) {
-            await Promise.all(activeWriteOperations);
+          while (true) {
+            const startedWrites = [...activeWriteOperations]
+              .filter((operation) => operation.started)
+              .flatMap((operation) => (operation.settlement ? [operation.settlement] : []));
+            if (startedWrites.length === 0) {
+              break;
+            }
+            await Promise.all(startedWrites);
           }
         } finally {
           if (timeout) {

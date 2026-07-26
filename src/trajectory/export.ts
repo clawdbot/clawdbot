@@ -218,10 +218,16 @@ async function readSessionEntries(params: {
   const completeTarget = normalizeCompleteSessionTarget(params.sessionTarget);
   if (completeTarget) {
     const targetKeyAgentId = parseAgentSessionKey(completeTarget.sessionKey)?.agentId;
+    const targetKeyEntry = loadSessionEntry({
+      agentId: completeTarget.agentId,
+      sessionKey: completeTarget.sessionKey,
+      storePath: completeTarget.storePath,
+    });
     if (
       completeTarget.sessionId !== params.sessionId ||
       (params.sessionKey !== undefined && completeTarget.sessionKey !== params.sessionKey) ||
-      (targetKeyAgentId && targetKeyAgentId !== completeTarget.agentId)
+      (targetKeyAgentId && targetKeyAgentId !== completeTarget.agentId) ||
+      (targetKeyEntry && targetKeyEntry.sessionId !== completeTarget.sessionId)
     ) {
       throw new Error("Trajectory export transcript target does not match the requested session");
     }

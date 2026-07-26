@@ -6,7 +6,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  replaceTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -234,6 +237,34 @@ describe("exportTrajectoryBundle", () => {
           sessionId: "requested-session",
           sessionKey: "agent:worker:requested",
           storePath: path.join(outputDir, "sessions.json"),
+        },
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("transcript target does not match the requested session");
+  });
+
+  it("rejects a structured transcript target whose key maps to another session", async () => {
+    const outputDir = makeTempDir();
+    const storePath = path.join(outputDir, "sessions.json");
+    const sessionKey = "agent:main:stored-session";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "stored-session",
+        updatedAt: 1,
+      },
+    );
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir: path.join(outputDir, "bundle"),
+        sessionId: "requested-session",
+        sessionKey,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "requested-session",
+          sessionKey,
+          storePath,
         },
         workspaceDir: outputDir,
       }),

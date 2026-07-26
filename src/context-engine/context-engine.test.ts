@@ -691,6 +691,24 @@ describe("Engine contract tests", () => {
     expect(result.result).not.toHaveProperty("sessionFile");
   });
 
+  it("rejects a structured successor key from another agent", async () => {
+    installCompactRuntimeSpy();
+
+    await expect(
+      delegateCompactionToRuntime({
+        sessionId: "s-agent-conflict",
+        sessionKey: "agent:main:s-agent-conflict",
+        sessionTarget: {
+          agentId: "worker",
+          sessionId: "s-agent-conflict",
+          sessionKey: "agent:main:s-agent-conflict",
+          storePath: "/tmp/openclaw-agent.sqlite",
+        },
+        tokenBudget: 4096,
+      }),
+    ).rejects.toThrow("successor session key conflicts with its agent identity");
+  });
+
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
     installCompactRuntimeSpy();
     const controller = new AbortController();

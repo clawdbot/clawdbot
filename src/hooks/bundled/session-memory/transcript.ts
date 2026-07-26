@@ -95,11 +95,7 @@ function renderSessionMemoryMessage(entry: unknown): RenderedSessionMemoryMessag
   };
 }
 
-/** Renders recent user/assistant transcript events into session memory text. */
-export function getRecentSessionContentFromEvents(
-  events: readonly unknown[],
-  messageCount = 15,
-): string | null {
+function renderSessionMemoryLines(events: readonly unknown[]): string[] {
   const allMessages: string[] = [];
   let lastAssistantText: string | undefined;
   for (const event of events) {
@@ -126,5 +122,19 @@ export function getRecentSessionContentFromEvents(
       lastAssistantText = rendered.text;
     }
   }
+  return allMessages;
+}
+
+/** Counts transcript events that remain after session-memory filtering and deduplication. */
+export function countSessionMemoryMessages(events: readonly unknown[]): number {
+  return renderSessionMemoryLines(events).length;
+}
+
+/** Renders recent user/assistant transcript events into session memory text. */
+export function getRecentSessionContentFromEvents(
+  events: readonly unknown[],
+  messageCount = 15,
+): string | null {
+  const allMessages = renderSessionMemoryLines(events);
   return allMessages.slice(-messageCount).join("\n");
 }

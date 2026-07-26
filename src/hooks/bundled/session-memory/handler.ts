@@ -17,7 +17,7 @@ import { resolveStateDir } from "../../../config/paths.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
-  readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptBoundedMessageTailPage,
   type TranscriptEvent,
 } from "../../../config/sessions/session-accessor.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
@@ -34,9 +34,12 @@ import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { getRecentSessionContentFromEvents } from "./transcript.js";
+import { countSessionMemoryMessages, getRecentSessionContentFromEvents } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
+const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
+const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -141,6 +144,39 @@ async function getRecentSqliteSessionContent(
   } catch {
     return null;
   }
+}
+
+function captureRecentSessionMemoryEvents(
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+  messageCount: number,
+): TranscriptEvent[] {
+  const captured: TranscriptEvent[] = [];
+  let capturedBytes = 0;
+  let offset = 0;
+  let totalMessages = Number.POSITIVE_INFINITY;
+  while (
+    offset < totalMessages &&
+    offset < SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES &&
+    capturedBytes < SESSION_MEMORY_CAPTURE_MAX_BYTES &&
+    countSessionMemoryMessages(captured) < messageCount
+  ) {
+    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: SESSION_MEMORY_CAPTURE_MAX_BYTES - capturedBytes,
+      maxMessages: Math.min(
+        SESSION_MEMORY_CAPTURE_PAGE_MESSAGES,
+        SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES - offset,
+      ),
+      offset,
+    });
+    totalMessages = page.totalMessages;
+    if (page.scannedMessages === 0) {
+      break;
+    }
+    captured.unshift(...page.events.map(({ event }) => event));
+    capturedBytes += page.serializedBytes;
+    offset += page.scannedMessages;
+  }
+  return captured;
 }
 
 function resolveDisplaySessionKey(params: {
@@ -358,21 +394,10 @@ const saveSessionToMemory: HookHandler = (event) => {
         typeof hookConfig?.messages === "number" && hookConfig.messages > 0
           ? hookConfig.messages
           : 15;
-      capturedEvents = readRecentSessionTranscriptMessageEvents(
-        {
-          agentId,
-          sessionId,
-          sessionKey: event.sessionKey,
-          storePath,
-        },
-        {
-          maxBytes: 8 * 1024 * 1024,
-          // This limit is over the materialized visible-message projection;
-          // control events cannot consume the configured message window.
-          maxLines: messageCount,
-          maxMessages: messageCount,
-        },
-      ).events.map(({ event: transcriptEvent }) => transcriptEvent);
+      capturedEvents = captureRecentSessionMemoryEvents(
+        { agentId, sessionId, sessionKey: event.sessionKey, storePath },
+        messageCount,
+      );
     }
   } catch {
     // The async writer retains its existing best-effort read fallback.

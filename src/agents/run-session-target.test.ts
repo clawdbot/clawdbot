@@ -89,6 +89,19 @@ describe("agent run session target", () => {
     });
   });
 
+  it("normalizes a supplied key before matching its compatibility token", async () => {
+    const storePath = path.join(tempDir, "fallback", "sessions.json");
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        config: { session: { store: storePath } } as OpenClawConfig,
+        sessionId: "compat-session",
+        sessionFile: "custom-key",
+        sessionKey: " custom-key ",
+      }),
+    ).resolves.toMatchObject({ sessionKey: "custom-key", storePath });
+  });
+
   it("uses a compatibility session-file token when callers omit sessionKey", async () => {
     const storePath = path.join(tempDir, "fallback", "sessions.json");
 

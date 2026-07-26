@@ -223,6 +223,106 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     }
   });
 
+  it("keeps queued writes inside the disposal timeout when prompt reload stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      let markReloadStarted!: () => void;
+      const reloadStarted = new Promise<void>((resolve) => {
+        markReloadStarted = resolve;
+      });
+      let finishReload!: () => void;
+      const reloadBlocked = new Promise<void>((resolve) => {
+        finishReload = resolve;
+      });
+      const release = vi.fn(async () => undefined);
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: vi.fn(async () => ({ release })),
+        lockOptions: { sessionFile: "agent:main:main" },
+        reloadPromptReleasedSessionFile: async () => {
+          markReloadStarted();
+          await reloadBlocked;
+        },
+      });
+      await controller.releaseForPrompt();
+      const reacquire = controller.reacquireAfterPrompt();
+      await reloadStarted;
+      const writeCallback = vi.fn();
+      const queuedWrite = controller.withSessionWriteLock(writeCallback);
+      const queuedWriteOutcome = queuedWrite.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      const disposal = controller.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(disposal).resolves.toBeUndefined();
+      expect(release).toHaveBeenCalledOnce();
+      expect(writeCallback).not.toHaveBeenCalled();
+
+      finishReload();
+      await expect(reacquire).resolves.toBeUndefined();
+      await expect(queuedWriteOutcome).resolves.toEqual(
+        expect.objectContaining({ message: "attempt disposed before transcript write" }),
+      );
+      expect(writeCallback).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects disposal from inside a write callback", async () => {
+    const release = vi.fn(async () => undefined);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { sessionFile: "agent:main:main" },
+    });
+
+    await controller.withSessionWriteLock(async () => {
+      await expect(controller.dispose()).rejects.toThrow(
+        "cannot dispose an attempt from inside a transcript write callback",
+      );
+      expect(release).not.toHaveBeenCalled();
+    });
+    expect(release).not.toHaveBeenCalled();
+    await controller.dispose();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a started write callback locked beyond the disposal timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseWrite!: () => void;
+      const writeBlocked = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      const release = vi.fn(async () => undefined);
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: vi.fn(async () => ({ release })),
+        lockOptions: { sessionFile: "agent:main:main" },
+      });
+      const writeStarted = vi.fn();
+      const write = controller.withSessionWriteLock(async () => {
+        writeStarted();
+        await writeBlocked;
+      });
+      await vi.waitFor(() => expect(writeStarted).toHaveBeenCalledOnce());
+
+      let disposeSettled = false;
+      const disposal = controller.dispose().then(() => {
+        disposeSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(disposeSettled).toBe(false);
+      expect(release).not.toHaveBeenCalled();
+
+      releaseWrite();
+      await Promise.all([write, disposal]);
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps disposal tied to a released prompt until the bounded timeout", async () => {
     vi.useFakeTimers();
     try {

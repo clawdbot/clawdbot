@@ -107,6 +107,10 @@ function buildCompactionResultSessionTarget(params: {
     : marker
       ? markerSessionKey
       : (targetSessionKey ?? suppliedSessionKey);
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (sessionKeyAgentId && agentId && sessionKeyAgentId !== agentId) {
+    throw new Error("Context-engine successor session key conflicts with its agent identity");
+  }
   const storePath = targetStorePath ?? marker?.storePath;
   return {
     ...(agentId ? { agentId } : {}),

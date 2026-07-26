@@ -273,10 +273,19 @@ function createSqliteTrajectoryRuntimeSink(params: {
   );
   const targetKeyAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
   const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+  const completeTargetKeyEntry =
+    completeTarget && target?.agentId && target.sessionKey && target.storePath
+      ? loadSessionEntry({
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        })
+      : undefined;
   if (
     completeTarget &&
     ((requestedSessionKey && target?.sessionKey !== requestedSessionKey) ||
-      (targetKeyAgentId && target?.agentId !== targetKeyAgentId))
+      (targetKeyAgentId && target?.agentId !== targetKeyAgentId) ||
+      (completeTargetKeyEntry && completeTargetKeyEntry.sessionId !== target?.sessionId))
   ) {
     return null;
   }

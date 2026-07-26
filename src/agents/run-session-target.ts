@@ -42,6 +42,7 @@ export async function resolveAgentRunSessionTarget(params: {
     targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
   );
   const legacySessionFile = normalizeOptionalString(params.sessionFile);
+  const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const legacyMarker = parseSqliteSessionFileMarker(legacySessionFile);
   const recognizedCompatibilityKey = Boolean(
     legacySessionFile?.startsWith("agent:") || legacySessionFile?.startsWith("in-memory:"),
@@ -65,7 +66,7 @@ export async function resolveAgentRunSessionTarget(params: {
     (fileBackedCompatibilityValue ||
       (!plainCompatibilitySessionKey &&
         !recognizedCompatibilityKey &&
-        legacySessionFile !== params.sessionKey))
+        legacySessionFile !== suppliedSessionKey))
   ) {
     throw new Error(
       "File-backed transcript targets are unsupported; migrate the session to SQLite first",
@@ -79,7 +80,6 @@ export async function resolveAgentRunSessionTarget(params: {
     legacySessionFile?.startsWith("in-memory:")
       ? legacySessionFile
       : undefined;
-  const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const markerEntries =
     legacyMarker && !hasCompleteTypedTarget
       ? listSessionEntries({
@@ -115,7 +115,7 @@ export async function resolveAgentRunSessionTarget(params: {
     normalizeOptionalString(sessionId);
   const compatibilitySessionKeySelected =
     !targetSessionKey && !suppliedSessionKey && sessionKey === compatibilitySessionKey;
-  const suppliedKeyAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  const suppliedKeyAgentId = parseAgentSessionKey(suppliedSessionKey)?.agentId;
   const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
   const compatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
   const candidateMarkerKey = targetSessionKey ?? suppliedSessionKey;

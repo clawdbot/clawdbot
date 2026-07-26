@@ -168,6 +168,31 @@ describe("trajectory runtime", () => {
     },
   );
 
+  it("rejects a complete target whose key maps to another session", async () => {
+    const storePath = path.join(makeTempDir(), "sessions.json");
+    const sessionKey = "agent:main:stored-session";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "stored-session",
+        updatedAt: 1,
+      },
+    );
+
+    expect(
+      createTrajectoryRuntimeRecorder({
+        sessionId: "requested-session",
+        sessionKey,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "requested-session",
+          sessionKey,
+          storePath,
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("stores bounded oversized runtime events in SQLite", async () => {
     const tempDir = makeTempDir();
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
