@@ -498,8 +498,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.runtime.installCommand": "ACP Runtime Install Command",
   models: "Models",
   "models.mode": "Model Catalog Mode",
-  "models.pricing": "Model Pricing",
-  "models.pricing.enabled": "Model Pricing Enabled",
   "models.catalogRefresh": "Model Catalog Refresh",
   "models.catalogRefresh.enabled": "Model Catalog Refresh Enabled",
   "models.catalogRefresh.url": "Model Catalog Refresh URL",

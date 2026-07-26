@@ -32,6 +32,7 @@ import {
   type SidebarSessionStatusFilter,
   type SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
+import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
@@ -46,6 +47,7 @@ import {
 /** Gateway-backed session-list and external-catalog data ownership. */
 export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
   sessionCatalogs: SessionCatalog[] = [];
+  sessionCatalogRefreshStatus: PanelRefreshStatus = createPanelRefreshStatus();
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
   visibleSessionLimits = new Map<string, number>();
   sessionsResult: SessionsListResult | null = null;
@@ -251,6 +253,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionCatalogRevision += 1;
     this.sessionCatalogLive.resetConnection();
     this.sessionCatalogs = [];
+    this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
     this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogPageDepths.clear();
     this.sessionCatalogRevisions.clear();

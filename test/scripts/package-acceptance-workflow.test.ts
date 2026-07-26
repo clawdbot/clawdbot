@@ -2771,6 +2771,8 @@ describe("package artifact reuse", () => {
     expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
     expect(runtimePairRun).toContain("--runtime-parity-tier soak");
     expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
+    expect(runtimePairRun).toContain("--scenario gateway-restart-inflight-run");
+    expect(runtimePairRun).toContain('--output-dir ".artifacts/qa-e2e/openclaw-core-restart"');
     expect(workflowStep(laneJob, "Upload runtime-pair lane artifacts").with?.name).toContain(
       "${{ matrix.lane }}",
     );
