@@ -1795,22 +1795,30 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   async probeVectorAvailability(): Promise<boolean> {
-    if (!this.vector.enabled) {
-      this.vector.semanticAvailable = false;
-      return false;
-    }
-    await this.ensureProviderInitialized();
-    // FTS-only mode: vector search not available
-    if (!this.provider) {
-      this.vector.semanticAvailable = false;
-      return false;
-    }
-    const ready = await this.probeVectorStoreAvailability();
-    this.vector.semanticAvailable = ready;
-    return ready;
+    return await this.withManagerOperation(async () => {
+      if (!this.vector.enabled) {
+        this.vector.semanticAvailable = false;
+        return false;
+      }
+      await this.ensureProviderInitialized();
+      // FTS-only mode: vector search not available
+      if (!this.provider) {
+        this.vector.semanticAvailable = false;
+        return false;
+      }
+      const ready = await this.probeVectorStoreAvailabilityAdmitted();
+      this.vector.semanticAvailable = ready;
+      return ready;
+    });
   }
 
   async probeVectorStoreAvailability(): Promise<boolean> {
+    return await this.withManagerOperation(
+      async () => await this.probeVectorStoreAvailabilityAdmitted(),
+    );
+  }
+
+  private async probeVectorStoreAvailabilityAdmitted(): Promise<boolean> {
     if (!this.vector.enabled) {
       this.vector.available = false;
       return false;
@@ -1848,25 +1856,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    const cached = this.getCachedEmbeddingAvailability();
-    if (cached) {
-      return cached;
-    }
-    await this.ensureProviderInitialized();
-    // FTS-only mode: embeddings not available but search still works
-    if (!this.provider) {
-      return this.cacheProbeResult({
-        ok: false,
-        error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
-      });
-    }
-    try {
-      await this.embedBatchWithRetry(["ping"]);
-      return this.cacheProbeResult({ ok: true });
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      return this.cacheProbeResult({ ok: false, error: message });
-    }
+    return await this.withManagerOperation(async () => {
+      const cached = this.getCachedEmbeddingAvailability();
+      if (cached) {
+        return cached;
+      }
+      await this.ensureProviderInitialized();
+      // FTS-only mode: embeddings not available but search still works
+      if (!this.provider) {
+        return this.cacheProbeResult({
+          ok: false,
+          error:
+            this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
+        });
+      }
+      try {
+        await this.embedBatchWithRetry(["ping"]);
+        return this.cacheProbeResult({ ok: true });
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        return this.cacheProbeResult({ ok: false, error: message });
+      }
+    });
   }
 
   async close(): Promise<void> {

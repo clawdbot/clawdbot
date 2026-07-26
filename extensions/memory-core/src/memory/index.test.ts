@@ -2948,6 +2948,50 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(1);
   });
 
+  it("waits for an admitted vector probe before manager teardown", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    const fields = manager as unknown as {
+      ensureVectorReady: () => Promise<boolean>;
+    };
+    let releaseProbe: () => void = () => {};
+    let markProbeStarted: () => void = () => {};
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+    fields.ensureVectorReady = async () => {
+      markProbeStarted();
+      await probeGate;
+      return true;
+    };
+
+    const probePromise = manager.probeVectorAvailability();
+    await probeStarted;
+    const closePromise = manager.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseProbe();
+    }
+
+    await expect(probePromise).resolves.toBe(true);
+    await closePromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
   it("fails closed when fallback initialization fails for an explicit provider", async () => {
     const cfg = createCfg({
       provider: "openai",
