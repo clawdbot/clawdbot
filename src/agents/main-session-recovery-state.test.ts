@@ -252,6 +252,29 @@ describe("main session recovery state", () => {
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
+  it("clears terminal residue that only retains a stale delivery run id", () => {
+    const entry = interruptedEntry({
+      status: "failed",
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: undefined,
+      restartRecoveryDeliveryRunId: "dead-delivery",
+    });
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toEqual({ kind: "applied" });
+    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(entry.mainRestartRecovery).toBeUndefined();
+  });
+
   it("keeps interrupted running recovery residue authoritative", () => {
     const entry = interruptedEntry({
       mainRestartRecovery: undefined,
