@@ -23,14 +23,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { ensureOpenClawAgentModelSpendSchemaInTransaction } from "../state/openclaw-agent-model-spend-schema.js";
 import { isUsdRepresentableAsMicroUsd, MICRO_USD_PER_USD } from "../utils/micro-usd.js";
-import {
-  estimateUsageCost,
-  resolveModelCostConfig,
-  resolveUsageCostRates,
-} from "../utils/usage-format.js";
-import { resolveAgentConfig, resolveAgentDir } from "./agent-scope-config.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveUserTimezone } from "./date-time.js";
-import { normalizeUsage, type UsageLike } from "./usage.js";
+import { resolveModelSpendCostMicroUsd } from "./model-spend-cost.js";
+import type { UsageLike } from "./usage.js";
 
 const PROCESSED_CALL_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const MODEL_SPEND_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -47,7 +43,7 @@ type ModelSpendDatabase = Pick<
 
 type ModelSpendAlertRow = Selectable<OpenClawAgentKyselyDatabase["model_spend_alerts"]>;
 
-export type ModelSpendTerminalCall = {
+type ModelSpendTerminalCall = {
   accountingCallId: string;
   model: Model;
   usage?: UsageLike;
@@ -70,11 +66,6 @@ export type PreparedModelSpendAlert = {
   alertIds: string[];
   deliveryIntentId: string;
   text: string;
-};
-
-type ResolvedModelSpendCost = {
-  costMicroUsd: number;
-  trackingComplete: boolean;
 };
 
 const ensuredModelSpendDatabases = new WeakSet<DatabaseSync>();
@@ -119,74 +110,11 @@ function runModelSpendWrite<T>(
   );
 }
 
-function ceilUsdToMicroUsd(value: number): number {
-  const microUsd = Math.ceil(value * MICRO_USD_PER_USD);
-  if (!Number.isSafeInteger(microUsd) || microUsd < 0) {
-    throw new Error(`model-spend USD value is outside the supported range: ${value}`);
-  }
-  return microUsd;
-}
-
 function configuredUsdToMicroUsd(value: number): number {
   if (!isUsdRepresentableAsMicroUsd(value)) {
     throw new Error(`model-spend alert interval is not representable as micro-USD: ${value}`);
   }
   return Math.round(value * MICRO_USD_PER_USD);
-}
-
-export function resolveModelSpendCostMicroUsd(params: {
-  model: Model;
-  usage?: UsageLike;
-  cfg?: OpenClawConfig;
-  agentId?: string;
-}): ResolvedModelSpendCost {
-  const providerBilledTotal = params.usage?.cost?.total;
-  if (
-    params.usage?.cost?.totalOrigin === "provider-billed" &&
-    typeof providerBilledTotal === "number" &&
-    Number.isFinite(providerBilledTotal) &&
-    providerBilledTotal >= 0
-  ) {
-    return { costMicroUsd: ceilUsdToMicroUsd(providerBilledTotal), trackingComplete: true };
-  }
-
-  const usage = normalizeUsage(params.usage);
-  if (!usage) {
-    return { costMicroUsd: 0, trackingComplete: false };
-  }
-  const buckets = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite];
-  const knownTokenTotal = buckets.reduce<number>((sum, bucket) => sum + (bucket ?? 0), 0);
-  const allBucketsKnown = buckets.every((bucket) => bucket !== undefined);
-  const totalReconciles = usage.total !== undefined && usage.total === knownTokenTotal;
-  const usageComplete =
-    (allBucketsKnown || totalReconciles) && (usage.total === undefined || totalReconciles);
-  const resolvedCost = params.cfg
-    ? resolveModelCostConfig({
-        provider: params.model.provider,
-        model: params.model.id,
-        config: params.cfg,
-        ...(params.agentId ? { agentDir: resolveAgentDir(params.cfg, params.agentId) } : {}),
-      })
-    : undefined;
-  const cost = resolvedCost ?? params.model.cost;
-  const usd = estimateUsageCost({ usage, cost });
-  const rates = resolveUsageCostRates({ usage, cost });
-  const pricingComplete =
-    rates !== undefined &&
-    usd !== undefined &&
-    usd >= 0 &&
-    [
-      { tokens: usage.input, rate: rates.input },
-      { tokens: usage.output, rate: rates.output },
-      { tokens: usage.cacheRead, rate: rates.cacheRead },
-      { tokens: usage.cacheWrite, rate: rates.cacheWrite },
-    ].every(
-      (bucket) => (bucket.tokens ?? 0) <= 0 || (Number.isFinite(bucket.rate) && bucket.rate > 0),
-    );
-  return {
-    costMicroUsd: ceilUsdToMicroUsd(pricingComplete ? usd : 0),
-    trackingComplete: usageComplete && pricingComplete,
-  };
 }
 
 function insertTrackingIncompleteAlert(params: {
@@ -504,7 +432,7 @@ function formatPendingAlerts(rows: ModelSpendAlertRow[]): string {
 }
 
 /** Atomically claims alerts for one final visible reply before it builds a durable send. */
-export function preparePendingModelSpendAlert(params: {
+function preparePendingModelSpendAlert(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey?: string;
@@ -692,7 +620,7 @@ export function releaseModelSpendAlerts(completion: ModelSpendAlertCompletion): 
 }
 
 /** Releases only a claim that failed before a durable queue entry took ownership. */
-export function releasePreparedModelSpendAlerts(completion: ModelSpendAlertCompletion): void {
+function releasePreparedModelSpendAlerts(completion: ModelSpendAlertCompletion): void {
   const alertIds = normalizeAlertIds(completion.alertIds);
   if (alertIds.length === 0) {
     return;

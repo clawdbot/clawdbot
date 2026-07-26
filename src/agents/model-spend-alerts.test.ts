@@ -17,11 +17,11 @@ import {
   markModelSpendAlertsDelivered,
   markModelSpendAlertsQueued,
   markModelSpendAlertsUnknown,
-  preparePendingModelSpendAlert,
+  preparePendingModelSpendAlertBestEffort as preparePendingModelSpendAlert,
   recordConfiguredModelSpendCall,
   releaseModelSpendAlerts,
-  resolveModelSpendCostMicroUsd,
 } from "./model-spend-alerts.js";
+import { resolveModelSpendCostMicroUsd } from "./model-spend-cost.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {

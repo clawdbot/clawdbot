@@ -60,7 +60,7 @@ type ModelCallDiagnosticContext = {
   suppressPluginHooks?: boolean;
 };
 
-export type ModelCallTerminalObservation = {
+type ModelCallTerminalObservation = {
   accountingCallId: string;
   model: Model;
   outcome: "completed" | "error";

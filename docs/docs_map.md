@@ -3343,6 +3343,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Typing indicators
   - H3: agents.defaults.sandbox
   - H3: agents.entries (per-agent overrides)
+  - H4: Model spend alerts
   - H2: Multi-agent routing
   - H3: Binding match fields
   - H3: Per-agent access profiles

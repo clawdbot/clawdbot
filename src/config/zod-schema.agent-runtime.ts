@@ -900,7 +900,7 @@ export const AgentModelPolicySchema = z
   })
   .strict();
 
-export const AgentModelSpendSchema = z
+const AgentModelSpendSchema = z
   .object({
     providers: z
       .array(z.string().transform((value) => normalizeLowercaseStringOrEmpty(value)))

@@ -289,6 +289,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           });
           // Standalone compaction sessions do not install the normal attempt stream guards.
           // This wrapper is therefore their sole terminal accounting owner.
+          const compactionConfig = params.config;
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
             {
@@ -301,14 +302,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               transport: session.agent.transport,
               contextTokenBudget,
               trace: compactionModelCallTrace,
-              contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
+              contentCapture: resolveDiagnosticModelContentCapturePolicy(compactionConfig),
               nextCallId: nextDiagnosticModelCallId,
-              ...(params.config
+              ...(compactionConfig
                 ? {
                     onTerminal: (event) => {
                       try {
                         recordConfiguredModelSpendCall({
-                          cfg: params.config,
+                          cfg: compactionConfig,
                           agentId: sessionAgentId,
                           call: event,
                         });
