@@ -21,7 +21,7 @@ import {
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
 } from "./subagent-announce-output.js";
-import { hasUsableSessionEntry } from "./subagent-announce.js";
+import { hasUsableSessionEntry } from "./subagent-announce-wake.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";

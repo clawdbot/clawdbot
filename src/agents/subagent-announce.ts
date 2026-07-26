@@ -1,17 +1,6 @@
-/**
- * Subagent completion announcement coordinator.
- *
- * Captures child output, applies wait outcomes, routes announcements, and performs cleanup decisions.
- */
+/** Coordinates child output capture, completion routing, and cleanup. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../auto-reply/tokens.js";
-import { logWarn } from "../logger.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -32,8 +21,6 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  runAnnounceDeliveryWithRetry,
-  resolveSubagentAnnounceTimeoutMs,
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
@@ -51,6 +38,16 @@ import {
   type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
+import {
+  normalizeSubagentAnnounceReply,
+  warnIfCronAnnounceSkipped,
+} from "./subagent-announce-reply.js";
+import {
+  hasUsableSessionEntry,
+  isWakeContinuationRun,
+  stripWakeRunSuffixes,
+  wakeSubagentRunAfterDescendants,
+} from "./subagent-announce-wake.js";
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -95,6 +92,7 @@ function loadSubagentRegistryRuntime() {
 
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
+export { hasUsableSessionEntry } from "./subagent-announce-wake.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
@@ -118,134 +116,6 @@ function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
     formatAgentInternalEventsForPrompt(events) ||
     "A background task finished. Process the completion update now."
   );
-}
-
-export function hasUsableSessionEntry(entry: unknown): boolean {
-  if (!entry || typeof entry !== "object") {
-    return false;
-  }
-  const sessionId = (entry as { sessionId?: unknown }).sessionId;
-  return typeof sessionId !== "string" || sessionId.trim() !== "";
-}
-
-function buildDescendantWakeMessage(params: { findings: string; taskLabel: string }): string {
-  return [
-    "[Subagent Context] Your prior run ended while waiting for descendant subagent completions.",
-    "[Subagent Context] All pending descendants for that run have now settled.",
-    "[Subagent Context] Continue your workflow using these results. Spawn more subagents if needed, otherwise send your final answer.",
-    "",
-    `Task: ${params.taskLabel}`,
-    "",
-    params.findings,
-  ].join("\n");
-}
-
-const WAKE_RUN_SUFFIX = ":wake";
-
-function stripWakeRunSuffixes(runId: string): string {
-  let next = runId.trim();
-  while (next.endsWith(WAKE_RUN_SUFFIX)) {
-    next = next.slice(0, -WAKE_RUN_SUFFIX.length);
-  }
-  return next || runId.trim();
-}
-
-function isWakeContinuationRun(runId: string): boolean {
-  const trimmed = runId.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return stripWakeRunSuffixes(trimmed) !== trimmed;
-}
-
-function stripAndClassifyReply(text: string): string | null {
-  let result = text;
-  let didStrip = false;
-  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
-  }
-  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
-  }
-  if (
-    didStrip &&
-    (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN) || isAnnounceSkip(result))
-  ) {
-    return null;
-  }
-  return result;
-}
-
-async function wakeSubagentRunAfterDescendants(params: {
-  runId: string;
-  childSessionKey: string;
-  taskLabel: string;
-  findings: string;
-  announceId: string;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  if (params.signal?.aborted) {
-    return false;
-  }
-
-  const childEntry = loadSessionEntryByKey(params.childSessionKey);
-  if (!hasUsableSessionEntry(childEntry)) {
-    return false;
-  }
-
-  const cfg = subagentAnnounceDeps.getRuntimeConfig();
-  const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
-  const wakeMessage = buildDescendantWakeMessage({
-    findings: params.findings,
-    taskLabel: params.taskLabel,
-  });
-
-  let wakeRunId;
-  try {
-    const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
-      operation: "descendant wake agent call",
-      signal: params.signal,
-      run: async () =>
-        await subagentAnnounceDeps.dispatchGatewayMethodInProcess(
-          "agent",
-          {
-            sessionKey: params.childSessionKey,
-            message: wakeMessage,
-            deliver: false,
-            inputProvenance: {
-              kind: "inter_session",
-              sourceSessionKey: params.childSessionKey,
-              sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-              sourceTool: "subagent_announce",
-            },
-            idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
-          },
-          {
-            timeoutMs: announceTimeoutMs,
-          },
-        ),
-    });
-    wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
-  } catch {
-    return false;
-  }
-
-  if (!wakeRunId) {
-    return false;
-  }
-
-  const { replaceSubagentRunAfterSteer } = await loadSubagentRegistryRuntime();
-  return replaceSubagentRunAfterSteer({
-    previousRunId: params.runId,
-    nextRunId: wakeRunId,
-    preserveFrozenResultFallback: true,
-    // Persist the wake message as the replacement run's task so that any
-    // post-restart redispatch reconstructs the correct prompt.
-    task: wakeMessage,
-  });
 }
 
 export async function runSubagentAnnounceFlow(params: {
@@ -449,14 +319,17 @@ export async function runSubagentAnnounceFlow(params: {
         childSessionKey: params.childSessionKey,
         childRunId: stripWakeRunSuffixes(params.childRunId),
       });
-      const woke = await wakeSubagentRunAfterDescendants({
-        runId: params.childRunId,
-        childSessionKey: params.childSessionKey,
-        taskLabel: params.label || params.task || "task",
-        findings: childCompletionFindings,
-        announceId: wakeAnnounceId,
-        signal: params.signal,
-      });
+      const woke = await wakeSubagentRunAfterDescendants(
+        {
+          runId: params.childRunId,
+          childSessionKey: params.childSessionKey,
+          taskLabel: params.label || params.task || "task",
+          findings: childCompletionFindings,
+          announceId: wakeAnnounceId,
+          signal: params.signal,
+        },
+        subagentAnnounceDeps,
+      );
       if (woke) {
         shouldDeleteChildSession = false;
         return true;
@@ -512,15 +385,13 @@ export async function runSubagentAnnounceFlow(params: {
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
         if (fallbackReply && !fallbackIsSilent) {
-          const cleaned = stripAndClassifyReply(fallbackReply);
+          const cleaned = normalizeSubagentAnnounceReply(fallbackReply);
           if (cleaned === null) {
-            if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
-              logWarn(
-                `cron job completion for session=${targetRequesterSessionKey} ` +
-                  `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
-                  `the agent replied with the skip sentinel instead of delivering a result`,
-              );
-            }
+            warnIfCronAnnounceSkipped({
+              reply,
+              requesterSessionKey: targetRequesterSessionKey,
+              childRunId: params.childRunId,
+            });
             if (!managedArtifactReturn) {
               return true;
             }
@@ -529,13 +400,11 @@ export async function runSubagentAnnounceFlow(params: {
             reply = cleaned;
           }
         } else {
-          if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
-            logWarn(
-              `cron job completion for session=${targetRequesterSessionKey} ` +
-                `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
-                `the agent replied with the skip sentinel instead of delivering a result`,
-            );
-          }
+          warnIfCronAnnounceSkipped({
+            reply,
+            requesterSessionKey: targetRequesterSessionKey,
+            childRunId: params.childRunId,
+          });
           if (managedArtifactReturn) {
             reply = "(no output)";
           } else {
@@ -543,10 +412,10 @@ export async function runSubagentAnnounceFlow(params: {
           }
         }
       } else if (reply) {
-        const cleaned = stripAndClassifyReply(reply);
+        const cleaned = normalizeSubagentAnnounceReply(reply);
         if (cleaned === null) {
           if (fallbackReply && !fallbackIsSilent) {
-            const cleanedFallback = stripAndClassifyReply(fallbackReply);
+            const cleanedFallback = normalizeSubagentAnnounceReply(fallbackReply);
             if (cleanedFallback === null) {
               if (!managedArtifactReturn) {
                 return true;
