@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getOpenClawProcessInstanceId } from "../infra/process-instance-id.js";
-import type {
-  OpenClawPluginReadinessSubjectCollector,
-  OpenClawPluginReadinessSubjectInput,
-} from "../plugins/plugin-registration.types.js";
+import type { OpenClawPluginReadinessSubjectCollector } from "../plugins/plugin-registration.types.js";
 
 export const CORE_READINESS_SUBJECT_REFS = {
   process: "openclaw/process/current",
@@ -12,7 +9,7 @@ export const CORE_READINESS_SUBJECT_REFS = {
   plugins: "openclaw/plugins/active",
   workspace: "openclaw/workspace/default",
 } as const;
-export const OPENCLAW_INSTANCE_ID_ENV = "OPENCLAW_INSTANCE_ID";
+const OPENCLAW_INSTANCE_ID_ENV = "OPENCLAW_INSTANCE_ID";
 
 const SUBJECT_REF_PATTERN = /^[a-z0-9][a-z0-9._/-]{0,191}$/;
 const SUBJECT_KIND_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
@@ -35,13 +32,12 @@ export type ReadinessIdentity = {
   subjects: ReadinessSubject[];
 };
 
-export type ReadinessSubjectReference = {
+type ReadinessSubjectReference = {
   subjectRef: string;
   relatedSubjectRefs?: string[];
 };
 
-export type PluginReadinessSubjectInput = OpenClawPluginReadinessSubjectInput;
-export type PluginReadinessSubjectCollector = OpenClawPluginReadinessSubjectCollector;
+type PluginReadinessSubjectCollector = OpenClawPluginReadinessSubjectCollector;
 
 type PluginSubjectCollection = {
   collector: PluginReadinessSubjectCollector;

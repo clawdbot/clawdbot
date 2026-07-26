@@ -313,7 +313,7 @@ type OpenClawPluginReadinessResult = {
   message: string;
 };
 
-export type OpenClawPluginReadinessSubjectInput = {
+type OpenClawPluginReadinessSubjectInput = {
   kind: string;
   key: string;
   identity?: {
