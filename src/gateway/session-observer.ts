@@ -666,6 +666,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.terminalHealth = terminalHealthFor(event);
       disabledRuns.delete(event.runId);
       const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
+      // previousDigest is set on every ACCEPTED digest of this run; digestCount now
+      // counts attempts (budget), so it no longer implies any digest was published.
       const hasRunDigest = state.previousDigest?.runId === state.runId;
       if (!hasRunDigest && endedAt - state.startedAt < FINAL_DIGEST_MIN_RUN_MS) {
         dormantRuns.delete(state.runId);
