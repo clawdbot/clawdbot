@@ -432,4 +432,77 @@ describe("normalizeInitialApplicationLocation", () => {
       window.history.replaceState({}, "", previousUrl);
     }
   });
+
+  it("stops a cold released-link startup without leaking its late subscription", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "agent:main:main",
+      lastActiveSessionKey: "agent:main:main",
+    });
+    window.history.replaceState({}, "", "/chat?session=agent%3Aresearch%3Aworkspace");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    const gateway = runtime.context.gateway as ApplicationContext<RouteId>["gateway"] & {
+      subscribe: (listener: GatewayListener) => () => void;
+    };
+    const originalSubscribe = gateway.subscribe.bind(gateway);
+    const activeSubscriptions = new Set<GatewayListener>();
+    gateway.subscribe = (listener) => {
+      activeSubscriptions.add(listener);
+      const unsubscribe = originalSubscribe(listener);
+      return () => {
+        activeSubscriptions.delete(listener);
+        unsubscribe();
+      };
+    };
+    const routerStart = vi.spyOn(runtime.router, "start");
+    const configRefresh = vi.spyOn(runtime.context.config, "refresh");
+
+    try {
+      const start = runtime.start();
+      await vi.waitFor(() => expect(activeSubscriptions.size).toBe(1));
+      runtime.stop();
+      await start;
+
+      expect(activeSubscriptions.size).toBe(0);
+      expect(configRefresh).not.toHaveBeenCalled();
+      expect(routerStart).not.toHaveBeenCalled();
+    } finally {
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
+  });
+
+  it("stops the router immediately and again after an in-flight start settles", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    window.history.replaceState({}, "", "/");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const routerStarted = deferred<void>();
+    const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
+    const routerStop = vi.spyOn(runtime.router, "stop");
+
+    try {
+      const start = runtime.start();
+      await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce());
+      runtime.stop();
+      expect(routerStop).toHaveBeenCalledOnce();
+
+      routerStarted.resolve();
+      await start;
+      expect(routerStop).toHaveBeenCalledTimes(2);
+    } finally {
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
+  });
 });

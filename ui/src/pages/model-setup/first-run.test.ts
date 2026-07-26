@@ -29,6 +29,20 @@ describe("model setup first-run redirect", () => {
       isDefaultChatLanding({ pathname: "/chat", search: "", hash: "" }, "", routeIdFromPath),
     ).toBe(true);
     expect(
+      isDefaultChatLanding(
+        { pathname: "/chat", search: "?session=agent%3Amain%3Amain", hash: "" },
+        "",
+        routeIdFromPath,
+      ),
+    ).toBe(false);
+    expect(
+      isDefaultChatLanding(
+        { pathname: "/chat", search: "", hash: "#session=agent%3Amain%3Amain" },
+        "",
+        routeIdFromPath,
+      ),
+    ).toBe(false);
+    expect(
       isDefaultChatLanding({ pathname: "/chat/main", search: "", hash: "" }, "", routeIdFromPath),
     ).toBe(false);
     expect(
@@ -45,6 +59,50 @@ describe("model setup first-run redirect", () => {
         routeIdFromPath,
       ),
     ).toBe(false);
+  });
+
+  it("installs a released session deep link without registering first-run detection", async () => {
+    const releasedLocation = {
+      pathname: "/chat",
+      search: "?session=agent%3Aresearch%3Atelegram%3A12345",
+      hash: "",
+    };
+    const canonicalLocation = {
+      pathname: "/chat/research/telegram/12345",
+      search: "",
+      hash: "",
+    };
+    let currentLocation = releasedLocation;
+    const replaceLocation = vi.fn((location: typeof releasedLocation) => {
+      currentLocation = location;
+    });
+    const subscribe = vi.fn(() => () => undefined);
+    const replaceRoute = vi.fn();
+    const context = {
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request: vi.fn() },
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["openclaw.setup.detect"] },
+          },
+        },
+        subscribe,
+      },
+      replace: replaceRoute,
+    } as unknown as ApplicationContext<RouteId>;
+
+    await startModelSetupFirstRunRedirectAfterLocation({
+      context,
+      enabled: isDefaultChatLanding(releasedLocation, "", routeIdFromPath),
+      history: { location: () => currentLocation, replace: replaceLocation },
+      initialLocationReady: Promise.resolve(canonicalLocation),
+    });
+
+    expect(replaceLocation).toHaveBeenCalledWith(canonicalLocation);
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(replaceRoute).not.toHaveBeenCalled();
   });
 
   it("detects once, caches the result, and redirects once", async () => {

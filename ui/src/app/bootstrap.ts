@@ -49,6 +49,7 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
@@ -274,7 +275,7 @@ export function bootstrapApplication(
     { persistDefaultConnectionSettings: documentMode === null },
   );
   const agents = createAgentCapability(gateway);
-  const initialLocationAbort = new AbortController();
+  const startupLifecycle = createStartupLifecycle();
   const startupRouteId = routeIdFromPath(startup.location.pathname, basePath);
   const releasedSessionQuery =
     (startupRouteId === "chat" || startupRouteId === "dashboard") &&
@@ -297,13 +298,13 @@ export function bootstrapApplication(
               sessionKey: settings.sessionKey,
               gateway,
               agentsList: () => agents.state.agentsList,
-              signal: initialLocationAbort.signal,
+              signal: startupLifecycle.signal,
             }),
         )
   ).catch((error: unknown) => {
     // stop() aborts an eager unscoped-session lookup even when start() returns
     // at the lazy-chunk guard, so consume that teardown-only rejection here.
-    if (initialLocationAbort.signal.aborted) {
+    if (startupLifecycle.signal.aborted) {
       return startup.location;
     }
     throw error;
@@ -445,8 +446,6 @@ export function bootstrapApplication(
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
-  let stopModelSetupRedirect: () => void = () => undefined;
-  let stopped = false;
   return {
     context,
     router,
@@ -456,71 +455,69 @@ export function bootstrapApplication(
     },
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
-    start: async () => {
-      gateway.start();
-      await sessionPathBuilderReady;
-      // stop() can win the race while the session-path chunk loads. Without this
-      // guard the redirect, config refresh, and router all attach to an app that
-      // has already been torn down.
-      if (stopped) {
-        return;
+    start: () => {
+      const stopRouter = () => router.stop();
+      if (!documentMode) {
+        startupLifecycle.addDisposer(stopRouter);
       }
+      const steps: StartupStep[] = [
+        () => {
+          gateway.start();
+          return () => gateway.stop();
+        },
+        () => sessionPathBuilderReady,
+      ];
       if (!deferInitialLocationUntilGateway) {
-        stopModelSetupRedirect = await startModelSetupFirstRunRedirectAfterLocation({
-          context,
-          enabled: firstRunDefaultLanding,
-          history,
-          initialLocationReady,
+        steps.push(() =>
+          startModelSetupFirstRunRedirectAfterLocation({
+            context,
+            enabled: firstRunDefaultLanding,
+            history,
+            initialLocationReady,
+          }),
+        );
+      }
+      steps.push(() => {
+        void config.refresh({ skipWithoutAuthCandidate: true });
+      });
+      if (!documentMode) {
+        steps.push(async () => {
+          await startApplicationRouter(router, history, basePath, context);
+          return stopRouter;
         });
       }
-      void config.refresh({ skipWithoutAuthCandidate: true });
-      const routerStart = documentMode
-        ? Promise.resolve()
-        : startApplicationRouter(router, history, basePath, context);
-      await routerStart;
-      if (stopped) {
-        return;
-      }
       if (deferInitialLocationUntilGateway) {
-        // The bare /chat route remains not-found while disconnected. Its shell
-        // fallback is gated on the same connected defaults, so both paths converge.
-        void startModelSetupFirstRunRedirectAfterLocation({
-          context,
-          enabled: firstRunDefaultLanding,
-          history,
-          initialLocationReady,
-          installLocation: async (location) => {
-            const routeId = routeIdFromPath(location.pathname, basePath);
-            if (routeId) {
-              await router.navigate(routeId, context, { history: "replace" }, location);
-            } else {
-              history.replace(location);
-            }
-          },
-          shouldInstallLocation: () =>
-            isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
-        })
-          .then((stop) => {
-            if (stopped) {
-              stop();
-            } else {
-              stopModelSetupRedirect = stop;
-            }
-          })
-          .catch((error: unknown) => {
-            if (!initialLocationAbort.signal.aborted) {
+        steps.push(() => {
+          // The bare /chat route remains not-found while disconnected. Its shell
+          // fallback is gated on the same connected defaults, so both paths converge.
+          startupLifecycle.trackDisposer(
+            startModelSetupFirstRunRedirectAfterLocation({
+              context,
+              enabled: firstRunDefaultLanding,
+              history,
+              initialLocationReady,
+              installLocation: async (location) => {
+                const routeId = routeIdFromPath(location.pathname, basePath);
+                if (routeId) {
+                  await router.navigate(routeId, context, { history: "replace" }, location);
+                } else {
+                  history.replace(location);
+                }
+              },
+              shouldInstallLocation: () =>
+                isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+            }),
+            (error) => {
               console.error("[openclaw] initial session location failed", error);
-            }
-          });
+            },
+          );
+        });
       }
+      return startupLifecycle.run(steps);
     },
     stop: () => {
-      stopped = true;
-      initialLocationAbort.abort();
-      stopModelSetupRedirect();
+      startupLifecycle.stop();
       stopPostConnect();
-      router.stop();
-      gateway.stop();
       agents.dispose();
       channels.dispose();
       sessions.dispose();
