@@ -459,4 +459,115 @@ describe("workboard doctor contract", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("migrates proven legacy decomposition links in SQLite and is idempotent", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    try {
+      const freshMigration = expectDefined(stateMigrations[1], "legacy decomposition migration");
+      await expect(
+        freshMigration.detectLegacyState({
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "oauth"),
+          context: createDoctorContext(env),
+        }),
+      ).resolves.toBeNull();
+
+      const sqlite = createWorkboardSqliteStores({ env });
+      await sqlite.cards.register("parent", {
+        version: 1,
+        card: {
+          id: "parent",
+          title: "Aggregate",
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          position: 1000,
+          createdAt: 1,
+          updatedAt: 1,
+          metadata: {
+            automation: { createdCardIds: ["child"] },
+            links: [{ id: "parent-child", type: "child", targetCardId: "child", createdAt: 1 }],
+          },
+        },
+      });
+      await sqlite.cards.register("child", {
+        version: 1,
+        card: {
+          id: "child",
+          title: "Legacy child",
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          position: 2000,
+          createdAt: 1,
+          updatedAt: 1,
+          metadata: {
+            automation: { createdByCardId: "parent" },
+            links: [{ id: "child-parent", type: "parent", targetCardId: "parent", createdAt: 1 }],
+          },
+        },
+      });
+      sqlite.close();
+
+      await expect(
+        freshMigration.detectLegacyState({
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "oauth"),
+          context: createDoctorContext(env),
+        }),
+      ).resolves.toMatchObject({
+        preview: [expect.stringContaining("1 proven legacy decomposition link")],
+      });
+
+      await expect(
+        freshMigration.migrateLegacyState({
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "oauth"),
+          context: createDoctorContext(env),
+        }),
+      ).resolves.toMatchObject({
+        changes: [expect.stringContaining("Migrated 1 proven legacy Workboard decomposition link")],
+        warnings: [],
+      });
+
+      const reopened = createWorkboardSqliteStores({ env });
+      expect((await reopened.cards.lookup("parent"))?.card.metadata?.links).toBeUndefined();
+      expect((await reopened.cards.lookup("child"))?.card.metadata?.links).toBeUndefined();
+      expect((await reopened.cards.lookup("parent"))?.card.events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "link_removed" })]),
+      );
+      expect((await reopened.cards.lookup("child"))?.card.events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "link_removed" })]),
+      );
+      reopened.close();
+
+      await expect(
+        freshMigration.detectLegacyState({
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "oauth"),
+          context: createDoctorContext(env),
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        freshMigration.migrateLegacyState({
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "oauth"),
+          context: createDoctorContext(env),
+        }),
+      ).resolves.toEqual({ changes: [], warnings: [] });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -3165,6 +3165,7 @@ export const en: TranslationMap = {
     eventAttemptUpdated: "Attempt updated",
     eventCommentAdded: "Comment added",
     eventLinkAdded: "Link added",
+    eventLinkRemoved: "Link removed",
     eventProofAdded: "Proof added",
     eventArtifactAdded: "Artifact added",
     eventAttachmentAdded: "Attachment added",

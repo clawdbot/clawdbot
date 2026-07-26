@@ -51,6 +51,7 @@ const eventLabelKeys: Record<WorkboardEvent["kind"], string> = {
   attempt_updated: "workboard.eventAttemptUpdated",
   comment_added: "workboard.eventCommentAdded",
   link_added: "workboard.eventLinkAdded",
+  link_removed: "workboard.eventLinkRemoved",
   proof_added: "workboard.eventProofAdded",
   artifact_added: "workboard.eventArtifactAdded",
   attachment_added: "workboard.eventAttachmentAdded",

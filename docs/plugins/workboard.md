@@ -163,20 +163,24 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                                                                                                |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                                                                                                     |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                                                                                                  |
+| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                                                                                                    |
 
 ### Recovering legacy aggregate dependencies
 
-Use `workboard_repair_decomposition` on the aggregate parent first without
-`apply` to inspect candidates. It only selects reciprocal hard links whose
-child is recorded in the parent's decomposition manifest and whose child
-provenance points back to that parent. Review the dry-run result, then rerun
-with `apply: true` to remove the reciprocal dependency and promote eligible
-children. The operation is idempotent and does not change status, comments,
-proof, artifacts, or prior events. Manual or ambiguous links are skipped;
-use `workboard_unlink_dependency` only when an operator has explicitly
-verified the parent/child relationship. Neither operation force-completes or
-auto-unblocks a card.
-| `workboard_dispatch` | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch. |
+`openclaw doctor --fix` owns the upgrade migration for proven legacy
+decomposition links in the Workboard SQLite database. It only removes
+reciprocal links whose child is recorded in the parent's decomposition
+manifest and whose child provenance points back to that parent. The migration
+is idempotent, records `link_removed` events, and leaves explicit hard
+(`decompositionMode: "hard"`) dependencies unchanged. Run Doctor before using
+an affected board; it does not force-complete or auto-unblock cards.
+
+For an operator-scoped investigation, use `workboard_repair_decomposition` on
+the aggregate parent first without `apply` to inspect candidates. Review the
+dry-run result, then rerun with `apply: true` to remove the reciprocal
+dependency and promote eligible children. Manual or ambiguous links are
+skipped; use `workboard_unlink_dependency` only when an operator has explicitly
+verified the parent/child relationship.
 
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded; consumers that need
