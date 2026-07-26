@@ -566,7 +566,7 @@ describe("memory plugin e2e", () => {
     ]);
   });
 
-  test("uses provider adapter auth when embedding apiKey is omitted", async () => {
+  test("uses provider adapter auth and drains cleanup before service replacement", async () => {
     const embedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
     const closeProvider = vi
       .fn<() => Promise<void>>()
@@ -684,14 +684,43 @@ describe("memory plugin e2e", () => {
       expect(providerOptions.fallback).toBe("none");
       expect(providerOptions.model).toBe("text-embedding-3-small");
       expect(providerOptions).not.toHaveProperty("remote");
-      expect(embedQuery).toHaveBeenCalledWith("project memory", {
-        signal: expect.any(AbortSignal),
-      });
       const service = firstObjectArg(registerService as unknown as MockCallSource, "service");
       const stop = service.stop as () => Promise<void>;
       await expect(stop()).rejects.toThrow("provider close failed");
-      await expect(stop()).resolves.toBeUndefined();
+
+      const replacementRegisterTool = vi.fn();
+      const replacementRegisterService = vi.fn();
+      registerTestPlugin(dynamicMemoryPlugin, {
+        ...mockApi,
+        registerTool: replacementRegisterTool,
+        registerService: replacementRegisterService,
+      });
+      const replacementRecallTool = replacementRegisterTool.mock.calls
+        .map(([tool]) => materializeRegisteredTool(tool))
+        .find((tool) => tool.name === "memory_recall");
+      if (!replacementRecallTool) {
+        throw new Error("expected replacement memory_recall tool registration");
+      }
+      await replacementRecallTool.execute("call-2", { query: "replacement memory" });
+
       expect(closeProvider).toHaveBeenCalledTimes(2);
+      expect(createProvider).toHaveBeenCalledTimes(2);
+      expect(embedQuery).toHaveBeenCalledWith("project memory", {
+        signal: expect.any(AbortSignal),
+      });
+      expect(
+        expectDefined(closeProvider.mock.invocationCallOrder[1], "retained provider close order"),
+      ).toBeLessThan(
+        expectDefined(
+          createProvider.mock.invocationCallOrder[1],
+          "replacement provider create order",
+        ),
+      );
+      const replacementService = firstObjectArg(
+        replacementRegisterService as unknown as MockCallSource,
+        "replacement service",
+      );
+      await (replacementService.stop as () => Promise<void>)();
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
       vi.doUnmock("openai");
