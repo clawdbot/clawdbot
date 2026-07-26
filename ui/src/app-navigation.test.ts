@@ -27,6 +27,68 @@ import {
 } from "./app-routes.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
+type SessionUrlContractCase = {
+  sessionKey: string;
+  agentId: string;
+  mainKey: string | undefined;
+  expectedPath: string | null;
+};
+
+// Keep in sync with extensions/clickclack/src/discussions/service.test.ts.
+// The publishable plugin cannot import this workspace package or its test fixtures.
+const SESSION_URL_CONTRACT_CASES = [
+  {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main",
+  },
+  { sessionKey: "main", agentId: "research", mainKey: undefined, expectedPath: "/chat/research" },
+  {
+    sessionKey: "agent:research:workspace",
+    agentId: "main",
+    mainKey: "workspace",
+    expectedPath: "/chat/research",
+  },
+  {
+    sessionKey: "telegram:12345",
+    agentId: "research",
+    mainKey: undefined,
+    expectedPath: "/chat/research/telegram/12345",
+  },
+  {
+    sessionKey: "agent:main:control-link",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/control-link",
+  },
+  { sessionKey: "agent:main:12345678", agentId: "main", mainKey: undefined, expectedPath: null },
+  {
+    sessionKey: "agent:main:telegram:12345",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/telegram/12345",
+  },
+  {
+    sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/12345678",
+  },
+  {
+    sessionKey: "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
+    agentId: "main",
+    mainKey: "deadbeef",
+    expectedPath: "/chat/main/deadbeef0",
+  },
+  {
+    sessionKey: "agent:main:cron:..:run",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/cron/~dotdot/run",
+  },
+] satisfies readonly SessionUrlContractCase[];
+
 /**
  * All route identifiers derived from sidebar nav routes plus routed settings
  * slices and the Plugins hub tabs, which route without their own sidebar item.
@@ -375,6 +437,16 @@ describe("routeIdFromPath", () => {
     expect(pathForSession("chat", "main", "dashboard:12345678-90ab-cdef-1234-567890abcdef")).toBe(
       "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
     );
+  });
+
+  it("matches the publishable ClickClack session URL vectors", () => {
+    for (const testCase of SESSION_URL_CONTRACT_CASES) {
+      expect(
+        pathForSession("chat", testCase.agentId, testCase.sessionKey, "", {
+          mainKey: testCase.mainKey,
+        }),
+      ).toBe(testCase.expectedPath);
+    }
   });
 
   it("keeps trailing hex tokens out of decorative slugs", () => {

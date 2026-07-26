@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadChatRoute, resolveSessionPrefix } from "./route.ts";
+import { loadChatRoute } from "./route-loader.ts";
 
 const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";
 const sessionKey = `agent:main:dashboard:${keyUuid}`;
@@ -46,40 +46,6 @@ function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
   } as unknown as ApplicationContext;
   return { context, list };
 }
-
-describe("resolveSessionPrefix", () => {
-  it("matches the UUID suffix of the immutable session key", () => {
-    expect(resolveSessionPrefix(result([row()]), "12345678")).toMatchObject({ kind: "unique" });
-    expect(
-      resolveSessionPrefix(
-        result([row(), row({ key: "agent:work:dashboard:12345678-ffff-ffff-ffff-ffffffffffff" })]),
-        "12345678",
-      ),
-    ).toMatchObject({ kind: "ambiguous", truncated: false });
-    expect(resolveSessionPrefix(result([]), "12345678")).toEqual({ kind: "not-found" });
-  });
-
-  it("drops substring matches and ignores the rotating sessionId", () => {
-    expect(
-      resolveSessionPrefix(
-        result([
-          row({
-            key: "agent:main:dashboard:aaaaaaaa-1234-5678-90ab-cdef12345678",
-            sessionId: "12345678-90ab-cdef-1234-567890abcdef",
-          }),
-        ]),
-        "12345678",
-      ),
-    ).toEqual({ kind: "not-found" });
-  });
-
-  it("treats a truncated search response as ambiguous", () => {
-    expect(resolveSessionPrefix(result([row()], { hasMore: true }), "12345678")).toMatchObject({
-      kind: "ambiguous",
-      truncated: true,
-    });
-  });
-});
 
 describe("loadChatRoute", () => {
   it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {

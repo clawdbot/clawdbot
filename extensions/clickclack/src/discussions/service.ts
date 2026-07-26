@@ -22,6 +22,7 @@ import {
   type ClickClackDiscussionBinding,
   type ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
+import { controlSessionUrl } from "./control-session-url.js";
 import {
   discussionAccounts,
   normalizedServerBaseUrl,
@@ -39,7 +40,6 @@ import {
 import {
   assertChannelPatch,
   assertManagedChannelListContract,
-  controlSessionUrl,
   openClickClackDiscussionBinding,
   resolveAvailableChannelName,
 } from "./service-open.js";

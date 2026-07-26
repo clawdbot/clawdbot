@@ -16,6 +16,19 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
+import { pathForSessionKey } from "../lib/sessions/navigation.ts";
+
+export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
+  return pathForSessionKey("chat", sessionKey, basePath);
+}
+
+export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = controlUiSessionPath(sessionKey, url.pathname);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");

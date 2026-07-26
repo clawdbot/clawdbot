@@ -1,9 +1,7 @@
-import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createApplicationRouter,
   locationForRoute,
-  pathForSession,
   pathForRoute,
   routeIdFromPath,
   startApplicationRouter,
@@ -15,7 +13,6 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
@@ -26,6 +23,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
+import { normalizeInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
@@ -55,30 +53,6 @@ import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
-
-export function normalizeInitialApplicationLocation(
-  location: RouteLocation,
-  basePath: string,
-  sessionKey: string,
-) {
-  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
-    return location;
-  }
-
-  const pathname = pathForSession(
-    "chat",
-    resolveAgentIdFromSessionKey(sessionKey),
-    sessionKey,
-    basePath,
-  );
-  if (!pathname) {
-    return location;
-  }
-  return {
-    ...location,
-    pathname,
-  };
-}
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
   if (typeof document === "undefined") {

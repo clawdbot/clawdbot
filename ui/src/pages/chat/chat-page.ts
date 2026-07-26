@@ -20,7 +20,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
-import type { ChatRouteData } from "./route.ts";
+import type { ChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,

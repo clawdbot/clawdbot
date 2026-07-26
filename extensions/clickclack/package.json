@@ -14,7 +14,6 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@openclaw/session-url-contract": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

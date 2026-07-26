@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { catalogSessionNavigation } from "./app-sidebar-session-catalogs.ts";
+import { catalogSessionNavigation } from "./app-sidebar-session-catalog-navigation.ts";
 
 describe("catalog session navigation", () => {
   it("keeps different catalog threads on different destinations", () => {

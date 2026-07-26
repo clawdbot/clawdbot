@@ -1,4 +1,3 @@
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -19,6 +18,7 @@ import type {
   ClickClackDiscussionBinding,
   ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
+import { controlSessionUrl } from "./control-session-url.js";
 import { normalizedServerBaseUrl } from "./eligibility.js";
 import {
   discussionCredentialFingerprint,
@@ -53,33 +53,6 @@ function isDefinitiveNoCreateHttpError(error: unknown): boolean {
   // Timeout, conflict, early-data, and rate-limit responses can follow a committed
   // request or positively indicate an existing external_ref. Reconcile those.
   return ![408, 409, 425, 429].includes(error.status);
-}
-
-export function controlSessionUrl(
-  baseUrl: string | undefined,
-  sessionKey: string,
-  fallbackAgentId: string,
-  mainKey: string | undefined,
-  displayName?: string,
-): string | undefined {
-  if (!baseUrl) {
-    return undefined;
-  }
-  const url = new URL(baseUrl);
-  const path = buildControlUiSessionPath({
-    namespace: "chat",
-    sessionKey,
-    fallbackAgentId,
-    basePath: url.pathname,
-    displayName,
-    mainKey,
-  });
-  if (!path) {
-    return undefined;
-  }
-  url.pathname = path;
-  url.hash = "";
-  return url.toString();
 }
 
 export async function resolveAvailableChannelName(params: {

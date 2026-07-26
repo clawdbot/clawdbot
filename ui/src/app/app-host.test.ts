@@ -15,8 +15,9 @@ import {
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
-import { selectShellRouteState } from "./app-host.ts";
+import "./app-host.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,

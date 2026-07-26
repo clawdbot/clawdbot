@@ -18,8 +18,8 @@ import {
 import { pathForSessionKey } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { catalogSessionNavigation } from "./app-sidebar-session-catalog-navigation.ts";
 import {
-  catalogSessionNavigation,
   formatSidebarTimestamp,
   type CatalogBackingSessionDisplay,
   type CatalogSessionMenuRequest,

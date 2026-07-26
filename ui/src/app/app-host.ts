@@ -1,6 +1,5 @@
 import { ContextProvider } from "@lit/context";
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
-import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import {
@@ -74,6 +73,7 @@ import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -106,7 +106,6 @@ import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigatio
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
-import { selectRenderedRouteMatch } from "./router-outlet.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
@@ -122,13 +121,6 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 
-type ShellRouteState = {
-  routeId?: RouteId;
-  location?: RouteLocation;
-  committedRouteId?: RouteId;
-  committedLocation?: RouteLocation;
-  committedSessionKey?: string;
-};
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
@@ -179,31 +171,6 @@ function diffAgentRoster(
     }
   }
   return { invalidatedIds, changedIds };
-}
-
-function sessionKeyFromRouteData(routeId: RouteId, data: unknown): string | undefined {
-  if (!isSessionRouteId(routeId) || !data || typeof data !== "object") {
-    return undefined;
-  }
-  const record = data as { kind?: unknown; sessionKey?: unknown };
-  return record.kind === "session" && typeof record.sessionKey === "string"
-    ? record.sessionKey.trim() || undefined
-    : undefined;
-}
-
-export function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
-  const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
-  const committedMatch = routerState.matches[0];
-  const committedSessionKey = committedMatch
-    ? sessionKeyFromRouteData(committedMatch.routeId, committedMatch.data)
-    : undefined;
-  return {
-    ...(match ? { routeId: match.routeId, location: match.location } : {}),
-    ...(committedMatch
-      ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
-      : {}),
-    ...(committedSessionKey ? { committedSessionKey } : {}),
-  };
 }
 
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
@@ -845,7 +812,17 @@ class OpenClawShell extends OpenClawLightDomElement {
             sessions: context.sessions.state.result?.sessions ?? [],
             onOpen: (sessionKey) => {
               context.gateway.setSessionKey(sessionKey);
-              this.navigate("chat", { search: searchForSession(sessionKey) });
+              // Ambiguous one-segment keys intentionally fall back to /chat;
+              // the removed query deep-link format is not a compatibility path.
+              this.navigate("chat", {
+                pathname: pathForSessionKey(
+                  "chat",
+                  sessionKey,
+                  context.basePath,
+                  undefined,
+                  this.sessionMainKey(),
+                ),
+              });
             },
           }),
         );

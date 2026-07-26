@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeInitialApplicationLocation } from "./bootstrap.ts";
+import { normalizeInitialApplicationLocation } from "./bootstrap-location.ts";
 
 describe("normalizeInitialApplicationLocation", () => {
   it("routes an opaque persisted key without aborting bootstrap", () => {

@@ -592,9 +592,6 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      '@openclaw/session-url-contract':
-        specifier: workspace:*
-        version: link:../../packages/session-url-contract
       openclaw:
         specifier: workspace:*
         version: link:../..

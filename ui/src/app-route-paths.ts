@@ -84,7 +84,7 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
 
 export type SessionPathTarget = ControlUiSessionPathTarget;
 
-export type SessionPathDetails = {
+type SessionPathDetails = {
   displayName?: string | null;
   mainKey?: string | null;
   shortIdLength?: number;

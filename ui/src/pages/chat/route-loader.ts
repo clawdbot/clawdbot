@@ -1,0 +1,318 @@
+import {
+  controlUiSessionKeyUuid,
+  controlUiUniqueShortIdPrefix,
+} from "@openclaw/session-url-contract";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { notFound } from "@openclaw/uirouter";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import {
+  INTERNAL_SESSION_PATH_PARAM,
+  pathForSession,
+  sessionRefFromPath,
+  type SessionPathTarget,
+} from "../../app-route-paths.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import {
+  buildCatalogSessionKey,
+  catalogSessionKeyFromSearch,
+} from "../../lib/sessions/catalog-key.ts";
+import {
+  buildAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
+
+const SESSION_REF_SEARCH_LIMIT = 20;
+const SESSION_REF_SEARCH_MAX_PAGES = 5;
+
+type SessionCandidate = {
+  agentId: string;
+  displayName: string;
+  href: string;
+  idPrefix: string;
+};
+
+export type ChatRouteData =
+  | {
+      kind: "session";
+      sessionKey: string;
+      agentId?: string;
+      draft?: string;
+      face: BoardFace;
+      canonicalLocation?: RouteLocation;
+    }
+  | {
+      kind: "ambiguous";
+      shortId: string;
+      candidates: SessionCandidate[];
+      truncated: boolean;
+      face: BoardFace;
+    };
+
+type SessionPrefixResolution =
+  | { kind: "not-found" }
+  | { kind: "unique"; session: GatewaySessionRow }
+  | { kind: "ambiguous"; sessions: GatewaySessionRow[]; truncated: boolean };
+
+const resolutionCache = new WeakMap<
+  GatewayBrowserClient,
+  Map<string, Promise<SessionPrefixResolution | null>>
+>();
+
+function sessionPrefixMatches(result: SessionsListResult, shortId: string): GatewaySessionRow[] {
+  const prefix = shortId.toLowerCase().replaceAll("-", "");
+  return result.sessions.filter((row) => {
+    const keyUuid = controlUiSessionKeyUuid(row.key);
+    return keyUuid?.startsWith(prefix) === true;
+  });
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Session route load aborted", "AbortError");
+}
+
+function waitForGatewayClient(
+  context: ApplicationContext,
+  signal: AbortSignal,
+): Promise<GatewayBrowserClient> {
+  const current = context.gateway.snapshot.client;
+  if (current && context.gateway.snapshot.phase === "connected") {
+    return Promise.resolve(current);
+  }
+  return new Promise((resolve, reject) => {
+    let unsubscribe: () => void = () => undefined;
+    let settled = false;
+    const cleanup = () => {
+      unsubscribe();
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(abortError(signal));
+    };
+    unsubscribe = context.gateway.subscribe((snapshot) => {
+      if (snapshot.phase === "connected" && snapshot.client) {
+        settled = true;
+        cleanup();
+        resolve(snapshot.client);
+      }
+    });
+    if (settled) {
+      unsubscribe();
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
+}
+
+async function querySessionPrefix(
+  context: ApplicationContext,
+  shortId: string,
+  signal: AbortSignal,
+): Promise<SessionPrefixResolution> {
+  const client = await waitForGatewayClient(context, signal);
+  let cache = resolutionCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    resolutionCache.set(client, cache);
+  }
+  let pending = cache.get(shortId);
+  if (!pending) {
+    pending = querySessionPrefixPages(context, shortId);
+    cache.set(shortId, pending);
+  }
+  try {
+    const resolved = await pending;
+    if (!resolved) {
+      throw new Error("Session list unavailable while resolving URL.");
+    }
+    return resolved;
+  } finally {
+    if (cache.get(shortId) === pending) {
+      cache.delete(shortId);
+    }
+  }
+}
+
+async function querySessionPrefixPages(
+  context: ApplicationContext,
+  shortId: string,
+): Promise<SessionPrefixResolution | null> {
+  const matches = new Map<string, GatewaySessionRow>();
+  let offset = 0;
+  for (let page = 0; ; page += 1) {
+    const result = await context.sessions.list({
+      archivedFilter: "all",
+      includeDerivedTitles: true,
+      limit: SESSION_REF_SEARCH_LIMIT,
+      search: shortId,
+      ...(offset > 0 ? { offset } : {}),
+    });
+    if (!result) {
+      return null;
+    }
+    for (const session of sessionPrefixMatches(result, shortId)) {
+      matches.set(session.key, session);
+    }
+    const sessions = [...matches.values()];
+    if (sessions.length > 1) {
+      return { kind: "ambiguous", sessions, truncated: result.hasMore === true };
+    }
+    if (result.hasMore !== true) {
+      const session = sessions[0];
+      return session ? { kind: "unique", session } : { kind: "not-found" };
+    }
+    if (page === SESSION_REF_SEARCH_MAX_PAGES - 1) {
+      return { kind: "ambiguous", sessions, truncated: true };
+    }
+    const nextOffset = result.nextOffset ?? offset + result.sessions.length;
+    if (nextOffset <= offset) {
+      return { kind: "ambiguous", sessions, truncated: true };
+    }
+    offset = nextOffset;
+  }
+}
+
+function draftFromLocation(location: RouteLocation): string | undefined {
+  return new URLSearchParams(location.search).get("draft") || undefined;
+}
+
+function configuredMainKey(context: ApplicationContext): string {
+  return resolveUiConfiguredMainKey({
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
+  });
+}
+
+function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
+  const mainKey = configuredMainKey(context);
+  const direct = sessionRefFromPath(location.pathname, context.basePath, mainKey);
+  if (direct) {
+    return { target: direct, normalized: false };
+  }
+  const internalPath = new URLSearchParams(location.search).get(INTERNAL_SESSION_PATH_PARAM);
+  const target = internalPath ? sessionRefFromPath(internalPath, context.basePath, mainKey) : null;
+  return target ? { target, normalized: true } : null;
+}
+
+function mainSessionKey(
+  context: ApplicationContext,
+  target: Extract<SessionPathTarget, { kind: "main" }>,
+): string {
+  return buildAgentMainSessionKey({
+    agentId: target.agentId,
+    mainKey: configuredMainKey(context),
+  });
+}
+
+function candidatesForResolution(
+  context: ApplicationContext,
+  face: BoardFace,
+  resolution: Extract<SessionPrefixResolution, { kind: "ambiguous" }>,
+  draft: string | undefined,
+): SessionCandidate[] {
+  const resolvedRows = resolution.sessions.flatMap((row) => {
+    const uuid = controlUiSessionKeyUuid(row.key);
+    return uuid ? [{ row, uuid }] : [];
+  });
+  const uuids = resolvedRows.map(({ uuid }) => uuid);
+  return resolvedRows.flatMap(({ row, uuid }) => {
+    const prefix = controlUiUniqueShortIdPrefix(uuid, uuids, resolution.truncated);
+    if (!prefix) {
+      return [];
+    }
+    const agentId = resolveAgentIdFromSessionKey(row.key);
+    const href = pathForSession(face, agentId, row.key, context.basePath, {
+      displayName: row.displayName,
+      mainKey: configuredMainKey(context),
+      shortIdLength: prefix.length,
+    });
+    return href
+      ? [
+          {
+            agentId,
+            displayName: row.displayName?.trim() || row.key,
+            href: `${href}${draft ? `?${new URLSearchParams({ draft }).toString()}` : ""}`,
+            idPrefix: prefix,
+          },
+        ]
+      : [];
+  });
+}
+
+export async function loadChatRoute(
+  context: ApplicationContext,
+  location: RouteLocation,
+  face: BoardFace,
+  signal: AbortSignal,
+): Promise<ChatRouteData | ReturnType<typeof notFound>> {
+  const resolvedTarget = targetFromLocation(context, location);
+  if (!resolvedTarget || resolvedTarget.target.namespace !== face) {
+    return notFound({ routeId: face });
+  }
+  const { target } = resolvedTarget;
+  const catalogKey = catalogSessionKeyFromSearch(location.search);
+  if (face === "chat" && target.kind === "main" && catalogKey) {
+    return {
+      kind: "session",
+      sessionKey: buildCatalogSessionKey(catalogKey),
+      agentId: target.agentId,
+      draft: draftFromLocation(location),
+      face,
+    };
+  }
+  if (target.kind === "main") {
+    return {
+      kind: "session",
+      sessionKey: mainSessionKey(context, target),
+      draft: draftFromLocation(location),
+      face,
+    };
+  }
+  if (target.kind === "literal") {
+    return {
+      kind: "session",
+      sessionKey: target.sessionKey,
+      draft: draftFromLocation(location),
+      face,
+    };
+  }
+  const resolution = await querySessionPrefix(context, target.shortId, signal);
+  if (resolution.kind === "not-found") {
+    return notFound({ routeId: face });
+  }
+  if (resolution.kind === "ambiguous") {
+    return {
+      kind: "ambiguous",
+      shortId: target.shortId,
+      candidates: candidatesForResolution(context, face, resolution, draftFromLocation(location)),
+      truncated: resolution.truncated,
+      face,
+    };
+  }
+  const row = resolution.session;
+  const agentId = resolveAgentIdFromSessionKey(row.key);
+  const canonicalPath = pathForSession(face, agentId, row.key, context.basePath, {
+    displayName: row.displayName,
+    mainKey: configuredMainKey(context),
+    shortIdLength: target.shortId.length,
+  });
+  if (!canonicalPath) {
+    return notFound({ routeId: face });
+  }
+  return {
+    kind: "session",
+    sessionKey: row.key,
+    draft: draftFromLocation(location),
+    face,
+    ...(!resolvedTarget.normalized && location.pathname !== canonicalPath
+      ? { canonicalLocation: { ...location, pathname: canonicalPath } }
+      : {}),
+  };
+}

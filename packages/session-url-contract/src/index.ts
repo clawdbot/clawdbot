@@ -1,5 +1,5 @@
 // Control UI session URL grammar shared by browser and plugin consumers.
-export const CONTROL_UI_SESSION_NAMESPACES = ["chat", "dashboard"] as const;
+const CONTROL_UI_SESSION_NAMESPACES = ["chat", "dashboard"] as const;
 
 export type ControlUiSessionNamespace = (typeof CONTROL_UI_SESSION_NAMESPACES)[number];
 
@@ -18,7 +18,7 @@ export type ControlUiSessionPathTarget =
       sessionKey: string;
     };
 
-export type BuildControlUiSessionPathParams = {
+type BuildControlUiSessionPathParams = {
   namespace: ControlUiSessionNamespace;
   sessionKey: string;
   fallbackAgentId?: string;
@@ -119,7 +119,7 @@ function isReservedSessionRest(rest: string, mainKey: string | undefined): boole
   );
 }
 
-export function controlUiSessionSlug(displayName: string | undefined | null): string {
+function controlUiSessionSlug(displayName: string | undefined | null): string {
   const tokens = (displayName ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, "-")
@@ -139,7 +139,7 @@ export function controlUiSessionKeyUuid(sessionKey: string | undefined | null): 
   return uuid ? uuid.toLowerCase().replaceAll("-", "") : null;
 }
 
-export function controlUiShortIdFromSessionRef(sessionRef: string): string | null {
+function controlUiShortIdFromSessionRef(sessionRef: string): string | null {
   return sessionRef.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase() ?? null;
 }
 
@@ -167,7 +167,7 @@ export function controlUiUniqueShortIdPrefix(
   return uuid;
 }
 
-export function buildControlUiLiteralSessionKey(
+function buildControlUiLiteralSessionKey(
   agentId: string,
   restSegments: readonly string[],
 ): string | null {
