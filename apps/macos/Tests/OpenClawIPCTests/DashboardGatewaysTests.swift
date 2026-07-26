@@ -257,6 +257,60 @@ struct DashboardManagerGatewayTargetTests {
         #expect(manager._testMainTarget() == .profile("second"))
         #expect(manager._testController()?.currentURL.port == 60003)
     }
+
+    @Test func `main menu switch replaces the frontmost dashboard in place`() async throws {
+        let sourceURL = try #require(URL(string: "http://127.0.0.1:60001/#token=current"))
+        let controller = DashboardWindowController(
+            url: sourceURL,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "current",
+                password: nil),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+        let frame = NSRect(x: 190, y: 190, width: 940, height: 700)
+        controller.window?.setFrame(frame, display: false)
+        controller.show()
+        let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
+        let manager = DashboardManager._testMake(
+            profileEndpointProvider: { profileID in
+                let url = try #require(URL(string: "ws://127.0.0.1:60002"))
+                return GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: profileID, password: nil),
+                    routeAuthority: nil)
+            },
+            gatewayEntriesProvider: { entries })
+        manager._testSetController(controller)
+        defer { manager.close() }
+
+        await manager._testSwitchFrontmostDashboard(to: .profile("studio"))
+
+        #expect(manager._testMainTarget() == .profile("studio"))
+        #expect(manager.frontmostDashboardTarget == .profile("studio"))
+        #expect(manager._testController() !== controller)
+        #expect(manager._testController()?.currentURL.port == 60002)
+        #expect(manager._testController()?.window?.frame == frame)
+    }
+
+    @Test func `main menu switch opens requested gateway when no dashboard exists`() async {
+        let entries = DashboardGatewayTestEntries.withProfiles(["studio"])
+        let manager = DashboardManager._testMake(
+            profileEndpointProvider: { profileID in
+                let url = try #require(URL(string: "ws://127.0.0.1:60002"))
+                return GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: profileID, password: nil),
+                    routeAuthority: nil)
+            },
+            gatewayEntriesProvider: { entries })
+        defer { manager.close() }
+
+        await manager._testSwitchFrontmostDashboard(to: .profile("studio"))
+
+        let windows = manager._testAuxiliaryWindows()
+        #expect(windows.count == 1)
+        #expect(windows.first?.target == .profile("studio"))
+        #expect(windows.first?.controller.isWindowOpen == true)
+        #expect(manager.frontmostDashboardTarget == .profile("studio"))
+    }
 }
 
 private enum DashboardGatewayTestEntries {
