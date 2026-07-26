@@ -158,6 +158,55 @@ describe("minimax music generation provider", () => {
     expect(result.metadata).not.toHaveProperty("requestedDurationSeconds");
   });
 
+  it("rejects malformed base64 audio in streamed music chunks", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        `data: ${JSON.stringify({ data: { status: 1, audio: "%%%not-base64!!" }, base_resp: { status_code: 0 } })}\n\n`,
+        {
+          headers: { "content-type": "text/event-stream" },
+        },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildMinimaxMusicGenerationProvider();
+    await expect(
+      provider.generateMusic({
+        provider: "minimax",
+        model: "",
+        prompt: "upbeat dance-pop",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax music generation returned malformed audio base64");
+  });
+
+  it("rejects malformed base64 audio in inline music payloads", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          data: {
+            audio: "%%%not-base64!!",
+          },
+          base_resp: { status_code: 0 },
+        }),
+        {
+          headers: { "content-type": "application/json" },
+        },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildMinimaxMusicGenerationProvider();
+    await expect(
+      provider.generateMusic({
+        provider: "minimax",
+        model: "music-2.6",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax music generation returned malformed audio base64");
+  });
+
   it("reports streaming music task failures", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: new Response(

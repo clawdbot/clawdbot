@@ -1,6 +1,7 @@
 // Minimax provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
@@ -104,10 +105,14 @@ function decodePossibleBinaryWithLimit(data: string, maxBytes: number): Buffer {
     }
     return Buffer.from(trimmed, "hex");
   }
-  if (Buffer.byteLength(trimmed, "base64") > maxBytes) {
+  const canonicalBase64 = canonicalizeBase64(trimmed);
+  if (!canonicalBase64) {
+    throw new Error("MiniMax music generation returned malformed audio base64");
+  }
+  if (Buffer.byteLength(canonicalBase64, "base64") > maxBytes) {
     throw createGeneratedMusicTooLargeError(maxBytes);
   }
-  return Buffer.from(trimmed, "base64");
+  return Buffer.from(canonicalBase64, "base64");
 }
 
 function decodePossibleText(data: string): string {
