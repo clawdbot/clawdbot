@@ -189,9 +189,9 @@ function loadBackgroundTasks(
         if (current.tasks === null && eventBuffer.events.length > 0) {
           // Real registry events remain authoritative when an initial page
           // fails; discarding them would hide active work and completions.
-          current.tasks = eventBuffer.events.reduce(
+          current.tasks = eventBuffer.events.reduce<TaskSummary[]>(
             (tasks, event) => applyTaskEvent(tasks, event).tasks,
-            [] as TaskSummary[],
+            [],
           );
         }
         current.error =
