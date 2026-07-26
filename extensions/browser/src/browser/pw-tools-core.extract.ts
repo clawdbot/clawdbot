@@ -2,7 +2,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { getPageForTargetId } from "./pw-session.js";
 
-export type BrowserPageContentCapture =
+type BrowserPageContentCapture =
   | { ok: true; html: string }
   | {
       ok: false;
