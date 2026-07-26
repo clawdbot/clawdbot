@@ -23,7 +23,7 @@ describe("readiness subjects", () => {
     );
   });
 
-  it("keeps host and Gateway renewal scopes separate", () => {
+  it("keeps host, process, and Gateway renewal scopes separate", () => {
     const first = createGatewayReadinessIdentity({
       env: { OPENCLAW_INSTANCE_ID: "pod-7/restart-2" },
       createGatewayInstanceId: () => "gateway-1",
@@ -31,6 +31,10 @@ describe("readiness subjects", () => {
     const second = createGatewayReadinessIdentity({
       env: { OPENCLAW_INSTANCE_ID: "pod-7/restart-2" },
       createGatewayInstanceId: () => "gateway-2",
+    });
+    const replacement = createGatewayReadinessIdentity({
+      env: { OPENCLAW_INSTANCE_ID: "pod-8/restart-1" },
+      createGatewayInstanceId: () => "gateway-3",
     });
 
     expect(first.subjects.find((subject) => subject.ref === first.producerRef)?.id).toBe(
@@ -45,9 +49,53 @@ describe("readiness subjects", () => {
     const secondHost = second.subjects.find(
       (subject) => subject.ref === CORE_READINESS_SUBJECT_REFS.hostInstance,
     );
+    const replacementHost = replacement.subjects.find(
+      (subject) => subject.ref === CORE_READINESS_SUBJECT_REFS.hostInstance,
+    );
+    const firstProcess = first.subjects.find(
+      (subject) => subject.ref === CORE_READINESS_SUBJECT_REFS.process,
+    );
+    const secondProcess = second.subjects.find(
+      (subject) => subject.ref === CORE_READINESS_SUBJECT_REFS.process,
+    );
+    const replacementProcess = replacement.subjects.find(
+      (subject) => subject.ref === CORE_READINESS_SUBJECT_REFS.process,
+    );
     expect(firstHost?.id).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(firstHost?.id).toBe(secondHost?.id);
+    expect(replacementHost?.id).not.toBe(firstHost?.id);
     expect(firstHost?.id).not.toContain("pod-7");
+    expect(firstProcess?.id).toBe(secondProcess?.id);
+    expect(firstProcess?.id).toBe(replacementProcess?.id);
+    expect(firstProcess?.parentRef).toBe(firstHost?.ref);
+    expect(secondProcess?.parentRef).toBe(secondHost?.ref);
+    expect(replacementProcess?.parentRef).toBe(replacementHost?.ref);
+    expect(first.subjects.find((subject) => subject.ref === first.producerRef)?.parentRef).toBe(
+      firstProcess?.ref,
+    );
+  });
+
+  it("distinguishes plugin object replacement from revision of the same object", () => {
+    const collect = (id: string, generation: string) => {
+      const collection = createPluginReadinessSubjectCollection({
+        pluginId: "storage",
+        criterionId: "backend",
+      });
+      const ref = collection.collector.declare({
+        kind: "backend",
+        key: "primary",
+        identity: { id, generation },
+      });
+      return collection.subjects.find((subject) => subject.ref === ref);
+    };
+
+    const first = collect("account-7", "config-1");
+    const revised = collect("account-7", "config-2");
+    const replacement = collect("account-8", "config-1");
+
+    expect(first?.id).toBe(revised?.id);
+    expect(first?.generation).not.toBe(revised?.generation);
+    expect(first?.id).not.toBe(replacement?.id);
   });
 
   it("namespaces plugin subjects and reconciles equal declarations", () => {
