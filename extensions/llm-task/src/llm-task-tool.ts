@@ -293,6 +293,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
             thinkLevel,
             streamParams,
             disableTools: true,
+            disableTrajectory: true,
           });
 
           const text = collectText(

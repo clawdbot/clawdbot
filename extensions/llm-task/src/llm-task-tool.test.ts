@@ -399,10 +399,11 @@ describe("llm-task tool (json-only)", () => {
     ).rejects.toThrow(/not allowed/i);
   });
 
-  it("disables tools for embedded run", async () => {
+  it("disables tools and trajectory for embedded run", async () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.disableTools).toBe(true);
+    expect(call.disableTrajectory).toBe(true);
     expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
