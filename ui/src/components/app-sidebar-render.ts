@@ -209,13 +209,10 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
   };
   const gateway = host.offline ? null : readSidebarNativeGateway();
   // Health is visual-only here by budget decision; the header picker owns health accessibility.
-  const identityMenuLabel = gateway
-    ? t("nav.gatewayFooterMenuLabel", {
-        account: selfLabel,
-        gateway: gateway.name,
-        primary: gateway.isPrimary ? `, ${t("nav.gatewayPrimaryTag")}` : "",
-      })
-    : t("profilePage.identity.menuButtonLabel", { name: selfLabel });
+  const gatewayPrimaryTag = gateway?.isPrimary
+    ? t("chat.sessionHeader.gatewayPicker.primaryTag")
+    : null;
+  const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
   return html`
     <div class="sidebar-footer-bar">
       <openclaw-tooltip .content=${selfLabel}>
@@ -224,7 +221,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${identityMenuLabel}
+          aria-label=${gateway
+            ? `${identityMenuLabel}: ${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+            : identityMenuLabel}
           @click=${(event: MouseEvent) =>
             host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
         >
@@ -245,9 +244,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                       data-health=${gateway.health}
                     ></span>
                     <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
-                    ${gateway.isPrimary
+                    ${gatewayPrimaryTag
                       ? html`<span class="sidebar-identity-card__gateway-primary"
-                          >· ${t("nav.gatewayPrimaryTag")}</span
+                          >· ${gatewayPrimaryTag}</span
                         >`
                       : nothing}
                   </span>`

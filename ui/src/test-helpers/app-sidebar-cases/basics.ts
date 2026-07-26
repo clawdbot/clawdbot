@@ -291,7 +291,7 @@ describe("AppSidebar gateway footer subtitle", () => {
       "· primary",
     );
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
-      "Account, Gateway: Local Gateway, primary",
+      "Identity and app menu for Account: Local Gateway, primary",
     );
   });
 

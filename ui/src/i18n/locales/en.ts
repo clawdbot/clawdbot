@@ -1663,8 +1663,6 @@ export const en: TranslationMap = {
   },
   nav: {
     account: "Account",
-    gatewayFooterMenuLabel: "{account}, Gateway: {gateway}{primary}",
-    gatewayPrimaryTag: "primary",
     back: "Back",
     forward: "Forward",
     chat: "Chat",
