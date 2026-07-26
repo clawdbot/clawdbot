@@ -112,7 +112,9 @@ Browser → Flask (0.0.0.0:5051)
 - The development reporter prefers
   `~/.openclaw/credentials/ai-intelligence-dev.env`; the generic
   `ai-intelligence.env` remains a fallback.
-- `openclaw-ai-routing-telemetry.timer` refreshes the report every five minutes.
+- `openclaw-ai-routing-telemetry.timer` refreshes the report every eight
+  minutes. The dashboard marks reports older than ten minutes stale, leaving a
+  two-minute scheduling margin.
 - The panel displays report age and marks reports older than ten minutes stale.
 - Report artifacts are
   `reports/ai_intelligence/routing-telemetry-latest.{json,txt}`.

@@ -1,9 +1,9 @@
 [Unit]
-Description=Refresh OpenClaw development AI routing telemetry every five minutes
+Description=Refresh OpenClaw development AI routing telemetry every eight minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+OnUnitActiveSec=8min
 Persistent=true
 Unit=openclaw-ai-routing-telemetry.service
 
