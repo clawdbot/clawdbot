@@ -63,17 +63,18 @@ async function resolveEditorMediaAttachments(
   const seen = new Set<string>();
   const attachments: Array<{ mimeType: string; data: string }> = [];
   for (const ref of refs) {
-    if (seen.has(ref.path)) {
+    // Transcript paths are untrusted hints; only the basename is read through the
+    // media store (its traversal guards and byte cap stay authoritative), so
+    // dedupe on that resolved id — path aliases must not repeat the same read.
+    const id = path.basename(ref.path);
+    if (seen.has(id)) {
       continue;
     }
-    seen.add(ref.path);
+    seen.add(id);
     if (seen.size > EDITOR_MEDIA_REF_LIMIT) {
       break;
     }
     try {
-      // Transcript paths are untrusted hints; read only the basename through the
-      // media store so its traversal guards and byte cap stay authoritative.
-      const id = path.basename(ref.path);
       const media = await readMediaBuffer(id, "inbound", MEDIA_MAX_BYTES);
       attachments.push({ mimeType: ref.contentType, data: media.buffer.toString("base64") });
     } catch {
