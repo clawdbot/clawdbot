@@ -15,6 +15,7 @@ import "./openai-responses-transport.js";
 
 const processResponsesStream = expectDefined(
   globalThis.openclawOpenAIResponsesTransportTestApi,
+  "openclawOpenAIResponsesTransportTestApi",
 ).processResponsesStream;
 
 function makeMockStream(events: Array<Record<string, unknown>>): AsyncIterable<unknown> {
