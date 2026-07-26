@@ -264,6 +264,7 @@ function testStartupLog() {
 function loadTestStartup(params: {
   minimalTestGateway?: boolean;
   log?: ReturnType<typeof testStartupLog>;
+  ambientEnvTriggers?: "allow" | "suppress";
   initialSnapshotRead?: Parameters<
     typeof loadGatewayStartupConfigSnapshot
   >[0]["initialSnapshotRead"];
@@ -272,6 +273,9 @@ function loadTestStartup(params: {
     minimalTestGateway: params.minimalTestGateway ?? true,
     log: params.log ?? testStartupLog(),
     initialSnapshotRead: params.initialSnapshotRead,
+    ...(params.ambientEnvTriggers !== undefined
+      ? { ambientEnvTriggers: params.ambientEnvTriggers }
+      : {}),
   });
 }
 
@@ -358,6 +362,23 @@ describe("gateway startup config validation", () => {
     expectPluginAutoEnableFor(sourceConfig);
     expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it("suppresses ambient channel auto-enable during the initial dev startup snapshot", async () => {
+    const snapshot = buildRuntimeSnapshot(validConfig);
+    mockStartupSnapshot(snapshot);
+
+    await loadTestStartup({
+      minimalTestGateway: false,
+      ambientEnvTriggers: "suppress",
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: validConfig,
+      env: process.env,
+      manifestRegistry: pluginManifestRegistry,
+      ambientEnvTriggers: "suppress",
+    });
   });
 
   it("reuses a CLI preflight snapshot without rereading config", async () => {

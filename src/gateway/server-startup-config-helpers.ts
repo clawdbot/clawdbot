@@ -1,4 +1,5 @@
 // Shared validation, auth-surface, and config-load helpers for Gateway startup.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
@@ -81,6 +82,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   log: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
   initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
   const snapshotRead =
@@ -112,6 +114,9 @@ export async function loadGatewayStartupConfigSnapshot(params: {
             ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
             : {}),
           discovery: pluginMetadataSnapshot?.discovery,
+          ...(params.ambientEnvTriggers !== undefined
+            ? { ambientEnvTriggers: params.ambientEnvTriggers }
+            : {}),
         }),
       );
   if (autoEnable.changes.length === 0) {
