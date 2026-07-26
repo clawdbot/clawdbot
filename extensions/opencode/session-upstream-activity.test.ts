@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   checkOpenCodeUpstreamActivity,
   linkContinuedOpenCodeSession,
@@ -11,28 +11,29 @@ type StatefulOpenCodeSession = {
   id: string;
   title: string;
   directory: string;
-  updatedAt?: number;
+  seq?: number;
   messages: Array<{
     info: { id: string; role: string; time: { created: number } };
     parts: Array<{
       id: string;
       type: string;
       text?: string;
-      auto?: boolean;
-      overflow?: boolean;
       synthetic?: boolean;
+      ignored?: boolean;
       metadata?: Record<string, unknown>;
       mime?: string;
       filename?: string;
+      source?: { text: { value: string; start: number; end: number } };
     }>;
   }>;
 };
+
+type Probe = Parameters<typeof checkOpenCodeUpstreamActivity>[0][number];
 
 const temporaryDirectories: string[] = [];
 const originalPath = process.env.PATH;
 
 afterEach(async () => {
-  vi.useRealTimers();
   process.env.PATH = originalPath;
   await Promise.all(
     temporaryDirectories.splice(0).map(async (directory) => {
@@ -71,11 +72,7 @@ if (args[0] === "--pure" && args[1] === "db") {
   const selected = state.sessions.filter((session) => query.includes("'" + session.id + "'"));
   process.stdout.write(JSON.stringify(selected.map((session) => ({
     id: session.id,
-    lastMessageId: session.messages.at(-1)?.info.id ?? null,
-    lastMessageCreatedAt: session.messages.at(-1)?.info.time.created ?? null,
-    lastMessageRole: session.messages.at(-1)?.info.role ?? null,
-    sessionUpdatedAt:
-      session.updatedAt ?? session.messages.at(-1)?.info.time.created ?? 1_700_000_000_000,
+    seq: session.seq ?? null,
   }))));
 } else if (args[0] === "--pure" && args[1] === "export") {
   const session = state.sessions.find((candidate) => candidate.id === args[2]);
@@ -127,161 +124,509 @@ function openCodeMessage(id: string, role: string, text: string, created: number
   };
 }
 
+function probe(marker: Probe["marker"], ownRecentUserTexts: string[] = []): Probe {
+  return {
+    sessionKey: "agent:main:ses-a",
+    agentId: "main",
+    threadId: "ses_a",
+    hostId: "gateway",
+    upstreamKind: "opencode-cli",
+    upstreamRef: { threadId: "ses_a" },
+    marker,
+    ownRecentUserTexts,
+  };
+}
+
+function markerFrom(outcome: Awaited<ReturnType<typeof checkOpenCodeUpstreamActivity>>[number]) {
+  if (outcome?.kind !== "activity") {
+    throw new Error("expected activity marker");
+  }
+  return outcome.nextMarker;
+}
+
 describe("OpenCode session upstream activity", () => {
   it.runIf(process.platform !== "win32")(
-    "batches probes and exports only changed threads while suppressing own echoes",
+    "uses event_sequence and exports only after the cursor advances",
     async () => {
-      const sessions = [
-        {
-          id: "ses_a",
-          title: "Session A",
-          directory: "/workspace/a",
-          messages: [openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000)],
-        },
-        {
-          id: "ses_b",
-          title: "Session B",
-          directory: "/workspace/b",
-          messages: [openCodeMessage("msg_b0", "assistant", "ready", 1_700_000_000_000)],
-        },
-      ];
-      const fixture = await installStatefulOpenCode(sessions);
-      await expect(linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a")).resolves.toEqual({
-        sessionKey: "agent:main:ses-a",
-        upstream: {
-          kind: "opencode-cli",
-          ref: { threadId: "ses_a" },
-          marker: {
-            messageId: "msg_a0",
-            createdAt: 1_700_000_000_000,
-            sessionUpdatedAt: 1_700_000_000_000,
-          },
-        },
-      });
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 1,
+        messages: [openCodeMessage("msg_001", "assistant", "ready", 1_700_000_000_000)],
+      };
+      const fixture = await installStatefulOpenCode([session]);
+      const continued = await linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a");
+      expect(continued.upstream?.marker).toEqual({ seq: 1, lastHumanMessageId: null });
 
-      sessions[1]!.messages.push(
-        openCodeMessage("msg_b1", "user", "sent  from OpenClaw", 1_700_000_001_000),
-      );
-      await fixture.writeState({ sessions });
       await fixture.clearLog();
-      const outcomes = await checkOpenCodeUpstreamActivity([
-        {
-          sessionKey: "agent:main:ses-a",
-          agentId: "main",
-          threadId: "ses_a",
-          hostId: "gateway",
-          upstreamKind: "opencode-cli",
-          upstreamRef: { threadId: "ses_a" },
-          marker: {
-            messageId: "msg_a0",
-            createdAt: 1_700_000_000_000,
-            sessionUpdatedAt: 1_700_000_000_000,
-          },
-          ownRecentUserTexts: [],
-        },
-        {
-          sessionKey: "agent:main:ses-b",
-          agentId: "main",
-          threadId: "ses_b",
-          hostId: "gateway",
-          upstreamKind: "opencode-cli",
-          upstreamRef: { threadId: "ses_b" },
-          marker: {
-            messageId: "msg_b0",
-            createdAt: 1_700_000_000_000,
-            sessionUpdatedAt: 1_700_000_000_000,
-          },
-          ownRecentUserTexts: ["sent from OpenClaw"],
-        },
-      ]);
-      expect(outcomes).toEqual([
+      await expect(
+        checkOpenCodeUpstreamActivity([probe(continued.upstream!.marker)]),
+      ).resolves.toEqual([]);
+      let calls = await fixture.readCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[2]).toBe(
+        "SELECT s.id AS id, es.seq AS seq FROM session AS s LEFT JOIN event_sequence AS es ON es.aggregate_id = s.id WHERE s.id IN ('ses_a')",
+      );
+
+      session.messages.push(
+        openCodeMessage("msg_002", "user", "external OpenCode turn", 1_700_000_001_000),
+      );
+      session.seq = 3;
+      await fixture.writeState({ sessions: [session] });
+      await fixture.clearLog();
+      await expect(
+        checkOpenCodeUpstreamActivity([probe(continued.upstream!.marker)]),
+      ).resolves.toEqual([
         expect.objectContaining({
           kind: "activity",
-          sessionKey: "agent:main:ses-b",
-          humanTurns: 0,
-          nextMarker: {
-            messageId: "msg_b1",
-            createdAt: 1_700_000_001_000,
-            sessionUpdatedAt: 1_700_000_001_000,
-          },
+          humanTurns: 1,
+          dedupeId: "msg_002",
+          nextMarker: { seq: 3, lastHumanMessageId: "msg_002" },
         }),
       ]);
-      const calls = await fixture.readCalls();
+      calls = await fixture.readCalls();
       expect(calls.filter((args) => args[1] === "db")).toHaveLength(1);
-      expect(calls.find((args) => args[1] === "db")?.[2]).toContain("'ses_a', 'ses_b'");
-      expect(calls.filter((args) => args[1] === "export")).toEqual([["--pure", "export", "ses_b"]]);
-
-      sessions[1]!.messages.push(
-        openCodeMessage("msg_b2", "user", "external OpenCode turn", 1_700_000_002_000),
-      );
-      await fixture.writeState({ sessions });
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: "agent:main:ses-b",
-            agentId: "main",
-            threadId: "ses_b",
-            hostId: "gateway",
-            upstreamKind: "opencode-cli",
-            upstreamRef: { threadId: "ses_b" },
-            marker: {
-              messageId: "msg_b1",
-              createdAt: 1_700_000_001_000,
-              sessionUpdatedAt: 1_700_000_001_000,
-            },
-            ownRecentUserTexts: ["sent from OpenClaw"],
-          },
-        ]),
-      ).resolves.toEqual([expect.objectContaining({ kind: "activity", humanTurns: 1 })]);
+      expect(calls.filter((args) => args[1] === "export")).toHaveLength(1);
     },
   );
 
   it.runIf(process.platform !== "win32")(
-    "reports confirmed deletion but not transient query or export failures",
+    "re-baselines a regressed cursor and keeps monitoring the next advance",
     async () => {
-      const session = {
+      const session: StatefulOpenCodeSession = {
         id: "ses_a",
         title: "Session A",
         directory: "/workspace/a",
-        messages: [openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000)],
+        seq: 0,
+        messages: [openCodeMessage("msg_001", "user", "old turn", 1_700_000_000_000)],
       };
       const fixture = await installStatefulOpenCode([session]);
-      const probe = {
-        sessionKey: "agent:main:ses-a",
-        agentId: "main",
-        threadId: "ses_a",
-        hostId: "gateway",
-        upstreamKind: "opencode-cli" as const,
-        upstreamRef: { threadId: "ses_a" },
-        marker: {
-          messageId: "msg_a0",
-          createdAt: 1_700_000_000_000,
-          sessionUpdatedAt: 1_700_000_000_000,
+      const reset = await checkOpenCodeUpstreamActivity([
+        probe({ seq: 12, lastHumanMessageId: "msg_001" }),
+      ]);
+      expect(reset).toEqual([
+        {
+          kind: "activity",
+          sessionKey: "agent:main:ses-a",
+          humanTurns: 0,
+          nextMarker: { seq: 0, lastHumanMessageId: "msg_001" },
         },
-        ownRecentUserTexts: [],
+      ]);
+      expect((await fixture.readCalls()).filter((args) => args[1] === "export")).toHaveLength(0);
+
+      session.messages.push(
+        openCodeMessage("msg_002", "user", "new after migration", 1_700_000_001_000),
+      );
+      session.seq = 2;
+      await fixture.writeState({ sessions: [session] });
+      await expect(checkOpenCodeUpstreamActivity([probe(markerFrom(reset[0]))])).resolves.toEqual([
+        expect.objectContaining({
+          humanTurns: 1,
+          nextMarker: { seq: 2, lastHumanMessageId: "msg_002" },
+        }),
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "waits across staged part projections and reports the human turn exactly once",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 1,
+        messages: [openCodeMessage("msg_001", "assistant", "ready", 1_700_000_000_000)],
       };
+      const fixture = await installStatefulOpenCode([session]);
+      let currentMarker: Probe["marker"] = { seq: 1, lastHumanMessageId: null };
+      const user = {
+        info: { id: "msg_002", role: "user", time: { created: 1_700_000_001_000 } },
+        parts: [] as StatefulOpenCodeSession["messages"][number]["parts"],
+      };
+      session.messages.push(user);
+      session.seq = 2;
+      await fixture.writeState({ sessions: [session] });
+      let outcomes = await checkOpenCodeUpstreamActivity([probe(currentMarker)]);
+      expect(outcomes).toEqual([expect.objectContaining({ humanTurns: 0 })]);
+      currentMarker = markerFrom(outcomes[0]);
+
+      user.parts.push({ id: "part-file", type: "file" });
+      session.seq = 3;
+      await fixture.writeState({ sessions: [session] });
+      outcomes = await checkOpenCodeUpstreamActivity([probe(currentMarker)]);
+      expect(outcomes).toEqual([expect.objectContaining({ humanTurns: 0 })]);
+      currentMarker = markerFrom(outcomes[0]);
+
+      user.parts.push({ id: "part-text", type: "text", text: "arrived in stages" });
+      session.seq = 4;
+      await fixture.writeState({ sessions: [session] });
+      outcomes = await checkOpenCodeUpstreamActivity([probe(currentMarker)]);
+      expect(outcomes).toEqual([
+        expect.objectContaining({
+          humanTurns: 1,
+          nextMarker: { seq: 4, lastHumanMessageId: "msg_002" },
+        }),
+      ]);
+      currentMarker = markerFrom(outcomes[0]);
+
+      user.parts.push({ id: "part-late", type: "text", text: "late detail" });
+      session.seq = 5;
+      await fixture.writeState({ sessions: [session] });
+      await expect(checkOpenCodeUpstreamActivity([probe(currentMarker)])).resolves.toEqual([
+        expect.objectContaining({
+          humanTurns: 0,
+          nextMarker: { seq: 5, lastHumanMessageId: "msg_002" },
+        }),
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "suppresses compaction replay text duplicated from an earlier user turn",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 9,
+        messages: [
+          {
+            info: { id: "msg_001", role: "user", time: { created: 1_700_000_000_000 } },
+            parts: [
+              { id: "part-hidden", type: "text", text: "hidden", ignored: true },
+              { id: "part-visible", type: "text", text: "please keep going" },
+            ],
+          },
+          openCodeMessage("msg_002", "assistant", "working", 1_700_000_001_000),
+          {
+            info: { id: "msg_003", role: "user", time: { created: 1_700_000_002_000 } },
+            parts: [{ id: "part-compact", type: "compaction" }],
+          },
+          openCodeMessage("msg_004", "assistant", "summary", 1_700_000_003_000),
+          openCodeMessage("msg_005", "user", "  please   keep going ", 1_700_000_004_000),
+        ],
+      };
+      await installStatefulOpenCode([session]);
+      await expect(
+        checkOpenCodeUpstreamActivity([probe({ seq: 4, lastHumanMessageId: "msg_001" })]),
+      ).resolves.toEqual([
+        {
+          kind: "activity",
+          sessionKey: "agent:main:ses-a",
+          humanTurns: 0,
+          nextMarker: { seq: 9, lastHumanMessageId: "msg_005" },
+        },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "normalizes media placeholders when suppressing compaction replay",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 7,
+        messages: [
+          {
+            info: { id: "msg_001", role: "user", time: { created: 1_700_000_000_000 } },
+            parts: [
+              {
+                id: "part-image",
+                type: "file",
+                mime: "image/png",
+                filename: "screen.png",
+              },
+            ],
+          },
+          openCodeMessage("msg_002", "assistant", "working", 1_700_000_001_000),
+          {
+            info: { id: "msg_003", role: "user", time: { created: 1_700_000_002_000 } },
+            parts: [{ id: "part-compact", type: "compaction" }],
+          },
+          openCodeMessage("msg_004", "assistant", "summary", 1_700_000_003_000),
+          openCodeMessage("msg_005", "user", "[Attached image/png: screen.png]", 1_700_000_004_000),
+        ],
+      };
+      await installStatefulOpenCode([session]);
+      await expect(
+        checkOpenCodeUpstreamActivity([probe({ seq: 2, lastHumanMessageId: null })]),
+      ).resolves.toEqual([
+        {
+          kind: "activity",
+          sessionKey: "agent:main:ses-a",
+          humanTurns: 0,
+          nextMarker: { seq: 7, lastHumanMessageId: "msg_005" },
+        },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "bounds replay suppression to the preceding 50 user messages",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 80,
+        messages: [
+          openCodeMessage("msg_001", "user", "repeat me", 1_700_000_000_000),
+          ...Array.from({ length: 50 }, (_, index) => ({
+            info: {
+              id: `msg_${String(index + 2).padStart(3, "0")}`,
+              role: "user",
+              time: { created: 1_700_000_001_000 + index },
+            },
+            parts: [
+              {
+                id: `part-${String(index)}`,
+                type: "text",
+                text: "internal",
+                synthetic: true,
+              },
+            ],
+          })),
+          openCodeMessage("msg_052", "user", "repeat me", 1_700_000_052_000),
+        ],
+      };
+      await installStatefulOpenCode([session]);
+      await expect(
+        checkOpenCodeUpstreamActivity([probe({ seq: 1, lastHumanMessageId: "msg_001" })]),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          humanTurns: 1,
+          nextMarker: { seq: 80, lastHumanMessageId: "msg_052" },
+        }),
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "dedupes SessionSummary re-publication of an existing human message id",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 7,
+        messages: [openCodeMessage("msg_001", "user", "already reported", 1_700_000_000_000)],
+      };
+      const fixture = await installStatefulOpenCode([session]);
+      const outcomes = await checkOpenCodeUpstreamActivity([
+        probe({ seq: 6, lastHumanMessageId: "msg_001" }),
+      ]);
+      expect(outcomes).toEqual([
+        {
+          kind: "activity",
+          sessionKey: "agent:main:ses-a",
+          humanTurns: 0,
+          nextMarker: { seq: 7, lastHumanMessageId: "msg_001" },
+        },
+      ]);
+      await fixture.clearLog();
+      await expect(
+        checkOpenCodeUpstreamActivity([probe(markerFrom(outcomes[0]))]),
+      ).resolves.toEqual([]);
+      expect((await fixture.readCalls()).filter((args) => args[1] === "export")).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "suppresses ignored, synthetic, shell, compaction, and continuation user rows",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 12,
+        messages: [
+          openCodeMessage("msg_001", "assistant", "ready", 1_700_000_000_000),
+          {
+            info: { id: "msg_002", role: "user", time: { created: 1_700_000_001_000 } },
+            parts: [{ id: "part-ignored", type: "text", text: "hidden", ignored: true }],
+          },
+          {
+            info: { id: "msg_003", role: "user", time: { created: 1_700_000_002_000 } },
+            parts: [{ id: "part-synthetic", type: "text", text: "hidden", synthetic: true }],
+          },
+          openCodeMessage(
+            "msg_004",
+            "user",
+            "The following tool was executed by the user",
+            1_700_000_003_000,
+          ),
+          {
+            info: { id: "msg_005", role: "user", time: { created: 1_700_000_004_000 } },
+            parts: [
+              { id: "part-text", type: "text", text: "looks human" },
+              { id: "part-compaction", type: "compaction" },
+            ],
+          },
+          {
+            info: { id: "msg_006", role: "user", time: { created: 1_700_000_005_000 } },
+            parts: [
+              {
+                id: "part-continue",
+                type: "text",
+                text: "continue",
+                metadata: { compaction_continue: true },
+              },
+            ],
+          },
+        ],
+      };
+      await installStatefulOpenCode([session]);
+      await expect(
+        checkOpenCodeUpstreamActivity([probe({ seq: 1, lastHumanMessageId: null })]),
+      ).resolves.toEqual([
+        {
+          kind: "activity",
+          sessionKey: "agent:main:ses-a",
+          humanTurns: 0,
+          nextMarker: { seq: 12, lastHumanMessageId: null },
+        },
+      ]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("does not report a file-mention-only turn", async () => {
+    const session: StatefulOpenCodeSession = {
+      id: "ses_a",
+      title: "Session A",
+      directory: "/workspace/a",
+      seq: 3,
+      messages: [
+        openCodeMessage("msg_001", "assistant", "ready", 1_700_000_000_000),
+        {
+          info: { id: "msg_002", role: "user", time: { created: 1_700_000_001_000 } },
+          parts: [
+            { id: "part-text", type: "text", text: "@notes.ts" },
+            {
+              id: "part-file",
+              type: "file",
+              mime: "text/plain",
+              filename: "notes.ts",
+              source: { text: { value: "@notes.ts", start: 0, end: 9 } },
+            },
+          ],
+        },
+      ],
+    };
+    await installStatefulOpenCode([session]);
+    await expect(
+      checkOpenCodeUpstreamActivity([probe({ seq: 1, lastHumanMessageId: null })]),
+    ).resolves.toEqual([
+      {
+        kind: "activity",
+        sessionKey: "agent:main:ses-a",
+        humanTurns: 0,
+        nextMarker: { seq: 3, lastHumanMessageId: null },
+      },
+    ]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps real text mixed with ignored text and suppresses OpenClaw self-echo",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 4,
+        messages: [
+          {
+            info: { id: "msg_001", role: "user", time: { created: 1_700_000_001_000 } },
+            parts: [
+              { id: "part-hidden", type: "text", text: "hidden", ignored: true },
+              { id: "part-real", type: "text", text: "real external turn" },
+            ],
+          },
+        ],
+      };
+      const fixture = await installStatefulOpenCode([session]);
+      await expect(
+        checkOpenCodeUpstreamActivity([probe({ seq: 0, lastHumanMessageId: null })]),
+      ).resolves.toEqual([expect.objectContaining({ humanTurns: 1 })]);
+      await expect(
+        checkOpenCodeUpstreamActivity([
+          probe({ seq: 0, lastHumanMessageId: null }, ["real external turn"]),
+        ]),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          humanTurns: 0,
+          nextMarker: { seq: 4, lastHumanMessageId: "msg_001" },
+        }),
+      ]);
+
+      session.messages.push(openCodeMessage("msg_002", "assistant", "summary", 1_700_000_002_000));
+      session.seq = 5;
+      await fixture.writeState({ sessions: [session] });
+      const suppressed = await checkOpenCodeUpstreamActivity([
+        probe({ seq: 4, lastHumanMessageId: "msg_001" }),
+      ]);
+      expect(suppressed).toEqual([expect.objectContaining({ humanTurns: 0 })]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reports confirmed absence but not query or export failures",
+    async () => {
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        seq: 2,
+        messages: [openCodeMessage("msg_001", "user", "external", 1_700_000_001_000)],
+      };
+      const fixture = await installStatefulOpenCode([session]);
+      const currentProbe = probe({ seq: 1, lastHumanMessageId: null });
 
       await fixture.writeState({ sessions: [], failDb: true });
-      await expect(checkOpenCodeUpstreamActivity([probe])).resolves.toEqual([]);
+      await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([]);
 
-      session.messages.push(openCodeMessage("msg_a1", "user", "external", 1_700_000_001_000));
       await fixture.writeState({ sessions: [session], failExports: ["ses_a"] });
-      await expect(checkOpenCodeUpstreamActivity([probe])).resolves.toEqual([]);
+      await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([]);
 
       await fixture.writeState({ sessions: [] });
-      await expect(checkOpenCodeUpstreamActivity([probe])).resolves.toEqual([
+      await expect(checkOpenCodeUpstreamActivity([currentProbe])).resolves.toEqual([
         { kind: "missing", sessionKey: "agent:main:ses-a" },
       ]);
     },
   );
 
   it.runIf(process.platform !== "win32")(
-    "bounds concurrent exports when many changed sessions catch up",
+    "treats a missing event_sequence row as sequence zero",
     async () => {
-      const sessions = Array.from({ length: 9 }, (_, index) => ({
+      const session: StatefulOpenCodeSession = {
+        id: "ses_a",
+        title: "Session A",
+        directory: "/workspace/a",
+        messages: [],
+      };
+      await installStatefulOpenCode([session]);
+      await expect(linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a")).resolves.toEqual({
+        sessionKey: "agent:main:ses-a",
+        upstream: {
+          kind: "opencode-cli",
+          ref: { threadId: "ses_a" },
+          marker: { seq: 0, lastHumanMessageId: null },
+        },
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "bounds concurrent exports when many cursors advance",
+    async () => {
+      const sessions: StatefulOpenCodeSession[] = Array.from({ length: 9 }, (_, index) => ({
         id: `ses_${String(index)}`,
         title: `Session ${String(index)}`,
         directory: `/workspace/${String(index)}`,
+        seq: 2,
         messages: [
           openCodeMessage(`msg_${String(index)}`, "assistant", "ready", 1_700_000_001_000 + index),
         ],
@@ -292,597 +637,15 @@ describe("OpenCode session upstream activity", () => {
       await expect(
         checkOpenCodeUpstreamActivity(
           sessions.map((session) => ({
+            ...probe({ seq: 1, lastHumanMessageId: null }),
             sessionKey: `agent:main:${session.id}`,
-            agentId: "main",
             threadId: session.id,
-            hostId: "gateway",
-            upstreamKind: "opencode-cli" as const,
             upstreamRef: { threadId: session.id },
-            marker: {
-              messageId: "msg_baseline",
-              createdAt: 1_700_000_000_000,
-              sessionUpdatedAt: 1_700_000_000_000,
-            },
-            ownRecentUserTexts: [],
           })),
         ),
       ).resolves.toHaveLength(sessions.length);
-      expect(await fixture.readMaxExportConcurrency()).toBe(4);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "recovers from a marker removed by OpenCode revert cleanup",
-    async () => {
-      const session = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        messages: [openCodeMessage("msg_new", "user", "replacement turn", 1_700_000_002_000)],
-      };
-      await installStatefulOpenCode([session]);
-
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: "agent:main:ses-a",
-            agentId: "main",
-            threadId: "ses_a",
-            hostId: "gateway",
-            upstreamKind: "opencode-cli",
-            upstreamRef: { threadId: "ses_a" },
-            marker: {
-              messageId: "msg_deleted",
-              createdAt: 1_700_000_001_000,
-              sessionUpdatedAt: 1_700_000_001_000,
-            },
-            ownRecentUserTexts: [],
-          },
-        ]),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          kind: "activity",
-          humanTurns: 1,
-          nextMarker: {
-            messageId: "msg_new",
-            createdAt: 1_700_000_002_000,
-            sessionUpdatedAt: 1_700_000_002_000,
-          },
-        }),
-      ]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rebases after a revert leaves only messages older than the deleted marker",
-    async () => {
-      const session = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        messages: [openCodeMessage("msg_old", "assistant", "older", 1_700_000_000_000)],
-      };
-      await installStatefulOpenCode([session]);
-
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: "agent:main:ses-a",
-            agentId: "main",
-            threadId: "ses_a",
-            hostId: "gateway",
-            upstreamKind: "opencode-cli",
-            upstreamRef: { threadId: "ses_a" },
-            marker: {
-              messageId: "msg_deleted",
-              createdAt: 1_700_000_001_000,
-              sessionUpdatedAt: 1_700_000_001_000,
-            },
-            ownRecentUserTexts: [],
-          },
-        ]),
-      ).resolves.toEqual([
-        {
-          kind: "activity",
-          sessionKey: "agent:main:ses-a",
-          humanTurns: 0,
-          nextMarker: {
-            messageId: "msg_old",
-            createdAt: 1_700_000_000_000,
-            sessionUpdatedAt: 1_700_000_000_000,
-          },
-        },
-      ]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "waits for parts after an early session touch and reports the human turn once",
-    async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(1_700_000_001_000);
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        // setAgentModel can advance this before the user row's parts are durable.
-        updatedAt: 1_700_000_001_000,
-        messages: [
-          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
-          {
-            info: { id: "msg_user", role: "user", time: { created: 1_700_000_001_000 } },
-            parts: [],
-          },
-        ],
-      };
-      const fixture = await installStatefulOpenCode([session]);
-      const probe = {
-        sessionKey: "agent:main:ses-a",
-        agentId: "main",
-        threadId: "ses_a",
-        hostId: "gateway",
-        upstreamKind: "opencode-cli" as const,
-        upstreamRef: { threadId: "ses_a" },
-        marker: {
-          messageId: "msg_a0",
-          createdAt: 1_700_000_000_000,
-          sessionUpdatedAt: 1_700_000_000_000,
-        },
-        ownRecentUserTexts: [],
-      };
-
-      await expect(checkOpenCodeUpstreamActivity([probe])).resolves.toEqual([]);
-
-      session.messages[1]!.parts.push({ id: "part-user", type: "text", text: "external turn" });
-      session.updatedAt = 1_700_000_002_000;
-      await fixture.writeState({ sessions: [session] });
-      const classified = await checkOpenCodeUpstreamActivity([probe]);
-      expect(classified).toEqual([expect.objectContaining({ kind: "activity", humanTurns: 1 })]);
-      const activity = classified[0];
-      expect(activity?.kind).toBe("activity");
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            ...probe,
-            marker: activity?.kind === "activity" ? activity.nextMarker : probe.marker,
-          },
-        ]),
-      ).resolves.toEqual([]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "bounds an orphaned empty user row while treating present non-text parts as classifiable",
-    async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(1_700_000_001_000);
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        updatedAt: 1_700_000_001_000,
-        messages: [
-          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
-          {
-            info: { id: "msg_user", role: "user", time: { created: 1_700_000_001_000 } },
-            parts: [],
-          },
-        ],
-      };
-      const fixture = await installStatefulOpenCode([session]);
-      const probe = {
-        sessionKey: "agent:main:ses-a",
-        agentId: "main",
-        threadId: "ses_a",
-        hostId: "gateway",
-        upstreamKind: "opencode-cli" as const,
-        upstreamRef: { threadId: "ses_a" },
-        marker: {
-          messageId: "msg_a0",
-          createdAt: 1_700_000_000_000,
-          sessionUpdatedAt: 1_700_000_000_000,
-        },
-        ownRecentUserTexts: [],
-      };
-
-      await expect(checkOpenCodeUpstreamActivity([probe])).resolves.toEqual([]);
-      await vi.advanceTimersByTimeAsync(2 * 60_000 - 1);
-      await expect(checkOpenCodeUpstreamActivity([probe])).resolves.toEqual([]);
-      await vi.advanceTimersByTimeAsync(1);
-      const orphaned = await checkOpenCodeUpstreamActivity([probe]);
-      expect(orphaned).toEqual([expect.objectContaining({ kind: "activity", humanTurns: 0 })]);
-
-      session.messages.push({
-        info: { id: "msg_compact", role: "user", time: { created: 1_700_000_122_000 } },
-        parts: [{ id: "part-compact", type: "compaction", auto: true }],
-      });
-      session.updatedAt = 1_700_000_122_000;
-      await fixture.writeState({ sessions: [session] });
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            ...probe,
-            marker: orphaned[0]?.kind === "activity" ? orphaned[0].nextMarker : probe.marker,
-          },
-        ]),
-      ).resolves.toEqual([expect.objectContaining({ kind: "activity", humanTurns: 0 })]);
-
-      const calls = await fixture.readCalls();
-      expect(calls.filter((args) => args[1] === "db")).toHaveLength(4);
-      expect(calls.filter((args) => args[1] === "export")).toHaveLength(4);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not baseline a latest user row until its parts are classifiable",
-    async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(1_700_000_001_000);
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        updatedAt: 1_700_000_001_000,
-        messages: [
-          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
-          {
-            info: { id: "msg_user", role: "user", time: { created: 1_700_000_001_000 } },
-            parts: [],
-          },
-        ],
-      };
-      const fixture = await installStatefulOpenCode([session]);
-      const continued = await linkContinuedOpenCodeSession("agent:main:ses-a", "ses_a");
-      expect(continued.upstream?.marker).toEqual({
-        messageId: "msg_a0",
-        createdAt: 1_700_000_000_000,
-        sessionUpdatedAt: 1_700_000_001_000,
-      });
-
-      session.messages[1]!.parts.push({ id: "part-user", type: "text", text: "external turn" });
-      session.updatedAt = 1_700_000_002_000;
-      await fixture.writeState({ sessions: [session] });
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: continued.sessionKey,
-            agentId: "main",
-            threadId: "ses_a",
-            hostId: "gateway",
-            upstreamKind: continued.upstream!.kind,
-            upstreamRef: continued.upstream!.ref,
-            marker: continued.upstream!.marker,
-            ownRecentUserTexts: [],
-          },
-        ]),
-      ).resolves.toEqual([expect.objectContaining({ kind: "activity", humanTurns: 1 })]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "classifies synthetic-only user parts without reporting them as human",
-    async () => {
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        messages: [
-          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
-          {
-            info: { id: "msg_resource", role: "user", time: { created: 1_700_000_001_000 } },
-            parts: [
-              {
-                id: "part-resource",
-                type: "text",
-                text: "Reading MCP resource: notes",
-                synthetic: true,
-              },
-            ],
-          },
-        ],
-      };
-      await installStatefulOpenCode([session]);
-
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: "agent:main:ses-a",
-            agentId: "main",
-            threadId: "ses_a",
-            hostId: "gateway",
-            upstreamKind: "opencode-cli",
-            upstreamRef: { threadId: "ses_a" },
-            marker: {
-              messageId: "msg_a0",
-              createdAt: 1_700_000_000_000,
-              sessionUpdatedAt: 1_700_000_000_000,
-            },
-            ownRecentUserTexts: [],
-          },
-        ]),
-      ).resolves.toEqual([expect.objectContaining({ kind: "activity", humanTurns: 0 })]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "classifies ignored-only text as non-human and advances the marker",
-    async () => {
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        messages: [
-          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
-          {
-            info: { id: "msg_ignored", role: "user", time: { created: 1_700_000_001_000 } },
-            parts: [
-              {
-                id: "part-ignored",
-                type: "text",
-                text: "plugin bookkeeping",
-                ignored: true,
-              },
-            ],
-          },
-        ],
-      };
-      await installStatefulOpenCode([session]);
-
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: "agent:main:ses-a",
-            agentId: "main",
-            threadId: "ses_a",
-            hostId: "gateway",
-            upstreamKind: "opencode-cli",
-            upstreamRef: { threadId: "ses_a" },
-            marker: {
-              messageId: "msg_a0",
-              createdAt: 1_700_000_000_000,
-              sessionUpdatedAt: 1_700_000_000_000,
-            },
-            ownRecentUserTexts: [],
-          },
-        ]),
-      ).resolves.toEqual([
-        {
-          kind: "activity",
-          sessionKey: "agent:main:ses-a",
-          humanTurns: 0,
-          nextMarker: {
-            messageId: "msg_ignored",
-            createdAt: 1_700_000_001_000,
-            sessionUpdatedAt: 1_700_000_001_000,
-          },
-        },
-      ]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps real user content when an ignored text part is mixed in",
-    async () => {
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        messages: [
-          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
-          {
-            info: { id: "msg_mixed", role: "user", time: { created: 1_700_000_001_000 } },
-            parts: [
-              {
-                id: "part-ignored",
-                type: "text",
-                text: "plugin bookkeeping",
-                ignored: true,
-              },
-              { id: "part-real", type: "text", text: "real external turn" },
-            ],
-          },
-        ],
-      };
-      await installStatefulOpenCode([session]);
-      const probe = {
-        sessionKey: "agent:main:ses-a",
-        agentId: "main",
-        threadId: "ses_a",
-        hostId: "gateway",
-        upstreamKind: "opencode-cli" as const,
-        upstreamRef: { threadId: "ses_a" },
-        marker: {
-          messageId: "msg_a0",
-          createdAt: 1_700_000_000_000,
-          sessionUpdatedAt: 1_700_000_000_000,
-        },
-        ownRecentUserTexts: [],
-      };
-
-      const outcomes = await checkOpenCodeUpstreamActivity([probe]);
-      expect(outcomes).toEqual([
-        expect.objectContaining({
-          kind: "activity",
-          humanTurns: 1,
-          nextMarker: {
-            messageId: "msg_mixed",
-            createdAt: 1_700_000_001_000,
-            sessionUpdatedAt: 1_700_000_001_000,
-          },
-        }),
-      ]);
-      const activity = outcomes[0];
-      expect(activity?.kind).toBe("activity");
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            ...probe,
-            marker: activity?.kind === "activity" ? activity.nextMarker : probe.marker,
-          },
-        ]),
-      ).resolves.toEqual([]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "excludes generated rows without discarding mixed real user content",
-    async () => {
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        messages: [
-          openCodeMessage("msg_a0", "assistant", "ready", 1_700_000_000_000),
-          {
-            info: { id: "msg_compact", role: "user", time: { created: 1_700_000_001_000 } },
-            parts: [{ id: "part-compact", type: "compaction", auto: true }],
-          },
-          openCodeMessage("msg_summary", "assistant", "summary", 1_700_000_002_000),
-          {
-            info: { id: "msg_continue", role: "user", time: { created: 1_700_000_003_000 } },
-            parts: [
-              {
-                id: "part-continue",
-                type: "text",
-                text: "Continue if you have next steps",
-                synthetic: true,
-                metadata: { compaction_continue: true },
-              },
-            ],
-          },
-          {
-            info: { id: "msg_mixed", role: "user", time: { created: 1_700_000_004_000 } },
-            parts: [
-              { id: "part-real", type: "text", text: "real external turn" },
-              {
-                id: "part-reminder",
-                type: "text",
-                text: "synthetic reminder",
-                synthetic: true,
-              },
-            ],
-          },
-        ],
-      };
-      await installStatefulOpenCode([session]);
-
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: "agent:main:ses-a",
-            agentId: "main",
-            threadId: "ses_a",
-            hostId: "gateway",
-            upstreamKind: "opencode-cli",
-            upstreamRef: { threadId: "ses_a" },
-            marker: {
-              messageId: "msg_a0",
-              createdAt: 1_700_000_000_000,
-              sessionUpdatedAt: 1_700_000_000_000,
-            },
-            ownRecentUserTexts: [],
-          },
-        ]),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          kind: "activity",
-          humanTurns: 1,
-          nextMarker: {
-            messageId: "msg_mixed",
-            createdAt: 1_700_000_004_000,
-            sessionUpdatedAt: 1_700_000_004_000,
-          },
-        }),
-      ]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "excludes the unmarked user-role replay after overflow compaction",
-    async () => {
-      const session: StatefulOpenCodeSession = {
-        id: "ses_a",
-        title: "Session A",
-        directory: "/workspace/a",
-        messages: [
-          {
-            info: { id: "msg_original", role: "user", time: { created: 1_700_000_000_000 } },
-            parts: [
-              {
-                id: "part-original-file",
-                type: "file",
-                mime: "image/png",
-                filename: "screenshot.png",
-              },
-              {
-                id: "part-original-text",
-                type: "file",
-                mime: "text/plain",
-                filename: "notes.txt",
-              },
-            ],
-          },
-          openCodeMessage("msg_a0", "assistant", "overflow", 1_700_000_001_000),
-          {
-            info: { id: "msg_compact", role: "user", time: { created: 1_700_000_002_000 } },
-            parts: [
-              {
-                id: "part-compact",
-                type: "compaction",
-                auto: true,
-                overflow: true,
-              },
-            ],
-          },
-          openCodeMessage("msg_summary", "assistant", "summary", 1_700_000_003_000),
-          {
-            info: { id: "msg_replay", role: "user", time: { created: 1_700_000_004_000 } },
-            parts: [
-              {
-                id: "part-replay-image",
-                type: "text",
-                text: "[Attached image/png: screenshot.png]",
-              },
-              {
-                id: "part-replay-text",
-                type: "file",
-                mime: "text/plain",
-                filename: "notes.txt",
-              },
-            ],
-          },
-        ],
-      };
-      await installStatefulOpenCode([session]);
-
-      await expect(
-        checkOpenCodeUpstreamActivity([
-          {
-            sessionKey: "agent:main:ses-a",
-            agentId: "main",
-            threadId: "ses_a",
-            hostId: "gateway",
-            upstreamKind: "opencode-cli",
-            upstreamRef: { threadId: "ses_a" },
-            marker: {
-              messageId: "msg_a0",
-              createdAt: 1_700_000_001_000,
-              sessionUpdatedAt: 1_700_000_001_000,
-            },
-            ownRecentUserTexts: [],
-          },
-        ]),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          kind: "activity",
-          humanTurns: 0,
-          nextMarker: {
-            messageId: "msg_replay",
-            createdAt: 1_700_000_004_000,
-            sessionUpdatedAt: 1_700_000_004_000,
-          },
-        }),
-      ]);
+      expect(await fixture.readMaxExportConcurrency()).toBeGreaterThan(0);
+      expect(await fixture.readMaxExportConcurrency()).toBeLessThanOrEqual(4);
     },
   );
 });
