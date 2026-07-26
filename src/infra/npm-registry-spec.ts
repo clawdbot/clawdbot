@@ -3,22 +3,43 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import {
   parse as parseSemver,
   prerelease as parseSemverPrerelease,
+  type SemVer,
   valid as validSemver,
 } from "semver";
+import { compareOpenClawSemver, isOpenClawCorrectionSemver } from "./semver.js";
 
 const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Parsed monthly patch OpenClaw release version used for channel-aware ordering. */
-type OpenClawReleaseVersion = {
-  channel: "alpha" | "beta" | "stable";
-  year: number;
-  month: number;
-  patch: number;
-  alphaNumber?: number;
-  betaNumber?: number;
-  correctionNumber?: number;
-};
+/**
+ * npm ≤11 prints `npm view`/`npm pack` `--json` results as a bare entry object
+ * or an entry array; npm 12 wraps view results in a singleton array and keys
+ * pack results by package name. Normalize both shapes to the entry list, or
+ * metadata reads mistake the wrapper for an entry and fail closed with
+ * incomplete-metadata errors.
+ */
+export function resolveNpmJsonEntries(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const looksLikeEntry =
+      typeof record.id === "string" ||
+      typeof record.name === "string" ||
+      typeof record.version === "string" ||
+      typeof record.filename === "string";
+    if (!looksLikeEntry) {
+      const entries = Object.values(record).filter(
+        (entry) => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+      );
+      if (entries.length > 0) {
+        return entries;
+      }
+    }
+  }
+  return [value];
+}
 
 /**
  * Parsed registry-only npm spec accepted by plugin install flows.
@@ -145,20 +166,19 @@ export function isExactSemverVersion(value: string): boolean {
 }
 
 /** Parses OpenClaw's monthly patch stable/alpha/beta/correction version format. */
-function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | null {
+function parseOpenClawReleaseVersion(value: string): SemVer | null {
   const trimmed = value.trim();
   const parsed = OPENCLAW_RELEASE_PREFIX_RE.test(trimmed) ? parseSemver(trimmed) : null;
   if (!parsed || parsed.build.length > 0) {
     return null;
   }
-  const { major: year, minor: month, patch } = parsed;
-  if (month < 1 || month > 12 || patch < 1) {
+  if (parsed.minor < 1 || parsed.minor > 12 || parsed.patch < 1) {
     return null;
   }
 
   const [label, sequence] = parsed.prerelease;
   const isStable = parsed.prerelease.length === 0;
-  const isCorrection = parsed.prerelease.length === 1 && typeof label === "number" && label > 0;
+  const isCorrection = isOpenClawCorrectionSemver(parsed) && typeof label === "number" && label > 0;
   const isAlpha =
     parsed.prerelease.length === 2 &&
     label === "alpha" &&
@@ -172,52 +192,20 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
   if (!isStable && !isCorrection && !isAlpha && !isBeta) {
     return null;
   }
-  const channel = isAlpha ? "alpha" : isBeta ? "beta" : "stable";
-
-  return {
-    channel,
-    year,
-    month,
-    patch,
-    correctionNumber: isCorrection ? label : undefined,
-    alphaNumber: isAlpha ? sequence : undefined,
-    betaNumber: isBeta ? sequence : undefined,
-  };
+  return parsed;
 }
 
 /** Returns whether a version is an OpenClaw monthly patch stable correction release. */
-export function isOpenClawStableCorrectionVersion(value: string): boolean {
+function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
-  return parsed?.channel === "stable" && parsed.correctionNumber !== undefined;
+  return parsed !== null && isOpenClawCorrectionSemver(parsed);
 }
 
 /** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */
 export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
   const parsedLeft = parseOpenClawReleaseVersion(left);
   const parsedRight = parseOpenClawReleaseVersion(right);
-  if (!parsedLeft || !parsedRight) {
-    return null;
-  }
-  if (parsedLeft.year !== parsedRight.year) {
-    return parsedLeft.year < parsedRight.year ? -1 : 1;
-  }
-  if (parsedLeft.month !== parsedRight.month) {
-    return parsedLeft.month < parsedRight.month ? -1 : 1;
-  }
-  if (parsedLeft.patch !== parsedRight.patch) {
-    return parsedLeft.patch < parsedRight.patch ? -1 : 1;
-  }
-  if (parsedLeft.channel !== parsedRight.channel) {
-    const rank = { alpha: 0, beta: 1, stable: 2 };
-    return rank[parsedLeft.channel] < rank[parsedRight.channel] ? -1 : 1;
-  }
-  if (parsedLeft.channel === "alpha") {
-    return Math.sign((parsedLeft.alphaNumber ?? 0) - (parsedRight.alphaNumber ?? 0));
-  }
-  if (parsedLeft.channel === "beta") {
-    return Math.sign((parsedLeft.betaNumber ?? 0) - (parsedRight.betaNumber ?? 0));
-  }
-  return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
+  return parsedLeft && parsedRight ? compareOpenClawSemver(parsedLeft, parsedRight) : null;
 }
 
 /** Returns whether an exact semver value is a prerelease, excluding stable correction releases. */

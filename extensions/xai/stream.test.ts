@@ -9,11 +9,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
-import {
-  createXaiFastModeWrapper,
-  createXaiToolPayloadCompatibilityWrapper,
-  wrapXaiProviderStream,
-} from "./stream.js";
+import { wrapXaiProviderStream } from "./stream.js";
 import {
   createXaiPayloadCaptureStream,
   expectXaiFastToolStreamShaping,
@@ -60,8 +56,11 @@ function captureWrappedModelId(params: {
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrapped = createXaiFastModeWrapper(baseStreamFn, params.fastMode);
-  void wrapped(
+  const wrapped = wrapXaiProviderStream({
+    streamFn: baseStreamFn,
+    extraParams: { fastMode: params.fastMode, tool_stream: false },
+  } as never);
+  void wrapped?.(
     {
       api: params.api ?? "openai-responses",
       provider: params.provider ?? "xai",
@@ -85,10 +84,13 @@ function runXaiToolPayloadWrapper(params: {
     options?.onPayload?.(params.payload, {} as Model<XaiStreamApi>);
     return {} as ReturnType<StreamFn>;
   };
-  const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+  const wrapped = wrapXaiProviderStream({
+    streamFn: baseStreamFn,
+    extraParams: { tool_stream: false },
+  } as never);
   const api = params.api ?? "openai-responses";
 
-  void wrapped(
+  void wrapped?.(
     {
       api,
       provider: params.provider ?? "xai",
@@ -182,16 +184,19 @@ describe("xai stream wrappers", () => {
       } as unknown as ReturnType<StreamFn>;
     };
     let enabled = true;
-    const wrapped = createXaiFastModeWrapper(baseStreamFn, () => enabled);
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStreamFn,
+      extraParams: { fastMode: () => enabled, tool_stream: false },
+    } as never);
     const model = {
       api: "openai-responses",
       provider: "xai",
       id: "grok-4",
     } as Model<XaiStreamApi>;
 
-    void wrapped(model, { messages: [] } as Context, {});
+    void wrapped?.(model, { messages: [] } as Context, {});
     enabled = false;
-    void wrapped(model, { messages: [] } as Context, {});
+    void wrapped?.(model, { messages: [] } as Context, {});
 
     expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
   });
@@ -391,9 +396,12 @@ describe("xai stream wrappers", () => {
       options?.onPayload?.(payload, model);
       return {} as ReturnType<StreamFn>;
     };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStreamFn,
+      extraParams: { tool_stream: false },
+    } as never);
 
-    void wrapped(
+    void wrapped?.(
       {
         api: "openai-responses",
         provider: "xai",
@@ -421,9 +429,12 @@ describe("xai stream wrappers", () => {
         options?.onPayload?.(payload, model);
         return {} as ReturnType<StreamFn>;
       };
-      const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+      const wrapped = wrapXaiProviderStream({
+        streamFn: baseStreamFn,
+        extraParams: { tool_stream: false },
+      } as never);
 
-      void wrapped(
+      void wrapped?.(
         {
           api: "openai-responses",
           provider,

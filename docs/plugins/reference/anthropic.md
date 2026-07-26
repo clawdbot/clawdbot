@@ -16,7 +16,7 @@ Anthropic models, Claude CLI, and native Claude session catalog.
 
 ## Surface
 
-providers: anthropic; contracts: mediaUnderstandingProviders, usageProviders
+providers: `anthropic`; contracts: `mediaUnderstandingProviders`, `usageProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

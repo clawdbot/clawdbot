@@ -15,16 +15,16 @@ import {
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  configureTaskFlowRegistryRuntime,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -233,6 +233,25 @@ describe("task-flow-registry audit", () => {
         flow.flowId,
       );
     });
+  });
+
+  it("does not flag retained terminal blocked flows after their task is pruned", () => {
+    const now = 60 * 60_000;
+    const flow: TaskFlowRecord = {
+      flowId: "flow-terminal-blocked",
+      syncMode: "task_mirrored",
+      ownerKey: "agent:main:main",
+      revision: 0,
+      status: "blocked",
+      notifyPolicy: "done_only",
+      goal: "Historical blocked task",
+      blockedTaskId: "task-pruned",
+      createdAt: 1,
+      updatedAt: 100,
+      endedAt: 100,
+    };
+
+    expect(listTaskFlowAuditFindings({ flows: [flow], now })).toStrictEqual([]);
   });
 
   it("reports cancel-stuck before maintenance finalizes the flow", async () => {

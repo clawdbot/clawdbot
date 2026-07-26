@@ -5,9 +5,11 @@ const mocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
   ensureGatewayReadyForOperation: vi.fn(),
   inspectPortUsage: vi.fn(),
+  loadGatewayTlsRuntime: vi.fn(),
   openUrl: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
+  resolveGatewayAuth: vi.fn(),
   resolveGatewayAuthToken: vi.fn(),
   resolveGatewayPort: vi.fn(),
 }));
@@ -21,6 +23,10 @@ vi.mock("../../gateway/auth-token-resolution.js", () => {
   const { resolveGatewayAuthToken } = mocks;
   return { resolveGatewayAuthToken };
 });
+
+vi.mock("../../gateway/auth.js", () => ({
+  resolveGatewayAuth: mocks.resolveGatewayAuth,
+}));
 
 vi.mock("../onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(),
@@ -37,12 +43,19 @@ vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: mocks.inspectPortUsage,
 }));
 
+vi.mock("../../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
+}));
+
 vi.mock("../gateway-readiness.js", () => ({
   ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
 }));
 
 // Assembled so secret scanners do not read the fixture as a real credential.
 const fakeToken = ["te", "st"].join("");
+const fakePassword = ["te", "st-password"].join("");
+const authPasswordKey = ["pass", "word"].join("");
+const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 const runtime = {
   error: vi.fn(),
@@ -99,6 +112,8 @@ describe("dashboardCommand --json", () => {
       secretRefConfigured: false,
       token: fakeToken,
     });
+    mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token: fakeToken });
+    mocks.loadGatewayTlsRuntime.mockResolvedValue({ enabled: false, required: false });
   });
 
   it("prints one compact success object without interactive side effects", async () => {
@@ -121,6 +136,63 @@ describe("dashboardCommand --json", () => {
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789);
     expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(mocks.loadGatewayTlsRuntime).not.toHaveBeenCalled();
+  });
+
+  it("adds the canonical certificate fingerprint for a TLS Gateway", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          bind: "loopback",
+          tls: { enabled: true },
+        },
+      },
+    });
+    mocks.resolveControlUiLinks.mockReturnValue({
+      httpUrl: "https://127.0.0.1:18789/",
+      wsUrl: "wss://127.0.0.1:18789",
+    });
+    mocks.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "ab".repeat(32),
+    });
+
+    await dashboardCommand(runtime, { json: true });
+
+    expect(mocks.loadGatewayTlsRuntime).toHaveBeenCalledWith({ enabled: true });
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        wsUrl: "wss://127.0.0.1:18789",
+        tlsFingerprint: "ab".repeat(32),
+      }),
+      0,
+    );
+  });
+
+  it("adds a plaintext password only for password-authenticated Gateways", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "password" },
+        },
+      },
+    });
+    mocks.resolveGatewayAuth.mockReturnValue({
+      mode: "password",
+      [authPasswordKey]: fakePassword,
+    });
+
+    await dashboardCommand(runtime, { json: true });
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ [gatewayPasswordJsonKey]: fakePassword }),
+      0,
+    );
   });
 
   it("prints one failure object and exits non-zero when not ready", async () => {

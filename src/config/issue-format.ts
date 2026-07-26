@@ -5,10 +5,13 @@ import type { ConfigValidationIssue } from "./types.js";
 type ConfigIssueLineInput = {
   path?: string | null;
   message: string;
+  line?: number;
+  sourceFile?: string;
 };
 
 type ConfigIssueFormatOptions = {
   normalizeRoot?: boolean;
+  sourceFile?: string;
 };
 
 type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
@@ -16,7 +19,7 @@ type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
 };
 
 /** Normalize missing or blank config issue paths to the root marker used in CLI output. */
-export function normalizeConfigIssuePath(path: string | null | undefined): string {
+function normalizeConfigIssuePath(path: string | null | undefined): string {
   if (typeof path !== "string") {
     return "<root>";
   }
@@ -25,9 +28,9 @@ export function normalizeConfigIssuePath(path: string | null | undefined): strin
 }
 
 /** Return the public config issue shape with a normalized path and non-empty allowed values. */
-export function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
+function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
-  return {
+  const normalized: ConfigValidationIssue = {
     path: normalizeConfigIssuePath(issue.path),
     message: issue.message,
     ...(hasAllowedValues ? { allowedValues: issue.allowedValues } : {}),
@@ -37,6 +40,13 @@ export function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValida
       ? { allowedValuesHiddenCount: issue.allowedValuesHiddenCount }
       : {}),
   };
+  if (issue.pathSegments) {
+    Object.defineProperty(normalized, "pathSegments", {
+      value: issue.pathSegments,
+      enumerable: false,
+    });
+  }
+  return normalized;
 }
 
 /** Normalize a batch of config validation issues for display or JSON output. */
@@ -44,6 +54,22 @@ export function normalizeConfigIssues(
   issues: ReadonlyArray<ConfigValidationIssue>,
 ): ConfigValidationIssue[] {
   return issues.map((issue) => normalizeConfigIssue(issue));
+}
+
+function resolveIssueLocationPrefix(
+  issue: ConfigIssueLineInput,
+  opts?: ConfigIssueFormatOptions,
+): string {
+  const sourceFile =
+    typeof issue.sourceFile === "string" && issue.sourceFile.trim()
+      ? issue.sourceFile.trim()
+      : typeof opts?.sourceFile === "string" && opts.sourceFile.trim()
+        ? opts.sourceFile.trim()
+        : "";
+  if (!sourceFile || typeof issue.line !== "number" || issue.line <= 0) {
+    return "";
+  }
+  return `${sanitizeTerminalText(sourceFile)}:${issue.line} — `;
 }
 
 function resolveIssuePathForLine(
@@ -66,9 +92,10 @@ export function formatConfigIssueLine(
   opts?: ConfigIssueFormatOptions,
 ): string {
   const prefix = marker ? `${marker} ` : "";
+  const locationPrefix = resolveIssueLocationPrefix(issue, opts);
   const path = sanitizeTerminalText(resolveIssuePathForLine(issue.path, opts));
   const message = sanitizeTerminalText(issue.message);
-  return `${prefix}${path}: ${message}`;
+  return `${prefix}${locationPrefix}${path}: ${message}`;
 }
 
 /** Format config issues as terminal-safe lines with a shared marker prefix. */

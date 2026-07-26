@@ -8,10 +8,9 @@
   },
   "type": "module",
   "dependencies": {
-    "@github/copilot-sdk": "1.0.5"
+    "@github/copilot-sdk": "1.0.7"
   },
   "devDependencies": {
-    "@github/copilot": "1.0.68",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {

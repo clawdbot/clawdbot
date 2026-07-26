@@ -1,0 +1,35 @@
+title: Matrix E2EE CLI account add enables encryption and bootstraps verification
+scenario:
+  id: matrix-e2ee-cli-account-add-enable-e2ee
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 84, "matrix:e2ee-cli": 0 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-cli-account-add-enable-e2ee
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE CLI Account Add Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js
+  call: runMatrixQaE2eeCliAccountAddEnableE2eeScenario
+  args:
+    - expr: "scenarioContext"

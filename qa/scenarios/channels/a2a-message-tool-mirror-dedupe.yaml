@@ -5,10 +5,10 @@ scenario:
   surface: channel
   coverage:
     primary:
-      - runtime.delivery
+      - agent-runtime.subagent-turns-delivery
     secondary:
-      - channels.qa-channel
-      - tools.message
+      - agent-runtime.subagent-turns-qa-channel
+      - channels.message-final-reply
   objective: Verify a sessions_send A2A turn whose nested target run replies through message(action=send) delivers once to the requester channel and does not re-announce the delivery-mirror transcript row.
   gatewayConfigPatch:
     messages:
@@ -37,10 +37,10 @@ scenario:
     - src/shared/transcript-only-openclaw-assistant.ts
   execution:
     kind: flow
+    channel: qa-channel
     summary: Run a real QA Gateway/qa-channel A2A source-reply turn and assert the message-tool delivery mirror is not announced again.
     config:
       requiredProviderMode: mock-openai
-      requiredChannelDriver: qa-channel
       conversationId: qa-a2a-mirror-room
       conversationTitle: QA A2A Mirror Room
       promptSnippet: qa a2a message-tool mirror check

@@ -1,15 +1,16 @@
 // Message channel tests cover channel id normalization and routing helpers.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { NATIVE_APPROVAL_CHANNELS } from "./message-channel-constants.js";
 import {
+  isBrowserCopilotClient,
+  isBrowserOperatorUiClient,
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
-  isNativeApprovalChannel,
+  isOperatorUiClient,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
 
@@ -73,6 +74,15 @@ describe("message-channel", () => {
     }
   });
 
+  it("classifies the browser copilot as a dedicated browser operator UI", () => {
+    const client = { id: "openclaw-browser-copilot", mode: "ui" };
+    expect(isBrowserCopilotClient(client)).toBe(true);
+    expect(isBrowserOperatorUiClient(client)).toBe(true);
+    expect(isOperatorUiClient(client)).toBe(true);
+    expect(isBrowserCopilotClient({ id: "webchat", mode: "webchat" })).toBe(false);
+    expect(isBrowserCopilotClient({ id: "openclaw-browser-copilot", mode: "webchat" })).toBe(true);
+  });
+
   it("normalizes plugin aliases when registered", () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -92,17 +102,35 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
   });
 
-  it("lists native chat exec approval channels", () => {
-    for (const channel of NATIVE_APPROVAL_CHANNELS) {
-      expect(isNativeApprovalChannel(channel)).toBe(true);
+  it("reads native approval behavior from bundled channel manifests", async () => {
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const previousTrust = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve("extensions");
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    vi.resetModules();
+    try {
+      const channelModule = await import("./message-channel.js");
+      const promptModule = await import("../channels/plugins/native-approval-prompt.js");
+      for (const channel of ["webchat", "discord", "imessage", "telegram", "whatsapp"]) {
+        expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(true);
+      }
+      expect(promptModule.isKnownNativeApprovalPromptChannel("whatsapp")).toBe(true);
+      for (const channel of ["feishu", "msteams", "line", "heartbeat", "", "TELEGRAM"]) {
+        expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(false);
+      }
+    } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      if (previousTrust === undefined) {
+        delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrust;
+      }
+      vi.resetModules();
     }
-    // Channels without a bundled approval-handler.runtime must not claim native approval.
-    expect(isNativeApprovalChannel("feishu")).toBe(false);
-    expect(isNativeApprovalChannel("msteams")).toBe(false);
-    expect(isNativeApprovalChannel("line")).toBe(false);
-    expect(isNativeApprovalChannel("heartbeat")).toBe(false);
-    expect(isNativeApprovalChannel("")).toBe(false);
-    expect(isNativeApprovalChannel("TELEGRAM")).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {

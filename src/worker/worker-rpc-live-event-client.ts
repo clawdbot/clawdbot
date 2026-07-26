@@ -147,7 +147,11 @@ export class WorkerLiveEventClient {
           const previousAck = this.ackedSeqValue;
           this.ackThrough(response.payload.ackedSeq);
           if (this.ackedSeqValue === previousAck && this.buffered[0] === current) {
-            this.rejectAll(new Error("worker live-event acknowledgement did not advance"));
+            this.rejectAll(
+              new Error(
+                `worker live-event acknowledgement did not advance (seq=${current.seq} runId=${current.runId} ackedSeq=${response.payload.ackedSeq} previousAck=${previousAck} buffered=${this.buffered.length} runEpoch=${this.options.runEpoch})`,
+              ),
+            );
             return;
           }
           continue;

@@ -2,16 +2,11 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import * as jsonFiles from "../../infra/json-files.js";
-import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config.js";
+import { describe, expect, it, vi } from "vitest";
+import { withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps, resolveSessionWorkStartError } from "./lifecycle.js";
 import {
-  resolveExplicitSessionFilePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
@@ -22,17 +17,7 @@ import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js"
 import { loadSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
-import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  updateSessionStore,
-  updateSessionStoreEntry,
-} from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
-
-type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
 
 it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
@@ -43,17 +28,6 @@ it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   ]);
   expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
 });
-
-function requireWriteTextAtomicCall(
-  spy: { mock: { calls: WriteTextAtomicCall[] } },
-  callIndex = 0,
-): WriteTextAtomicCall {
-  const call = spy.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected writeTextAtomic call ${callIndex}`);
-  }
-  return call;
-}
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -85,16 +59,6 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
-  });
-
-  it("rejects explicit sessionFile paths without derived fallback", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    expect(() =>
-      resolveExplicitSessionFilePath("/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl", {
-        sessionsDir,
-      }),
-    ).toThrow(/within sessions directory/);
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
@@ -162,16 +126,16 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      expect(groupPolicy.mode).toBe("none");
     });
   });
 
-  it("defaults to daily resets at 4am local time", () => {
+  it("defaults to no automatic reset", () => {
     const policy = resolveSessionResetPolicy({
       resetType: "direct",
     });
 
-    expect(policy.mode).toBe("daily");
+    expect(policy.mode).toBe("none");
     expect(policy.atHour).toBe(4);
   });
 
@@ -313,16 +277,34 @@ describe("session lifecycle timestamps", () => {
         "utf8",
       );
 
-      const timestamps = resolveSessionLifecycleTimestamps({
-        storePath,
-        entry: {
-          sessionId: "legacy-session",
-          sessionFile,
-          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
-        },
-      });
+      const realReadSync = fs.readSync.bind(fs);
+      let shortReadCalls = 0;
+      const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+        fd: number,
+        buffer: NodeJS.ArrayBufferView,
+        offset: number,
+        length: number,
+        position: fs.ReadPosition | null,
+      ) => {
+        shortReadCalls += 1;
+        return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+      }) as typeof fs.readSync);
 
-      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      try {
+        const timestamps = resolveSessionLifecycleTimestamps({
+          storePath,
+          entry: {
+            sessionId: "legacy-session",
+            sessionFile,
+            updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+          },
+        });
+
+        expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+        expect(shortReadCalls).toBeGreaterThan(1);
+      } finally {
+        readSpy.mockRestore();
+      }
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
@@ -381,745 +363,6 @@ describe("session work admission", () => {
   });
 });
 
-describe("session store writer queue", () => {
-  const writerFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-writer-test-" });
-
-  async function makeTmpStore(
-    initial: Record<string, unknown> = {},
-  ): Promise<{ dir: string; storePath: string }> {
-    const dir = await writerFixtureRootTracker.make("case");
-    const storePath = path.join(dir, "sessions.json");
-    if (Object.keys(initial).length > 0) {
-      await fsPromises.writeFile(storePath, JSON.stringify(initial, null, 2), "utf-8");
-    }
-    return { dir, storePath };
-  }
-
-  beforeAll(async () => {
-    await writerFixtureRootTracker.setup();
-  });
-
-  afterAll(async () => {
-    await writerFixtureRootTracker.cleanup();
-  });
-
-  afterEach(async () => {
-    clearSessionStoreCacheForTest();
-  });
-
-  it("serializes concurrent updateSessionStore calls without data loss", async () => {
-    const key = "agent:main:test";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s1", updatedAt: Date.now(), counter: 0 },
-    });
-
-    const N = 4;
-    await Promise.all(
-      Array.from({ length: N }, (_, i) =>
-        updateSessionStore(storePath, async (store) => {
-          const entry = store[key] as Record<string, unknown>;
-          await Promise.resolve();
-          entry.counter = (entry.counter as number) + 1;
-          entry.tag = `writer-${i}`;
-        }),
-      ),
-    );
-
-    const store = loadSessionStore(storePath);
-    expect((store[key] as Record<string, unknown>).counter).toBe(N);
-  });
-
-  it("drops non-object persisted session entries on load", async () => {
-    const { storePath } = await makeTmpStore({
-      "agent:main:good": { sessionId: "s-good", updatedAt: Date.now() },
-      "agent:main:null": null,
-      "agent:main:string": "not-a-session-entry",
-      "agent:main:array": [{ sessionId: "s-array", updatedAt: Date.now() }],
-    } as unknown as Record<string, SessionEntry>);
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-
-    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
-    expect(store["agent:main:null"]).toBeUndefined();
-    expect(store["agent:main:string"]).toBeUndefined();
-    expect(store["agent:main:array"]).toBeUndefined();
-  });
-
-  it("strips malformed pending final-delivery fields on load", async () => {
-    const { storePath } = await makeTmpStore({
-      "agent:main:bad-pending": {
-        sessionId: "s-bad-pending",
-        updatedAt: 100,
-        pendingFinalDelivery: "yes",
-        pendingFinalDeliveryText: { text: "would crash display sanitizers" },
-        pendingFinalDeliveryCreatedAt: "100",
-        pendingFinalDeliveryLastAttemptAt: -1,
-        pendingFinalDeliveryAttemptCount: "2",
-        pendingFinalDeliveryLastError: { message: "boom" },
-        pendingFinalDeliveryContext: {
-          channel: "telegram",
-          to: ["chat"],
-          accountId: { id: "default" },
-          threadId: {},
-        },
-        pendingFinalDeliveryIntentId: 123,
-        restartRecoveryDeliveryContext: {
-          channel: "discord",
-          to: [],
-        },
-        restartRecoveryDeliveryRunId: 123,
-        restartRecoveryDeliverySourceRunId: 123,
-        restartRecoveryTerminalRunIds: [123, "", {}],
-      },
-      "agent:main:good-pending": {
-        sessionId: "s-good-pending",
-        updatedAt: 100,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "hello",
-        pendingFinalDeliveryCreatedAt: 10,
-        pendingFinalDeliveryLastAttemptAt: 20,
-        pendingFinalDeliveryAttemptCount: 2,
-        pendingFinalDeliveryLastError: null,
-        pendingFinalDeliveryContext: {
-          channel: "Telegram",
-          to: " chat-1 ",
-          accountId: "Default",
-          threadId: 42.5,
-        },
-        pendingFinalDeliveryIntentId: "intent-1",
-        restartRecoveryDeliveryContext: {
-          channel: "Discord",
-          to: " discord:dm:123 ",
-          accountId: "Main",
-          threadId: "reply-1",
-        },
-        restartRecoveryDeliveryRunId: "run-1",
-        restartRecoveryDeliverySourceRunId: "source-run-1",
-        restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
-      },
-    } as unknown as Record<string, SessionEntry>);
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const bad = store["agent:main:bad-pending"];
-    const good = store["agent:main:good-pending"];
-
-    expect(bad).toMatchObject({
-      sessionId: "s-bad-pending",
-      updatedAt: 100,
-    });
-    expect(bad?.pendingFinalDelivery).toBeUndefined();
-    expect(bad?.pendingFinalDeliveryText).toBeUndefined();
-    expect(bad?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(bad?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(bad?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(bad?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
-    expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
-    expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
-
-    expect(good).toMatchObject({
-      pendingFinalDelivery: true,
-      pendingFinalDeliveryText: "hello",
-      pendingFinalDeliveryCreatedAt: 10,
-      pendingFinalDeliveryLastAttemptAt: 20,
-      pendingFinalDeliveryAttemptCount: 2,
-      pendingFinalDeliveryLastError: null,
-      pendingFinalDeliveryContext: {
-        channel: "telegram",
-        to: "chat-1",
-        accountId: "default",
-        threadId: 42,
-      },
-      pendingFinalDeliveryIntentId: "intent-1",
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        threadId: "reply-1",
-      },
-      restartRecoveryDeliveryRunId: "run-1",
-      restartRecoveryDeliverySourceRunId: "source-run-1",
-      restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],
-    });
-  });
-
-  it("strips malformed plugin extension state on load", async () => {
-    const { storePath } = await makeTmpStore({
-      "agent:main:plugins": {
-        sessionId: "s-plugins",
-        updatedAt: 100,
-        pluginExtensions: {
-          " workflow-plugin ": {
-            " approval ": { state: "waiting" },
-            scalar: true,
-            huge: "x".repeat(70 * 1024),
-            emptyNamespace: undefined,
-          },
-          "bad-shape": "not-a-namespace-record",
-          "array-shape": [{ workflow: { state: "bad" } }],
-          "": { workflow: { state: "bad" } },
-        },
-        pluginExtensionSlotKeys: {
-          " workflow-plugin ": {
-            " approval ": " approvalSnapshot ",
-            reserved: "sessionId",
-            dotted: "approval.snapshot",
-            empty: "",
-          },
-          "bad-shape": "approvalSnapshot",
-          "": { workflow: "ignoredSlot" },
-        },
-      },
-    } as unknown as Record<string, SessionEntry>);
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:main:plugins"]?.pluginExtensions).toEqual({
-      "workflow-plugin": {
-        approval: { state: "waiting" },
-        scalar: true,
-      },
-    });
-    expect(store["agent:main:plugins"]?.pluginExtensionSlotKeys).toEqual({
-      "workflow-plugin": {
-        approval: "approvalSnapshot",
-      },
-    });
-  });
-
-  it("normalizes malformed persisted session entry fields on load", async () => {
-    const { storePath } = await makeTmpStore({
-      "agent:main:good": {
-        sessionId: " s-good ",
-        updatedAt: "definitely-not-a-time",
-        sessionFile: { path: "bad.jsonl" },
-      },
-      "agent:main:object-id": { sessionId: { nested: "bad" }, updatedAt: Date.now() },
-      "agent:main:unsafe-id": { sessionId: "../etc/passwd", updatedAt: Date.now() },
-    } as unknown as Record<string, SessionEntry>);
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-
-    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
-    expect(store["agent:main:good"]?.updatedAt).toBe(0);
-    expect(store["agent:main:good"]?.sessionFile).toBeUndefined();
-    expect(store["agent:main:object-id"]).toBeUndefined();
-    expect(store["agent:main:unsafe-id"]).toBeUndefined();
-  });
-
-  it("keeps metadata-only canonical sessions without treating their ids as transcript ids", async () => {
-    const { storePath } = await makeTmpStore({
-      "agent:main:metadata": {
-        sessionId: "agent:main:metadata",
-        updatedAt: Date.now(),
-        groupActivation: "always",
-      },
-    } as unknown as Record<string, SessionEntry>);
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-
-    expect(store["agent:main:metadata"]).toMatchObject({
-      groupActivation: "always",
-    });
-    expect(store["agent:main:metadata"]?.sessionId).toBeUndefined();
-  });
-
-  it("skips session store disk writes when payload is unchanged", async () => {
-    const key = "agent:main:no-op-save";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s-noop", updatedAt: Date.now() },
-    });
-
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
-    await updateSessionStore(
-      storePath,
-      async () => {
-        // Intentionally no-op mutation.
-      },
-      { skipMaintenance: true },
-    );
-    expect(writeSpy).not.toHaveBeenCalled();
-    writeSpy.mockRestore();
-  });
-
-  it("skips unchanged writes after persisting blobbed skills prompts", async () => {
-    const key = "agent:main:no-op-blobbed-save";
-    const { storePath } = await makeTmpStore({
-      [key]: {
-        sessionId: "s-noop-blobbed",
-        updatedAt: Date.now(),
-        skillsSnapshot: {
-          prompt: `<available_skills>\n${"shared prompt\n".repeat(200)}</available_skills>`,
-          skills: [{ name: "demo" }],
-          version: 1,
-        },
-      },
-    });
-
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
-    await updateSessionStore(
-      storePath,
-      async (store) => {
-        expectDefined(store[key], "store[key] test invariant").displayName = "saved once";
-      },
-      { skipMaintenance: true },
-    );
-    writeSpy.mockClear();
-
-    await updateSessionStore(
-      storePath,
-      async () => {
-        // Intentionally no-op mutation after the disk JSON has prompt refs.
-      },
-      { skipMaintenance: true },
-    );
-
-    const storeWrites = writeSpy.mock.calls.filter(([targetPath]) => targetPath === storePath);
-    expect(storeWrites).toHaveLength(0);
-    writeSpy.mockClear();
-
-    await updateSessionStore(
-      storePath,
-      async () => {
-        // The first unchanged save must not clear the serialized comparison cache.
-      },
-      { skipMaintenance: true },
-    );
-
-    const secondStoreWrites = writeSpy.mock.calls.filter(
-      ([targetPath]) => targetPath === storePath,
-    );
-    expect(secondStoreWrites).toHaveLength(0);
-    writeSpy.mockRestore();
-  });
-
-  it("keeps unchanged entry saves from clearing blobbed store comparison cache", async () => {
-    const now = Date.now();
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-    const key = "agent:main:no-op-blobbed-entry-save";
-    let writeSpy:
-      | {
-          mock: { calls: WriteTextAtomicCall[] };
-          mockClear: () => void;
-          mockRestore: () => void;
-        }
-      | undefined;
-    try {
-      const { storePath } = await makeTmpStore({
-        [key]: {
-          sessionId: "s-noop-blobbed-entry",
-          updatedAt: now,
-          displayName: "entry",
-          skillsSnapshot: {
-            prompt: `<available_skills>\n${"entry prompt\n".repeat(200)}</available_skills>`,
-            skills: [{ name: "demo" }],
-            version: 1,
-          },
-        },
-      });
-
-      writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
-      await updateSessionStore(
-        storePath,
-        async (store) => {
-          expectDefined(store[key], "store[key] test invariant").displayName = "saved once";
-        },
-        { skipMaintenance: true },
-      );
-      writeSpy.mockClear();
-
-      await updateSessionStoreEntry({
-        storePath,
-        sessionKey: key,
-        update: async (entry) => ({ displayName: entry.displayName, updatedAt: entry.updatedAt }),
-        skipMaintenance: true,
-      });
-      expect(
-        writeSpy.mock.calls.filter((call: WriteTextAtomicCall) => call[0] === storePath),
-      ).toHaveLength(0);
-      writeSpy.mockClear();
-
-      await updateSessionStore(
-        storePath,
-        async () => {
-          // The unchanged entry save must leave the serialized comparison cache hot.
-        },
-        { skipMaintenance: true },
-      );
-      expect(
-        writeSpy.mock.calls.filter((call: WriteTextAtomicCall) => call[0] === storePath),
-      ).toHaveLength(0);
-    } finally {
-      writeSpy?.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("caches unchanged session stores from persisted JSON shape", async () => {
-    const key = "agent:main:no-op-cache";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s-noop-cache", updatedAt: Date.now() },
-    });
-
-    await updateSessionStore(
-      storePath,
-      async (store) => {
-        (store[key] as Record<string, unknown>).ephemeral = undefined;
-      },
-      { skipMaintenance: true },
-    );
-
-    expect(loadSessionStore(storePath)[key]).not.toHaveProperty("ephemeral");
-  });
-
-  it("clones session store cache hits from cached serialized JSON", () => {
-    const key = "agent:main:serialized-cache";
-    const storePath = "/tmp/openclaw-serialized-cache-test.json";
-    const store = {
-      [key]: {
-        sessionId: "s-serialized-cache",
-        updatedAt: Date.now(),
-        skillsSnapshot: {
-          prompt: "p".repeat(1024),
-          skills: [{ name: "demo" }],
-          version: 1,
-        },
-      },
-    } satisfies Record<string, SessionEntry>;
-    const serialized = JSON.stringify(store);
-    writeSessionStoreCache({
-      storePath,
-      store,
-      mtimeMs: 1,
-      sizeBytes: serialized.length,
-      serialized,
-      cloneSerialized: serialized,
-      takeOwnership: true,
-    });
-    store[key].sessionId = "mutated-cache-object";
-
-    const cached = readSessionStoreCache({
-      storePath,
-      mtimeMs: 1,
-      sizeBytes: serialized.length,
-    });
-
-    expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
-  });
-
-  it("returns an owned parsed store for fresh skip-cache loads without cloning again", async () => {
-    const key = "agent:main:owned-skip-cache";
-    const { storePath } = await makeTmpStore({
-      [key]: {
-        sessionId: "s-owned-skip-cache",
-        updatedAt: Date.now(),
-        skillsSnapshot: {
-          prompt: "owned prompt",
-          skills: [{ name: "demo" }],
-          version: 1,
-        },
-      },
-    });
-    const parseSpy = vi.spyOn(JSON, "parse");
-    try {
-      const loaded = loadSessionStore(storePath, { skipCache: true, clone: false });
-      expectDefined(loaded[key], "loaded[key] test invariant").sessionId = "mutated-owned-store";
-
-      expect(parseSpy).toHaveBeenCalledTimes(1);
-      expect(
-        expectDefined(
-          loadSessionStore(storePath, { skipCache: true, clone: false })[key],
-          "loadSessionStore(storePath, { skipCache: true, clone: false })[key] test invariant",
-        ).sessionId,
-      ).toBe("s-owned-skip-cache");
-    } finally {
-      parseSpy.mockRestore();
-    }
-  });
-
-  it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
-    const key = "agent:main:no-fsync";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s-no-fsync", updatedAt: Date.now(), counter: 0 },
-    });
-
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
-    await updateSessionStore(
-      storePath,
-      async (store) => {
-        const entry = store[key] as Record<string, unknown>;
-        entry.counter = 1;
-      },
-      { skipMaintenance: true },
-    );
-
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    const [writtenPath, writtenText, writeOptions] = requireWriteTextAtomicCall(writeSpy);
-    expect(writtenPath).toBe(storePath);
-    expect(writtenText).toBeTypeOf("string");
-    expect(writeOptions?.durable).toBe(false);
-    expect(writeOptions?.mode).toBe(0o600);
-    expect(writeOptions?.beforeRename).toBeTypeOf("function");
-    writeSpy.mockRestore();
-  });
-
-  it("can persist a known single entry without touching hydrated prompts from other sessions", async () => {
-    const key = "agent:main:single-entry";
-    const otherKey = "agent:main:other-entry";
-    const otherPrompt = `<available_skills>\n${"other prompt\n".repeat(200)}</available_skills>`;
-    const { dir, storePath } = await makeTmpStore({
-      [key]: { sessionId: "s-single-entry", updatedAt: Date.now(), counter: 0 },
-      [otherKey]: {
-        sessionId: "s-other-entry",
-        updatedAt: Date.now(),
-        skillsSnapshot: {
-          prompt: otherPrompt,
-          skills: [{ name: "demo" }],
-          version: 1,
-        },
-      },
-    });
-    loadSessionStore(storePath);
-    await updateSessionStore(storePath, () => undefined, { skipMaintenance: true });
-    const before = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
-    const beforeOtherEntry = before[otherKey];
-
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        const next = { ...store[key], counter: 1 } as SessionEntry;
-        store[key] = next;
-        return next;
-      },
-      {
-        resolveSingleEntryPersistence: (entry) => ({ sessionKey: key, entry }),
-        skipMaintenance: true,
-      },
-    );
-
-    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-      string,
-      SessionEntry
-    >;
-    expect((persisted[key] as Record<string, unknown> | undefined)?.counter).toBe(1);
-    expect(persisted[otherKey]).toStrictEqual(beforeOtherEntry);
-    expect(fs.existsSync(path.join(dir, "skills-prompts"))).toBe(true);
-  });
-
-  it("multiple consecutive errors do not permanently poison the queue", async () => {
-    const key = "agent:main:multi-err";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s1", updatedAt: Date.now() },
-    });
-
-    const errors = Array.from({ length: 3 }, (_, i) =>
-      updateSessionStore(storePath, async () => {
-        throw new Error(`fail-${i}`);
-      }),
-    );
-
-    const success = updateSessionStore(storePath, async (store) => {
-      store[key] = { ...store[key], modelOverride: "recovered" } as unknown as SessionEntry;
-    });
-
-    for (const [index, p] of errors.entries()) {
-      await expect(p).rejects.toThrow(`fail-${index}`);
-    }
-    await success;
-
-    const store = loadSessionStore(storePath);
-    expect(store[key]?.modelOverride).toBe("recovered");
-  });
-
-  it("clears stale runtime provider when model is patched without provider", () => {
-    const merged = mergeSessionEntry(
-      {
-        sessionId: "sess-runtime",
-        updatedAt: 100,
-        modelProvider: "anthropic",
-        model: "claude-opus-4-6",
-      },
-      {
-        model: "gpt-5.4",
-      },
-    );
-    expect(merged.model).toBe("gpt-5.4");
-    expect(merged.modelProvider).toBeUndefined();
-  });
-
-  it("rewrites generated sessionFile paths when session id changes", () => {
-    const previousSessionId = "11111111-1111-4111-8111-111111111111";
-    const nextSessionId = "22222222-2222-4222-8222-222222222222";
-    const merged = mergeSessionEntry(
-      {
-        sessionId: previousSessionId,
-        updatedAt: 100,
-        sessionFile: `/tmp/openclaw/sessions/${previousSessionId}.jsonl`,
-      },
-      {
-        sessionId: nextSessionId,
-        updatedAt: 200,
-      },
-    );
-
-    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}.jsonl`);
-  });
-
-  it("rewrites stale generated sessionFile patches during session rollover", () => {
-    const previousSessionId = "11111111-1111-4111-8111-111111111111";
-    const nextSessionId = "22222222-2222-4222-8222-222222222222";
-    const previousSessionFile = `/tmp/openclaw/sessions/${previousSessionId}-topic-456.jsonl`;
-    const merged = mergeSessionEntry(
-      {
-        sessionId: previousSessionId,
-        updatedAt: 100,
-        sessionFile: previousSessionFile,
-      },
-      {
-        sessionId: nextSessionId,
-        updatedAt: 200,
-        sessionFile: previousSessionFile,
-      },
-    );
-
-    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}-topic-456.jsonl`);
-  });
-
-  it("preserves custom sessionFile paths when session id changes", () => {
-    const merged = mergeSessionEntry(
-      {
-        sessionId: "previous-session",
-        updatedAt: 100,
-        sessionFile: "/tmp/openclaw/sessions/custom-transcript.jsonl",
-      },
-      {
-        sessionId: "next-session",
-        updatedAt: 200,
-      },
-    );
-
-    expect(merged.sessionFile).toBe("/tmp/openclaw/sessions/custom-transcript.jsonl");
-  });
-
-  it("caps future updatedAt values at the session merge boundary", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-future",
-        updatedAt: now + 10_000,
-      },
-      {
-        updatedAt: now + 20_000,
-      },
-      { now },
-    );
-
-    expect(merged.updatedAt).toBe(now);
-  });
-
-  it("caps future updatedAt values while preserving activity", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-preserve-future",
-        updatedAt: now + 10_000,
-      },
-      {},
-      { now, policy: "preserve-activity" },
-    );
-
-    expect(merged.updatedAt).toBe(now);
-  });
-
-  it("normalizes orphan modelProvider fields at store write boundary", async () => {
-    const key = "agent:main:orphan-provider";
-    const { storePath } = await makeTmpStore({
-      [key]: {
-        sessionId: "sess-orphan",
-        updatedAt: 100,
-        modelProvider: "anthropic",
-      },
-    });
-
-    await updateSessionStore(storePath, async (store) => {
-      const entry = expectDefined(store[key], "store[key] test invariant");
-      entry.updatedAt = Date.now();
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store[key]?.modelProvider).toBeUndefined();
-    expect(store[key]?.model).toBeUndefined();
-  });
-
-  it("does not preserve legacy ACP metadata when replacing a session entry wholesale", async () => {
-    const key = "agent:codex:acp:binding:discord:default:feedface";
-    const acp = {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "codex-discord",
-      mode: "persistent" as const,
-      state: "idle" as const,
-      lastActivityAt: 100,
-    };
-    const { storePath } = await makeTmpStore({
-      [key]: {
-        sessionId: "sess-acp",
-        updatedAt: Date.now(),
-        acp,
-      },
-    });
-
-    await updateSessionStore(storePath, (store) => {
-      store[key] = {
-        sessionId: "sess-acp",
-        updatedAt: Date.now(),
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      };
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store[key]?.acp).toBeUndefined();
-    expect(store[key]?.modelProvider).toBe("openai");
-    expect(store[key]?.model).toBe("gpt-5.4");
-  });
-
-  it("removes legacy ACP metadata when the SQLite metadata row is cleared", async () => {
-    const key = "agent:codex:acp:binding:discord:default:deadbeef";
-    const { storePath } = await makeTmpStore({
-      [key]: {
-        sessionId: "sess-acp-clear",
-        updatedAt: 100,
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-discord",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        },
-      },
-    });
-    const cfg = {
-      session: {
-        store: storePath,
-      },
-    } as OpenClawConfig;
-
-    const result = await upsertAcpSessionMeta({
-      cfg,
-      sessionKey: key,
-      mutate: () => null,
-    });
-
-    expect(result?.acp).toBeUndefined();
-    expect(loadSessionEntry({ storePath, sessionKey: key })?.acp).toBeUndefined();
-  });
-});
-
 describe("resolveAndPersistSessionFile", () => {
   const fixture = useTempSessionsFixture("session-file-test-");
 
@@ -1132,8 +375,7 @@ describe("resolveAndPersistSessionFile", () => {
         updatedAt: Date.now(),
       },
     };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const sessionStore = store;
     const expectedSessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId,
@@ -1159,8 +401,7 @@ describe("resolveAndPersistSessionFile", () => {
   it("creates and persists entry when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const sessionStore = {};
     const expectedSessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId,
@@ -1202,8 +443,7 @@ describe("resolveAndPersistSessionFile", () => {
         sessionFile: previousSessionFile,
       },
     };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    const sessionStore = store;
 
     const result = await resolveAndPersistSessionFile({
       sessionId: nextSessionId,

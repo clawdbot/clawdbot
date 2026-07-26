@@ -30,25 +30,33 @@ describe("type suppression inventory", () => {
     const fixtureRoot = createFixture({
       "src/example.ts": `
         const prose = "as any and @ts-expect-error";
+        const interpolated = \`value: \${value}\`;
         const first = value as any;
         const second = <any>value;
+        const third = value as /* preserved trivia */ any;
+        const fourth = </* preserved trivia */ any>value;
+        const fifth = value as // preserved line trivia
+          any;
+        const typeOnly: any = value;
         // @ts-expect-error invalid contract fixture
         consume({ invalid: true });
       `,
+      "src/plain.ts": "export const value = 1;",
     });
 
     const report = collectTypeSuppressionReport({
-      files: ["src/example.ts"],
+      files: ["src/example.ts", "src/plain.ts"],
       repoRoot: fixtureRoot,
     });
 
     expect(report.summary).toMatchObject({
-      findingCount: 3,
+      findingCount: 6,
       kindCounts: {
-        "as-any": 1,
+        "as-any": 3,
         "expect-error": 1,
-        "type-assertion-any": 1,
+        "type-assertion-any": 2,
       },
+      scannedFileCount: 2,
       touchedFileCount: 1,
     });
   });

@@ -101,6 +101,16 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
 4. Decide what Telegram message, mock model response, command, callback, button,
    media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra
    maintainer guidance, not as a replacement for reading the PR.
+   For an MCP App channel-action proof, use the trusted runner's
+   `--mcp-app-fixture` option with a Tailscale-capable Crabbox provider and send
+   `mcp app conformance qa check`. This starts the pinned official-SDK fixture
+   and publishes the candidate Gateway through its real Funnel lifecycle. The
+   native Telegram button must open the fixture showing `ready`. Click both
+   `Call app tool` and `Read resource`, then capture `companion-called` and
+   `resource-ok`.
+   Reopen that same Telegram button after its ticket expires and capture the
+   expired state. Do not substitute Control UI, transcript, curl, or a newly
+   minted button for any part of that path.
 5. Create detached worktrees under
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then

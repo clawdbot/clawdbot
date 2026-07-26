@@ -20,13 +20,13 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
-export type ProviderEnvAuthEvidence = {
+type ProviderEnvAuthEvidence = {
   mode: "api-key" | "aws-sdk" | "oauth";
   source: string;
 };
 
 /** Secret-free direct-auth fact retained for runtime credential resolution. */
-export type ProviderDirectAuthPlanningEvidence =
+type ProviderDirectAuthPlanningEvidence =
   | ({ kind: "environment" } & ProviderEnvAuthEvidence)
   | {
       kind: "setup-provider";

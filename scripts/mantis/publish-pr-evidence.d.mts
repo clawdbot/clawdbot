@@ -56,12 +56,13 @@ export function publishArtifactFiles({
   fetchImpl,
   manifest,
   storageConfig,
+  timeoutMs,
 }: {
   artifactRoot: string;
   fetchImpl?:
     | ((
         url: URL,
-        init: { body: Buffer; headers: HeadersInit; method: string },
+        init: { body: Buffer; headers: HeadersInit; method: string; signal: AbortSignal },
       ) => Promise<Response>)
     | undefined;
   manifest: EvidenceManifest;
@@ -75,6 +76,7 @@ export function publishArtifactFiles({
         secretAccessKey: string;
       }
     | undefined;
+  timeoutMs?: number | undefined;
 }): Promise<{
   artifactRoot: string;
   rawBase: string;

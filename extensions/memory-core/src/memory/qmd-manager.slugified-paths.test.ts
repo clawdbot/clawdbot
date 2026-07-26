@@ -13,16 +13,18 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logInfoMock: vi.fn(),
 }));
 
+type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+
 interface MockChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+  stdout: MockStream;
+  stderr: MockStream;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
 }
 
 function createMockChild(params?: { autoClose?: boolean }): MockChild {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child = new EventEmitter() as unknown as MockChild;
   child.stdout = stdout;
   child.stderr = stderr;
@@ -78,6 +80,14 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
+const withLease = async <T>(
+  options: { signal?: AbortSignal },
+  run: (lease: { signal: AbortSignal; assertOwned: () => void }) => Promise<T>,
+) =>
+  await run({
+    signal: options.signal ?? new AbortController().signal,
+    assertOwned: vi.fn(),
+  });
 
 function setQmdStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -114,6 +124,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         cfg: cfgToUse,
         agentId,
         resolved,
+        withLease,
         mode: "status",
       }),
     );

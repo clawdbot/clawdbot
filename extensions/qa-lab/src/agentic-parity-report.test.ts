@@ -3,14 +3,23 @@ import { describe, expect, it } from "vitest";
 import {
   buildQaAgenticParityComparison,
   buildQaRuntimeParityReport,
-  computeQaAgenticParityMetrics,
-  QaParityLabelMismatchError,
   renderQaAgenticParityMarkdownReport,
   renderQaRuntimeParityMarkdownReport,
-  type QaParityReportScenario,
   type QaParitySuiteSummary,
   type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
+
+type QaParityReportScenario = QaParitySuiteSummary["scenarios"][number];
+
+function computeQaAgenticParityMetrics(summary: QaParitySuiteSummary) {
+  const label = summary.run?.primaryProvider ?? "qa";
+  return buildQaAgenticParityComparison({
+    candidateLabel: label,
+    baselineLabel: label,
+    candidateSummary: summary,
+    baselineSummary: summary,
+  }).candidateMetrics;
+}
 
 const FULL_PARITY_PASS_SCENARIOS: QaParityReportScenario[] = [
   { name: "Approval turn tool followthrough", status: "pass" },
@@ -664,7 +673,7 @@ status=done`,
         },
         comparedAt: "2026-04-11T00:00:00.000Z",
       }),
-    ).toThrow(QaParityLabelMismatchError);
+    ).toThrow("do not match --candidate-label");
   });
 
   it("throws QaParityLabelMismatchError when the baseline run.primaryProvider does not match the label", () => {

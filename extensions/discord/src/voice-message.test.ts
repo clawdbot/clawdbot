@@ -6,7 +6,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "./internal/discord.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 import type { DiscordRetryRunner } from "./retry.js";
-import type { VoiceMessageMetadata } from "./voice-message.js";
+
+type VoiceMessageMetadata = Awaited<
+  ReturnType<typeof import("./voice-message.js").getVoiceMessageMetadata>
+>;
 
 const GUARDED_FETCH_TEST_TIMEOUT_MS = 250;
 
@@ -268,10 +271,11 @@ describe("sendDiscordVoiceMessage", () => {
     throw lastError;
   }
 
-  it("requests a fresh upload URL when the CDN upload is rate limited", async () => {
+  it("requests a fresh upload URL when rate limited and cancels the successful body", async () => {
     const post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }));
     const rest = createRest(post);
     let uploadUrlRequests = 0;
+    const successfulUpload = cancelTrackedResponse("uploaded", { status: 200 });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       const method = input instanceof Request ? input.method : (init?.method ?? "GET");
@@ -297,7 +301,7 @@ describe("sendDiscordVoiceMessage", () => {
         );
       }
       if (method === "PUT" && url === "https://cdn.test/upload-2") {
-        return new Response(null, { status: 200 });
+        return successfulUpload.response;
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
@@ -316,6 +320,7 @@ describe("sendDiscordVoiceMessage", () => {
     ).resolves.toEqual({ id: "msg-1", channel_id: "channel-1" });
 
     expect(uploadUrlRequests).toBe(2);
+    expect(successfulUpload.wasCanceled()).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
     expect(

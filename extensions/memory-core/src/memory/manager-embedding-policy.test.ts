@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
-  isRetryableMemoryEmbeddingTransportError,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
@@ -108,21 +107,18 @@ describe("memory embedding policy", () => {
 
     for (const message of splittableMessages) {
       expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
-      expect(isRetryableMemoryEmbeddingTransportError(message)).toBe(true);
       expect(isSplittableMemoryEmbeddingTransportError(message)).toBe(true);
     }
-    expect(isRetryableMemoryEmbeddingTransportError("ECONNREFUSED")).toBe(true);
+    expect(isRetryableMemoryEmbeddingError("ECONNREFUSED")).toBe(true);
     expect(isSplittableMemoryEmbeddingTransportError("ECONNREFUSED")).toBe(false);
-    expect(isRetryableMemoryEmbeddingTransportError("EHOSTUNREACH")).toBe(true);
+    expect(isRetryableMemoryEmbeddingError("EHOSTUNREACH")).toBe(true);
     expect(isSplittableMemoryEmbeddingTransportError("EHOSTUNREACH")).toBe(false);
-    expect(isRetryableMemoryEmbeddingTransportError("memory embeddings batch timed out")).toBe(
-      true,
-    );
+    expect(isRetryableMemoryEmbeddingError("memory embeddings batch timed out")).toBe(true);
     expect(isSplittableMemoryEmbeddingTransportError("memory embeddings batch timed out")).toBe(
       false,
     );
-    expect(isRetryableMemoryEmbeddingTransportError("worker terminated by user")).toBe(false);
-    expect(isRetryableMemoryEmbeddingTransportError("embedding validation failed")).toBe(false);
+    expect(isRetryableMemoryEmbeddingError("worker terminated by user")).toBe(false);
+    expect(isRetryableMemoryEmbeddingError("embedding validation failed")).toBe(false);
   });
 
   it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {

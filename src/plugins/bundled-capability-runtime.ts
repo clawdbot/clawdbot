@@ -74,13 +74,8 @@ function applyVitestCapabilityAliasOverrides(params: {
     return params.aliasMap;
   }
 
-  const {
-    "openclaw/plugin-sdk": _ignoredLegacyRootAlias,
-    "@openclaw/plugin-sdk": _ignoredScopedRootAlias,
-    ...scopedAliasMap
-  } = params.aliasMap;
   return {
-    ...scopedAliasMap,
+    ...params.aliasMap,
     // Capability contract loads only need a narrow SDK slice. Keep those
     // helpers on a tiny source graph so Vitest does not pull the dist chunk
     // bundle that also drags Matrix/WhatsApp code into these tests.
@@ -124,7 +119,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
     const definition = resolved as OpenClawPluginDefinition;
     return {
       definition,
-      register: definition.register ?? definition.activate,
+      register: definition.register,
     };
   }
   return {};

@@ -796,3 +796,4 @@ export function shouldRepairMalformedToolCallArguments(params: {
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

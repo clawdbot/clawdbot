@@ -1,7 +1,10 @@
 // Tests stripping untrusted inbound metadata while preserving user-visible content.
 import { describe, it, expect } from "vitest";
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import type { TemplateContext } from "../templating.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT, ROOM_EVENT_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
@@ -9,13 +12,17 @@ import {
   stripLeadingInboundMetadata,
 } from "./strip-inbound-meta.js";
 
+const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
+
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
+{"message_id":"msg-abc","sender":{"id":"+1555000"}}
+\`\`\``;
+
+const LEGACY_PRETTY_CONV_BLOCK = `Conversation info (untrusted metadata):
+\`\`\`json
 {
-  "message_id": "msg-abc",
-  "sender": {
-    "id": "+1555000"
-  }
+  "message_id": "msg-abc"
 }
 \`\`\``;
 
@@ -76,7 +83,12 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("What is the weather today?");
   });
 
-  it("strips explicit bot mention notes with conversation info", () => {
+  it("strips legacy pretty-printed Conversation info blocks", () => {
+    const input = `${LEGACY_PRETTY_CONV_BLOCK}\n\nWhat is the weather today?`;
+    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
+  });
+
+  it("strips legacy explicit bot mention notes with conversation info", () => {
     const input = `Conversation info (untrusted metadata):
 \`\`\`json
 {

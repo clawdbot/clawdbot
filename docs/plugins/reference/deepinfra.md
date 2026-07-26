@@ -16,7 +16,7 @@ Adds DeepInfra model provider support to OpenClaw.
 
 ## Surface
 
-providers: deepinfra; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, speechProviders, videoGenerationProviders
+providers: `deepinfra`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `memoryEmbeddingProviders`, `speechProviders`, `videoGenerationProviders`
 
 ## Related docs
 

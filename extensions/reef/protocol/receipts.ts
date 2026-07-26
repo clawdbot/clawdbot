@@ -15,6 +15,13 @@ export interface SignedReceipt extends ReceiptBody {
   signature: string;
 }
 
+export class InvalidDeliveryReceiptError extends Error {
+  constructor() {
+    super("invalid delivery receipt");
+    this.name = "InvalidDeliveryReceiptError";
+  }
+}
+
 export function signReceipt(body: ReceiptBody, recipientSigningSecretKey: string): SignedReceipt {
   validateReceiptBody(body);
   return {
@@ -41,14 +48,20 @@ export async function confirmDelivery(
   receipt: SignedReceipt,
   recipientSigningPublicKey: string,
   audit: AuditStore,
+  expected?: { id?: string; bodyHash?: string; status?: ReceiptBody["status"] },
 ): Promise<AuditEntry> {
-  if (!verifyReceipt(receipt, recipientSigningPublicKey)) {
-    throw new Error("invalid delivery receipt");
+  if (
+    !verifyReceipt(receipt, recipientSigningPublicKey) ||
+    (expected?.id !== undefined && receipt.id !== expected.id) ||
+    (expected?.bodyHash !== undefined && receipt.bodyHash !== expected.bodyHash) ||
+    (expected?.status !== undefined && receipt.status !== expected.status)
+  ) {
+    throw new InvalidDeliveryReceiptError();
   }
   return appendAudit(audit, "confirm_delivery", {
     receipt,
     status: receipt.status,
-    category: receipt.category,
+    ...(receipt.category ? { category: receipt.category } : {}),
   });
 }
 

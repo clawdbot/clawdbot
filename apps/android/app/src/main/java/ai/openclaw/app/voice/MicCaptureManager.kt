@@ -25,6 +25,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -53,6 +54,8 @@ internal data class GatewayTranscriptionSession(
 internal class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
+  private val preferredAudioInputDevice: () -> String? = { null },
+  private val onAppliedAudioInputChanged: (String?) -> Unit = {},
   private val createTranscriptionSession: suspend () -> GatewayTranscriptionSession,
   private val appendTranscriptionAudio: suspend (
     session: GatewayTranscriptionSession,
@@ -122,6 +125,7 @@ internal class MicCaptureManager(
   @Volatile private var transcriptionSession: GatewayTranscriptionSession? = null
   private var transcriptionStartJob: Job? = null
   private var transcriptionCaptureJob: Job? = null
+  private val audioInputGeneration = AtomicLong()
   private var transcriptionAppendJob: Job? = null
   private var transcriptionDrainJob: Job? = null
   private var transcriptFlushJob: Job? = null
@@ -711,6 +715,8 @@ internal class MicCaptureManager(
   private fun startTranscriptionCapture(session: GatewayTranscriptionSession) {
     transcriptionCaptureJob?.cancel()
     transcriptionAppendJob?.cancel()
+    val inputGeneration = audioInputGeneration.incrementAndGet()
+    onAppliedAudioInputChanged(null)
     val audioFrames =
       Channel<ByteArray>(
         capacity = 4,
@@ -737,7 +743,17 @@ internal class MicCaptureManager(
         var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = transcriptionSampleRateHz * 2 * transcriptionAudioFrameMs / 1000
-          audioInput = AndroidAudioInputSession.open(context, transcriptionSampleRateHz, frameBytes)
+          val openedAudioInput =
+            AndroidAudioInputSession.open(
+              context,
+              transcriptionSampleRateHz,
+              frameBytes,
+              preferredAudioInputDevice(),
+              { key ->
+                if (audioInputGeneration.get() == inputGeneration) onAppliedAudioInputChanged(key)
+              },
+            )
+          audioInput = openedAudioInput
           val buffer = ByteArray(frameBytes)
           audioInput.startRecording()
           while (coroutineContext.isActive && _micEnabled.value && transcriptionSession == session) {

@@ -18,17 +18,24 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  type ControlUiPluginFrameGrantAck,
+} from "./control-ui-contract.js";
 import { resolveOpenedControlUiRepresentation } from "./control-ui-static.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -44,7 +51,10 @@ const REAL_PNG = Buffer.from(
   "base64",
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
-const avatarTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 describe("handleControlUiHttpRequest", () => {
   function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
@@ -89,10 +99,10 @@ describe("handleControlUiHttpRequest", () => {
       assistantAgentId: string;
       devGitBranch?: string;
       localMediaPreviewRoots?: string[];
-      chatMessageMaxWidth?: string;
       seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
       terminalEnabled: boolean;
+      pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
 
@@ -145,7 +155,7 @@ describe("handleControlUiHttpRequest", () => {
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const url = params.basePath
       ? `${params.basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
       : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
@@ -164,7 +174,7 @@ describe("handleControlUiHttpRequest", () => {
         root: { kind: "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runAvatarRequest(params: {
@@ -288,6 +298,11 @@ describe("handleControlUiHttpRequest", () => {
       error: {
         type: "forbidden",
         message: "missing scope: operator.read",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
+        },
       },
     });
   }
@@ -383,6 +398,30 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
+  async function withScopedPairedOperatorDevice<T>(params: {
+    scopes: string[];
+    fn: (bearer: string) => Promise<T>;
+  }) {
+    const tempHome = testTempDirs.make("openclaw-ui-scoped-device-");
+    return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      const deviceId = `control-ui-device-${randomUUID()}`;
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: params.scopes,
+      });
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: params.scopes,
+      });
+      expect(approved).toMatchObject({ status: "approved" });
+      const operatorBearer =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      expect(typeof operatorBearer).toBe("string");
+      return await params.fn(operatorBearer ?? "");
+    });
+  }
+
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -404,15 +443,15 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
-          "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+          "connect-src 'self' ws: wss: data: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
         expect(setHeader).toHaveBeenCalledWith(
           "Permissions-Policy",
-          "camera=*, microphone=*, geolocation=*, clipboard-write=*",
+          "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
         );
-        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
       },
     });
   });
@@ -540,6 +579,67 @@ describe("handleControlUiHttpRequest", () => {
         );
       },
     });
+  });
+
+  it("sanitizes control characters in assistant media filenames", () => {
+    expect(buildAssistantMediaContentDisposition("draft\r\nfinal.pdf", "application/pdf")).toBe(
+      `attachment; filename="draft__final.pdf"; filename*=UTF-8''draft__final.pdf`,
+    );
+  });
+
+  it("caps long assistant media filenames in content disposition", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-long-",
+      fn: async (tmpRoot) => {
+        const filename = `${"a".repeat(210)}.pdf`;
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=t`,
+          method: "GET",
+          auth: { mode: "token", token: "t", allowTailscale: false },
+        });
+        const capped = `${"a".repeat(196)}.pdf`;
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="${capped}"; filename*=UTF-8''${capped}`,
+        );
+      },
+    });
+  });
+
+  it("caps assistant media filenames without splitting surrogate pairs", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-surrogate-",
+      fn: async (tmpRoot) => {
+        const filename = `${"a".repeat(195)}😀${"b".repeat(20)}.pdf`;
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=t`,
+          method: "GET",
+          auth: { mode: "token", token: "t", allowTailscale: false },
+        });
+        const cappedFallback = `${"a".repeat(195)}__.pdf`;
+        const cappedExtended = `${"a".repeat(195)}%F0%9F%98%80.pdf`;
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="${cappedFallback}"; filename*=UTF-8''${cappedExtended}`,
+        );
+      },
+    });
+  });
+
+  it("replaces ill-formed assistant media filename surrogates before encoding", () => {
+    expect(buildAssistantMediaContentDisposition("draft\uD800.pdf", "application/pdf")).toBe(
+      `attachment; filename="draft_.pdf"; filename*=UTF-8''draft%EF%BF%BD.pdf`,
+    );
   });
 
   it("serves assistant media from canonical inbound media refs", async () => {
@@ -959,7 +1059,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(end).toHaveBeenCalledWith(
-          html.replace("<html", '<html data-openclaw-terminal-enabled="false"'),
+          html.replace("<html", '<html data-openclaw-terminal-enabled="true"'),
         );
       },
     });
@@ -990,6 +1090,56 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each([
+    {
+      name: "root-mounted nested routes",
+      requestPath: "/settings/approvals",
+      basePath: undefined,
+      expectedPrefix: "",
+    },
+    {
+      name: "base-mounted nested routes",
+      requestPath: "/openclaw/settings/approvals",
+      basePath: "/openclaw",
+      expectedPrefix: "/openclaw",
+    },
+  ])(
+    "anchors Vite-relative public asset hrefs for $name",
+    async ({ requestPath, basePath, expectedPrefix }) => {
+      const assets = [
+        "favicon.svg",
+        "favicon-32.png",
+        "apple-touch-icon.png",
+        "manifest.webmanifest",
+      ];
+      const html = `<html><head>${assets
+        .map((asset) => `<link href="./${asset}" />`)
+        .join("")}</head><body></body></html>\n`;
+
+      await withControlUiRoot({
+        indexHtml: html,
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: requestPath, method: "GET" } as IncomingMessage,
+            res,
+            {
+              ...(basePath ? { basePath } : {}),
+              root: { kind: "resolved", path: tmp },
+            },
+          );
+
+          expect(handled).toBe(true);
+          const body = String(end.mock.calls[0]?.[0] ?? "");
+          for (const asset of assets) {
+            expect(body).toContain(`href="${expectedPrefix}/${asset}"`);
+            expect(body).not.toContain(`href="./${asset}"`);
+          }
+        },
+      });
+    },
+  );
+
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1000,8 +1150,7 @@ describe("handleControlUiHttpRequest", () => {
           {
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp, timeFormat: "24" } },
-              gateway: { controlUi: { chatMessageMaxWidth: "min(1280px, 82%)" } },
+              agents: { defaults: { workspace: tmp } },
               ui: {
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
@@ -1017,10 +1166,9 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarStatus).toBe("none");
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
-        expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.seamColor).toBe("#1A2b3C");
-        expect(parsed.timeFormat).toBe("24");
-        expect(parsed.terminalEnabled).toBe(false);
+        expect(parsed.timeFormat).toBe("auto");
+        expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
@@ -1301,7 +1449,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
-        const { res, handled, end } = await runBootstrapConfigRequest({
+        const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
           headers: {
@@ -1314,6 +1462,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+        expect(setHeader.mock.calls.some(([name]) => name === "Set-Cookie")).toBe(false);
         const parsed = parseBootstrapPayload(end);
         expect(parsed).toMatchObject({
           assistantAgentId: "main",
@@ -1322,6 +1471,187 @@ describe("handleControlUiHttpRequest", () => {
         });
       },
     });
+  });
+
+  it("sets least-privilege route-bound cookies for multiple external plugin tabs", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const registry = createEmptyPluginRegistry();
+        registry.controlUiDescriptors.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "demo",
+            label: "Demo",
+            path: "/secure-hook",
+          },
+        });
+        registry.controlUiDescriptors.push({
+          pluginId: "other-plugin",
+          source: "other-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "other",
+            label: "Other",
+            path: "/other-hook/panel",
+            requiredScopes: ["operator.read"],
+          },
+        });
+        registry.httpRoutes.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          path: "/secure-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        registry.httpRoutes.push({
+          pluginId: "other-plugin",
+          source: "other-plugin",
+          path: "/other-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        setActivePluginRegistry(registry);
+
+        const { res, handled, setHeader } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+          },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const setCookie = setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
+        expect(Array.isArray(setCookie)).toBe(true);
+        const cookies = Array.isArray(setCookie) ? setCookie : [];
+        expect(cookies).toHaveLength(2);
+        const cookieNames = cookies.map((cookie) => String(cookie).split("=", 1)[0] ?? "");
+        expect(new Set(cookieNames).size).toBe(2);
+        expect(
+          cookieNames.every((name) =>
+            /^__openclaw_plugin_tab_auth_[0-9a-f]{16}_[0-9a-f]{64}$/.test(name),
+          ),
+        ).toBe(true);
+        expect(cookies.map(String)).toEqual([
+          expect.stringContaining("Path=/secure-hook"),
+          expect.stringContaining("Path=/other-hook"),
+        ]);
+        expect(cookies.every((cookie) => String(cookie).includes("HttpOnly"))).toBe(true);
+        expect(cookies.every((cookie) => String(cookie).includes("Secure"))).toBe(true);
+        expect(cookies.every((cookie) => String(cookie).includes("SameSite=None"))).toBe(true);
+        const payloads = cookies.map((cookie) => {
+          const encoded = String(cookie).match(new RegExp("=v1\\.([^.]+)\\."))?.[1];
+          return JSON.parse(Buffer.from(encoded ?? "", "base64url").toString("utf8"));
+        });
+        expect(payloads).toMatchObject([
+          {
+            pluginId: "demo-plugin",
+            path: "/secure-hook",
+            scopes: ["operator.read"],
+          },
+          {
+            pluginId: "other-plugin",
+            path: "/other-hook",
+            scopes: ["operator.read"],
+          },
+        ]);
+      },
+    });
+  });
+
+  it("acknowledges only plugin frame grants issued by bootstrap", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const registry = createEmptyPluginRegistry();
+        registry.controlUiDescriptors.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "demo",
+            label: "Demo",
+            path: "/secure-hook/panel",
+          },
+        });
+        registry.httpRoutes.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          path: "/secure-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        setActivePluginRegistry(registry);
+
+        const { end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-auth-token" },
+        });
+
+        expect(parseBootstrapPayload(end).pluginFrameGrants).toEqual([
+          {
+            pluginId: "demo-plugin",
+            path: "/secure-hook",
+            match: "prefix",
+          },
+        ]);
+      },
+    });
+  });
+
+  it("issues read-only plugin frame grants for Tailscale-authenticated bootstrap", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.controlUiDescriptors.push({
+      pluginId: "demo-plugin",
+      source: "demo-plugin",
+      descriptor: {
+        surface: "tab",
+        id: "demo",
+        label: "Demo",
+        path: "/secure-hook/panel",
+        requiredScopes: ["operator.admin"],
+      },
+    });
+    registry.httpRoutes.push({
+      pluginId: "demo-plugin",
+      source: "demo-plugin",
+      path: "/secure-hook",
+      auth: "gateway",
+      match: "prefix",
+      handler: async () => true,
+    });
+    setActivePluginRegistry(registry);
+    const { res, setHeader } = makeMockHttpResponse();
+
+    expect(
+      setControlUiPluginAuthCookieForRequest(
+        { headers: {} } as IncomingMessage,
+        res,
+        "tailscale",
+        true,
+        "test-generation",
+      ),
+    ).toEqual([
+      {
+        pluginId: "demo-plugin",
+        path: "/secure-hook",
+        match: "prefix",
+        scopes: ["operator.read"],
+      },
+    ]);
+    expect(setHeader).toHaveBeenCalledWith(
+      "Set-Cookie",
+      expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
+    );
   });
 
   it("serves bootstrap config JSON when paired device-token auth is valid", async () => {
@@ -1340,6 +1670,52 @@ describe("handleControlUiHttpRequest", () => {
             expect(res.statusCode).toBe(200);
             const parsed = parseBootstrapPayload(end);
             expect(parsed.assistantAgentId).toBe("main");
+          },
+        });
+      },
+    });
+  });
+
+  it("selects higher-scope frame tabs using paired device-token scopes", async () => {
+    await withScopedPairedOperatorDevice({
+      scopes: ["operator.read", "operator.admin"],
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const registry = createEmptyPluginRegistry();
+            registry.controlUiDescriptors.push({
+              pluginId: "admin-plugin",
+              source: "admin-plugin",
+              descriptor: {
+                surface: "tab",
+                id: "admin",
+                label: "Admin",
+                path: "/admin-hook/panel",
+                requiredScopes: ["operator.admin"],
+              },
+            });
+            registry.httpRoutes.push({
+              pluginId: "admin-plugin",
+              source: "admin-plugin",
+              path: "/admin-hook",
+              auth: "gateway",
+              match: "prefix",
+              handler: async () => true,
+            });
+            setActivePluginRegistry(registry);
+
+            const { end } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+            });
+            expect(parseBootstrapPayload(end).pluginFrameGrants).toEqual([
+              {
+                pluginId: "admin-plugin",
+                path: "/admin-hook",
+                match: "prefix",
+              },
+            ]);
           },
         });
       },
@@ -1539,7 +1915,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("serves local avatar bytes through hardened avatar handler", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-");
     try {
       const avatarPath = path.join(tmp, "main.png");
       await fs.writeFile(avatarPath, "avatar-bytes\n");
@@ -1564,7 +1940,7 @@ describe("handleControlUiHttpRequest", () => {
   ] as const)(
     "validates %s avatar requests without reading bytes and closes the descriptor",
     async (_name, url, method) => {
-      const tmp = avatarTempDirs.make("openclaw-avatar-no-read-");
+      const tmp = testTempDirs.make("openclaw-avatar-no-read-");
       const read = vi.spyOn(fsSync, "read");
       const closeSync = vi.spyOn(fsSync, "closeSync");
       try {
@@ -1588,7 +1964,7 @@ describe("handleControlUiHttpRequest", () => {
   );
 
   it("rejects hardlinked avatar bytes and reports matching metadata", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-hardlink-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-hardlink-");
     try {
       await fs.writeFile(path.join(tmp, "original.png"), REAL_PNG);
       await fs.link(path.join(tmp, "original.png"), path.join(tmp, "avatar.png"));
@@ -1616,7 +1992,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("bounds an avatar route file that grows after its descriptor is pinned", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-growth-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-growth-");
     const avatarPath = path.join(tmp, "avatar.png");
     try {
       await fs.writeFile(avatarPath, REAL_PNG);
@@ -1903,6 +2279,71 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("accepts RFC qvalue boundary forms", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('valid-qvalue');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-QvAl5678.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+        const cases = [
+          { quality: "0", fallbackQuality: "0.5", expected: "gzip" },
+          { quality: "0.", fallbackQuality: "0.5", expected: "gzip" },
+          { quality: "0.000", fallbackQuality: "0.5", expected: "gzip" },
+          { quality: "0.123", fallbackQuality: "0.1", expected: "br" },
+          { quality: "0.999", fallbackQuality: "0.5", expected: "br" },
+          { quality: "1", fallbackQuality: "0.5", expected: "br" },
+          { quality: "1.", fallbackQuality: "0.5", expected: "br" },
+          { quality: "1.000", fallbackQuality: "0.5", expected: "br" },
+        ] as const;
+
+        for (const testCase of cases) {
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/app-QvAl5678.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            headers: {
+              "accept-encoding": `br;q=${testCase.quality}, gzip;q=${testCase.fallbackQuality}, identity;q=0`,
+            },
+          });
+
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", testCase.expected);
+          const compressed = end.mock.calls[0]?.[0] as Buffer;
+          const decoded =
+            testCase.expected === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed);
+          expect(decoded.toString()).toBe(source);
+        }
+      },
+    });
+  });
+
+  it("rejects malformed Accept-Encoding qvalues instead of parsing numeric prefixes", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('strict-qvalue');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-QvAl1234.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+
+        for (const malformedQuality of ["0.8junk", ".8", "0.1234", "1.001", "1e0"]) {
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/app-QvAl1234.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            headers: {
+              "accept-encoding": `br;q=${malformedQuality}, gzip;q=0.5, identity;q=0`,
+            },
+          });
+
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+          expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+        }
+      },
+    });
+  });
+
   it("falls through to an acceptable sidecar when the preferred variant is missing", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1930,20 +2371,29 @@ describe("handleControlUiHttpRequest", () => {
         const { filePath } = await writeAssetFile(tmp, "app-MnOp3456.js", "source\n");
         const fd = fsSync.openSync(filePath, "r");
         const openError = Object.assign(new Error("descriptor limit"), { code: "EMFILE" });
+        const closeSync = vi.spyOn(fsSync, "closeSync");
 
-        expect(() =>
-          resolveOpenedControlUiRepresentation({
-            req: {
-              headers: { "accept-encoding": "br, identity;q=0" },
-            } as IncomingMessage,
-            sourceFile: { path: filePath, fd },
-            precompressed: true,
-            openPrecompressedFile: () => {
-              throw openError;
-            },
-          }),
-        ).toThrow(openError);
-        expect(() => fsSync.fstatSync(fd)).toThrow(/bad file descriptor/iu);
+        try {
+          expect(() =>
+            resolveOpenedControlUiRepresentation({
+              req: {
+                headers: { "accept-encoding": "br, identity;q=0" },
+              } as IncomingMessage,
+              sourceFile: { path: filePath, fd },
+              precompressed: true,
+              openPrecompressedFile: () => {
+                throw openError;
+              },
+            }),
+          ).toThrow(openError);
+          expect(closeSync).toHaveBeenCalledWith(fd);
+        } finally {
+          const sourceWasClosed = closeSync.mock.calls.some(([closedFd]) => closedFd === fd);
+          closeSync.mockRestore();
+          if (!sourceWasClosed) {
+            fsSync.closeSync(fd);
+          }
+        }
       },
     });
   });
@@ -2062,7 +2512,7 @@ describe("handleControlUiHttpRequest", () => {
           expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
           expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
           expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-terminal-enabled="false">',
+            '<html data-openclaw-terminal-enabled="true">',
           );
           expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
             end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -2449,3 +2899,4 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

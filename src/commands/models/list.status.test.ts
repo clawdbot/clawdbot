@@ -154,6 +154,14 @@ const mocks = vi.hoisted(() => {
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
+    resolveAgentHarnessOwnerPluginIds: vi.fn().mockReturnValue(["codex"]),
+    runPluginPayloadSmokeCheckForManifestRecords: vi
+      .fn()
+      .mockResolvedValue({ checked: ["codex"], failures: [] }),
+    resolveAgentHarnessRuntimeAvailability: vi.fn().mockReturnValue({
+      status: "available",
+      ownerPluginIds: ["codex"],
+    }),
     loadModelCatalog: vi.fn().mockResolvedValue([]),
     modelCatalogRouteVariants: undefined as unknown[] | undefined,
     openAIModelRouteOverride: undefined as ((params: unknown) => unknown) | undefined,
@@ -249,10 +257,7 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
   ),
 }));
 vi.mock("../../agents/model-selection-cli.js", () => ({
-  isCliProvider: vi.fn(
-    (provider: string, cfg?: { agents?: { defaults?: { cliBackends?: object } } }) =>
-      Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
-  ),
+  isCliProvider: vi.fn((provider: string) => provider === "claude-cli"),
 }));
 vi.mock("../../infra/shell-env.js", () => ({
   getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
@@ -276,8 +281,15 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
 }));
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../../agents/harness/runtime-plugin.js", () => ({
+  resolveAgentHarnessOwnerPluginIds: mocks.resolveAgentHarnessOwnerPluginIds,
+  resolveAgentHarnessRuntimeAvailability: mocks.resolveAgentHarnessRuntimeAvailability,
+}));
+vi.mock("../../cli/update-cli/plugin-payload-validation.js", () => ({
+  runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
+}));
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await mocks.loadModelCatalog(...args);
     return { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
   },
@@ -424,6 +436,7 @@ async function withOpenAIStatusFixture<T>(
     catalog?: unknown[];
     routeVariants?: unknown[];
     utilityModel?: string;
+    modelPolicyAllow?: string[];
   },
   run: () => Promise<T>,
 ): Promise<T> {
@@ -444,6 +457,9 @@ async function withOpenAIStatusFixture<T>(
     agents: {
       defaults: {
         model: { primary: params.primary, fallbacks: params.fallbacks ?? [] },
+        ...(params.modelPolicyAllow
+          ? { modelPolicy: { allow: params.modelPolicyAllow } }
+          : undefined),
         // Route tests target the configured primary/fallback models; keep the
         // derived utility model out unless a test opts in explicitly.
         utilityModel: params.utilityModel ?? "",
@@ -582,6 +598,54 @@ describe("modelsStatusCommand auth overview", () => {
     ).toBe(true);
     expect((payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai"))).toBe(
       true,
+    );
+  });
+
+  it("expands nested wildcard policy entries to the models they actually allow", async () => {
+    await withOpenAIStatusFixture(
+      {
+        primary: "clawrouter/anthropic/claude-haiku-4-5",
+        profiles: {},
+        modelPolicyAllow: ["clawrouter/anthropic/*"],
+        catalog: [
+          {
+            provider: "clawrouter",
+            id: "anthropic/claude-haiku-4-5",
+            name: "Claude Haiku",
+          },
+          {
+            provider: "clawrouter",
+            id: "google/gemini-3.5-flash",
+            name: "Gemini Flash",
+          },
+          { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+        ],
+      },
+      async () => {
+        const localRuntime = createRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+
+        expect(parseFirstJsonLog(localRuntime).allowed).toEqual([
+          "clawrouter/anthropic/claude-haiku-4-5",
+        ]);
+      },
+    );
+  });
+
+  it("preserves a restrictive wildcard when the current catalog has no match", async () => {
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.6-sol",
+        profiles: {},
+        modelPolicyAllow: ["clawrouter/anthropic/*"],
+        catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      },
+      async () => {
+        const localRuntime = createRuntime();
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+
+        expect(parseFirstJsonLog(localRuntime).allowed).toEqual(["clawrouter/anthropic/*"]);
+      },
     );
   });
 
@@ -768,6 +832,90 @@ describe("modelsStatusCommand auth overview", () => {
     ]);
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
     expect(textRuntime.log.mock.calls.flat().join("\n")).not.toContain("set an API key env var");
+  });
+
+  it("reports usable Codex auth as unavailable when its harness plugin is quarantined", async () => {
+    const localRuntime = createRuntime();
+    const textRuntime = createRuntime();
+    const payloadFailure = {
+      pluginId: "codex",
+      installPath: "/private/plugin",
+      reason: "missing-package-dir" as const,
+      detail: "missing",
+    };
+    mocks.runPluginPayloadSmokeCheckForManifestRecords
+      .mockResolvedValueOnce({ checked: ["codex"], failures: [payloadFailure] })
+      .mockResolvedValueOnce({ checked: ["codex"], failures: [payloadFailure] });
+    const resolveAvailability = (params: {
+      payloadFailures: Array<{ pluginId: string; reason: string }>;
+    }) =>
+      params.payloadFailures.some((failure) => failure.pluginId === "codex")
+        ? {
+            status: "unavailable",
+            ownerPluginIds: ["codex", "openai"],
+            reason: "owner-plugin-degraded",
+            detail:
+              'Agent harness "codex" owner plugin "codex" is unavailable (missing-package-dir).',
+          }
+        : { status: "available", ownerPluginIds: ["codex", "openai"] };
+    mocks.resolveAgentHarnessRuntimeAvailability
+      .mockImplementationOnce(resolveAvailability)
+      .mockImplementationOnce(resolveAvailability);
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.5",
+        profiles: {
+          "openai:default": {
+            type: "oauth",
+            provider: "openai",
+            access: "oauth-access",
+            refresh: "oauth-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        await modelsStatusCommand({ check: true }, textRuntime as never);
+      },
+    );
+
+    expect(mocks.runPluginPayloadSmokeCheckForManifestRecords).toHaveBeenCalledWith(
+      expect.objectContaining({ env: process.env }),
+    );
+    expect(mocks.resolveAgentHarnessRuntimeAvailability).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: "codex",
+        provider: "openai",
+        payloadFailures: [payloadFailure],
+        payloadCheckedPluginIds: ["codex"],
+        selectedPluginRootDirs: expect.any(Map),
+      }),
+    );
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.auth.runtimeAuthRoutes).toEqual([
+      {
+        provider: "openai",
+        runtime: "codex",
+        authProvider: "openai",
+        status: "unavailable",
+        authStatus: "usable",
+        runtimeStatus: "unavailable",
+        runtimeReason: "owner-plugin-degraded",
+        runtimeDetail:
+          'Agent harness "codex" owner plugin "codex" is unavailable (missing-package-dir).',
+        runtimePluginIds: ["codex", "openai"],
+        effective: {
+          kind: "profiles",
+          detail: "/tmp/openclaw-agent/auth-profiles.json",
+        },
+      },
+    ]);
+    expect(localRuntime.exit).toHaveBeenCalledWith(1);
+    expect(textRuntime.exit).toHaveBeenCalledWith(1);
+    expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("status=unavailable");
+    expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("auth=usable");
+    expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("runtime=unavailable");
   });
 
   it("evaluates mixed primary and fallback OpenAI routes independently", async () => {
@@ -1116,7 +1264,6 @@ describe("modelsStatusCommand auth overview", () => {
         defaults: {
           model: { primary: "claude-cli/claude-sonnet-4-6", fallbacks: [] },
           models: { "claude-cli/claude-sonnet-4-6": {} },
-          cliBackends: { "claude-cli": {} },
         },
       },
       models: { providers: {} },
@@ -1495,3 +1642,4 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

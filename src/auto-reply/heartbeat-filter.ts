@@ -239,7 +239,7 @@ function collectSuccessfulToolResultCallIds(message: {
   return uniqueStrings(ids);
 }
 
-function isRealNonHeartbeatUserMessage(
+export function isRealNonHeartbeatUserMessage(
   message: { role: string; content?: unknown },
   heartbeatPrompt?: string,
 ): boolean {

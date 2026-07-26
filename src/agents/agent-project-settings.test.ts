@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildEmbeddedAgentSettingsSnapshot,
-  DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY,
   resolveEmbeddedAgentProjectSettingsPolicy,
 } from "./agent-project-settings-snapshot.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "./agent-project-settings.js";
@@ -14,9 +13,7 @@ type EmbeddedAgentSettingsArgs = Parameters<typeof buildEmbeddedAgentSettingsSna
 
 describe("resolveEmbeddedAgentProjectSettingsPolicy", () => {
   it("defaults to sanitize", () => {
-    expect(resolveEmbeddedAgentProjectSettingsPolicy()).toBe(
-      DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY,
-    );
+    expect(resolveEmbeddedAgentProjectSettingsPolicy()).toBe("sanitize");
   });
 
   it("accepts trusted and ignore modes", () => {
@@ -185,30 +182,5 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
     } finally {
       await fs.rm(baseDir, { recursive: true, force: true });
     }
-  });
-
-  it("keeps compaction reserve overrides after disabling runtime retry", () => {
-    const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-      cwd: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              reserveTokensFloor: 50_000,
-              keepRecentTokens: 16_000,
-            },
-          },
-        },
-      },
-      contextTokenBudget: 200_000,
-    });
-
-    expect(settingsManager.getRetryEnabled()).toBe(false);
-    expect(settingsManager.getCompactionSettings()).toEqual({
-      enabled: true,
-      reserveTokens: 50_000,
-      keepRecentTokens: 16_000,
-    });
   });
 });

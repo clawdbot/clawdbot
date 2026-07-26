@@ -16,8 +16,8 @@ Adds Meta model provider support to OpenClaw.
 
 ## Surface
 
-providers: meta
+providers: `meta`
 
 ## Related docs
 
-- [meta](/providers/meta)
+- [Meta](/providers/meta)

@@ -8,10 +8,20 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
-import { assistantAvatarFallbackUrl } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
-import { isRenderableControlUiAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
+import {
+  assistantAvatarFallbackUrl,
+  isRenderableControlUiAvatarUrl,
+  resolveAssistantTextAvatar,
+} from "../../lib/avatar.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
+import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
+import {
+  resolveAvatar,
+  resolveAvatarInitials,
+  resolveIdentityHue,
+} from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -25,8 +35,47 @@ export function renderChatAvatar(
   user?: { name?: string | null; avatar?: string | null },
   basePath?: string,
   authToken?: string | null,
+  sender?: SenderIdentity | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
+  // Attributed multi-user messages show the author's own avatar (profile
+  // upload → gateway Gravatar proxy → initials), not the local viewer's.
+  if (normalized === "user" && sender) {
+    const label = formatSenderLabel(sender) ?? "";
+    const initials = resolveAvatarInitials(sender);
+    const initialsAvatar = html`<div
+      class="chat-avatar user chat-avatar--sender-initials"
+      style=${`background: hsl(${resolveIdentityHue(sender)} 48% 42%)`}
+      aria-label="${label}"
+    >
+      ${initials.initials}
+    </div>`;
+    const resolved = resolveAvatar(sender);
+    if (resolved.kind === "initials") {
+      return initialsAvatar;
+    }
+    // The derived route may 404 (no upload, no Gravatar); swap to initials
+    // instead of a broken image. Lit reuses DOM parts, so a load must clear a
+    // prior sender's error state.
+    return html`<span class="chat-avatar-slot">
+      <img
+        class="chat-avatar user"
+        src="${resolved.url}"
+        alt="${label}"
+        @error=${(event: Event) => {
+          (event.currentTarget as HTMLElement)
+            .closest(".chat-avatar-slot")
+            ?.classList.add("is-fallback");
+        }}
+        @load=${(event: Event) => {
+          (event.currentTarget as HTMLElement)
+            .closest(".chat-avatar-slot")
+            ?.classList.remove("is-fallback");
+        }}
+      />
+      ${initialsAvatar}
+    </span>`;
+  }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
@@ -259,6 +308,16 @@ function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
   return avatarUrl.startsWith("/");
 }
 
+/** Give each sequential fetch a full budget; sharing one can starve the image request. */
+const CHAT_AVATAR_FETCH_TIMEOUT_MS = 30_000;
+
+function scheduleChatAvatarFetchTimeout(controller: AbortController, label: string) {
+  return setTimeout(
+    () => controller.abort(new DOMException(`${label} timed out`, "TimeoutError")),
+    CHAT_AVATAR_FETCH_TIMEOUT_MS,
+  );
+}
+
 export async function refreshChatAvatar(host: ChatAvatarHost) {
   if (!host.connected) {
     clearChatAvatarState(host);
@@ -277,8 +336,16 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   const authHeader = resolveControlUiAuthHeader(host);
   const headers = buildControlUiAuthHeaders(authHeader);
   const url = buildAvatarMetaUrl(host.basePath, agentId);
+
+  const metaController = new AbortController();
+  const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
+  let avatarUrl: string;
   try {
-    const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
+    const res = await fetch(url, {
+      method: "GET",
+      ...(headers ? { headers } : {}),
+      signal: metaController.signal,
+    });
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
@@ -296,7 +363,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
       return;
     }
     setChatAvatarMeta(host, data);
-    const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
+    avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
       clearChatAvatarUrl(host);
       return;
@@ -305,9 +372,22 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
       setChatAvatarUrl(host, avatarUrl);
       return;
     }
+  } catch {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+      clearChatAvatarState(host);
+    }
+    return;
+  } finally {
+    clearTimeout(metaTimeout);
+  }
+
+  const avatarController = new AbortController();
+  const avatarTimeout = scheduleChatAvatarFetchTimeout(avatarController, "chat avatar image fetch");
+  try {
     const avatarRes = await fetch(avatarUrl, {
       method: "GET",
       ...(headers ? { headers } : {}),
+      signal: avatarController.signal,
     });
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
@@ -325,5 +405,7 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       clearChatAvatarState(host);
     }
+  } finally {
+    clearTimeout(avatarTimeout);
   }
 }

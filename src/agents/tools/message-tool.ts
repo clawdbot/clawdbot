@@ -21,6 +21,7 @@ import {
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
@@ -32,6 +33,7 @@ import {
   channelSupportsMessageCapabilityForChannel,
   type ChannelMessageActionDiscoveryInput,
   listCrossChannelSchemaSupportedMessageActions,
+  type PreparedMessageToolCatalog,
   resolveChannelMessageToolSchemaProperties,
 } from "../../channels/plugins/message-action-discovery.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
@@ -57,6 +59,7 @@ import {
   getToolResult,
   runMessageAction,
   type MessageActionRunResult,
+  type MessageActionRunnerGateway,
 } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
@@ -65,6 +68,7 @@ import {
 } from "../../infra/outbound/outbound-policy.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -92,6 +96,12 @@ import {
   appendMessageToolReadHint,
   appendMessageToolVisibleReplyHint,
 } from "./message-tool-description.js";
+import {
+  buildMessageToolQuerySchemaProperties,
+  buildMessageToolSchemaFromActions,
+  MESSAGE_TOOL_SEND_TEXT_DESCRIPTION,
+  type MessageToolSchemaBuilders,
+} from "./message-tool-schema-scoping.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
@@ -411,6 +421,13 @@ function sanitizePresentationTextFieldsResult(
               if (sanitized.text) {
                 sanitizedAction.url = sanitized.text;
                 sanitizedButton.action = sanitizedAction;
+              } else if (
+                sanitizedAction.type === "web-app" &&
+                typeof sanitizedAction.widgetId === "string" &&
+                sanitizedAction.widgetId.trim()
+              ) {
+                delete sanitizedAction.url;
+                sanitizedButton.action = sanitizedAction;
               } else {
                 // Explicit typed actions own the control. If sanitization removes
                 // the target, legacy shadow fields must not become active fallbacks.
@@ -560,8 +577,8 @@ const presentationCommandOrCallbackActionSchema = Type.Union([
   presentationCallbackActionSchema,
 ]);
 
-// Approval actions carry server-issued IDs and are runtime-authored only. The
-// message tool exposes the remaining button actions that models may safely author.
+// Approval and question actions carry server-issued IDs and are runtime-authored
+// only. The message tool exposes the remaining actions models may safely author.
 const presentationButtonActionSchema = Type.Union([
   presentationCommandActionSchema,
   presentationCallbackActionSchema,
@@ -572,6 +589,12 @@ const presentationButtonActionSchema = Type.Union([
   Type.Object({
     type: Type.Literal("web-app"),
     url: Type.String(),
+    widgetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    type: Type.Literal("web-app"),
+    url: Type.Optional(Type.String()),
+    widgetId: Type.String(),
   }),
 ]);
 
@@ -646,7 +669,7 @@ function buildSendSchema(options: {
   includeBestEffort: boolean;
 }) {
   const props: Record<string, TSchema> = {
-    message: Type.Optional(Type.String()),
+    message: Type.Optional(Type.String({ description: MESSAGE_TOOL_SEND_TEXT_DESCRIPTION })),
     effectId: Type.Optional(
       Type.String({
         description: "sendWithEffect id/name.",
@@ -878,7 +901,6 @@ function buildThreadSchema() {
 
 function buildEventSchema() {
   return {
-    query: Type.Optional(Type.String()),
     eventName: Type.Optional(Type.String()),
     eventType: Type.Optional(Type.String()),
     startTime: Type.Optional(Type.String()),
@@ -886,8 +908,6 @@ function buildEventSchema() {
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
     image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-    durationMin: optionalNonNegativeIntegerSchema(),
-    until: Type.Optional(Type.String()),
   };
 }
 
@@ -895,6 +915,8 @@ function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
     deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
+    durationMin: optionalNonNegativeIntegerSchema(),
+    until: Type.Optional(Type.String()),
   };
 }
 
@@ -964,6 +986,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildSendSchema(options),
     ...buildReactionSchema(),
     ...buildFetchSchema(),
+    ...buildMessageToolQuerySchemaProperties(),
     ...buildPollSchema(),
     ...buildChannelTargetSchema(),
     ...buildStickerSchema(),
@@ -977,48 +1000,37 @@ function buildMessageToolSchemaProps(options: {
   };
 }
 
-function isSendOnlyActions(actions: readonly string[]): boolean {
-  const uniqueActions = new Set(actions);
-  return uniqueActions.size === 1 && uniqueActions.has("send");
-}
-
-function buildSendOnlyMessageToolSchemaProps(options: {
-  includePresentation: boolean;
-  includeDeliveryPin: boolean;
-  includeBestEffort: boolean;
-  extraProperties?: Record<string, TSchema>;
-}) {
-  return {
+const MESSAGE_TOOL_SCHEMA_BUILDERS = {
+  full: buildMessageToolSchemaProps,
+  base: (options) => ({
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
     ...buildGatewaySchema(),
-    ...options.extraProperties,
-  };
-}
-
-function buildMessageToolSchemaFromActions(
-  actions: readonly string[],
-  options: {
-    includePresentation: boolean;
-    includeDeliveryPin: boolean;
-    includeBestEffort: boolean;
-    extraProperties?: Record<string, TSchema>;
+  }),
+  groups: {
+    reaction: buildReactionSchema,
+    fetch: buildFetchSchema,
+    query: buildMessageToolQuerySchemaProperties,
+    poll: buildPollSchema,
+    channelTarget: buildChannelTargetSchema,
+    sticker: buildStickerSchema,
+    thread: buildThreadSchema,
+    event: buildEventSchema,
+    moderation: buildModerationSchema,
+    channelManagement: buildChannelManagementSchema,
+    presence: buildPresenceSchema,
   },
-) {
-  const props = isSendOnlyActions(actions)
-    ? buildSendOnlyMessageToolSchemaProps(options)
-    : buildMessageToolSchemaProps(options);
-  return Type.Object({
-    action: stringEnum(actions),
-    ...props,
-  });
-}
+} satisfies MessageToolSchemaBuilders;
 
-const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
-  includePresentation: true,
-  includeDeliveryPin: true,
-  includeBestEffort: false,
-});
+const MessageToolSchema = buildMessageToolSchemaFromActions(
+  AllMessageActions,
+  {
+    includePresentation: true,
+    includeDeliveryPin: true,
+    includeBestEffort: false,
+  },
+  MESSAGE_TOOL_SCHEMA_BUILDERS,
+);
 
 type MessageToolOptions = {
   agentAccountId?: string;
@@ -1027,6 +1039,7 @@ type MessageToolOptions = {
   sessionId?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
   getRuntimeConfig?: () => OpenClawConfig;
   getScopedChannelsCommandSecretTargets?: typeof getScopedChannelsCommandSecretTargets;
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
@@ -1065,11 +1078,13 @@ type MessageToolDiscoveryParams = {
   agentId?: string;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
 type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg" | "channel"> & {
   cfg: OpenClawConfig;
   channel?: string;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
 type InferredSessionDelivery = {
@@ -1080,11 +1095,9 @@ type InferredSessionDelivery = {
   to: string;
 };
 
-const USER_PREFIXED_DIRECT_TARGET_CHANNELS = new Set(["discord", "mattermost", "msteams", "slack"]);
-
 function formatSessionDeliveryTarget(channel: string, peerKind: string, to: string): string {
   return (peerKind === "direct" || peerKind === "dm") &&
-    USER_PREFIXED_DIRECT_TARGET_CHANNELS.has(channel)
+    getChannelPlugin(channel)?.messaging?.directTargetStyle === "user-prefixed"
     ? `user:${to}`
     : to;
 }
@@ -1172,6 +1185,7 @@ function buildMessageActionDiscoveryInput(
     agentId: params.agentId,
     requesterSenderId: params.requesterSenderId,
     senderIsOwner: params.senderIsOwner,
+    preparedMessageToolCatalog: params.preparedMessageToolCatalog,
   };
 }
 
@@ -1184,7 +1198,8 @@ function resolveMessageToolSchemaActions(params: MessageToolDiscoveryParams): st
     const allActions = new Set<string>(["send", ...scopedActions]);
     // Include actions from other configured channels so isolated/cron agents
     // can invoke cross-channel actions without validation errors.
-    for (const plugin of listChannelPlugins()) {
+    const channels = params.preparedMessageToolCatalog?.channels ?? listChannelPlugins();
+    for (const plugin of channels) {
       if (plugin.id === currentChannel) {
         continue;
       }
@@ -1229,7 +1244,11 @@ function resolveIncludeCapability(
       capability,
     );
   }
-  return channelSupportsMessageCapability(params.cfg, capability);
+  return channelSupportsMessageCapability(
+    params.cfg,
+    capability,
+    params.preparedMessageToolCatalog,
+  );
 }
 
 function resolveIncludePresentation(params: MessageToolDiscoveryParams): boolean {
@@ -1245,11 +1264,15 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
   if (!currentChannel) {
     return false;
   }
-  const adapter =
-    listChannelPlugins().find((plugin) => plugin.id === currentChannel)?.message ??
-    getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
-      ?.message ??
-    getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message;
+  const prepared = params.preparedMessageToolCatalog?.getChannel(currentChannel);
+  if (prepared) {
+    return prepared.reconcilesUnknownSend;
+  }
+  const adapter = params.preparedMessageToolCatalog
+    ? getBundledChannelPlugin(currentChannel)?.message
+    : (getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
+        ?.message ??
+      getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message);
   return (
     adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
     typeof adapter.durableFinal.reconcileUnknownSend === "function"
@@ -1267,12 +1290,17 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
       normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
     ),
   );
-  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
-    includePresentation,
-    includeDeliveryPin,
-    includeBestEffort,
-    extraProperties,
-  });
+  return buildMessageToolSchemaFromActions(
+    actions.length > 0 ? actions : ["send"],
+    {
+      includePresentation,
+      includeDeliveryPin,
+      includeBestEffort,
+      scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
+      extraProperties,
+    },
+    MESSAGE_TOOL_SCHEMA_BUILDERS,
+  );
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
@@ -1297,6 +1325,7 @@ function buildMessageToolDescription(options?: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 }): string {
   const baseDescription = "Send/manage channel messages.";
   const resolvedOptions = options ?? {};
@@ -1313,6 +1342,7 @@ function buildMessageToolDescription(options?: {
         agentId: resolvedOptions.agentId,
         requesterSenderId: resolvedOptions.requesterSenderId,
         senderIsOwner: resolvedOptions.senderIsOwner,
+        preparedMessageToolCatalog: resolvedOptions.preparedMessageToolCatalog,
       }
     : undefined;
 
@@ -1345,6 +1375,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
+  const preparedMessageToolCatalog =
+    options?.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   let generatedIdempotencyCounter = 0;
   // Poll-vote echo record lives in the session-scoped map (recentPollVoteBySession)
   // so it survives the run boundary between the vote and the follow-up text; a
@@ -1389,6 +1421,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: resolvedAgentId,
         requesterSenderId: options.requesterSenderId,
         senderIsOwner: options.senderIsOwner,
+        preparedMessageToolCatalog,
       })
     : MessageToolSchema;
   const description = buildMessageToolDescription({
@@ -1405,6 +1438,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
+    preparedMessageToolCatalog,
   });
 
   return {
@@ -1421,6 +1455,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const params = { ...(args as Record<string, unknown>) };
       // `final` is a Codex app-server-only source-delivery control. It must
       // not be dispatched to a provider or participate in idempotency.
+      const requestedSourceReplyFinal =
+        typeof params.final === "boolean" ? params.final : undefined;
       delete params.final;
 
       // Sanitize outbound text fields in three layers:
@@ -1485,6 +1521,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               sessionId: options.sessionId,
             })
           : undefined;
+      if (normalizeOptionalString(options?.messageActionTurnCapability) && !trustedTurnContext) {
+        throw new Error("message action turn capability is no longer active");
+      }
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&
@@ -1580,11 +1619,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
+      const callerOwnsTerminalReceipt =
+        gatewayResolved.target === "remote" ||
+        normalizeOptionalString(gatewayOpts.gatewayUrl) !== undefined ||
+        normalizeOptionalString(gatewayOpts.gatewayToken) !== undefined;
       // Direct tool invocations already execute inside the authenticated
       // Gateway request. Keep their authority operation-local by dispatching
       // channel actions in-process instead of laundering it through a new
       // backend connection.
-      const gateway =
+      const gateway: MessageActionRunnerGateway | undefined =
         options?.conversationReadOrigin === "direct-operator"
           ? undefined
           : {
@@ -1594,13 +1637,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
               clientDisplayName: "agent",
               mode: GATEWAY_CLIENT_MODES.BACKEND,
-              resolveAgentRuntimeIdentityToken: () =>
+              ...(callerOwnsTerminalReceipt
+                ? { terminalSourceReplyReceiptOwner: "caller" as const }
+                : {}),
+              resolveAgentRuntimeIdentityToken: (context) =>
                 resolveMessageActionAgentRuntimeIdentityToken({
                   opts: gatewayOpts,
                   target: gatewayResolved.target,
                   turnCapability: options?.messageActionTurnCapability,
                   runId: options?.runId,
                   sessionId: options?.sessionId,
+                  sourceReplyFinal: context?.sourceReplyFinal,
+                  sourceReplyToolCallId: context?.sourceReplyToolCallId,
+                  callerOwnsTerminalReceipt,
                 }),
             };
       const hasCurrentMessageId =
@@ -1654,6 +1703,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const actionParams = actionIdempotencyKey
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
+      const hasExactSourceTurn =
+        action === "send" &&
+        sourceReplySinkDeliveryMode === "message_tool_only" &&
+        normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
       let result: MessageActionRunResult;
       try {
         result = await runMessageActionForTool({
@@ -1677,6 +1730,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+          // Only an admitted channel source can arm terminal restart reconciliation.
+          // Source-less scheduled and ambient sends remain ordinary message actions.
+          sourceReplyFinal: hasExactSourceTurn ? (requestedSourceReplyFinal ?? true) : undefined,
+          sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
           abortSignal: signal,
@@ -1731,3 +1788,4 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

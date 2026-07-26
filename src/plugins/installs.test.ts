@@ -192,4 +192,42 @@ describe("recordPluginInstall", () => {
       installedAt: "2026-05-15T00:00:03.000Z",
     });
   });
+
+  it("replaces local npm-pack provenance on a registry reinstall", () => {
+    const localInstall = recordPluginInstall(
+      {},
+      {
+        pluginId: "diffs",
+        source: "npm",
+        spec: "/tmp/openclaw-diffs.tgz",
+        sourcePath: "/tmp/openclaw-diffs.tgz",
+        installPath: "/tmp/openclaw/plugins/diffs-local",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmTarballName: "openclaw-diffs-1.0.0.tgz",
+        installedAt: "2026-05-14T18:00:03.000Z",
+      },
+    );
+
+    const registryInstall = recordPluginInstall(localInstall, {
+      pluginId: "diffs",
+      source: "npm",
+      spec: "@openclaw/diffs",
+      installPath: "/tmp/openclaw/plugins/diffs",
+      resolvedName: "@openclaw/diffs",
+      resolvedVersion: "1.1.0",
+      resolvedSpec: "@openclaw/diffs@1.1.0",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+
+    expect(registryInstall.plugins?.installs?.diffs).toEqual({
+      source: "npm",
+      spec: "@openclaw/diffs",
+      installPath: "/tmp/openclaw/plugins/diffs",
+      resolvedName: "@openclaw/diffs",
+      resolvedVersion: "1.1.0",
+      resolvedSpec: "@openclaw/diffs@1.1.0",
+      installedAt: "2026-05-15T00:00:03.000Z",
+    });
+  });
 });

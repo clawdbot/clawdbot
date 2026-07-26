@@ -2,10 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import type { QaBusState } from "./bus-state.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
+import { renderQaMarkdownReport } from "./report.js";
 import { runQaScenario, type QaScenarioResult } from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 
@@ -107,7 +107,7 @@ export async function runQaSelfCheckAgainstState(params: {
   });
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, report, "utf8");
-  await transportFactoryResult.cleanup();
+  await transportFactoryResult.cleanupWithoutGateway();
 
   return {
     outputPath,

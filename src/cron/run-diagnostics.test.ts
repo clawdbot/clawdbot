@@ -5,11 +5,13 @@ import {
   createCronRunDiagnosticsFromMissingWebSearchProvider,
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
-  MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
   mergeCronRunDiagnostics,
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "./run-diagnostics.js";
+
+const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
 
 describe("cron run diagnostics", () => {
   it("normalizes and bounds diagnostic entries", () => {
@@ -86,6 +88,21 @@ describe("cron run diagnostics", () => {
     expect(normalizeCronRunDiagnostics({ entries: [] })).toBeUndefined();
     expect(normalizeCronRunDiagnostics({ entries: [{ source: "exec" }] })).toBeUndefined();
     expect(summarizeCronRunDiagnostics(undefined)).toBeUndefined();
+  });
+
+  it("bounds fallback summaries at valid UTF-16 boundaries", () => {
+    expect(
+      summarizeCronRunDiagnostics({
+        entries: [
+          {
+            ts: 1,
+            source: "exec",
+            severity: "error",
+            message: `${"s".repeat(1_998)}😀tail`,
+          },
+        ],
+      }),
+    ).toBe(`${"s".repeat(1_998)}…`);
   });
 
   it("creates diagnostics from errors and prefers the latest error summary", () => {

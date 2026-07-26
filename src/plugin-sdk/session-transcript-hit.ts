@@ -4,8 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
+import { loadCombinedSessionStoreForGateway as loadGatewaySessionStore } from "../config/sessions/combined-store-gateway.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 export {
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
@@ -20,7 +22,21 @@ export type {
   SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
 
-export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+/** Loads the cross-session plugin view without process-only incognito rows. */
+export function loadCombinedSessionStoreForGateway(
+  cfg: OpenClawConfig,
+  opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
+) {
+  const result = loadGatewaySessionStore(cfg, { ...opts, includeIncognito: false });
+  return {
+    storePath: result.storePath,
+    // Plugin search hits can be re-persisted into durable transcripts, so the
+    // SDK cross-session view must never expose incognito content.
+    store: Object.fromEntries(
+      Object.entries(result.store).filter(([sessionKey]) => !isIncognitoSessionKey(sessionKey)),
+    ),
+  };
+}
 
 const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
 const QMD_ARCHIVE_TIMESTAMP_RE =
@@ -142,6 +158,9 @@ export function resolveTranscriptStemToSessionKeys(params: {
   const parsedStemId = parseUsageCountedSessionIdFromFileName(stemAsFile);
 
   for (const [sessionKey, entry] of Object.entries(store)) {
+    if (isIncognitoSessionKey(sessionKey)) {
+      continue;
+    }
     const sessionFile = normalizeOptionalString(entry.sessionFile);
     if (sessionFile) {
       const base = path.basename(sessionFile);
@@ -162,6 +181,9 @@ export function resolveTranscriptStemToSessionKeys(params: {
   const normalizedStem = normalizeQmdSessionStem(params.stem);
   if (params.allowQmdSlugFallback === true && normalizedStem) {
     for (const [sessionKey, entry] of Object.entries(store)) {
+      if (isIncognitoSessionKey(sessionKey)) {
+        continue;
+      }
       const sessionFile = normalizeOptionalString(entry.sessionFile);
       if (sessionFile) {
         const base = path.basename(sessionFile);
@@ -182,7 +204,9 @@ export function resolveTranscriptStemToSessionKeys(params: {
     return normalizedDeduped.length === 1 ? normalizedDeduped : [];
   }
   const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
-  return archivedOwnerAgentId
-    ? [`agent:${normalizeAgentId(archivedOwnerAgentId)}:${params.stem}`]
-    : [];
+  if (!archivedOwnerAgentId) {
+    return [];
+  }
+  const fallbackKey = `agent:${normalizeAgentId(archivedOwnerAgentId)}:${params.stem}`;
+  return isIncognitoSessionKey(fallbackKey) ? [] : [fallbackKey];
 }

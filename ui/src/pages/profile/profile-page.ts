@@ -1,59 +1,53 @@
 import { consume } from "@lit/context";
-import { html, nothing, svg } from "lit";
+import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
+import type {
+  UserProfile,
+  UsersSelfResult,
+  UsersSetAvatarResult,
+  UsersSetDisplayNameResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import type { AuthenticatedUser } from "../../app/user-profile.ts";
+import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsGroup,
+  renderSettingsPage,
+  renderSettingsSection,
+} from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
-import { formatCost } from "../../lib/format.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import "../../styles/profile.css";
+import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import {
-  buildHeatmap,
-  buildInsights,
-  computeStreaks,
-  firstActiveDate,
-  formatLongDuration,
-  formatTokenScale,
-  localDateString,
-  peakDay,
-  type ProfileHeatmap,
-  type ProfileInsights,
-} from "./stats.ts";
-
-const HEATMAP_CELL = 11;
-const HEATMAP_GAP = 3;
-const HEATMAP_PITCH = HEATMAP_CELL + HEATMAP_GAP;
-const HEATMAP_LEFT = 30;
-const HEATMAP_TOP = 18;
-
-const CACHE_SETTLE_POLL_MS = 5000;
-const CACHE_SETTLE_SLOW_POLL_MS = 60_000;
-const MAX_FAST_SETTLE_POLLS = 24;
-
-// Fixed reference week (2024-01-01 is a Monday) for localized weekday labels.
-const WEEKDAY_LABEL_ROWS = [
-  { row: 1, utcDay: Date.UTC(2024, 0, 1) },
-  { row: 3, utcDay: Date.UTC(2024, 0, 3) },
-  { row: 5, utcDay: Date.UTC(2024, 0, 5) },
-];
-
-function integerFormat(): Intl.NumberFormat {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-}
+  decideUsageRefresh,
+  USAGE_PAYLOAD_TTL_MS,
+  type UsageRefreshReason,
+} from "../usage/refresh-policy.ts";
+import "../../styles/profile.css";
+import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
+import { renderIdentitySection } from "./identity-section.ts";
+import {
+  renderProfileHeatmap,
+  renderProfileInsights,
+  renderProfileStats,
+} from "./profile-stat-sections.ts";
+import { buildInsights, firstActiveDate, formatTokenScale, type ProfileInsights } from "./stats.ts";
 
 function formatMonthYear(date: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -61,19 +55,6 @@ function formatMonthYear(date: string): string {
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(`${date}T12:00:00Z`));
-}
-
-function formatFullDate(date: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeZone: "UTC",
-  }).format(new Date(`${date}T12:00:00Z`));
-}
-
-function streakLabel(days: number): string {
-  return t(days === 1 ? "profilePage.streakDay" : "profilePage.streakDays", {
-    count: integerFormat().format(days),
-  });
 }
 
 function toErrorMessage(error: unknown): string {
@@ -86,21 +67,45 @@ function toErrorMessage(error: unknown): string {
   return typeof error === "string" ? error : "request failed";
 }
 
+function toIdentityErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return typeof error === "string" && error.trim()
+    ? error
+    : t("profilePage.identity.profileUnavailable");
+}
+
 export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 
-  @state() private loading = true;
+  @state() private loading = false;
   @state() private error: string | null = null;
   @state() private costSummary: CostUsageSummary | null = null;
   @state() private sessionsResult: SessionsUsageResult | null = null;
+  @state() private selfUser: AuthenticatedUser | null = null;
+  @state() private ownProfile: UserProfile | null = null;
+  @state() private displayName = "";
+  @state() private identityLoading = false;
+  @state() private identityBusy: "display-name" | "avatar" | null = null;
+  @state() private identityError: string | null = null;
 
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private requestId = 0;
+  private identityRequestId = 0;
   private refreshTimer: number | null = null;
-  private refreshAttempts = 0;
+  private lastProfileLoadedAtMs: number | null = null;
+  private pendingAutomaticProfileRefresh = false;
+  // Set only when a disconnect invalidates active work. The shared refresh
+  // policy decides when the retry is allowed to run.
+  private profileReloadPending = false;
   private subscriptions: Array<() => void> = [];
+
+  private readonly handlePageActivation = () => {
+    this.requestProfileRefresh("focus");
+  };
 
   override connectedCallback() {
     super.connectedCallback();
@@ -109,6 +114,8 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.context.agents.subscribe(() => this.requestUpdate()),
       this.context.agentIdentity.subscribe(() => this.requestUpdate()),
     ];
+    document.addEventListener("visibilitychange", this.handlePageActivation);
+    globalThis.addEventListener("focus", this.handlePageActivation);
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
   }
 
@@ -117,9 +124,13 @@ export class ProfilePage extends OpenClawLightDomElement {
       unsubscribe();
     }
     this.subscriptions = [];
+    document.removeEventListener("visibilitychange", this.handlePageActivation);
+    globalThis.removeEventListener("focus", this.handlePageActivation);
     this.requestId += 1;
+    this.identityRequestId += 1;
     this.clearRefreshTimer();
-    this.refreshAttempts = 0;
+    this.pendingAutomaticProfileRefresh = false;
+    this.profileReloadPending = false;
     this.client = null;
     this.connected = false;
     super.disconnectedCallback();
@@ -127,23 +138,45 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const becameConnected = snapshot.connected && !this.connected;
+    const becameConnected = snapshot.phase === "connected" && !this.connected;
+    const nextSelfUser =
+      snapshot.phase === "connected"
+        ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
+        : null;
+    const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
+    this.selfUser = nextSelfUser;
     if (clientChanged) {
       // Never keep one gateway's stats on screen while another gateway loads
       // (or fails to load); the render branches key off costSummary presence.
       this.clearRefreshTimer();
-      this.refreshAttempts = 0;
+      this.requestId += 1;
+      this.loading = false;
+      this.lastProfileLoadedAtMs = null;
+      this.pendingAutomaticProfileRefresh = false;
+      this.profileReloadPending = false;
       this.costSummary = null;
       this.sessionsResult = null;
       this.error = null;
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (clientChanged || selfProfileChanged) {
+      this.identityRequestId += 1;
+      this.ownProfile = null;
+      this.displayName = "";
+      this.identityLoading = false;
+      this.identityBusy = null;
+      this.identityError = null;
+    }
+    if (snapshot.phase !== "connected" || !snapshot.client) {
+      this.profileReloadPending ||= this.loading;
       this.requestId += 1;
       this.clearRefreshTimer();
       this.loading = false;
       return;
+    }
+    if (nextSelfUser && (clientChanged || selfProfileChanged)) {
+      void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
       if (list) {
@@ -151,15 +184,17 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
     });
     if (clientChanged || becameConnected || (!this.costSummary && !this.loading && !this.error)) {
-      void this.loadProfile();
+      this.requestProfileRefresh("reconnect");
     }
   }
 
   private async loadProfile() {
     const client = this.client;
     if (!client || !this.connected) {
+      this.profileReloadPending = true;
       return;
     }
+    this.profileReloadPending = false;
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = null;
@@ -176,7 +211,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           range: "all",
           agentScope: "all",
           // Instance rows keep durations per transcript; family rollups would
-          // merge resets and inflate "Longest session" to the family lifespan.
+          // merge resets and inflate "Longest thread" to the family lifespan.
           groupBy: "instance",
           limit: 1000,
           ...dateParams,
@@ -187,6 +222,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
       this.costSummary = costSummary;
       this.sessionsResult = sessionsResult;
+      this.lastProfileLoadedAtMs = Date.now();
       this.scheduleCacheSettleRefresh();
     } catch (error) {
       if (requestId !== this.requestId) {
@@ -196,6 +232,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     } finally {
       if (requestId === this.requestId) {
         this.loading = false;
+        this.flushPendingAutomaticProfileRefresh();
       }
     }
   }
@@ -214,20 +251,14 @@ export class ProfilePage extends OpenClawLightDomElement {
   private scheduleCacheSettleRefresh() {
     this.clearRefreshTimer();
     if (!this.isCacheSettling()) {
-      this.refreshAttempts = 0;
       return;
     }
-    // Large cold rebuilds can take many minutes; back off to a slow poll
-    // instead of stopping, so the page converges rather than freezing a
-    // partial snapshot as final.
-    const interval =
-      this.refreshAttempts < MAX_FAST_SETTLE_POLLS
-        ? CACHE_SETTLE_POLL_MS
-        : CACHE_SETTLE_SLOW_POLL_MS;
-    this.refreshAttempts += 1;
+    const loadedAtMs = this.lastProfileLoadedAtMs ?? Date.now();
+    const ageMs = Math.max(0, Date.now() - loadedAtMs);
+    const interval = Math.max(0, USAGE_PAYLOAD_TTL_MS - ageMs);
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
-      void this.loadProfile();
+      this.requestProfileRefresh("poll");
     }, interval);
   }
 
@@ -235,6 +266,223 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (this.refreshTimer !== null) {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
+    }
+  }
+
+  private requestProfileRefresh(reason: UsageRefreshReason) {
+    if (this.loading && reason !== "manual") {
+      this.pendingAutomaticProfileRefresh = true;
+      return;
+    }
+    this.pendingAutomaticProfileRefresh = false;
+    const decision = decideUsageRefresh({
+      reason,
+      visible: document.visibilityState === "visible" && document.hasFocus(),
+      interrupted: this.profileReloadPending,
+      nowMs: Date.now(),
+      lastLoadedAtMs: this.lastProfileLoadedAtMs,
+    });
+    if (decision === "fetch") {
+      this.clearRefreshTimer();
+      void this.loadProfile();
+    } else if (decision === "skip" && this.isCacheSettling()) {
+      this.scheduleCacheSettleRefresh();
+    }
+  }
+
+  private flushPendingAutomaticProfileRefresh() {
+    if (!this.pendingAutomaticProfileRefresh) {
+      return;
+    }
+    this.pendingAutomaticProfileRefresh = false;
+    this.requestProfileRefresh("focus");
+  }
+
+  private async loadIdentity() {
+    const client = this.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    const requestId = ++this.identityRequestId;
+    const currentProfile = this.ownProfile;
+    const displayNameDraft = this.displayName;
+    const hasUnsavedDisplayName =
+      currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
+    this.identityLoading = true;
+    this.identityError = null;
+    try {
+      const result = await client.request<Partial<UsersSelfResult> | null>("users.self", {});
+      if (requestId !== this.identityRequestId) {
+        return;
+      }
+      const profile = result?.profile;
+      if (!profile) {
+        return;
+      }
+      this.ownProfile = profile;
+      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
+    } catch (error) {
+      if (requestId === this.identityRequestId) {
+        this.identityError = toIdentityErrorMessage(error);
+      }
+    } finally {
+      if (requestId === this.identityRequestId) {
+        this.identityLoading = false;
+      }
+    }
+  }
+
+  private applyOwnProfile(profile: UserProfile) {
+    this.ownProfile = profile;
+    this.displayName = profile.displayName ?? "";
+  }
+
+  private async saveDisplayName() {
+    const client = this.client;
+    const profile = this.ownProfile;
+    if (!client || !profile || this.identityBusy || this.identityLoading) {
+      return;
+    }
+    this.identityBusy = "display-name";
+    this.identityError = null;
+    const identityRequestId = this.identityRequestId;
+    let shouldRefresh = false;
+    try {
+      const displayName = this.displayName.trim() || null;
+      const result = await client.request<UsersSetDisplayNameResult>("users.setDisplayName", {
+        profileId: profile.id,
+        displayName,
+      });
+      if (client !== this.client || identityRequestId !== this.identityRequestId) {
+        return;
+      }
+      this.applyOwnProfile(result.profile);
+      this.context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
+      shouldRefresh = true;
+    } catch (error) {
+      if (client === this.client && identityRequestId === this.identityRequestId) {
+        this.identityError = toIdentityErrorMessage(error);
+      }
+    } finally {
+      if (identityRequestId === this.identityRequestId && this.identityBusy === "display-name") {
+        this.identityBusy = null;
+      }
+    }
+    if (shouldRefresh && client === this.client && identityRequestId === this.identityRequestId) {
+      void this.loadIdentity();
+    }
+  }
+
+  private async saveAvatar(file: File) {
+    const client = this.client;
+    const profile = this.ownProfile;
+    if (!client || !profile || this.identityBusy || this.identityLoading) {
+      return;
+    }
+    this.identityBusy = "avatar";
+    this.identityError = null;
+    const identityRequestId = this.identityRequestId;
+    const displayNameDraft = this.displayName;
+    const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
+    let shouldRefresh = false;
+    try {
+      const avatar = await processProfileAvatar(file);
+      if (client !== this.client || identityRequestId !== this.identityRequestId) {
+        return;
+      }
+      const result = await client.request<UsersSetAvatarResult>("users.setAvatar", {
+        profileId: profile.id,
+        mime: avatar.mime,
+        avatarBase64: avatar.avatarBase64,
+      });
+      if (client !== this.client || identityRequestId !== this.identityRequestId) {
+        return;
+      }
+      this.ownProfile = result.profile;
+      this.displayName = hasUnsavedDisplayName
+        ? displayNameDraft
+        : (result.profile.displayName ?? "");
+      const avatarUrl = userProfileAvatarUrl(
+        this.context.gateway.connection.gatewayUrl,
+        result.profile.id,
+        result.profile.updatedAt,
+      );
+      if (avatarUrl) {
+        this.context.gateway.updateSelfUser?.({ avatarUrl });
+      }
+      shouldRefresh = true;
+    } catch (error) {
+      if (client === this.client && identityRequestId === this.identityRequestId) {
+        this.identityError =
+          error instanceof ProfileAvatarError
+            ? t(
+                error.code === "too-large"
+                  ? "profilePage.identity.avatarErrors.tooLarge"
+                  : error.code === "source-too-large"
+                    ? "profilePage.identity.avatarErrors.sourceTooLarge"
+                    : "profilePage.identity.avatarErrors.invalid",
+              )
+            : toIdentityErrorMessage(error);
+      }
+    } finally {
+      if (identityRequestId === this.identityRequestId && this.identityBusy === "avatar") {
+        this.identityBusy = null;
+      }
+    }
+    if (shouldRefresh && client === this.client && identityRequestId === this.identityRequestId) {
+      void this.loadIdentity();
+    }
+  }
+
+  private renderIdentity() {
+    if (!this.selfUser) {
+      return nothing;
+    }
+    if (!this.ownProfile) {
+      // users.self is the idempotent gateway-owned profile ensure path. Retrying
+      // keeps profile ids and authenticated email linkage authoritative server-side.
+      const emptyState = this.identityLoading
+        ? t("profilePage.identity.loading")
+        : this.identityError
+          ? this.identityError
+          : html`<div class="profile-identity-empty">
+              <span>${t("profilePage.identity.notSet")}</span>
+              <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
+                ${t("profilePage.identity.setIdentity")}
+              </button>
+            </div>`;
+      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
+        ${renderSettingsSection(
+          { title: t("profilePage.identity.title") },
+          renderSettingsEmpty(emptyState),
+        )}
+      </div>`;
+    }
+    // The gateway route serves an uploaded avatar first and its private Gravatar
+    // fallback second, while a 404 still leaves the viewer-avatar initials visible.
+    const avatarUrl = userProfileAvatarUrl(
+      this.context.gateway.connection.gatewayUrl,
+      this.ownProfile.id,
+      this.ownProfile.updatedAt,
+    );
+    return renderIdentitySection({
+      profile: this.ownProfile,
+      avatarUrl,
+      displayName: this.displayName,
+      busy: this.identityLoading ? "loading" : this.identityBusy,
+      error: this.identityError,
+      onDisplayNameInput: (value) => {
+        this.displayName = value;
+      },
+      onSaveDisplayName: () => void this.saveDisplayName(),
+      onAvatarSelect: (file) => void this.saveAvatar(file),
+    });
+  }
+
+  private refreshManually() {
+    this.requestProfileRefresh("manual");
+    if (this.selfUser && !this.identityBusy) {
+      void this.loadIdentity();
     }
   }
 
@@ -269,8 +517,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     const { agentId, name, avatarUrl, textAvatar } = this.featuredAgent();
     const since = this.costSummary ? firstActiveDate(this.costSummary.daily) : null;
     const channels = insights?.topChannels ?? [];
-    return html`
-      <section class="profile-hero card">
+    return renderSettingsGroup(html`
+      <section class="profile-hero">
         <div class="profile-hero__avatar">${this.renderAvatar(avatarUrl, textAvatar, name)}</div>
         <div class="profile-hero__name">${name}</div>
         <div class="profile-hero__handle">
@@ -297,212 +545,24 @@ export class ProfilePage extends OpenClawLightDomElement {
           )}
         </div>
       </section>
-    `;
-  }
-
-  private renderStats(insights: ProfileInsights | null) {
-    const summary = this.costSummary;
-    if (!summary) {
-      return nothing;
-    }
-    const today = localDateString();
-    const streaks = computeStreaks(summary.daily, today);
-    const peak = peakDay(summary.daily);
-    const cells: Array<{ label: string; value: string; sub?: string }> = [
-      {
-        label: t("profilePage.statLifetimeTokens"),
-        value: formatTokenScale(summary.totals.totalTokens),
-        sub: summary.totals.totalCost > 0 ? `≈ ${formatCost(summary.totals.totalCost)}` : undefined,
-      },
-      {
-        label: t("profilePage.statPeakDay"),
-        value: formatTokenScale(peak?.totalTokens ?? 0),
-        sub: peak ? formatFullDate(peak.date) : undefined,
-      },
-      {
-        label: t("profilePage.statLongestSession"),
-        value:
-          insights?.longestSessionMs != null ? formatLongDuration(insights.longestSessionMs) : "—",
-      },
-      { label: t("profilePage.statCurrentStreak"), value: streakLabel(streaks.current) },
-      { label: t("profilePage.statLongestStreak"), value: streakLabel(streaks.longest) },
-    ];
-    return html`
-      <section class="profile-stats">
-        ${cells.map(
-          (cell) => html`
-            <div class="stat profile-stats__cell">
-              <div class="stat-value">${cell.value}</div>
-              <div class="stat-label">${cell.label}</div>
-              ${cell.sub ? html`<div class="profile-stats__sub">${cell.sub}</div>` : nothing}
-            </div>
-          `,
-        )}
-      </section>
-    `;
-  }
-
-  private renderHeatmapSvg(heatmap: ProfileHeatmap) {
-    const weekCount = heatmap.weeks.length;
-    const width = HEATMAP_LEFT + weekCount * HEATMAP_PITCH;
-    const height = HEATMAP_TOP + 7 * HEATMAP_PITCH;
-    const numberFormat = integerFormat();
-    const weekdayFormat = new Intl.DateTimeFormat(undefined, {
-      weekday: "short",
-      timeZone: "UTC",
-    });
-    return html`
-      <div class="profile-heatmap__scroll">
-        <svg
-          class="profile-heatmap__svg"
-          width=${width}
-          height=${height}
-          viewBox="0 0 ${width} ${height}"
-          role="img"
-          aria-label=${t("profilePage.heatmapTitle")}
-        >
-          ${heatmap.monthLabels.map((label, index) =>
-            label
-              ? svg`<text class="profile-heatmap__month" x=${HEATMAP_LEFT + index * HEATMAP_PITCH} y="10">${label}</text>`
-              : nothing,
-          )}
-          ${WEEKDAY_LABEL_ROWS.map(
-            ({ row, utcDay }) =>
-              svg`<text class="profile-heatmap__weekday" x=${HEATMAP_LEFT - 6} y=${HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}>${weekdayFormat.format(new Date(utcDay))}</text>`,
-          )}
-          ${heatmap.weeks.map((week, weekIndex) =>
-            week.days.map((day, dayIndex) => {
-              if (!day) {
-                return nothing;
-              }
-              const tooltip = `${formatFullDate(day.date)} · ${t("profilePage.heatmapCellTokens", {
-                tokens: numberFormat.format(day.tokens),
-              })}`;
-              return svg`
-                <rect
-                  class="profile-heatmap__cell profile-heatmap__cell--l${day.level}"
-                  x=${HEATMAP_LEFT + weekIndex * HEATMAP_PITCH}
-                  y=${HEATMAP_TOP + dayIndex * HEATMAP_PITCH}
-                  width=${HEATMAP_CELL}
-                  height=${HEATMAP_CELL}
-                  rx="2.5"
-                ><title>${tooltip}</title></rect>
-              `;
-            }),
-          )}
-        </svg>
-      </div>
-    `;
-  }
-
-  private renderHeatmap() {
-    const summary = this.costSummary;
-    if (!summary) {
-      return nothing;
-    }
-    const heatmap = buildHeatmap(summary.daily, localDateString());
-    return html`
-      <section class="card profile-heatmap">
-        <div class="profile-heatmap__header">
-          <div>
-            <div class="card-title">${t("profilePage.heatmapTitle")}</div>
-            <div class="card-sub">${t("profilePage.heatmapSub")}</div>
-          </div>
-          <div class="profile-heatmap__legend" aria-hidden="true">
-            <span>${t("profilePage.legendLess")}</span>
-            ${[0, 1, 2, 3, 4].map(
-              (level) =>
-                html`<span
-                  class="profile-heatmap__swatch profile-heatmap__cell--l${level}"
-                ></span>`,
-            )}
-            <span>${t("profilePage.legendMore")}</span>
-          </div>
-        </div>
-        ${this.renderHeatmapSvg(heatmap)}
-      </section>
-    `;
-  }
-
-  private renderInsights(insights: ProfileInsights | null) {
-    if (!insights) {
-      return nothing;
-    }
-    const numberFormat = integerFormat();
-    const rows: Array<{ label: string; value: string }> = [
-      { label: t("profilePage.insightModel"), value: insights.topModel ?? "—" },
-      { label: t("profilePage.insightMessages"), value: numberFormat.format(insights.messages) },
-      { label: t("profilePage.insightToolCalls"), value: numberFormat.format(insights.toolCalls) },
-      {
-        label: t("profilePage.insightUniqueTools"),
-        value: numberFormat.format(insights.uniqueTools),
-      },
-      { label: t("profilePage.insightAgents"), value: numberFormat.format(insights.agents) },
-      {
-        label: t("profilePage.insightSessions"),
-        value: insights.sessionsCapped
-          ? t("profilePage.sessionsCapped", { count: numberFormat.format(insights.sessions) })
-          : numberFormat.format(insights.sessions),
-      },
-    ];
-    const maxToolCount = insights.topTools[0]?.count ?? 0;
-    return html`
-      <section class="profile-columns">
-        <div class="card profile-insights">
-          <div class="card-title">${t("profilePage.insightsTitle")}</div>
-          <div class="profile-insights__rows">
-            ${rows.map(
-              (row) => html`
-                <div class="profile-insights__row">
-                  <span class="profile-insights__label">${row.label}</span>
-                  <span class="profile-insights__value">${row.value}</span>
-                </div>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="card profile-tools">
-          <div class="card-title">${t("profilePage.toolsTitle")}</div>
-          ${insights.topTools.length === 0
-            ? html`<div class="profile-tools__empty">${t("profilePage.toolsEmpty")}</div>`
-            : html`
-                <div class="profile-tools__rows">
-                  ${insights.topTools.map(
-                    (tool) => html`
-                      <div class="profile-tools__row">
-                        <span class="profile-tools__name">${tool.name}</span>
-                        <span class="profile-tools__bar" aria-hidden="true">
-                          <span
-                            class="profile-tools__bar-fill"
-                            style="width: ${maxToolCount > 0
-                              ? Math.max(4, Math.round((tool.count / maxToolCount) * 100))
-                              : 0}%"
-                          ></span>
-                        </span>
-                        <span class="profile-tools__count">
-                          ${t(tool.count === 1 ? "profilePage.toolRun" : "profilePage.toolRuns", {
-                            count: integerFormat().format(tool.count),
-                          })}
-                        </span>
-                      </div>
-                    `,
-                  )}
-                </div>
-              `}
-        </div>
-      </section>
-    `;
+    `);
   }
 
   private renderBody() {
     if (!this.connected || !this.client) {
-      return html`<div class="card profile-note">${t("profilePage.offline")}</div>`;
+      return renderSettingsPage(renderSettingsGroup(renderSettingsEmpty(t("profilePage.offline"))));
     }
+    const renderIdentityAwareState = (content: unknown) =>
+      renderSettingsPage(this.selfUser ? html`${this.renderIdentity()} ${content}` : content);
     if (this.loading && !this.costSummary) {
-      return html`<div class="card profile-note">${t("profilePage.loading")}</div>`;
+      return renderIdentityAwareState(
+        renderSettingsGroup(renderSettingsEmpty(t("profilePage.loading"))),
+      );
     }
     if (this.error && !this.costSummary) {
-      return html`<div class="card profile-note profile-note--error">${this.error}</div>`;
+      return renderIdentityAwareState(
+        renderSettingsGroup(renderSettingsEmpty(this.error), { danger: true }),
+      );
     }
     const insights = this.sessionsResult ? buildInsights(this.sessionsResult) : null;
     const hasActivity = (this.costSummary?.totals.totalTokens ?? 0) > 0;
@@ -510,22 +570,19 @@ export class ProfilePage extends OpenClawLightDomElement {
     // settle poll keeps retrying, so the loading note stays truthful until
     // real data or a genuinely fresh shell arrives.
     const emptyState = this.isCacheSettling()
-      ? html`<div class="card profile-note">${t("profilePage.loading")}</div>`
-      : html`
-          <div class="card profile-note">
-            <div class="card-title">${t("profilePage.emptyTitle")}</div>
-            <div class="card-sub">${t("profilePage.emptyBody")}</div>
-          </div>
-        `;
-    return html`
-      <div class="profile-page">
-        ${this.renderHero(insights)}
-        ${hasActivity
-          ? html`${this.renderStats(insights)} ${this.renderHeatmap()}
-            ${this.renderInsights(insights)}`
-          : emptyState}
-      </div>
-    `;
+      ? renderSettingsGroup(renderSettingsEmpty(t("profilePage.loading")))
+      : renderSettingsGroup(
+          renderSettingsEmpty(
+            html`<strong>${t("profilePage.emptyTitle")}</strong><br />${t("profilePage.emptyBody")}`,
+          ),
+        );
+    return renderSettingsPage(
+      hasActivity
+        ? html`${this.renderHero(insights)} ${renderProfileStats(this.costSummary, insights)}
+          ${this.renderIdentity()} ${renderProfileHeatmap(this.costSummary)}
+          ${renderProfileInsights(insights)}`
+        : html`${this.renderHero(insights)} ${this.renderIdentity()} ${emptyState}`,
+    );
   }
 
   override render() {
@@ -533,8 +590,10 @@ export class ProfilePage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("profile")}</div>
-          <div class="page-sub">${subtitleForRoute("profile")}</div>
         </div>
+        <button class="btn profile-refresh" @click=${() => this.refreshManually()}>
+          ${this.loading ? t("common.refreshing") : t("common.refresh")}
+        </button>
       </section>
       ${renderSettingsWorkspace(this.renderBody())}
     `;

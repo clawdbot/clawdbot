@@ -22,6 +22,33 @@ describe("subagent run timeout helpers", () => {
     ).toBe(2_592_001_000);
   });
 
+  it("waits for the collector lifecycle start before setting its deadline", () => {
+    expect(
+      resolveSubagentRunDeadlineMs({
+        collect: true,
+        createdAt: 1_000,
+        runTimeoutSeconds: 60,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveSubagentRunDeadlineMs({
+        collect: true,
+        createdAt: 1_000,
+        runTimeoutSeconds: 60,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveSubagentRunDeadlineMs(
+        {
+          collect: true,
+          createdAt: 1_000,
+          runTimeoutSeconds: 60,
+        },
+        5_000,
+      ),
+    ).toBe(65_000);
+  });
+
   it("caps actual timer delays without shortening semantic durations", () => {
     // Long-lived subagent runs retain their requested deadline even though the
     // watchdog timer must be scheduled in bounded chunks.

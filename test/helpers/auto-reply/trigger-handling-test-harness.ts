@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../../src/agents/embedded-agent-runner/runs.js";
-import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -120,8 +120,7 @@ const DEFAULT_MODEL_CATALOG = [
 
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
   loadManifestModelCatalog: vi.fn(() => DEFAULT_MODEL_CATALOG),
-  loadModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
-  resetModelCatalogCacheForTest: vi.fn(),
+  loadPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
 }));
 
 const installModelCatalogMock = () =>
@@ -129,9 +128,23 @@ const installModelCatalogMock = () =>
 
 installModelCatalogMock();
 
+vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    return { entries, routeVariants: entries, authoritative: true };
+  },
+}));
+
 vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => modelCatalogMocks.loadManifestModelCatalog(),
-  loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
+  loadPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    return { entries, routeVariants: entries, authoritative: true };
+  },
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({

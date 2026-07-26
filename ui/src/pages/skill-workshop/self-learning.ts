@@ -1,5 +1,6 @@
 // Self-learning (skills.workshop.autonomous.enabled) surface for the Workshop
 // tab: config read/patch plumbing plus the toggle, pitch, and error renderers.
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import {
@@ -13,11 +14,7 @@ export type SkillWorkshopSelfLearning = {
   error: string | null;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+const CONFIG_CHANGED_SINCE_LOAD = "config changed since last load";
 
 // Mirrors the gateway default for skills.workshop.autonomous.enabled: absent
 // config means self-learning is off. Snapshot sourceConfig/resolved are both
@@ -41,10 +38,20 @@ export async function setSelfLearningEnabled(
   runtimeConfig: RuntimeConfigCapability,
   enabled: boolean,
 ): Promise<string | null> {
-  const patched = await runtimeConfig.patch({
+  const patch = {
     raw: { skills: { workshop: { autonomous: { enabled } } } },
     note: enabled ? "Enable Skill Workshop self-learning" : "Disable Skill Workshop self-learning",
-  });
+  };
+  let patched = await runtimeConfig.patch(patch);
+  if (!patched && runtimeConfig.state.lastError?.includes(CONFIG_CHANGED_SINCE_LOAD)) {
+    // This scalar toggle is safe to replay after refreshing the optimistic-lock hash.
+    // Keep arbitrary merge patches fail-closed: arrays and derived objects may need rebuilding.
+    await runtimeConfig.refresh();
+    if (runtimeConfig.state.lastError) {
+      return runtimeConfig.state.lastError;
+    }
+    patched = await runtimeConfig.patch(patch);
+  }
   if (!patched) {
     return runtimeConfig.state.lastError ?? t("skillWorkshop.selfLearning.updateError");
   }

@@ -24,6 +24,7 @@ import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 function resolveRuntimeModelContext(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   agentDir: string;
   workspaceDir: string;
   provider: string;
@@ -35,6 +36,7 @@ function resolveRuntimeModelContext(params: {
   modelContextWindowTokens?: number;
 } {
   const model = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   }).model as ProviderRuntimeModel | undefined;
   if (!model) {
@@ -97,6 +99,7 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
     try {
       runtimeModelContext = resolveRuntimeModelContext({
         cfg: params.cfg,
+        agentId,
         agentDir,
         workspaceDir,
         provider: modelRef.provider,

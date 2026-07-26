@@ -38,13 +38,6 @@ export function isAbortError(error: unknown): boolean {
   return "name" in error && String((error as { name?: unknown }).name) === "AbortError";
 }
 
-export function mergeAbortSignals(
-  signals: Array<AbortSignal | undefined>,
-): AbortSignal | undefined {
-  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  return activeSignals.length > 1 ? AbortSignal.any(activeSignals) : activeSignals[0];
-}
-
 /** @deprecated Discord no longer uses this for channel-owned message run timeouts. */
 export async function runDiscordTaskWithTimeout(params: {
   run: (abortSignal: AbortSignal | undefined) => Promise<void>;

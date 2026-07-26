@@ -105,7 +105,7 @@ export function planPristineStartupConfigMigrations(
   config: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): PristineStartupMigrationPlan {
-  if (!isRecord(config) || Object.hasOwn(config, "$include")) {
+  if (!isRecord(config) || containsObjectKey(config, "$include")) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
   const skipCoreStateMigrations = configIsPristineCoreStateSafe(config);

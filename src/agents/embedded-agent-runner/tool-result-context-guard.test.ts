@@ -7,10 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
+import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
   installContextEngineLoopHook,
@@ -18,8 +15,7 @@ import {
   markTranscriptPromptText,
 } from "./tool-result-context-guard.js";
 
-const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
-  "Context overflow: estimated context size exceeds safe threshold during tool loop.";
+const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
 
 function makeUser(text: string): AgentMessage {
   return castAgentMessage({
@@ -285,15 +281,19 @@ describe("installToolResultContextGuard", () => {
     });
   });
 
-  it("throws a preemptive overflow when total context still exceeds the high-water mark", async () => {
+  it("keeps total-context pressure provider-bound after per-result shaping", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [
       makeUser("u".repeat(50_000)),
       makeToolResult("call_big", "x".repeat(5_000)),
     ];
 
-    await expect(applyGuardToContext(agent, contextForNextCall)).rejects.toThrow(
-      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+
+    expect(transformed).not.toBe(contextForNextCall);
+    expect((transformed[0] as { content?: unknown }).content).toBe("u".repeat(50_000));
+    expectOpenClawTruncation(
+      getToolResultText(expectDefined(transformed[1], "transformed[1] test invariant")),
     );
     expect(
       getToolResultText(
@@ -302,7 +302,7 @@ describe("installToolResultContextGuard", () => {
     ).toBe("x".repeat(5_000));
   });
 
-  it("throws instead of rewriting older tool results under aggregate pressure", async () => {
+  it("does not manufacture overflow from aggregate character pressure", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [
       makeUser("u".repeat(50_000)),
@@ -311,9 +311,9 @@ describe("installToolResultContextGuard", () => {
       makeToolResult("call_3", "c".repeat(500)),
     ];
 
-    await expect(applyGuardToContext(agent, contextForNextCall)).rejects.toThrow(
-      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
-    );
+    const transformed = await applyGuardToContext(agent, contextForNextCall);
+
+    expect(transformed).toBe(contextForNextCall);
     expect(
       getToolResultText(
         expectDefined(contextForNextCall[1], "contextForNextCall[1] test invariant"),
@@ -331,7 +331,7 @@ describe("installToolResultContextGuard", () => {
     ).toBe("c".repeat(500));
   });
 
-  it("does not special-case the latest read result before throwing under aggregate pressure", async () => {
+  it("preserves the latest read result while admitting aggregate pressure", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [
       makeUser("u".repeat(50_000)),
@@ -339,9 +339,9 @@ describe("installToolResultContextGuard", () => {
       makeReadToolResult("call_new", "y".repeat(500)),
     ];
 
-    await expect(applyGuardToContext(agent, contextForNextCall)).rejects.toThrow(
-      PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
-    );
+    const transformed = await applyGuardToContext(agent, contextForNextCall);
+
+    expect(transformed).toBe(contextForNextCall);
     expect(
       getToolResultText(
         expectDefined(contextForNextCall[1], "contextForNextCall[1] test invariant"),
@@ -1239,3 +1239,4 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

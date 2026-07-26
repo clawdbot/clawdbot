@@ -59,6 +59,87 @@ function extractNonrootNodePreflight(): string {
   return expectDefined(match[1], "non-root smoke Node preflight capture");
 }
 
+function extractInstallE2eInstallerFunction(): string {
+  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+  const startMarker = "run_official_installer() (\n";
+  const endMarker = "\n\nverify_installed_version()";
+  const start = script.indexOf(startMarker);
+  const end = script.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end <= start) {
+    throw new Error("install E2E installer function was not found");
+  }
+  return script.slice(start, end);
+}
+
+function runInstallE2eInstallerFixture(params: {
+  curlExitCode?: number;
+  installTag: string;
+  installerBody: string;
+}) {
+  const root = tempDirs.make("openclaw-install-e2e-download-");
+  const binDir = join(root, "bin");
+  const curlPath = join(binDir, "curl");
+  const curlArgsPath = join(root, "curl-args.txt");
+  const installerSourcePath = join(root, "installer-source.sh");
+  const markerPath = join(root, "installer-marker.txt");
+  const outputPathCapture = join(root, "curl-output-path.txt");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(installerSourcePath, params.installerBody);
+  writeFileSync(
+    curlPath,
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'printf \'%s\\n\' "$*" >"$CURL_ARGS_PATH"',
+      'output=""',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "-o" ]; then',
+      "    shift",
+      '    output="$1"',
+      "  fi",
+      "  shift",
+      "done",
+      'cp "$FAKE_INSTALLER_SOURCE" "$output"',
+      'printf "%s" "$output" >"$OUTPUT_PATH_CAPTURE"',
+      'exit "$FAKE_CURL_EXIT"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CURL_ARGS_PATH: curlArgsPath,
+    FAKE_CURL_EXIT: String(params.curlExitCode ?? 0),
+    FAKE_INSTALLER_SOURCE: installerSourcePath,
+    INSTALL_MARKER: markerPath,
+    OUTPUT_PATH_CAPTURE: outputPathCapture,
+    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+  };
+  delete env.OPENCLAW_BETA;
+  delete env.OPENCLAW_VERSION;
+
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      [
+        "set -u",
+        extractInstallE2eInstallerFunction(),
+        'INSTALL_URL="https://installer.example.test/install.sh"',
+        `INSTALL_TAG=${JSON.stringify(params.installTag)}`,
+        "run_official_installer",
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env,
+    },
+  );
+
+  return { curlArgsPath, markerPath, outputPathCapture, result };
+}
+
 function runNonrootNodePreflight(
   version: string,
   options: { sqlite?: boolean; sqliteVersion?: string } = {},
@@ -203,6 +284,106 @@ function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
   });
 }
 
+function extractInstallSmokeInstallerPipeline(): string {
+  const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+  const match = script.match(/(run_installer_pipeline\(\) \{[\s\S]*?\n\})\n\nrun_install_smoke/u);
+  if (!match) {
+    throw new Error("install smoke installer pipeline helper was not found");
+  }
+  return expectDefined(match[1], "install smoke installer pipeline helper capture");
+}
+
+function readNulSeparatedArgs(filePath: string): string[] {
+  return readFileSync(filePath, "utf8").split("\0").filter(Boolean);
+}
+
+function runInstallSmokeInstallerPipelineFixture(params: {
+  curlExitCode?: number;
+  installerArgs: string[];
+}) {
+  const root = tempDirs.make("openclaw-install-smoke-pipeline-");
+  const binDir = join(root, "bin");
+  const curlArgsPath = join(root, "curl-args.txt");
+  const installerArgsPath = join(root, "installer-args.txt");
+  const installerMarkerPath = join(root, "installer-ran");
+  const installerSourcePath = join(root, "installer.sh");
+  const timeoutArgsPath = join(root, "timeout-args.txt");
+  const installUrl = "https://installer.example.test/install.sh?channel=beta&trace=1";
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    join(binDir, "timeout"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `printf '%s\\0' "$@" >"$TIMEOUT_ARGS_PATH"`,
+      "shift 2",
+      'exec "$@"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(binDir, "curl"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `printf '%s\\0' "$@" >"$CURL_ARGS_PATH"`,
+      'cat "$FAKE_INSTALLER_SOURCE"',
+      'exit "$FAKE_CURL_EXIT"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    installerSourcePath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `printf '%s\\0' "$@" >"$INSTALLER_ARGS_PATH"`,
+      'touch "$INSTALLER_MARKER_PATH"',
+      "",
+    ].join("\n"),
+  );
+
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `set -euo pipefail
+${extractInstallSmokeInstallerPipeline()}
+run_installer_pipeline "$INSTALL_URL" "$@"`,
+      "_",
+      ...params.installerArgs,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CURL_ARGS_PATH: curlArgsPath,
+        FAKE_CURL_EXIT: String(params.curlExitCode ?? 0),
+        FAKE_INSTALLER_SOURCE: installerSourcePath,
+        INSTALLER_ARGS_PATH: installerArgsPath,
+        INSTALLER_MARKER_PATH: installerMarkerPath,
+        INSTALL_COMMAND_TIMEOUT: "17",
+        INSTALL_URL: installUrl,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        TIMEOUT_ARGS_PATH: timeoutArgsPath,
+      },
+    },
+  );
+
+  return {
+    curlArgsPath,
+    installUrl,
+    installerArgsPath,
+    installerMarkerPath,
+    result,
+    timeoutArgsPath,
+  };
+}
+
 function expectInstallDockerfileContract(
   dockerfilePath: string,
   runnerPath: string,
@@ -234,7 +415,7 @@ async function waitForCondition(
     if (predicate()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -463,6 +644,13 @@ describe("test-install-sh-docker", () => {
     expect(nonrootDockerfile).toContain("USER app");
     expect(nonrootDockerfile).toContain("WORKDIR /home/app");
     expect(nonrootDockerfile).toContain("NPM_CONFIG_UPDATE_NOTIFIER=false");
+    expect(nonrootDockerfile).toContain('installer="$(mktemp)"');
+    expect(nonrootDockerfile).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" https://deb.nodesource.com/setup_24.x',
+    );
+    expect(nonrootDockerfile).toContain('bash "$installer"');
+    expect(nonrootDockerfile).toContain('rm -f "$installer"');
+    expect(nonrootDockerfile).not.toMatch(/curl[^\n]+\|\s*bash/u);
   });
 
   it("keeps shared install helpers parsing and verifying installed CLI versions", () => {
@@ -835,6 +1023,27 @@ printf 'status=%s\\n' "$status"
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
+  it("downloads the OpenShell installer completely before execution", () => {
+    const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8"));
+    const steps = workflow.jobs.validate_special_e2e.steps as Array<{
+      name?: string;
+      run?: string;
+    }>;
+    const installStep = expectDefined(
+      steps.find((step) => step.name === "Install OpenShell CLI"),
+      "OpenShell install step",
+    );
+    const run = expectDefined(installStep.run, "OpenShell install command");
+
+    expect(run).toContain('installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"');
+    expect(run).toContain("curl -LsSf --connect-timeout 10 --max-time 120 \\");
+    expect(run).toContain('-o "$installer_path"');
+    expect(run).toContain('sh "$installer_path"');
+    expect(run).toContain("trap 'rm -f \"$installer_path\"' EXIT");
+    expect(run.indexOf('-o "$installer_path"')).toBeLessThan(run.indexOf('sh "$installer_path"'));
+    expect(run).not.toContain("install.sh | sh");
+  });
+
   it("prints package size audits for release smoke tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -915,9 +1124,36 @@ printf 'status=%s\\n' "$status"
 
     expect(wrapper).toContain('-v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro"');
     expect(runner).toContain("Run official installer one-liner for latest release tarball");
-    expect(runner).toContain("run_installer_for_package_spec");
-    expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
+    expect(runner).toContain("run_installer_pipeline");
+    expect(runner).toContain('--version "$FRESH_TAG_URL"');
     expect(runner).not.toContain('npm_install_global "install latest release tarball"');
+  });
+
+  it("uses one bounded installer pipeline for candidate, default, and freshness smoke", () => {
+    const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+
+    expect(runner.match(/^\s*run_installer_pipeline\b/gmu)).toHaveLength(4);
+    expect(runner).toContain("bash -o pipefail -c");
+    expect(runner.match(/curl -fsSL --connect-timeout 30 --max-time 300 --/gu)).toHaveLength(1);
+    expect(runner).toContain('run_installer_pipeline "$INSTALL_URL" --no-prompt');
+    expect(runner).toContain('--version "$FRESH_TAG_URL"');
+    expect(runner).toContain('--version "$FRESHNESS_VERSION"');
+    expect(runner).toMatch(
+      /HOME="\$policy_home" \\\n\s*NPM_CONFIG_USERCONFIG="\$\{policy_home\}\/\.npmrc" \\\n\s*OPENCLAW_NO_ONBOARD=1 \\\n\s*OPENCLAW_NO_PROMPT=1 \\\n\s*run_installer_pipeline/u,
+    );
+  });
+
+  it("bounds both non-root installer pipelines and propagates curl failures", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+    const nonrootRunner = readFileSync(NONROOT_RUNNER_PATH, "utf8");
+
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL"');
+    expect(wrapper).toContain(
+      `'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 -- "$OPENCLAW_INSTALL_CLI_URL" | bash -s -- --set-npm-prefix --no-onboard'`,
+    );
+    expect(nonrootRunner).toContain(
+      'curl -fsSL --connect-timeout 30 --max-time 300 -- "$INSTALL_URL" | bash',
+    );
   });
 
   it("uses public npm latest as the non-root installer expectation", () => {
@@ -932,6 +1168,40 @@ printf 'status=%s\\n' "$status"
 });
 
 describe("install-sh E2E runner", () => {
+  it("does not execute a partial installer after a bounded download fails", () => {
+    const fixture = runInstallE2eInstallerFixture({
+      curlExitCode: 28,
+      installerBody: 'touch "$INSTALL_MARKER"\n',
+      installTag: "latest",
+    });
+
+    expect(fixture.result.status).toBe(28);
+    expect(readFileSync(fixture.curlArgsPath, "utf8")).toContain(
+      "-fsSL --connect-timeout 10 --max-time 120 https://installer.example.test/install.sh -o",
+    );
+    expect(existsSync(fixture.markerPath)).toBe(false);
+    expect(existsSync(readFileSync(fixture.outputPathCapture, "utf8"))).toBe(false);
+  });
+
+  it.each([
+    ["latest", "|"],
+    ["beta", "1|"],
+    ["2026.7.1", "|2026.7.1"],
+  ])(
+    "executes a complete %s installer with the expected tag environment",
+    (installTag, expected) => {
+      const fixture = runInstallE2eInstallerFixture({
+        installTag,
+        installerBody:
+          'printf "%s|%s" "${OPENCLAW_BETA-}" "${OPENCLAW_VERSION-}" >"$INSTALL_MARKER"\n',
+      });
+
+      expect(fixture.result.status, fixture.result.stderr).toBe(0);
+      expect(readFileSync(fixture.markerPath, "utf8")).toBe(expected);
+      expect(existsSync(readFileSync(fixture.outputPathCapture, "utf8"))).toBe(false);
+    },
+  );
+
   it("normalizes Docker wrapper timing and toggle knobs before forwarding", () => {
     const wrapper = readFileSync(INSTALL_E2E_DOCKER_PATH, "utf8");
 
@@ -1057,6 +1327,60 @@ describe("install-sh E2E runner", () => {
 });
 
 describe("install-sh smoke runner", () => {
+  it("passes the URL and installer arguments through the timed pipeline unchanged", () => {
+    const installerArgs = [
+      "--install-method",
+      "npm",
+      "--version",
+      "https://packages.example.test/openclaw.tgz?x=1&y=2",
+      "--no-prompt",
+    ];
+    const fixture = runInstallSmokeInstallerPipelineFixture({ installerArgs });
+
+    expect(fixture.result.status, fixture.result.stderr).toBe(0);
+    expect(readNulSeparatedArgs(fixture.timeoutArgsPath)).toEqual([
+      "--kill-after=30s",
+      "17s",
+      "bash",
+      "-o",
+      "pipefail",
+      "-c",
+      'curl -fsSL --connect-timeout 30 --max-time 300 -- "$1" | bash -s -- "${@:2}"',
+      "_",
+      fixture.installUrl,
+      ...installerArgs,
+    ]);
+    expect(readNulSeparatedArgs(fixture.curlArgsPath)).toEqual([
+      "-fsSL",
+      "--connect-timeout",
+      "30",
+      "--max-time",
+      "300",
+      "--",
+      fixture.installUrl,
+    ]);
+    expect(readNulSeparatedArgs(fixture.installerArgsPath)).toEqual(installerArgs);
+    expect(existsSync(fixture.installerMarkerPath)).toBe(true);
+  });
+
+  it("propagates curl exit 28 even when the piped installer exits successfully", () => {
+    const fixture = runInstallSmokeInstallerPipelineFixture({
+      curlExitCode: 28,
+      installerArgs: ["--no-prompt"],
+    });
+
+    expect(fixture.result.status, fixture.result.stderr).toBe(28);
+    expect(existsSync(fixture.installerMarkerPath)).toBe(true);
+    expect(readNulSeparatedArgs(fixture.timeoutArgsPath).slice(0, 6)).toEqual([
+      "--kill-after=30s",
+      "17s",
+      "bash",
+      "-o",
+      "pipefail",
+      "-c",
+    ]);
+  });
+
   it("wraps long npm/update operations with heartbeat and install-size audits", () => {
     const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
 

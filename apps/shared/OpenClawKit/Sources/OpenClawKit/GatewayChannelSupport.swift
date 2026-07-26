@@ -52,6 +52,7 @@ extension GatewayChannelActor {
         "operator.read",
         "operator.write",
         "operator.approvals",
+        "operator.questions",
         "operator.pairing",
     ]
 

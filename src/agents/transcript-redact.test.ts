@@ -21,12 +21,9 @@ function textMessage(text: string): AgentMessage {
   } as unknown as AgentMessage;
 }
 
-function cfg(mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
+function cfg(_mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
   return {
-    logging: {
-      redactSensitive: mode,
-      ...(patterns ? { redactPatterns: patterns } : {}),
-    },
+    logging: patterns ? { redactPatterns: patterns } : {},
   } satisfies OpenClawConfig;
 }
 
@@ -82,6 +79,61 @@ describe("redactTranscriptMessage", () => {
     ).text;
     expect(text).not.toContain("sk-abcdef1234567890xyz");
     expect(text).toContain("end");
+  });
+
+  it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "feishu_doc",
+          arguments: {
+            page_token: "PGabc123XYZ",
+            next_page_token: "NXTpage456",
+            page_cursor: "PC789",
+            doc_token: "DOCsecret999",
+            app_secret: "REALSECRETzzz",
+          },
+        },
+      ],
+    } as unknown as AgentMessage;
+    const args = (
+      msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+        arguments: Record<string, string>;
+      }>
+    )[0]!.arguments;
+    // Pagination cursors are opaque paging state — replaying a "***" mask as a
+    // real cursor silently pages from the start, so keep them intact.
+    expect(args.page_token).toBe("PGabc123XYZ");
+    expect(args.next_page_token).toBe("NXTpage456");
+    expect(args.page_cursor).toBe("PC789");
+    // Genuine credentials stay masked.
+    expect(args.doc_token).toBe("***");
+    expect(args.app_secret).toBe("***");
+  });
+
+  it("still masks a secret-shaped value even under an exempt pagination key (#104992)", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "feishu_doc",
+          arguments: { page_token: "sk-abcdef1234567890xyz" },
+        },
+      ],
+    } as unknown as AgentMessage;
+    const args = (
+      msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+        arguments: Record<string, string>;
+      }>
+    )[0]!.arguments;
+    // Value-pattern redaction still runs on exempt keys, so an embedded real
+    // secret shape is masked even though the key itself is allowed through.
+    expect(args.page_token).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("redacts thinking block", () => {
@@ -177,6 +229,36 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(blockMetadata)).not.toContain("sk-abcdef1234567890xyz");
     expect(rejectedSignature).not.toContain("sk-abcdef1234567890xyz");
     expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
+  });
+
+  it("handles configured providers without explicit models", () => {
+    const msg = {
+      role: "assistant",
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+      content: [{ type: "text", text: "visible", textSignature: "response-item-1" }],
+    } as unknown as AgentMessage;
+    const inputCfg = {
+      logging: { redactSensitive: "tools" },
+      models: { providers: { openai: { apiKey: "test-key" } } },
+    } as unknown as OpenClawConfig;
+
+    const result = redactTranscriptMessage(msg, inputCfg) as unknown as {
+      api: string;
+      model: string;
+      provider: string;
+      content: Array<{ textSignature: string }>;
+    };
+
+    expect(result).toMatchObject({
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+    });
+    expect(expectDefined(result.content[0], "result.content[0] test invariant").textSignature).toBe(
+      "response-item-1",
+    );
   });
 
   it.each([
@@ -458,6 +540,27 @@ describe("redactTranscriptMessage", () => {
       expect(block.textSignature).toBe(textSignature);
     },
   );
+
+  it.each([
+    ["openai-completions", "openrouter", "deepseek/deepseek-v4-flash"],
+    ["anthropic-messages", "anthropic", "claude-sonnet-4-6"],
+  ])("preserves commentary phase signatures for %s", (api, provider, model) => {
+    const textSignature = JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" });
+    const msg = {
+      role: "assistant",
+      api,
+      provider,
+      model,
+      content: [{ type: "text", text: "I will check.", textSignature }],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = expectDefined(
+      (msgContent(result) as Array<{ textSignature: string }>)[0],
+      "commentary text block",
+    );
+    expect(block.textSignature).toBe(textSignature);
+  });
 
   it("preserves Anthropic redacted_thinking data while redacting siblings", () => {
     const msg = {
@@ -1366,13 +1469,14 @@ describe("redactTranscriptMessage", () => {
     expect(text).toContain("ok");
   });
 
-  it("passes through unchanged when redactSensitive is off", () => {
+  it("redacts text even when a caller supplies the retired off spelling", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz");
     const result = redactTranscriptMessage(msg, cfg("off"));
-    expect(result).toBe(msg); // same reference; nothing changed
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("leaves structured tool-call secrets unchanged when redactSensitive is off", () => {
+  it("redacts structured tool-call secrets regardless of retired mode input", () => {
     const msg = {
       role: "assistant",
       content: [
@@ -1385,12 +1489,12 @@ describe("redactTranscriptMessage", () => {
       ],
     } as unknown as AgentMessage;
     const result = redactTranscriptMessage(msg, cfg("off"));
-    expect(result).toBe(msg);
-    expect(JSON.stringify(msgContent(result))).toContain("plainsecretvalue123");
-    expect(JSON.stringify(msgContent(result))).toContain("hunter2");
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(msgContent(result))).not.toContain("plainsecretvalue123");
+    expect(JSON.stringify(msgContent(result))).not.toContain("hunter2");
   });
 
-  it("leaves structured tool-result details unchanged when redactSensitive is off", () => {
+  it("redacts structured tool-result details regardless of retired mode input", () => {
     const msg = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -1401,9 +1505,9 @@ describe("redactTranscriptMessage", () => {
       timestamp: Date.now(),
     } as unknown as AgentMessage;
     const result = redactTranscriptMessage(msg, cfg("off")) as unknown as { details: unknown };
-    expect(result).toBe(msg);
-    expect(JSON.stringify(result.details)).toContain("plainsecretvalue123");
-    expect(JSON.stringify(result.details)).toContain("hunter2");
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(result.details)).not.toContain("plainsecretvalue123");
+    expect(JSON.stringify(result.details)).not.toContain("hunter2");
   });
 
   it("returns same object reference when nothing matches", () => {
@@ -1412,10 +1516,10 @@ describe("redactTranscriptMessage", () => {
     expect(result).toBe(msg);
   });
 
-  it("passes through signatures unchanged when global redaction is off", () => {
+  it("redacts signature summaries with the fixed global policy", () => {
     const readLoggingConfig = vi
       .spyOn(loggingConfigModule, "readLoggingConfig")
-      .mockReturnValue({ redactSensitive: "off" });
+      .mockReturnValue({});
     const msg = {
       role: "assistant",
       content: [
@@ -1433,7 +1537,7 @@ describe("redactTranscriptMessage", () => {
     } as unknown as AgentMessage;
 
     try {
-      expect(redactTranscriptMessage(msg)).toBe(msg);
+      expect(JSON.stringify(redactTranscriptMessage(msg))).not.toContain("sk-abcdef1234567890xyz");
     } finally {
       readLoggingConfig.mockRestore();
     }
@@ -1457,3 +1561,4 @@ describe("redactTranscriptMessage", () => {
     expect(() => redactTranscriptMessage(msg, cfg("tools"))).not.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

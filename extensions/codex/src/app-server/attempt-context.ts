@@ -12,11 +12,14 @@ import {
   type ContextEngineProjection,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import {
+  buildMemorySystemPromptAddition,
+  prepareMemorySystemPromptAddition,
+} from "openclaw/plugin-sdk/core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
@@ -40,7 +43,6 @@ const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   ...CODEX_INHERITED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
   ...CODEX_TURN_SCOPED_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES,
 ]);
-const CODEX_HEARTBEAT_CONTEXT_BASENAME = "heartbeat.md";
 const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
@@ -50,7 +52,6 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["tools.md", 40],
   ["bootstrap.md", 50],
   ["memory.md", 60],
-  ["heartbeat.md", 70],
 ]);
 
 type CodexBootstrapFile = Awaited<ReturnType<typeof resolveBootstrapFilesForRun>>[number];
@@ -65,7 +66,6 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContextFiles?: EmbeddedContextFile[];
   developerInstructionFiles?: EmbeddedContextFile[];
   turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
-  heartbeatReferenceFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolNames?: string[];
@@ -74,7 +74,6 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   developerInstructions?: string;
   turnScopedDeveloperInstructions?: string;
   memoryCollaborationInstructions?: string;
-  heartbeatCollaborationInstructions?: string;
 };
 
 /** Reads mirrored Codex session history for harness hooks. */
@@ -170,6 +169,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
+  sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const memoryToolsAvailable =
@@ -238,14 +238,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     )
       ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
       : [];
-    const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(contextFiles);
     return {
       bootstrapFiles,
       contextFiles,
       promptContextFiles,
       developerInstructionFiles,
       turnScopedDeveloperInstructionFiles,
-      heartbeatReferenceFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
       memoryToolNames: [...params.memoryToolNames],
@@ -257,17 +255,16 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         turnScopedDeveloperInstructionFiles,
       ),
       memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
-        ? renderCodexWorkspaceMemoryCollaborationInstructions({
+        ? await renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
             memoryToolRouted: memoryToolsAvailable,
             citationsMode: params.params.config?.memory?.citations,
             agentId: params.params.agentId ?? params.sessionAgentId,
             agentSessionKey: params.sessionKey,
+            sandboxed: params.sandboxed,
           })
         : undefined,
-      heartbeatCollaborationInstructions:
-        renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
     };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
@@ -447,14 +444,9 @@ function buildCodexBootstrapInjectionStats(params: {
         readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName));
     let injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
     let truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
-    if (injected === undefined) {
-      if (CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)) {
-        injectedChars = rawChars;
-        truncated = false;
-      } else if (baseName === CODEX_HEARTBEAT_CONTEXT_BASENAME) {
-        injectedChars = 0;
-        truncated = false;
-      }
+    if (injected === undefined && CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)) {
+      injectedChars = rawChars;
+      truncated = false;
     }
     return {
       name: displayName,
@@ -664,7 +656,7 @@ function renderCodexWorkspaceBootstrapPromptContext(
     return undefined;
   }
   const lines = [
-    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.",
     "",
     "# Project Context",
     "",
@@ -689,7 +681,6 @@ function selectCodexWorkspacePromptContextFiles(
         baseName &&
         !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
         !CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
-        baseName !== CODEX_HEARTBEAT_CONTEXT_BASENAME &&
         (!excludeMemory ||
           !isCodexWorkspaceRootMemoryContextFile({
             file,
@@ -782,37 +773,6 @@ function renderCodexWorkspaceDeveloperInstructions(params: {
   return lines.join("\n").trim();
 }
 
-function selectCodexWorkspaceHeartbeatReferenceFiles(
-  contextFiles: EmbeddedContextFile[],
-): EmbeddedContextFile[] {
-  return contextFiles
-    .filter((file) => {
-      const baseName = getCodexContextFileBasename(file.path);
-      return (
-        baseName === CODEX_HEARTBEAT_CONTEXT_BASENAME &&
-        !isMissingCodexBootstrapContextFile(file) &&
-        file.content.trim().length > 0
-      );
-    })
-    .toSorted(compareCodexContextFiles);
-}
-
-function renderCodexWorkspaceHeartbeatReference(files: EmbeddedContextFile[]): string | undefined {
-  if (files.length === 0) {
-    return undefined;
-  }
-  const lines = [
-    "## OpenClaw Heartbeat Workspace",
-    "",
-    "HEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.",
-    "",
-  ];
-  for (const file of files) {
-    lines.push(`- ${file.path}`);
-  }
-  return lines.join("\n").trim();
-}
-
 function selectCodexWorkspaceMemoryReferenceFiles(params: {
   bootstrapFiles: CodexBootstrapFile[];
   workspaceDir: string;
@@ -857,20 +817,22 @@ function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryToolRouted: boolean;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
-}): string | undefined {
+  sandboxed?: boolean;
+}): Promise<string | undefined> {
   const memoryRecallInstructions = params.memoryToolRouted
-    ? renderCodexMemoryRecallInstructions({
+    ? await renderCodexMemoryRecallInstructions({
         toolNames: params.toolNames,
         citationsMode: params.citationsMode,
         agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
+        sandboxed: params.sandboxed,
       })
     : undefined;
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
@@ -881,18 +843,20 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   return sections.length > 0 ? sections.join("\n\n") : undefined;
 }
 
-function renderCodexMemoryRecallInstructions(params: {
+async function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
-}): string | undefined {
+  sandboxed?: boolean;
+}): Promise<string | undefined> {
   const availableTools = new Set(params.toolNames);
-  const memoryPrompt = buildMemorySystemPromptAddition({
+  const memoryPrompt = await prepareMemorySystemPromptAddition({
     availableTools,
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
   });
   if (!memoryPrompt) {
     // Memory recall policy belongs to the active memory plugin.
@@ -1062,3 +1026,4 @@ function normalizeCodexDynamicToolName(name: string): string {
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,4 @@
-export type ProviderModelAuthReadiness = "ready" | "unknown" | "unavailable";
+type ProviderModelAuthReadiness = "ready" | "unknown" | "unavailable";
 
 export type ProviderModelAuthEvidence =
   | "aws-sdk"
@@ -29,9 +29,9 @@ export type ProviderModelAuthSource =
   | ProviderModelAuthProfileSource
   | ProviderModelAuthDirectSource;
 
-export type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "user-lock";
+type ProviderModelAuthRequiredReason = "configured-auth" | "provider-binding" | "user-lock";
 
-export type ProviderModelAuthAutomaticProfiles =
+type ProviderModelAuthAutomaticProfiles =
   | { kind: "empty"; explicitOrder: boolean }
   | {
       kind: "usable";

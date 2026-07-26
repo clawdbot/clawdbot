@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 
 export { normalizePluginsConfig, resolveEffectiveEnableState };
+export { mergeDeep } from "../infra/deep-merge.js";
 
 /** Requires an already-resolved runtime config at plugin runtime boundaries. */
 export function requireRuntimeConfig(config: OpenClawConfig, context: string): OpenClawConfig {

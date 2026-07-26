@@ -269,10 +269,11 @@ describe("install smoke no-push root image transport", () => {
       packages: "read",
     });
     expect(caller.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       ref: "${{ needs.resolve_target.outputs.revision }}",
       run_bun_global_install_smoke: true,
     });
-    expect(caller.with).not.toHaveProperty("allow_unreleased_changelog");
   });
 
   it("passes package changelog intent only to current-tree smoke scripts", () => {

@@ -9,14 +9,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createXaiDeviceCodeAuthMethod,
   createXaiOAuthAuthMethod,
-  fetchXaiOAuthDiscovery,
-  isTrustedXaiOAuthEndpoint,
-  loginXaiDeviceCode,
   refreshXaiOAuthCredential,
-  XAI_OAUTH_CLIENT_ID,
-  XAI_OAUTH_DISCOVERY_URL,
-  XAI_OAUTH_SCOPE,
 } from "./xai-oauth.js";
+
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_DISCOVERY_URL = "https://auth.x.ai/.well-known/openid-configuration";
 
 function jsonResponse(value: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(value), {
@@ -56,14 +54,6 @@ describe("xAI OAuth", () => {
     vi.useRealTimers();
   });
 
-  it("accepts only trusted xAI OAuth endpoints", () => {
-    expect(isTrustedXaiOAuthEndpoint("https://auth.x.ai/oauth2/token")).toBe(true);
-    expect(isTrustedXaiOAuthEndpoint("https://accounts.x.ai/oauth2/token")).toBe(true);
-    expect(isTrustedXaiOAuthEndpoint("http://auth.x.ai/oauth2/token")).toBe(false);
-    expect(isTrustedXaiOAuthEndpoint("https://x.ai.evil.test/oauth2/token")).toBe(false);
-    expect(isTrustedXaiOAuthEndpoint("not a url")).toBe(false);
-  });
-
   it("keeps the public auth method named OAuth while using device code", () => {
     const method = createXaiOAuthAuthMethod();
 
@@ -83,34 +73,25 @@ describe("xAI OAuth", () => {
     expect(method.wizard?.assistantVisibility).toBe("manual-only");
   });
 
-  it("validates discovered endpoints before using them", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
-        token_endpoint: "https://auth.x.ai/oauth2/token",
-      }),
-    );
-
-    await expect(fetchXaiOAuthDiscovery({ fetchImpl })).resolves.toEqual({
-      tokenEndpoint: "https://auth.x.ai/oauth2/token",
-    });
-
-    const discoveryInit = fetchImpl.mock.calls.at(0)?.[1];
-    const discoveryHeaders = new Headers(discoveryInit?.headers ?? {});
-    expect(discoveryHeaders.get("user-agent")).toBe("openclaw/2026.3.22");
-    vi.unstubAllEnvs();
-
+  it("rejects untrusted discovered endpoints through credential refresh", async () => {
     const poisonedFetch = vi.fn<typeof fetch>(async () =>
       jsonResponse({
         authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
         token_endpoint: "https://evil.test/oauth2/token",
       }),
     );
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
 
-    await expect(fetchXaiOAuthDiscovery({ fetchImpl: poisonedFetch })).rejects.toThrow(
-      "untrusted token endpoint",
-    );
+    await expect(
+      refreshXaiOAuthCredential(credential, { fetchImpl: poisonedFetch }),
+    ).rejects.toThrow("untrusted token endpoint");
   });
 
   it("refreshes with the cached token endpoint and preserves refresh fallback", async () => {
@@ -477,7 +458,7 @@ describe("xAI OAuth", () => {
       },
     };
 
-    const result = await loginXaiDeviceCode(ctx);
+    const result = await createXaiOAuthAuthMethod().run(ctx);
 
     expect(openUrl).toHaveBeenCalledWith("https://accounts.x.ai/oauth2/device?user_code=ABCD-1234");
     expect(deviceCode).toHaveBeenCalledWith({
@@ -571,7 +552,7 @@ describe("xAI OAuth", () => {
       },
     };
 
-    await loginXaiDeviceCode(ctx);
+    await createXaiOAuthAuthMethod().run(ctx);
 
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Code expires in 5 minutes."),

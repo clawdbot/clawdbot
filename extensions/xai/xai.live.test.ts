@@ -20,8 +20,7 @@ import {
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
+import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
@@ -34,21 +33,17 @@ const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 
 function createLiveConfig(): OpenClawConfig {
-  const cfg = getRuntimeConfig();
   return {
-    ...cfg,
     models: {
-      ...cfg.models,
       providers: {
-        ...cfg.models?.providers,
         xai: {
-          ...cfg.models?.providers?.xai,
           apiKey: XAI_API_KEY,
           baseUrl: "https://api.x.ai/v1",
+          models: [],
         },
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function createReferencePng(): Buffer {
@@ -300,6 +295,38 @@ describeLive("xai plugin live", () => {
       expect(audioFile.fileExtension).toBe(".mp3");
       expect(audioFile.voiceCompatible).toBe(false);
       expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
+
+      const streaming = await speechProvider.streamSynthesize?.({
+        text: "OpenClaw xAI streaming text to speech integration test OK.",
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+          voiceId: "altair",
+        },
+        target: "audio-file",
+        timeoutMs: 90_000,
+      });
+      if (!streaming) {
+        throw new Error("xAI streaming TTS did not return an audio stream");
+      }
+      try {
+        const reader = streaming.audioStream.getReader();
+        let streamedBytes = 0;
+        while (true) {
+          const result = await reader.read();
+          if (result.done) {
+            break;
+          }
+          streamedBytes += result.value.byteLength;
+        }
+        expect(streamedBytes).toBeGreaterThan(512);
+        expect(streaming.outputFormat).toBe("mp3");
+        expect(streaming.fileExtension).toBe(".mp3");
+        expect(streaming.voiceCompatible).toBe(false);
+      } finally {
+        await streaming.release?.();
+      }
 
       const telephony = await speechProvider.synthesizeTelephony?.({
         text: "OpenClaw xAI telephony check OK.",

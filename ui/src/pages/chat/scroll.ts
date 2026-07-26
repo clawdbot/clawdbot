@@ -12,7 +12,6 @@ type ChatScrollHost = {
   chatScrollCommitCleanup: (() => void) | null;
   chatScrollFrame: number | null;
   chatScrollGuardFrame: number | null;
-  chatScrollTimeout: number | null;
   chatScrollGeneration: number;
   chatLastScrollTop: number;
   chatLastScrollHeight?: number;
@@ -22,6 +21,7 @@ type ChatScrollHost = {
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
+  chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
 };
 
 function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | null {
@@ -41,10 +41,6 @@ function cancelCommittedChatScroll(host: ChatScrollHost): void {
   if (host.chatScrollGuardFrame != null) {
     cancelAnimationFrame(host.chatScrollGuardFrame);
     host.chatScrollGuardFrame = null;
-  }
-  if (host.chatScrollTimeout != null) {
-    clearTimeout(host.chatScrollTimeout);
-    host.chatScrollTimeout = null;
   }
   host.chatIsProgrammaticScroll = false;
 }
@@ -91,18 +87,7 @@ function scheduleProgrammaticScrollGuardClear(
 }
 
 function pickScrollTarget(host: ChatScrollHost): HTMLElement | null {
-  const container = queryHost(host, ".chat-thread") as HTMLElement | null;
-  if (container) {
-    const overflowY = getComputedStyle(container).overflowY;
-    const canScroll =
-      overflowY === "auto" ||
-      overflowY === "scroll" ||
-      container.scrollHeight - container.clientHeight > 1;
-    if (canScroll) {
-      return container;
-    }
-  }
-  return (document.scrollingElement ?? document.documentElement) as HTMLElement | null;
+  return queryHost(host, ".chat-thread") as HTMLElement | null;
 }
 
 /** Schedule layout work when the caller already runs after the DOM commit. */
@@ -156,41 +141,21 @@ export function scheduleCommittedChatScroll(
     const scrollTop = target.scrollHeight;
     host.chatProgrammaticScrollTarget = scrollTop;
     host.chatIsProgrammaticScroll = true;
-    if (typeof target.scrollTo === "function") {
+    if (host.chatScrollToEnd) {
+      host.chatScrollToEnd({ behavior: smoothEnabled ? "smooth" : "auto" });
+    } else if (typeof target.scrollTo === "function") {
       target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
     } else {
       target.scrollTop = scrollTop;
     }
-    scheduleProgrammaticScrollGuardClear(host, generation, target, smoothEnabled);
+    scheduleProgrammaticScrollGuardClear(
+      host,
+      generation,
+      target,
+      smoothEnabled || Boolean(host.chatScrollToEnd),
+    );
     host.chatUserNearBottom = true;
     setNewMessagesBelow(host, false);
-
-    // Markdown, images, and mobile controls can grow after the first layout.
-    const retryDelay = effectiveForce ? 150 : 120;
-    host.chatScrollTimeout = window.setTimeout(() => {
-      host.chatScrollTimeout = null;
-      if (generation !== host.chatScrollGeneration) {
-        return;
-      }
-      const latest = pickScrollTarget(host);
-      if (!latest) {
-        return;
-      }
-      const latestDistanceFromBottom = latest.scrollHeight - latest.scrollTop - latest.clientHeight;
-      const shouldStickRetry =
-        manualScroll ||
-        effectiveForce ||
-        (!host.chatFollowLocked &&
-          (host.chatUserNearBottom || latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD));
-      if (!shouldStickRetry) {
-        return;
-      }
-      host.chatProgrammaticScrollTarget = latest.scrollHeight;
-      host.chatIsProgrammaticScroll = true;
-      latest.scrollTop = latest.scrollHeight;
-      scheduleProgrammaticScrollGuardClear(host, generation, latest, false);
-      host.chatUserNearBottom = true;
-    }, retryDelay);
   });
 }
 
@@ -236,10 +201,6 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
     if (host.chatScrollGuardFrame != null) {
       cancelAnimationFrame(host.chatScrollGuardFrame);
       host.chatScrollGuardFrame = null;
-    }
-    if (host.chatScrollTimeout != null) {
-      clearTimeout(host.chatScrollTimeout);
-      host.chatScrollTimeout = null;
     }
     host.chatIsProgrammaticScroll = false;
   }

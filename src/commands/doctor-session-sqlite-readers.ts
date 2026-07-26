@@ -1,5 +1,6 @@
 /** Read-only diagnostic readers used by the session SQLite doctor mode. */
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLoadedFileEntry, type FileEntry } from "../agents/sessions/session-manager.js";
@@ -7,7 +8,7 @@ import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
 type ReadOnlySqliteSessionSummary = {
@@ -129,18 +130,26 @@ export function readOnlySqliteSessionEntries(
   if (!fs.existsSync(sqlitePath)) {
     return { exists: false, ok: true, summaries: [] };
   }
-  const sqlite = requireNodeSqlite();
-  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  let database: DatabaseSync | undefined;
   try {
-    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    const table = database
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    const nodeTable = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("session_entries");
-    if (!table) {
+      .get("session_nodes");
+    const legacyEntryTable = nodeTable
+      ? undefined
+      : database
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get("session_entries");
+    if (!nodeTable && !legacyEntryTable) {
       return { exists: true, ok: true, summaries: [] };
     }
     const rows = database
-      .prepare("SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC")
+      .prepare(
+        nodeTable
+          ? "SELECT session_key, entry_json FROM session_nodes ORDER BY session_key ASC"
+          : "SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC",
+      )
       .all() as Array<{ entry_json?: unknown; session_key?: unknown }>;
     return {
       exists: true,
@@ -168,10 +177,9 @@ export function readOnlySqliteTranscriptEventCount(
   if (!fs.existsSync(sqlitePath)) {
     return { events: 0, exists: false, ok: true };
   }
-  const sqlite = requireNodeSqlite();
-  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  let database: DatabaseSync | undefined;
   try {
-    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const table = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get("transcript_events");
@@ -214,10 +222,9 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
       },
     };
   }
-  const sqlite = requireNodeSqlite();
-  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  let database: DatabaseSync | undefined;
   try {
-    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get("transcript_events");
@@ -293,7 +300,9 @@ export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
 function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   try {
     const parsed = JSON.parse(entryJson) as unknown;
-    return isRecord(parsed) ? (parsed as SessionEntry) : undefined;
+    return isRecord(parsed) && typeof parsed.sessionId === "string"
+      ? (parsed as SessionEntry)
+      : undefined;
   } catch {
     return undefined;
   }

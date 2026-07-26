@@ -63,11 +63,6 @@ function resolveMarkdownModeFromSection(
   return isMarkdownTableMode(sectionMode) ? sectionMode : undefined;
 }
 
-export type {
-  ResolveMarkdownTableMode,
-  ResolveMarkdownTableModeParams,
-} from "./markdown-tables.types.js";
-
 export function resolveMarkdownTableMode(
   params: ResolveMarkdownTableModeParams,
 ): MarkdownTableMode {

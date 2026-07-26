@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendCronRunLog, readCronRunLogEntriesSync } from "./run-log.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
+import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
@@ -38,7 +39,7 @@ async function createHarness(params: {
   const cron = new CronService({
     storePath,
     cronEnabled: true,
-    cronConfig: { triggers: { enabled: true, minIntervalMs: 30_000 } },
+    cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent,
     requestHeartbeat: vi.fn(),
@@ -95,9 +96,12 @@ describe("cron trigger evaluation", () => {
         nextRunAtMs: persisted?.state.nextRunAtMs,
         job: { state: { nextRunAtMs: persisted?.state.nextRunAtMs } },
       });
-      expect(readCronRunLogEntriesSync({ storePath: harness.storePath, jobId: job.id })).toEqual(
-        [],
-      );
+      expect(
+        readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(harness.storePath),
+          jobId: job.id,
+        }).entries,
+      ).toEqual([]);
     } finally {
       harness.cron.stop();
     }
@@ -124,19 +128,12 @@ describe("cron trigger evaluation", () => {
       if (!finished) {
         throw new Error("missing finished event");
       }
-      await appendCronRunLog({
-        storePath: harness.storePath,
-        entry: {
-          ts: Date.now(),
+      expect(
+        readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(harness.storePath),
           jobId: job.id,
-          action: "finished",
-          status: finished.status,
-          triggerFired: finished.triggerFired,
-        },
-      });
-      expect(readCronRunLogEntriesSync({ storePath: harness.storePath, jobId: job.id })).toEqual([
-        expect.objectContaining({ triggerFired: true }),
-      ]);
+        }).entries,
+      ).toEqual([expect.objectContaining({ triggerFired: true })]);
       expect(harness.cron.getJob(job.id)?.state).toMatchObject({
         triggerEvalCount: 1,
         lastTriggerFireAtMs: expect.any(Number),

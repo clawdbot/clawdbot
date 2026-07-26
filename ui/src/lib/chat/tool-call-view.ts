@@ -6,6 +6,7 @@
  * the OpenClaw session tools and foreign harnesses (Claude/Codex style).
  */
 
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -21,7 +22,7 @@ import { parsePatchView } from "./tool-call-patch.ts";
 
 export type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
 
-export type ToolCallViewSource = {
+type ToolCallViewSource = {
   name: string;
   args?: unknown;
   details?: unknown;
@@ -56,12 +57,6 @@ const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codeba
 const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -81,7 +76,7 @@ function resolvePathArg(args: Record<string, unknown> | null): string | undefine
   );
 }
 
-export function splitPathForDisplay(path: string): { base: string; dir?: string } {
+function splitPathForDisplay(path: string): { base: string; dir?: string } {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
   const slash = normalized.lastIndexOf("/");
   if (slash <= 0) {
@@ -410,6 +405,20 @@ function buildToolCallView(
       return { kind: "generic" };
     }
     const { base, dir } = splitPathForDisplay(path);
+    const authoritativeDiff = readDetailsDiff(source.details);
+    if (authoritativeDiff) {
+      return {
+        kind,
+        target: base,
+        targetDetail: dir,
+        diff: authoritativeDiff.lines,
+        ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
+      };
+    }
+    const details = asRecord(source.details);
+    if (details?.changed === false) {
+      return { kind, target: base, targetDetail: dir };
+    }
     const content = args
       ? editorCommand === "create"
         ? readString(args.file_text)
@@ -424,7 +433,10 @@ function buildToolCallView(
       target: base,
       targetDetail: dir,
       diff,
-      stat: { added: countTextLines(content), removed: 0 },
+      // Present details need created=true before zero removals are authoritative.
+      ...(details && details.created !== true
+        ? {}
+        : { stat: { added: countTextLines(content), removed: 0 } }),
     };
   }
 

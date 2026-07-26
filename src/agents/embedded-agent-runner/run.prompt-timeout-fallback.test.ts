@@ -31,8 +31,11 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        promptError: new Error("LLM request timed out."),
-        promptErrorSource: "prompt",
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("LLM request timed out."),
+        },
       }),
     );
 
@@ -63,8 +66,11 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        promptError: new Error("LLM request timed out."),
-        promptErrorSource: "prompt",
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("LLM request timed out."),
+        },
         promptTimeoutOutcome: {
           message: "Harness abandoned the timed-out turn after provider activity.",
           replayInvalid: true,

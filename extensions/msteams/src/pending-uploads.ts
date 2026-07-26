@@ -101,21 +101,3 @@ export function setPendingUploadActivityId(uploadId: string, activityId: string)
     entry.consentCardActivityId = activityId;
   }
 }
-
-/**
- * Get the count of pending uploads (for monitoring/debugging).
- */
-export function getPendingUploadCount(): number {
-  return pendingUploads.size;
-}
-
-/**
- * Clear all pending uploads (for testing).
- */
-export function clearPendingUploads(): void {
-  for (const timer of pendingUploadTimers.values()) {
-    clearTimeout(timer);
-  }
-  pendingUploadTimers.clear();
-  pendingUploads.clear();
-}

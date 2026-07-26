@@ -245,27 +245,4 @@ describe("xai code_execution tool", () => {
       }),
     ).rejects.toThrow("xAI code execution failed: malformed JSON response");
   });
-
-  it("reuses the legacy grok web search key for code_execution requests", async () => {
-    const mockFetch = installCodeExecutionFetch();
-    const tool = createCodeExecutionTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("code-execution:legacy-key", {
-      task: "Count rows in a two-column table",
-    });
-
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-legacy-key");
-  });
 });

@@ -181,7 +181,6 @@ describe("discordOutbound", () => {
             channels: {
               discord: {
                 token: "test-token",
-                retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
               },
             },
           },
@@ -1191,3 +1190,4 @@ describe("discordOutbound", () => {
     ).toBe("default");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -26,10 +27,7 @@ import type {
 } from "./types.ts";
 
 function pct(part: number, total: number): number {
-  if (total === 0) {
-    return 0;
-  }
-  return (part / total) * 100;
+  return total === 0 ? 0 : (part / total) * 100;
 }
 
 function formatAnalysisCost(value: number): string {
@@ -593,7 +591,14 @@ function renderPeakErrorList(
   `;
 }
 
+function focusSummaryHint(event: MouseEvent) {
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.focus();
+  }
+}
+
 function renderSummaryStat(params: {
+  hintId: string;
   title: string;
   hint: string;
   value: string | number;
@@ -602,6 +607,7 @@ function renderSummaryStat(params: {
   className?: string;
   compactValue?: boolean;
 }) {
+  const hintId = `usage-summary-hint-${params.hintId}`;
   const classes = [
     "stat",
     "usage-summary-card",
@@ -622,7 +628,20 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <span class="usage-summary-hint" title=${params.hint}>?</span>
+        <openclaw-tooltip>
+          <button
+            id=${hintId}
+            type="button"
+            class="usage-summary-hint"
+            aria-label=${params.title}
+            @click=${focusSummaryHint}
+          >
+            ?
+          </button>
+          <!-- Some browsers do not focus buttons on pointer activation; the
+               click handler normalizes that path without adding a second toggle. -->
+          <span slot="content">${params.hint}</span>
+        </openclaw-tooltip>
       </div>
       <div class=${valueClasses}>${params.value}</div>
       <div class="usage-summary-sub">${params.sub}</div>
@@ -728,124 +747,135 @@ function renderUsageInsights(
     sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
   }));
 
-  return html`
-    <section class="card usage-overview-card">
-      <div class="card-title">${t("usage.overview.title")}</div>
-      <div class="usage-overview-layout">
-        <div class="usage-summary-grid">
-          ${renderSummaryStat({
-            title: t("usage.overview.messages"),
-            hint: t("usage.overview.messagesHint"),
-            value: aggregates.messages.total,
-            sub: `${aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
-            className: "usage-summary-card--hero",
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.throughput"),
-            hint: throughputHint,
-            value: throughputLabel,
-            sub: throughputCostLabel,
-            className: "usage-summary-card--hero usage-summary-card--throughput",
-            compactValue: true,
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.toolCalls"),
-            hint: t("usage.overview.toolCallsHint"),
-            value: aggregates.tools.totalCalls,
-            sub: `${aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`,
-            className: "usage-summary-card--half",
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.avgTokens"),
-            hint: tokensHint,
-            value: formatTokens(avgTokens),
-            sub: t("usage.overview.acrossMessages", {
-              count: String(aggregates.messages.total || 0),
-            }),
-            className: "usage-summary-card--half",
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.cacheHitRate"),
-            hint: cacheHint,
-            value: cacheHitLabel,
-            sub: `${formatTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatTokens(cacheBase)} ${t("usage.overview.prompt")}`,
-            tone: cacheHitRate > 0.6 ? "good" : cacheHitRate > 0.3 ? "warn" : "bad",
-            className: "usage-summary-card--medium",
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.errorRate"),
-            hint: errorHint,
-            value: `${errorRatePct.toFixed(2)}%`,
-            sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
-            tone: errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good",
-            className: "usage-summary-card--medium",
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.avgCost"),
-            hint: costHint,
-            value: formatAnalysisCost(avgCost),
-            sub: `${formatAnalysisCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
-            className: "usage-summary-card--compact",
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.sessions"),
-            hint: t("usage.overview.sessionsHint"),
-            value: sessionCount,
-            sub: t("usage.overview.sessionsInRange", { count: String(totalSessions) }),
-            className: "usage-summary-card--compact",
-          })}
-          ${renderSummaryStat({
-            title: t("usage.overview.errors"),
-            hint: t("usage.overview.errorsHint"),
-            value: aggregates.messages.errors,
-            sub: `${aggregates.messages.toolResults} ${t("usage.overview.toolResults")}`,
-            className: "usage-summary-card--compact",
-          })}
+  return renderSettingsSection(
+    { title: t("usage.overview.title") },
+    html`
+      <section class="usage-panel usage-overview-card">
+        <div class="usage-overview-layout">
+          <div class="usage-summary-grid">
+            ${renderSummaryStat({
+              hintId: "messages",
+              title: t("usage.overview.messages"),
+              hint: t("usage.overview.messagesHint"),
+              value: aggregates.messages.total,
+              sub: `${aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
+              className: "usage-summary-card--hero",
+            })}
+            ${renderSummaryStat({
+              hintId: "throughput",
+              title: t("usage.overview.throughput"),
+              hint: throughputHint,
+              value: throughputLabel,
+              sub: throughputCostLabel,
+              className: "usage-summary-card--hero usage-summary-card--throughput",
+              compactValue: true,
+            })}
+            ${renderSummaryStat({
+              hintId: "tool-calls",
+              title: t("usage.overview.toolCalls"),
+              hint: t("usage.overview.toolCallsHint"),
+              value: aggregates.tools.totalCalls,
+              sub: `${aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`,
+              className: "usage-summary-card--half",
+            })}
+            ${renderSummaryStat({
+              hintId: "average-tokens",
+              title: t("usage.overview.avgTokens"),
+              hint: tokensHint,
+              value: formatTokens(avgTokens),
+              sub: t("usage.overview.acrossMessages", {
+                count: String(aggregates.messages.total || 0),
+              }),
+              className: "usage-summary-card--half",
+            })}
+            ${renderSummaryStat({
+              hintId: "cache-hit-rate",
+              title: t("usage.overview.cacheHitRate"),
+              hint: cacheHint,
+              value: cacheHitLabel,
+              sub: `${formatTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatTokens(cacheBase)} ${t("usage.overview.prompt")}`,
+              tone: cacheHitRate > 0.6 ? "good" : cacheHitRate > 0.3 ? "warn" : "bad",
+              className: "usage-summary-card--medium",
+            })}
+            ${renderSummaryStat({
+              hintId: "error-rate",
+              title: t("usage.overview.errorRate"),
+              hint: errorHint,
+              value: `${errorRatePct.toFixed(2)}%`,
+              sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
+              tone: errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good",
+              className: "usage-summary-card--medium",
+            })}
+            ${renderSummaryStat({
+              hintId: "average-cost",
+              title: t("usage.overview.avgCost"),
+              hint: costHint,
+              value: formatAnalysisCost(avgCost),
+              sub: `${formatAnalysisCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
+              className: "usage-summary-card--compact",
+            })}
+            ${renderSummaryStat({
+              hintId: "sessions",
+              title: t("usage.overview.sessions"),
+              hint: t("usage.overview.sessionsHint"),
+              value: sessionCount,
+              sub: t("usage.overview.sessionsInRange", { count: String(totalSessions) }),
+              className: "usage-summary-card--compact",
+            })}
+            ${renderSummaryStat({
+              hintId: "errors",
+              title: t("usage.overview.errors"),
+              hint: t("usage.overview.errorsHint"),
+              value: aggregates.messages.errors,
+              sub: `${aggregates.messages.toolResults} ${t("usage.overview.toolResults")}`,
+              className: "usage-summary-card--compact",
+            })}
+          </div>
+          <div class="usage-insights-grid">
+            ${renderInsightList(
+              t("usage.overview.topModels"),
+              topModels,
+              t("usage.overview.noModelData"),
+            )}
+            ${renderInsightList(
+              t("usage.overview.topProviders"),
+              topProviders,
+              t("usage.overview.noProviderData"),
+            )}
+            ${renderInsightList(
+              t("usage.overview.topTools"),
+              topTools,
+              t("usage.overview.noToolCalls"),
+            )}
+            ${renderInsightList(
+              t("usage.overview.topAgents"),
+              topAgents,
+              t("usage.overview.noAgentData"),
+            )}
+            ${renderInsightList(
+              t("usage.overview.topChannels"),
+              topChannels,
+              t("usage.overview.noChannelData"),
+            )}
+            ${renderPeakErrorList(
+              t("usage.overview.peakErrorDays"),
+              errorDays,
+              t("usage.overview.noErrorData"),
+            )}
+            ${renderPeakErrorList(
+              t("usage.overview.peakErrorHours"),
+              errorHours,
+              t("usage.overview.noErrorData"),
+              {
+                className: "usage-insight-card--wide",
+                listClassName: "usage-error-list--hours",
+              },
+            )}
+          </div>
         </div>
-        <div class="usage-insights-grid">
-          ${renderInsightList(
-            t("usage.overview.topModels"),
-            topModels,
-            t("usage.overview.noModelData"),
-          )}
-          ${renderInsightList(
-            t("usage.overview.topProviders"),
-            topProviders,
-            t("usage.overview.noProviderData"),
-          )}
-          ${renderInsightList(
-            t("usage.overview.topTools"),
-            topTools,
-            t("usage.overview.noToolCalls"),
-          )}
-          ${renderInsightList(
-            t("usage.overview.topAgents"),
-            topAgents,
-            t("usage.overview.noAgentData"),
-          )}
-          ${renderInsightList(
-            t("usage.overview.topChannels"),
-            topChannels,
-            t("usage.overview.noChannelData"),
-          )}
-          ${renderPeakErrorList(
-            t("usage.overview.peakErrorDays"),
-            errorDays,
-            t("usage.overview.noErrorData"),
-          )}
-          ${renderPeakErrorList(
-            t("usage.overview.peakErrorHours"),
-            errorHours,
-            t("usage.overview.noErrorData"),
-            {
-              className: "usage-insight-card--wide",
-              listClassName: "usage-error-list--hours",
-            },
-          )}
-        </div>
-      </div>
-    </section>
-  `;
+      </section>
+    `,
+  );
 }
 
 function renderSessionsCard(
@@ -1011,123 +1041,128 @@ function renderSessionsCard(
     .map((key) => sessionMap.get(key))
     .filter((entry): entry is UsageSessionEntry => Boolean(entry));
 
-  return html`
-    <div class="card sessions-card">
-      <div class="sessions-card-header">
-        <div class="card-title">${t("usage.sessions.title")}</div>
-        <div class="sessions-card-count">
-          ${t("usage.sessions.shown", { count: String(sessions.length) })}
-          ${totalSessions !== sessions.length
-            ? ` · ${t("usage.sessions.total", { count: String(totalSessions) })}`
-            : ""}
+  return renderSettingsSection(
+    { title: t("usage.sessions.title") },
+    html`
+      <div class="usage-panel sessions-card">
+        <div class="sessions-card-header">
+          <div class="sessions-card-count">
+            ${t("usage.sessions.shown", { count: String(sessions.length) })}
+            ${totalSessions !== sessions.length
+              ? ` · ${t("usage.sessions.total", { count: String(totalSessions) })}`
+              : ""}
+          </div>
         </div>
-      </div>
-      <div class="sessions-card-meta">
-        <div class="sessions-card-stats">
-          <span>
-            ${isTokenMode ? formatTokens(avgValue) : formatAnalysisCost(avgValue)}
-            ${t("usage.sessions.avg")}
-          </span>
-          <span>${totalErrors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}</span>
-        </div>
-        <div class="chart-toggle small">
-          <button
-            class="btn btn--sm toggle-btn ${sessionsTab === "all" ? "active" : ""}"
-            @click=${() => onSessionsTabChange("all")}
-          >
-            ${t("usage.sessions.all")}
-          </button>
-          <button
-            class="btn btn--sm toggle-btn ${sessionsTab === "recent" ? "active" : ""}"
-            @click=${() => onSessionsTabChange("recent")}
-          >
-            ${t("usage.sessions.recent")}
-          </button>
-        </div>
-        <label class="sessions-sort">
-          <span>${t("usage.sessions.sort")}</span>
-          <select
-            @change=${(e: Event) =>
-              onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
-          >
-            <option value="cost" ?selected=${sessionSort === "cost"}>
-              ${t("usage.metrics.cost")}
-            </option>
-            <option value="errors" ?selected=${sessionSort === "errors"}>
-              ${t("usage.overview.errors")}
-            </option>
-            <option value="messages" ?selected=${sessionSort === "messages"}>
-              ${t("usage.overview.messages")}
-            </option>
-            <option value="recent" ?selected=${sessionSort === "recent"}>
-              ${t("usage.sessions.recentShort")}
-            </option>
-            <option value="tokens" ?selected=${sessionSort === "tokens"}>
-              ${t("usage.metrics.tokens")}
-            </option>
-          </select>
-        </label>
-        <openclaw-tooltip
-          .content=${sessionSortDir === "desc"
-            ? t("usage.sessions.descending")
-            : t("usage.sessions.ascending")}
-        >
-          <button
-            class="btn btn--sm"
-            aria-label=${sessionSortDir === "desc"
+        <div class="sessions-card-meta">
+          <div class="sessions-card-stats">
+            <span>
+              ${isTokenMode ? formatTokens(avgValue) : formatAnalysisCost(avgValue)}
+              ${t("usage.sessions.avg")}
+            </span>
+            <span
+              >${totalErrors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}</span
+            >
+          </div>
+          <div class="chart-toggle small">
+            <button
+              class="btn btn--sm toggle-btn ${sessionsTab === "all" ? "active" : ""}"
+              @click=${() => onSessionsTabChange("all")}
+            >
+              ${t("usage.sessions.all")}
+            </button>
+            <button
+              class="btn btn--sm toggle-btn ${sessionsTab === "recent" ? "active" : ""}"
+              @click=${() => onSessionsTabChange("recent")}
+            >
+              ${t("usage.sessions.recent")}
+            </button>
+          </div>
+          <label class="sessions-sort">
+            <span>${t("usage.sessions.sort")}</span>
+            <select
+              class="settings-select"
+              @change=${(e: Event) =>
+                onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
+            >
+              <option value="cost" ?selected=${sessionSort === "cost"}>
+                ${t("usage.metrics.cost")}
+              </option>
+              <option value="errors" ?selected=${sessionSort === "errors"}>
+                ${t("usage.overview.errors")}
+              </option>
+              <option value="messages" ?selected=${sessionSort === "messages"}>
+                ${t("usage.overview.messages")}
+              </option>
+              <option value="recent" ?selected=${sessionSort === "recent"}>
+                ${t("usage.sessions.recentShort")}
+              </option>
+              <option value="tokens" ?selected=${sessionSort === "tokens"}>
+                ${t("usage.metrics.tokens")}
+              </option>
+            </select>
+          </label>
+          <openclaw-tooltip
+            .content=${sessionSortDir === "desc"
               ? t("usage.sessions.descending")
               : t("usage.sessions.ascending")}
-            @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
           >
-            ${sessionSortDir === "desc" ? "↓" : "↑"}
-          </button>
-        </openclaw-tooltip>
-        ${selectedCount > 0
+            <button
+              class="btn btn--sm"
+              aria-label=${sessionSortDir === "desc"
+                ? t("usage.sessions.descending")
+                : t("usage.sessions.ascending")}
+              @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
+            >
+              ${sessionSortDir === "desc" ? "↓" : "↑"}
+            </button>
+          </openclaw-tooltip>
+          ${selectedCount > 0
+            ? html`
+                <button class="btn btn--sm" @click=${onClearSessions}>
+                  ${t("usage.sessions.clearSelection")}
+                </button>
+              `
+            : nothing}
+        </div>
+        ${sessionsTab === "recent"
+          ? recentEntries.length === 0
+            ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
+            : html`
+                <div class="session-bars session-bars--recent">
+                  ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+                </div>
+              `
+          : sessions.length === 0
+            ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
+            : html`
+                <div class="session-bars">
+                  ${sortedWithDir
+                    .slice(0, 50)
+                    .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+                  ${sessions.length > 50
+                    ? html`
+                        <div class="usage-more-sessions">
+                          ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
+                        </div>
+                      `
+                    : nothing}
+                </div>
+              `}
+        ${selectedCount > 1
           ? html`
-              <button class="btn btn--sm" @click=${onClearSessions}>
-                ${t("usage.sessions.clearSelection")}
-              </button>
+              <div class="sessions-selected-group">
+                <div class="sessions-card-count">
+                  ${t("usage.sessions.selected", { count: String(selectedCount) })}
+                </div>
+                <div class="session-bars session-bars--selected">
+                  ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
+                </div>
+              </div>
             `
           : nothing}
       </div>
-      ${sessionsTab === "recent"
-        ? recentEntries.length === 0
-          ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
-          : html`
-              <div class="session-bars session-bars--recent">
-                ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
-              </div>
-            `
-        : sessions.length === 0
-          ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
-          : html`
-              <div class="session-bars">
-                ${sortedWithDir
-                  .slice(0, 50)
-                  .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
-                ${sessions.length > 50
-                  ? html`
-                      <div class="usage-more-sessions">
-                        ${t("usage.sessions.more", { count: String(sessions.length - 50) })}
-                      </div>
-                    `
-                  : nothing}
-              </div>
-            `}
-      ${selectedCount > 1
-        ? html`
-            <div class="sessions-selected-group">
-              <div class="sessions-card-count">
-                ${t("usage.sessions.selected", { count: String(selectedCount) })}
-              </div>
-              <div class="session-bars session-bars--selected">
-                ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
-              </div>
-            </div>
-          `
-        : nothing}
-    </div>
-  `;
+    `,
+  );
 }
 
 export {
@@ -1136,7 +1171,7 @@ export {
   renderDailyChartCompact,
   renderFilterChips,
   renderInsightList,
-  renderPeakErrorList,
   renderSessionsCard,
   renderUsageInsights,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

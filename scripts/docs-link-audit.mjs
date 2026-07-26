@@ -7,12 +7,21 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
-import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, "docs");
 const DOCS_JSON_PATH = path.join(DOCS_DIR, "docs.json");
-const MINTLIFY_BROKEN_LINKS_ARGS = ["dlx", "mint", "broken-links", "--check-anchors"];
+const MINTLIFY_CLI_VERSION = "4.2.715";
+const MINTLIFY_BROKEN_LINKS_ARGS = [
+  "exec",
+  "--yes",
+  `--package=mint@${MINTLIFY_CLI_VERSION}`,
+  "--",
+  "mint",
+  "broken-links",
+  "--check-anchors",
+];
 const NODE_25_UNSUPPORTED_BY_MINTLIFY = 25;
 
 if (!fs.existsSync(DOCS_DIR) || !fs.statSync(DOCS_DIR).isDirectory()) {
@@ -353,17 +362,26 @@ function parseNodeMajor(version) {
   return Number.isFinite(major) ? major : 0;
 }
 
-function createMintlifyPnpmRunnerSpawnSpec(params, options = {}) {
-  return createPnpmRunnerSpawnSpec({
+function createMintlifyNpmRunnerSpawnSpec(params, options = {}) {
+  const env = params.env ?? process.env;
+  const runner = resolveNpmRunner({
     comSpec: params.comSpec,
-    cwd: params.cwd,
-    env: params.env ?? process.env,
-    nodeExecPath: options.nodeExecPath ?? params.nodeExecPath,
-    npmExecPath: params.npmExecPath,
+    env,
+    execPath: options.nodeExecPath ?? params.nodeExecPath,
+    npmArgs: MINTLIFY_BROKEN_LINKS_ARGS,
     platform: params.platform,
-    pnpmArgs: MINTLIFY_BROKEN_LINKS_ARGS,
-    stdio: "inherit",
   });
+  return {
+    command: runner.command,
+    args: runner.args,
+    options: {
+      cwd: params.cwd,
+      env: runner.env ?? env,
+      shell: runner.shell,
+      stdio: "inherit",
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    },
+  };
 }
 
 /**
@@ -377,7 +395,6 @@ function createMintlifyPnpmRunnerSpawnSpec(params, options = {}) {
  *   spawnSyncImpl: typeof spawnSync;
  *   env?: NodeJS.ProcessEnv;
  *   nodeExecPath?: string;
- *   npmExecPath?: string;
  *   platform?: NodeJS.Platform;
  *   comSpec?: string;
  * }} params
@@ -385,11 +402,11 @@ function createMintlifyPnpmRunnerSpawnSpec(params, options = {}) {
 export function resolveMintlifyAnchorAuditInvocation(params) {
   const nodeVersion = params.nodeVersion ?? process.versions.node;
   if (parseNodeMajor(nodeVersion) < NODE_25_UNSUPPORTED_BY_MINTLIFY) {
-    return createMintlifyPnpmRunnerSpawnSpec(params);
+    return createMintlifyNpmRunnerSpawnSpec(params);
   }
 
   const node22Probe = "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)";
-  const node22Runner = createMintlifyPnpmRunnerSpawnSpec(params, { nodeExecPath: "node" });
+  const node22Runner = createMintlifyNpmRunnerSpawnSpec(params, { nodeExecPath: "node" });
   const candidates = [
     {
       command: "fnm",
@@ -413,7 +430,7 @@ export function resolveMintlifyAnchorAuditInvocation(params) {
     }
   }
 
-  return createMintlifyPnpmRunnerSpawnSpec(params);
+  return createMintlifyNpmRunnerSpawnSpec(params);
 }
 
 /**
@@ -558,7 +575,6 @@ export function auditDocsLinks(options = {}) {
  *   env?: NodeJS.ProcessEnv;
  *   nodeExecPath?: string;
  *   nodeVersion?: string;
- *   npmExecPath?: string;
  *   platform?: NodeJS.Platform;
  *   spawnSyncImpl?: typeof spawnSync;
  *   prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
@@ -585,16 +601,14 @@ export function runDocsLinkAuditCli(options = {}) {
 
     try {
       anchorDocsDir = prepareAnchorAuditDocsDirImpl(mirroredDocsDir.dir);
-      // Use the npm Mintlify package explicitly. Some developer machines also
-      // have the Swift Package Manager tool named `mint` on PATH, and that
-      // binary exits with "command 'broken-links' not found".
+      // Mintlify's package graph expects npm's hoisted layout; pnpm dlx can fail
+      // to resolve declared transitive packages from its strict store layout.
       const invocation = resolveMintlifyAnchorAuditInvocation({
         comSpec: options.comSpec,
         cwd: anchorDocsDir,
         env: options.env,
         nodeExecPath: options.nodeExecPath,
         nodeVersion: options.nodeVersion,
-        npmExecPath: options.npmExecPath,
         platform: options.platform,
         spawnSyncImpl,
       });

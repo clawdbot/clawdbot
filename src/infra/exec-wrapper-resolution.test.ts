@@ -1,21 +1,22 @@
 // Tests execution wrapper resolution for shell commands.
 import { describe, expect, test } from "vitest";
+import { unwrapEnvInvocation } from "./command-carriers.js";
 import {
-  basenameLower,
+  isDispatchWrapperExecutable,
+  resolveDispatchWrapperTrustPlan,
+} from "./dispatch-wrapper-resolution.js";
+import {
   extractEnvAssignmentKeysFromDispatchWrappers,
   extractShellWrapperCommand,
-  extractShellWrapperInlineCommand,
   hasEnvManipulationBeforeShellWrapper,
-  isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   isShellWrapperInvocation,
   normalizeExecutableToken,
-  resolveDispatchWrapperTrustPlan,
   resolveShellWrapperTransportArgv,
-  unwrapEnvInvocation,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 
 function supportsScriptPositionalCommandForTests(): boolean {
   return process.platform === "darwin" || process.platform === "freebsd";
@@ -38,16 +39,6 @@ function expectTransparentDispatchWrapperCase(params: {
     policyBlocked: false,
   });
 }
-
-describe("basenameLower", () => {
-  test.each([
-    { token: " Bun.CMD ", expected: "bun.cmd" },
-    { token: "C:\\tools\\PwSh.EXE", expected: "pwsh.exe" },
-    { token: "/tmp/bash", expected: "bash" },
-  ])("normalizes basenames for %j", ({ token, expected }) => {
-    expect(basenameLower(token)).toBe(expected);
-  });
-});
 
 describe("normalizeExecutableToken", () => {
   test.each([
@@ -73,7 +64,16 @@ describe("wrapper classification", () => {
     { token: "time", dispatch: true, shell: false },
     { token: "timeout.exe", dispatch: true, shell: false },
     { token: "bash", dispatch: false, shell: true },
+    { token: "csh", dispatch: false, shell: true },
+    { token: "elvish", dispatch: false, shell: true },
+    { token: "mksh", dispatch: false, shell: true },
+    { token: "nu", dispatch: false, shell: true },
+    { token: "nu.exe", dispatch: false, shell: true },
+    { token: "osh", dispatch: false, shell: true },
     { token: "pwsh.exe", dispatch: false, shell: true },
+    { token: "tcsh", dispatch: false, shell: true },
+    { token: "xonsh", dispatch: false, shell: true },
+    { token: "yash", dispatch: false, shell: true },
     { token: "node", dispatch: false, shell: false },
   ])("classifies wrappers for %j", ({ token, dispatch, shell }) => {
     expect(isDispatchWrapperExecutable(token)).toBe(dispatch);
@@ -90,6 +90,10 @@ describe("unwrapKnownShellMultiplexerInvocation", () => {
     {
       argv: ["busybox", "sh", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "busybox", argv: ["sh", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["busybox", "tcsh", "-c", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "busybox", argv: ["tcsh", "-c", "echo hi"] },
     },
     {
       argv: ["toybox", "--", "pwsh.exe", "-Command", "Get-Date"],
@@ -596,6 +600,51 @@ describe("extractShellWrapperCommand", () => {
     },
     {
       argv: ["cmd", "-k", "echo", "hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["tcsh", "-c", "echo hi"],
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
+    },
+    {
+      argv: ["nu", "--commands", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--execute", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--execute=echo Hi"],
+      expectedInline: "echo Hi",
+      expectedCommand: { isWrapper: true, command: "echo Hi" },
+    },
+    {
+      argv: ["nu", "--commands=echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--interactive", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
+    },
+    {
+      argv: ["nu", "--interactive", "--execute=echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
+    },
+    {
+      argv: ["elvish", "-c", "echo hi"],
       expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: "echo hi" },
     },

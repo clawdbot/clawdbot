@@ -4,14 +4,8 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -23,27 +17,41 @@ import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
-import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
+import {
+  dispatchGatewayRequestInProcessRaw,
+  type GatewayMethodDispatchResponse,
+  unwrapGatewayMethodDispatchResponse,
+} from "./server-in-process-dispatch.js";
+import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestOptions,
+} from "./server-methods/types.js";
 import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import {
+  createSyntheticPluginRuntimeClient,
+  mergePluginRuntimeClientInternal,
+  resolvePluginSubagentToolsAlsoAllow,
+} from "./server-plugin-runtime-client.js";
+import { projectGatewayRuntimeNodes } from "./server-plugins-node-runtime.js";
 
 export {
   clearFallbackGatewayContext,
   setFallbackGatewayContext,
   setFallbackGatewayContextResolver,
 } from "./server-plugin-fallback-context.js";
-
-export function hasInProcessGatewayContext(): boolean {
-  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
-}
+export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 
 type PluginSubagentOverridePolicy = {
   allowModelOverride: boolean;
+
   allowAnyModel: boolean;
   hasConfiguredAllowlist: boolean;
   allowedModels: Set<string>;
@@ -190,40 +198,6 @@ function resolveRequestedFallbackModelRef(params: {
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────
 
-function createSyntheticOperatorClient(params?: {
-  allowModelOverride?: boolean;
-  agentRunTracking?: "plugin_subagent";
-  cronRunContinuation?: boolean;
-  pluginRuntimeOwnerId?: string;
-  scopes?: string[];
-}): GatewayRequestOptions["client"] {
-  const pluginRuntimeOwnerId =
-    typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
-      ? params.pluginRuntimeOwnerId.trim()
-      : undefined;
-  return {
-    connect: {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        version: "internal",
-        platform: "node",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
-      role: "operator",
-      scopes: params?.scopes ?? [WRITE_SCOPE],
-    },
-    internal: {
-      allowModelOverride: params?.allowModelOverride === true,
-      ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
-      ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
-      ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
-      ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
-    },
-  };
-}
-
 function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
@@ -255,29 +229,10 @@ function resolveRuntimeNodeInvokeSyntheticScopes(params: {
   pluginTrustedOfficialInstall?: boolean;
   requestedScopes?: OperatorScope[];
 }): OperatorScope[] | undefined {
-  if (!params.requestedScopes) {
-    return undefined;
-  }
-  if (!canTrustedOfficialPluginRequestScopes(params)) {
-    return undefined;
-  }
-  return params.requestedScopes;
-}
-
-function mergeGatewayClientInternal(
-  client: GatewayRequestOptions["client"] | undefined,
-  internal: NonNullable<GatewayRequestOptions["client"]>["internal"],
-): GatewayRequestOptions["client"] {
-  if (!client || !internal) {
-    return client ?? null;
-  }
-  return {
-    ...client,
-    internal: {
-      ...client.internal,
-      ...internal,
-    },
-  };
+  // Requested scopes may replace caller scopes, so only bundled or trusted official plugins qualify.
+  return params.requestedScopes && canTrustedOfficialPluginRequestScopes(params)
+    ? params.requestedScopes
+    : undefined;
 }
 
 type DispatchGatewayMethodInProcessOptions = {
@@ -287,77 +242,19 @@ type DispatchGatewayMethodInProcessOptions = {
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
+  onAccepted?: (payload: unknown) => void;
   pluginRuntimeOwnerId?: string;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  delegatedToolPolicyHandoff?: boolean;
+  sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
 };
 
-export type GatewayMethodDispatchResponse = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ErrorShape;
-  meta?: Record<string, unknown>;
-};
-
-function unwrapGatewayMethodDispatchResponse(
-  method: string,
-  response: GatewayMethodDispatchResponse,
-): unknown {
-  if (!response.ok) {
-    throw new GatewayClientRequestError({
-      code: response.error?.code,
-      message: response.error?.message ?? `Gateway method "${method}" failed.`,
-      details: response.error?.details,
-      retryable: response.error?.retryable,
-      retryAfterMs: response.error?.retryAfterMs,
-    });
-  }
-  return response.payload;
-}
-
-function resolveInProcessDispatchTimeoutMs(timeoutMs?: number): number | undefined {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? resolveSafeTimeoutDelayMs(timeoutMs)
-    : undefined;
-}
-
-function resolveInProcessDispatchDeadlineMs(timeoutMs?: number): number | undefined {
-  const safeTimeoutMs = resolveInProcessDispatchTimeoutMs(timeoutMs);
-  return safeTimeoutMs === undefined ? undefined : Date.now() + safeTimeoutMs;
-}
-
-function resolveRemainingInProcessDispatchTimeoutMs(deadlineMs?: number): number | undefined {
-  return deadlineMs === undefined
-    ? undefined
-    : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
-}
-
-async function waitForInProcessDispatch<T>(
-  method: string,
-  promise: Promise<T>,
-  deadlineMs?: number,
-): Promise<T> {
-  const remainingTimeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
-  if (remainingTimeoutMs === undefined) {
-    return await promise;
-  }
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`gateway request timeout for ${method}`));
-        }, remainingTimeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
+export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
 
 export async function dispatchGatewayMethodInProcessRaw(
   method: string,
@@ -378,128 +275,60 @@ export async function dispatchGatewayMethodInProcessRaw(
     );
   }
 
-  let firstResponse: GatewayMethodDispatchResponse | undefined;
-  let finalResponse: GatewayMethodDispatchResponse | undefined;
-  let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
-  let rejectFirstResponse: ((err: Error) => void) | undefined;
-  let resolveFinalResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
-  let rejectFinalResponse: ((err: Error) => void) | undefined;
-  let postFirstResponseError: Error | undefined;
-  const firstResponsePromise = new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-    resolveFirstResponse = resolve;
-    rejectFirstResponse = reject;
-  });
-  const deadlineMs = resolveInProcessDispatchDeadlineMs(options?.timeoutMs);
-  const { handleGatewayRequest } = await import("./server-methods.js");
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
       ? options.pluginRuntimeOwnerId.trim()
       : undefined;
-  const syntheticClient = createSyntheticOperatorClient({
+  const syntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
+    internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
+    internalDeliverySuppressText: options?.internalDeliverySuppressText,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+    ...(options?.runtimePluginToolGrant
+      ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
+      : {}),
+    delegatedToolPolicyHandoff: options?.delegatedToolPolicyHandoff === true,
+    ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
   });
-  const scopedClient = mergeGatewayClientInternal(
+  const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking
+    pluginRuntimeOwnerId ||
+      options?.agentRunTracking ||
+      options?.runtimePluginToolGrant ||
+      options?.delegatedToolPolicyHandoff ||
+      scope?.client?.internal?.delegatedToolPolicyHandoff
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+          runtimePluginToolGrant: options?.runtimePluginToolGrant,
+          delegatedToolPolicyHandoff:
+            options?.delegatedToolPolicyHandoff === true ? (true as const) : undefined,
         }
       : undefined,
   );
   if (options?.disableSyntheticClient === true && !scopedClient) {
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
   }
-  void handleGatewayRequest({
-    req: {
-      type: "req",
-      id: `plugin-subagent-${randomUUID()}`,
-      method,
-      params,
-    },
+  return await dispatchGatewayRequestInProcessRaw(method, params, {
     client:
       options?.forceSyntheticClient === true
         ? syntheticClient
         : (scopedClient ?? (options?.disableSyntheticClient === true ? null : syntheticClient)),
-    isWebchatConnect,
-    respond: (ok, payload, error, meta) => {
-      const response = { ok, payload, error, ...(meta ? { meta } : {}) };
-      if (!firstResponse) {
-        firstResponse = response;
-        resolveFirstResponse?.(response);
-        return;
-      }
-      if (!finalResponse) {
-        finalResponse = response;
-        resolveFinalResponse?.(response);
-      }
-    },
     context,
-  })
-    .then(() => {
-      if (!firstResponse) {
-        rejectFirstResponse?.(
-          new Error(`Gateway method "${method}" completed without a response.`),
-        );
-      }
-    })
-    .catch((err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      if (!firstResponse) {
-        rejectFirstResponse?.(error);
-        return;
-      }
-      postFirstResponseError = error;
-      rejectFinalResponse?.(error);
-    });
+    expectFinal: options?.expectFinal,
+    isWebchatConnect,
+    onAccepted: options?.onAccepted,
+    requestIdPrefix: "plugin-subagent",
+    timeoutMs: options?.timeoutMs,
+  });
+}
 
-  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
-  const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
-  if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
-    return firstResponse;
-  }
-  if (postFirstResponseError) {
-    throw postFirstResponseError;
-  }
-  const final =
-    finalResponse ??
-    (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-      resolveFinalResponse = resolve;
-      const timeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
-      const timeout =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
-              reject(new Error(`gateway request timeout for ${method}`));
-            }, timeoutMs);
-      const clearFinalTimeout = () => {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
-      };
-      rejectFinalResponse = (err) => {
-        clearFinalTimeout();
-        reject(err);
-      };
-      if (postFirstResponseError) {
-        rejectFinalResponse(postFirstResponseError);
-        return;
-      }
-      if (finalResponse) {
-        clearFinalTimeout();
-        resolve(finalResponse);
-        return;
-      }
-      resolveFinalResponse = (response) => {
-        clearFinalTimeout();
-        resolve(response);
-      };
-    }));
-  return final;
+/** Live request context for trusted built-in tools that need direct runtime state. */
+export function getInProcessGatewayRequestContext(): GatewayRequestContext | undefined {
+  return getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
 }
 
 async function dispatchGatewayMethod<T>(
@@ -540,6 +369,19 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
 
 const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
 
+function normalizeSubagentRunRuntime(
+  value: unknown,
+): Awaited<ReturnType<PluginRuntime["subagent"]["run"]>>["runtime"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const harness = typeof record.harness === "string" ? record.harness.trim() : "";
+  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
+  const model = typeof record.model === "string" ? record.model.trim() : "";
+  return harness && provider && model ? { harness, provider, model } : undefined;
+}
+
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const limit =
@@ -563,6 +405,10 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         typeof scope?.pluginId === "string" && scope.pluginId.trim()
           ? scope.pluginId.trim()
           : undefined;
+      const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
+        pluginId,
+        toolsAlsoAllow: params.toolsAlsoAllow,
+      });
       const overrideRequested = Boolean(params.provider || params.model);
       const hasRequestScopeClient = Boolean(scope?.client);
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
@@ -582,7 +428,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       if (overrideRequested && !allowOverride) {
         throw new Error("provider/model override is not authorized for this plugin subagent run.");
       }
-      const payload = await dispatchGatewayMethod<{ runId?: string }>(
+      const payload = await dispatchGatewayMethod<{ runId?: string; runtime?: unknown }>(
         "agent",
         {
           sessionKey: params.sessionKey,
@@ -604,13 +450,15 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           allowSyntheticModelOverride,
           agentRunTracking: "plugin_subagent",
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+          ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
         },
       );
       const runId = payload?.runId;
       if (typeof runId !== "string" || !runId) {
         throw new Error("Gateway agent method returned an invalid runId.");
       }
-      return { runId };
+      const runtime = normalizeSubagentRunRuntime(payload?.runtime);
+      return { runId, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
       const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
@@ -637,9 +485,6 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       };
     },
     getSessionMessages,
-    async getSession(params) {
-      return getSessionMessages(params);
-    },
     async deleteSession(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
       const pluginId =
@@ -683,8 +528,9 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
                 (node as { connected?: unknown }).connected === true,
             )
           : nodes;
+      const projectedNodes = projectGatewayRuntimeNodes(filteredNodes);
       return {
-        nodes: filteredNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
+        nodes: projectedNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
       };
     },
     async invoke(params) {
@@ -710,7 +556,7 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         },
         {
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
-          ...(syntheticScopes ? { syntheticScopes } : {}),
+          ...(syntheticScopes ? { forceSyntheticClient: true, syntheticScopes } : {}),
         },
       );
       return payload;
@@ -755,6 +601,7 @@ export function loadGatewayPlugins(params: {
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
   };
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const started = performance.now();
   const activationAutoEnabled =
@@ -766,6 +613,7 @@ export function loadGatewayPlugins(params: {
             ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
             : {}),
           discovery: params.pluginLookUpTable?.discovery,
+          ambientEnvTriggers: params.ambientEnvTriggers,
         })
       : undefined;
   const autoEnableMs = performance.now() - started;
@@ -790,6 +638,7 @@ export function loadGatewayPlugins(params: {
               ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
               : {}),
             discovery: params.pluginLookUpTable?.discovery,
+            ambientEnvTriggers: params.ambientEnvTriggers,
           });
   const resolvedConfigMs = performance.now() - started;
   const resolvedConfig = autoEnabled.config;
@@ -801,6 +650,7 @@ export function loadGatewayPlugins(params: {
         activationSourceConfig: params.activationSourceConfig,
         workspaceDir: params.workspaceDir,
         env: process.env,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       })
     ).startup.pluginIds,
   ];

@@ -10,7 +10,7 @@ import {
   resolveMessageActionDiscoveryForPlugin,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
-  testing as messageActionTesting,
+  type PreparedMessageToolCatalog,
 } from "../channels/plugins/message-action-discovery.js";
 import {
   channelPluginHasNativeApprovalPromptUi,
@@ -36,6 +36,7 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
 /**
@@ -51,7 +52,10 @@ export function listChannelSupportedActions(
   if (!channelId) {
     return [];
   }
-  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(channelId);
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(
+    channelId,
+    params.preparedMessageToolCatalog,
+  );
   if (!pluginActions?.actions) {
     return [];
   }
@@ -70,7 +74,8 @@ export function listAllChannelSupportedActions(
   params: ChannelMessageActionDiscoveryParams,
 ): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
-  for (const plugin of listChannelPlugins()) {
+  const channels = params.preparedMessageToolCatalog?.channels ?? listChannelPlugins();
+  for (const plugin of channels) {
     const channelActions = resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,
       actions: plugin.actions,
@@ -174,10 +179,3 @@ export function resolveChannelReactionGuidance(params: {
     channel: resolved.channelLabel?.trim() || channelId,
   };
 }
-
-/** Test-only utilities for channel tool discovery state. */
-export const testing = {
-  resetLoggedListActionErrors() {
-    messageActionTesting.resetLoggedMessageActionErrors();
-  },
-};

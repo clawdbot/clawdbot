@@ -1,60 +1,20 @@
-import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { execFileUtf8Tail } from "./logs-cli.runtime.js";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
-
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawn: spawnMock,
-  };
-});
-
-function mockSpawnedChild() {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  const kill = vi.fn(() => true);
-  const child = Object.assign(new EventEmitter(), { kill, stderr, stdout });
-  spawnMock.mockReturnValue(child as unknown as ChildProcess);
-  return { child, kill, stderr, stdout };
-}
-
 describe("execFileUtf8Tail", () => {
-  beforeEach(() => {
-    spawnMock.mockReset();
-  });
-
-  it.each(["stdout", "stderr"] as const)(
-    "terminates the child when %s emits an error",
-    async (streamName) => {
-      const { kill, stderr, stdout } = mockSpawnedChild();
-
-      const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
-      stdout.emit("data", Buffer.from("partial output"));
-      const streamError = new Error(`${streamName} read failed`);
-      (streamName === "stdout" ? stdout : stderr).emit("error", streamError);
-
-      await expect(resultPromise).resolves.toEqual({
-        code: 1,
-        stderr: streamError.message,
-        stdout: "partial output",
-        truncated: false,
-      });
-      expect(kill).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("does not kill the child when spawning fails", async () => {
-    const { child, kill } = mockSpawnedChild();
-
-    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
-    child.emit("error", new Error("spawn failed"));
-
-    await expect(resultPromise).resolves.toMatchObject({ code: 1, stderr: "spawn failed" });
-    expect(kill).not.toHaveBeenCalled();
+  it("replaces the ambient environment when an explicit environment is supplied", async () => {
+    process.env.OPENCLAW_LOG_ENV_LEAK_TEST = "ambient";
+    try {
+      await expect(
+        execFileUtf8Tail(
+          process.execPath,
+          ["-e", "process.stdout.write(process.env.OPENCLAW_LOG_ENV_LEAK_TEST ?? 'missing')"],
+          { env: {}, maxBytes: 1024 },
+        ),
+      ).resolves.toMatchObject({ code: 0, stdout: "missing" });
+    } finally {
+      delete process.env.OPENCLAW_LOG_ENV_LEAK_TEST;
+    }
   });
 
   it.each([
@@ -63,15 +23,13 @@ describe("execFileUtf8Tail", () => {
     { label: "four-byte", text: "😀z", maxBytes: 4, expected: "z" },
     { label: "complete", text: "a¢z", maxBytes: 3, expected: "¢z" },
   ])("decodes a $label character at the stdout tail boundary", async (testCase) => {
-    const { child, stdout } = mockSpawnedChild();
-    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], {
-      maxBytes: testCase.maxBytes,
-    });
-
-    stdout.emit("data", Buffer.from(testCase.text, "utf8"));
-    child.emit("close", 0);
-
-    await expect(resultPromise).resolves.toEqual({
+    await expect(
+      execFileUtf8Tail(
+        process.execPath,
+        ["-e", `process.stdout.write(${JSON.stringify(testCase.text)})`],
+        { maxBytes: testCase.maxBytes },
+      ),
+    ).resolves.toEqual({
       code: 0,
       stderr: "",
       stdout: testCase.expected,
@@ -79,16 +37,34 @@ describe("execFileUtf8Tail", () => {
     });
   });
 
-  it("decodes a truncated stderr tail at a UTF-8 boundary", async () => {
-    const { child, stderr } = mockSpawnedChild();
-    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
-
-    stderr.emit("data", Buffer.concat([Buffer.from("😀"), Buffer.alloc(64 * 1024 - 3, "x")]));
-    child.emit("close", 1);
-
-    const result = await resultPromise;
-    expect(result.stderr).toBe("x".repeat(64 * 1024 - 3));
+  it("keeps a bounded stderr tail for failed commands", async () => {
+    const result = await execFileUtf8Tail(
+      process.execPath,
+      ["-e", "process.stderr.write('😀' + 'x'.repeat(64 * 1024)); process.exit(1)"],
+      { maxBytes: 1024 },
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toBe("x".repeat(64 * 1024));
     expect(result.stderr).not.toContain("�");
     expect(result.truncated).toBe(false);
+  });
+
+  it("terminates a stalled command at the configured deadline", async () => {
+    const startedAt = Date.now();
+
+    const result = await execFileUtf8Tail(process.execPath, ["-e", "setTimeout(() => {}, 1_000)"], {
+      maxBytes: 1024,
+      timeoutMs: 25,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(result).toMatchObject({ code: 124, stdout: "", truncated: false });
+  });
+
+  it("returns a soft failure when command launch fails", async () => {
+    const command = `openclaw-missing-${process.pid}-${Date.now()}`;
+    const result = await execFileUtf8Tail(command, [], { maxBytes: 1024 });
+    expect(result).toMatchObject({ code: 1, stdout: "", truncated: false });
+    expect(result.stderr).toMatch(/ENOENT|not found/i);
   });
 });

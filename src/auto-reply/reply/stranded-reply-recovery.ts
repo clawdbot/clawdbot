@@ -3,7 +3,7 @@ import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.j
 import type { ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue/types.js";
 
-export const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
+const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 const STRANDED_REPLY_DELIVERY_FAILURE_TEXT =
   "I generated a reply but could not deliver it to this chat. Please try again.";
 
@@ -43,9 +43,10 @@ export function buildStrandedReplyRetryFollowupRun(
     userTurnTranscriptRecorder: undefined,
     currentInboundContext: undefined,
     // Internally generated system turn: the client turn's lifecycle (gateway cancel
-    // identity) completes with the parent run. queuedLifecycle is one-shot WeakSet-tracked,
-    // so a shared object would be double-owned and free cancel while the retry still runs.
-    queuedLifecycle: undefined,
+    // identity) completes with the parent run. turnAdoptionLifecycle is one-shot
+    // WeakSet-tracked, so a shared object would be double-owned and free cancel
+    // while the retry still runs.
+    turnAdoptionLifecycle: undefined,
     run: {
       ...base.run,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

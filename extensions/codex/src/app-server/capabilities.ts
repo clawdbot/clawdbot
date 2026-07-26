@@ -20,6 +20,9 @@ export const CODEX_CONTROL_METHODS = {
   resumeThread: "thread/resume",
   review: "review/start",
   unarchiveThread: "thread/unarchive",
+  getThreadGoal: "thread/goal/get",
+  setThreadGoal: "thread/goal/set",
+  clearThreadGoal: "thread/goal/clear",
 } as const;
 
 type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;

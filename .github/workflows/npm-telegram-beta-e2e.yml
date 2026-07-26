@@ -202,14 +202,14 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout dispatch ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -320,10 +320,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]] || {
-            echo "Package Telegram artifact name does not bind the declared producer run attempt." >&2
-            exit 1
-          }
           artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
           jq -e \
             --arg digest "sha256:${ARTIFACT_DIGEST}" \
@@ -340,6 +336,7 @@ jobs:
             echo "Package Telegram artifact identity does not match the requested immutable tuple." >&2
             exit 1
           }
+          artifact_created_at="$(jq -er '.created_at | fromdateiso8601' <<< "$artifact_json")"
           attempt_json="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
@@ -347,11 +344,35 @@ jobs:
           jq -e \
             --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
             --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            '(.id | tostring) == $run_id and
+             (.run_attempt | tostring) == $attempt' \
             <<< "$attempt_json" >/dev/null || {
             echo "Package Telegram artifact producer run attempt does not match the requested tuple." >&2
             exit 1
           }
+          attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
+          if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
+            jq -e '(.status == "queued" or .status == "in_progress") and .conclusion == null' \
+              <<< "$attempt_json" >/dev/null || {
+              echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
+              exit 1
+            }
+            if (( artifact_created_at <= attempt_started_at )); then
+              echo "Package Telegram artifact predates the active producer run attempt." >&2
+              exit 1
+            fi
+          else
+            jq -e '.status == "completed" and .conclusion == "success"' \
+              <<< "$attempt_json" >/dev/null || {
+              echo "Completed Package Telegram artifact producer run attempt was not successful." >&2
+              exit 1
+            }
+            attempt_completed_at="$(jq -er '.updated_at | fromdateiso8601' <<< "$attempt_json")"
+            if (( artifact_created_at <= attempt_started_at || artifact_created_at > attempt_completed_at )); then
+              echo "Package Telegram artifact creation time is outside the declared producer run attempt." >&2
+              exit 1
+            fi
+          fi
 
       - name: Download package-under-test artifact
         if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id == github.run_id
@@ -385,7 +406,8 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
+          OPENCLAW_QA_SUITE_PROGRESS: "1"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}
           PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || '' }}
@@ -402,7 +424,7 @@ jobs:
 
           append_telegram_summary() {
             local status=$?
-            local report="${output_dir}/telegram-qa-report.md"
+            local report="${output_dir}/qa-suite-report.md"
             if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "${report}" ]]; then
               {
                 echo "## Package Telegram E2E"
@@ -434,6 +456,14 @@ jobs:
           const path = require("node:path");
           const [manifestPath, packageDir] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const dependencyTarballs = Array.isArray(manifest.corePackageTarballs)
+            ? manifest.corePackageTarballs
+            : manifest.corePackageTarballs === undefined && Array.isArray(manifest.dependencyTarballs)
+              ? manifest.dependencyTarballs
+              : null;
+          if (!dependencyTarballs) {
+            throw new Error("package artifact manifest is missing dependency tarball metadata");
+          }
           const entries = [
             {
               packageName: "openclaw",
@@ -441,7 +471,7 @@ jobs:
               tarballName: manifest.tarballName,
               tarballSha256: manifest.tarballSha256,
             },
-            ...(Array.isArray(manifest.dependencyTarballs) ? manifest.dependencyTarballs : []),
+            ...dependencyTarballs,
           ];
           const packageNames = new Set();
           const tarballNames = new Set();

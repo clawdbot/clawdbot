@@ -416,6 +416,8 @@ describe("dreaming view", () => {
     expect(compactText(container.querySelector(".dreams-diary__preview-hint"))).toBe(
       "Showing the first chunk of this page (6001 total lines).",
     );
+    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect(container.querySelector(".dreams-diary__preview-backdrop")).toBeNull();
 
     const closePreviewButton = container.querySelector<HTMLButtonElement>(
       ".dreams-diary__preview-header .btn",

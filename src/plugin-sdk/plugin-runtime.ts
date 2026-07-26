@@ -3,13 +3,32 @@
  * and avoid adding new imports here.
  */
 
-export * from "../plugins/commands.js";
-export * from "../plugins/hook-runner-global.js";
-export * from "../plugins/http-path.js";
-export * from "../plugins/http-registry.js";
-export * from "../plugins/interactive-binding-helpers.js";
-export * from "../plugins/interactive.js";
-export * from "../plugins/lazy-service-module.js";
-export * from "../plugins/types.js";
+export {
+  clearPluginCommands,
+  executePluginCommand,
+  listRegisteredPluginAgentPromptGuidance,
+  matchPluginCommand,
+  registerPluginCommand,
+} from "../plugins/commands.js";
+
+export { createInteractiveConversationBindingHelpers } from "../plugins/interactive-binding-helpers.js";
+export {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "../plugins/interactive.js";
+export { startLazyPluginServiceModule } from "../plugins/lazy-service-module.js";
+export type { LazyPluginServiceHandle } from "../plugins/lazy-service-module.js";
+export type {
+  OpenClawPluginApi,
+  PluginConversationBinding,
+  PluginConversationBindingRequestParams,
+  PluginConversationBindingRequestResult,
+  PluginInteractiveRegistration,
+} from "../plugins/types.js";
 export { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+
+export { dispatchPluginInteractiveHandler } from "../plugins/interactive.js";
+export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+export { getPluginCommandSpecs } from "../plugins/command-specs.js";
+export type { OpenClawPluginConfigSchema } from "../plugins/types.js";

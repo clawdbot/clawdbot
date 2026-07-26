@@ -37,7 +37,7 @@ export const slackConfigAdapter = createScopedChannelConfigAdapter<
   resolveAccessorAccount: resolveSlackConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectSlackAccount),
   defaultAccountId: resolveDefaultSlackAccountId,
-  clearBaseFields: ["botToken", "appToken", "name"],
+  clearBaseFields: ["botToken", "appToken", "userToken", "signingSecret", "name"],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account) => account.defaultTo,
@@ -46,6 +46,7 @@ export const slackConfigAdapter = createScopedChannelConfigAdapter<
 export function createSlackPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedSlackAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedSlackAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedSlackAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedSlackAccount>,
   | "id"
@@ -60,6 +61,7 @@ export function createSlackPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "setupContract"
   | "security"
   | "secrets"
 > {
@@ -70,6 +72,7 @@ export function createSlackPluginBase(params: {
       preferSessionLookupForAnnounceTarget: true,
     },
     setupWizard: params.setupWizard,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
     capabilities: {
       chatTypes: ["direct", "channel", "thread"],
       reactions: true,

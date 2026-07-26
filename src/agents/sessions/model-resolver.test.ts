@@ -4,7 +4,12 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { findInitialModel, parseModelPattern, restoreModelFromSession } from "./model-resolver.js";
+import {
+  findInitialModel,
+  parseModelPattern,
+  resolveCliModel,
+  restoreModelFromSession,
+} from "./model-resolver.js";
 
 function model(provider: string, id: string): Model {
   return {
@@ -21,12 +26,13 @@ function model(provider: string, id: string): Model {
   };
 }
 
-function registry(models: Model[]): ModelRegistry {
+function registry(models: Model[], authenticatedModels: Model[] = models): ModelRegistry {
   return {
     find: (provider: string, modelId: string) =>
       models.find((entry) => entry.provider === provider && entry.id === modelId),
-    getAvailable: () => models,
-    hasConfiguredAuth: (entry: Model) => models.includes(entry),
+    getAll: () => models,
+    getAvailable: () => authenticatedModels,
+    hasConfiguredAuth: (entry: Model) => authenticatedModels.includes(entry),
   } as ModelRegistry;
 }
 
@@ -55,6 +61,78 @@ describe("model resolver fallback selection", () => {
     );
 
     expect(result.model).toBe(firstAvailable);
+  });
+
+  it("ignores an unauthenticated saved default", async () => {
+    const savedDefault = model("saved-provider", "saved-model");
+    const available = model("available-provider", "available-model");
+
+    const result = await findInitialModel({
+      scopedModels: [],
+      isContinuing: false,
+      defaultProvider: savedDefault.provider,
+      defaultModelId: savedDefault.id,
+      modelRegistry: registry([savedDefault, available], [available]),
+    });
+
+    expect(result.model).toBe(available);
+  });
+});
+
+describe("custom model fallback", () => {
+  it.each([
+    { suffix: "high", reasoning: true },
+    { suffix: "off", reasoning: false },
+  ] as const)("parses :$suffix and configures reasoning", ({ suffix, reasoning }) => {
+    const providerModel = model("custom-provider", "known-model");
+    const result = resolveCliModel({
+      cliModel: `custom-provider/new-model:${suffix}`,
+      modelRegistry: registry([providerModel]),
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-provider",
+      id: "new-model",
+      reasoning,
+    });
+    expect(result.thinkingLevel).toBe(suffix);
+  });
+
+  it("keeps an invalid suffix as part of the custom model id", () => {
+    const result = resolveCliModel({
+      cliProvider: "custom-provider",
+      cliModel: "new-model:specialized",
+      modelRegistry: registry([model("custom-provider", "known-model")]),
+    });
+
+    expect(result.model?.id).toBe("new-model:specialized");
+    expect(result.thinkingLevel).toBeUndefined();
+  });
+
+  it("preserves an explicit thinking level for a custom model", () => {
+    const result = resolveCliModel({
+      cliProvider: "custom-provider",
+      cliModel: "new-model",
+      cliThinking: "low",
+      modelRegistry: registry([model("custom-provider", "known-model")]),
+    });
+
+    expect(result.model).toMatchObject({ id: "new-model", reasoning: true });
+    expect(result.thinkingLevel).toBe("low");
+  });
+
+  it("uses the parsed thinking level during initial model selection", async () => {
+    const result = await findInitialModel({
+      cliProvider: "custom-provider",
+      cliModel: "new-model:high",
+      scopedModels: [],
+      isContinuing: false,
+      modelRegistry: registry([model("custom-provider", "known-model")]),
+    });
+
+    expect(result.model).toMatchObject({ id: "new-model", reasoning: true });
+    expect(result.thinkingLevel).toBe("high");
   });
 });
 

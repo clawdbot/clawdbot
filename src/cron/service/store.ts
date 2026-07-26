@@ -22,7 +22,6 @@ type PersistOptions = {
 export type CronRollbackSnapshot = {
   store: CronStoreFile | null;
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
-  pendingCatchupDeferralJobIds: Set<string>;
 };
 
 function durableNextRunsFromJobs(jobs: readonly CronJob[]) {
@@ -81,10 +80,13 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
     return;
   }
-  // Runtime nextRunAtMs belongs to the old schedule identity; clear it so the
-  // current normalized schedule recomputes from the active clock.
+  // Runtime nextRunAtMs and paced provenance belong to the old scheduling
+  // identity; clear them together so the current inputs recompute atomically.
   params.hydrated.state ??= {};
   params.hydrated.state.nextRunAtMs = undefined;
+  params.hydrated.state.startupCatchupAtMs = undefined;
+  params.hydrated.state.pacedNextRunAtMs = undefined;
+  params.hydrated.state.forcePreservedNextRunAtMs = undefined;
 }
 
 function warnInvalidPersistedCronJob(params: {
@@ -305,7 +307,6 @@ export function snapshotStoreForRollback(state: CronServiceState): CronRollbackS
   return {
     store: state.store ? structuredClone(state.store) : null,
     durableNextRunAtMsByJobId: new Map(state.durableNextRunAtMsByJobId),
-    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
   };
 }
 
@@ -332,7 +333,6 @@ export async function persistOrRestore(
   } catch (err) {
     state.store = snapshot.store;
     state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
-    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
     throw err;
   }
   for (const notify of opts.postPersistAutoDisableNotifications ?? []) {

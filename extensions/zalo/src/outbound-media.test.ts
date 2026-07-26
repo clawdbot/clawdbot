@@ -1,9 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Zalo tests cover outbound media plugin behavior.
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 
@@ -16,12 +16,22 @@ vi.mock("openclaw/plugin-sdk/web-media", () => {
 });
 
 import {
-  clearHostedZaloMediaForTest,
   prepareHostedZaloMediaUrl,
   resolveHostedZaloMediaRoutePrefix,
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
 import { setZaloRuntime } from "./runtime.js";
+
+const testStateEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  OPENCLAW_STATE_DIR: fs.mkdtempSync(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-media-"),
+  ),
+};
+
+function openTestStore<T>(options: OpenKeyedStoreOptions) {
+  return createPluginStateKeyedStoreForTests<T>("zalo", { ...options, env: testStateEnv });
+}
 
 function createMockResponse() {
   const headers = new Map<string, string>();
@@ -40,17 +50,14 @@ function createMockResponse() {
 function installZaloRuntimeForTest(): void {
   setZaloRuntime({
     state: {
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests<T>("zalo", options),
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => openTestStore<T>(options),
     },
   } as unknown as PluginRuntime);
 }
 
 describe("zalo outbound hosted media", () => {
   beforeEach(async () => {
-    resetPluginStateStoreForTests();
     installZaloRuntimeForTest();
-    await clearHostedZaloMediaForTest();
     loadWebMediaMock.mockReset();
     loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("image-bytes"),
@@ -105,24 +112,30 @@ describe("zalo outbound hosted media", () => {
     expect(id).toHaveLength(24);
     expect(/^[0-9a-f]+$/.test(id)).toBe(true);
 
-    const metaStore = createPluginStateKeyedStoreForTests("zalo", {
+    const metaStore = openTestStore<{
+      id: string;
+      routePath: string;
+      contentType: string;
+      byteLength: number;
+    }>({
       namespace: "hosted-outbound-media",
       maxEntries: 80,
     });
-    const chunkStore = createPluginStateKeyedStoreForTests("zalo", {
+    const chunkStore = openTestStore({
       namespace: "hosted-outbound-media-chunks",
       maxEntries: 16_384,
     });
 
-    const metaEntries = await metaStore.entries();
-    expect(metaEntries).toHaveLength(1);
-    expect(metaEntries[0]?.value).toMatchObject({
+    const metaEntry = (await metaStore.entries()).find(({ value }) => value.id === id);
+    expect(metaEntry?.value).toMatchObject({
       id,
       routePath: "/zalo-webhook/media/",
       contentType: "image/png",
       byteLength: Buffer.byteLength("image-bytes"),
     });
-    expect(await chunkStore.entries()).toHaveLength(1);
+    expect(
+      (await chunkStore.entries()).some(({ key }) => key.startsWith(`media:${id}:chunk:`)),
+    ).toBe(true);
   });
 
   it("preserves the root webhook path when deriving the hosted media route", () => {
@@ -226,6 +239,27 @@ describe("zalo outbound hosted media", () => {
       {
         method: "GET",
         url: `${pathname}?token=wrong`,
+      } as never,
+      response.res as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(401);
+    expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
+  });
+
+  it("rejects hosted media requests without a token", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+    const response = createMockResponse();
+
+    const handled = await tryHandleHostedZaloMediaRequest(
+      {
+        method: "GET",
+        url: new URL(hostedUrl).pathname,
       } as never,
       response.res as never,
     );

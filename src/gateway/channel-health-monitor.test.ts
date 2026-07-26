@@ -2,11 +2,12 @@
  * Channel health monitor regression tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+import type { ChannelManager } from "./server-channels.js";
 
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
@@ -16,6 +17,8 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    setAmbientAutostartSuppressedChannelIds: vi.fn(),
+    isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -285,6 +288,21 @@ describe("channel-health-monitor", () => {
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     monitor.stop();
+  });
+
+  it("does not restart an ambient-suppressed dev channel", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("ambient credentials suppressed"),
+        },
+      },
+      {
+        isAmbientAutostartSuppressed: vi.fn((channelId) => channelId === "discord"),
+      },
+    );
+
+    await expectNoRestart(manager);
   });
 
   it("skips disabled channels", async () => {

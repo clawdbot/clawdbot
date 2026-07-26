@@ -18,6 +18,13 @@ import {
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const deviceIdentityState = vi.hoisted(() => ({
   value: {
     deviceId: "test-device-identity",
@@ -151,15 +158,6 @@ function startStubGatewayClient() {
 }
 
 vi.mock("./client.js", () => ({
-  describeGatewayCloseCode: (code: number) => {
-    if (code === 1000) {
-      return "normal closure";
-    }
-    if (code === 1006) {
-      return "abnormal closure (no close frame)";
-    }
-    return undefined;
-  },
   isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: {
@@ -766,6 +764,7 @@ describe("callGateway url resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -788,6 +787,7 @@ describe("callGateway url resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -1095,7 +1095,7 @@ describe("callGateway url resolution", () => {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(10_000);
@@ -1139,7 +1139,6 @@ describe("buildGatewayConnectionDetails", () => {
         mode: "local",
         bind: "loopback",
         tls: { enabled: true },
-        handshakeTimeoutMs: 4321,
       },
     } satisfies OpenClawConfig;
     resolveGatewayPort.mockReturnValue(18800);
@@ -1157,7 +1156,7 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("wss://127.0.0.1:18800");
     expect(details.tlsFingerprint).toBe("sha256:test-local-gateway-fingerprint");
-    expect(details.preauthHandshakeTimeoutMs).toBe(4321);
+    expect(details.preauthHandshakeTimeoutMs).toBeUndefined();
   });
 
   it("lets probe details local port override bypass gateway env URL and port", async () => {
@@ -1739,7 +1738,7 @@ describe("callGateway error details", () => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
@@ -1775,27 +1774,6 @@ describe("callGateway error details", () => {
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(startCalls).toBe(0);
-  });
-
-  it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {
-    startMode = "silent";
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
-    });
-    setGatewayNetworkDefaults();
-
-    vi.useFakeTimers();
-    let errMessage = "";
-    const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
-
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(errMessage).toBe("");
-    await vi.advanceTimersByTimeAsync(20_000);
-    await promise;
-
-    expect(errMessage).toContain("gateway timeout after 30000ms");
   });
 
   it("keeps the default wrapper timeout aligned with env handshake timeout", async () => {
@@ -1915,7 +1893,7 @@ describe("callGateway error details", () => {
       return result;
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
     });
     await vi.advanceTimersByTimeAsync(60_000);
@@ -2016,7 +1994,7 @@ describe("callGateway error details", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(lastRequestOptions?.method).toBe("agent");
     });
     controller.abort();
@@ -2079,7 +2057,7 @@ describe("callGateway error details", () => {
       onSignalAbort,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(startCalled).toBe(true);
     });
     controller.abort();
@@ -2088,17 +2066,6 @@ describe("callGateway error details", () => {
     expect(onSignalAbort).not.toHaveBeenCalled();
     expect(lastRequestOptions).toBeNull();
     expect(stopStarted).toBe(true);
-  });
-
-  it("passes configured gateway handshake timeout to the client watchdog", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
-    });
-    setGatewayNetworkDefaults();
-
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
@@ -2162,7 +2129,7 @@ describe("callGateway error details", () => {
       callResolved = true;
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
     expect(callResolved).toBe(false);
@@ -2222,7 +2189,7 @@ describe("callGateway error details", () => {
 
     const promise = callGateway<{ ok: true }>({ method: "health", timeoutMs: 5 });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
 
@@ -2833,3 +2800,4 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

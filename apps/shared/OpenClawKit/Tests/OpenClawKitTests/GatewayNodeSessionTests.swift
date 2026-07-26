@@ -24,6 +24,18 @@ private final class InvokeCancellationFlag: @unchecked Sendable {
     }
 }
 
+private actor StringCapture {
+    private var value: String?
+
+    func set(_ value: String?) {
+        self.value = value
+    }
+
+    func get() -> String? {
+        self.value
+    }
+}
+
 private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let callbacks: [Error?]
 
@@ -101,6 +113,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
+    private let helloSessionDefaults: [String: Any]?
+    private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
@@ -116,11 +130,15 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     init(
         helloAuth: [String: Any]? = nil,
         helloMethods: [String] = [],
+        helloSessionDefaults: [String: Any]? = nil,
+        helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
+        self.helloSessionDefaults = helloSessionDefaults
+        self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -210,6 +228,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         if phase == 0 {
             return .data(Self.connectChallengeData(nonce: "nonce-1"))
         }
+        if self.helloDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: self.helloDelayNanoseconds)
+        }
         for _ in 0..<50 {
             let id = self.lock.withLock { self.connectRequestId }
             if let id {
@@ -219,7 +240,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 return .data(Self.connectOkData(
                     id: id,
                     auth: self.helloAuth,
-                    methods: self.helloMethods))
+                    methods: self.helloMethods,
+                    sessionDefaults: self.helloSessionDefaults))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
@@ -229,7 +251,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         return .data(Self.connectOkData(
             id: "connect",
             auth: self.helloAuth,
-            methods: self.helloMethods))
+            methods: self.helloMethods,
+            sessionDefaults: self.helloSessionDefaults))
     }
 
     func receive(
@@ -278,6 +301,24 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             idempotencyKey: idempotencyKey))))
     }
 
+    func emitResponse(id: String, payload: [String: Any]) {
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
+            defer { self.pendingReceiveHandler = nil }
+            return self.pendingReceiveHandler
+        }
+        let frame: [String: Any] = [
+            "type": "res",
+            "id": id,
+            "ok": true,
+            "payload": payload,
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
+        handler?(.success(.data(data)))
+    }
+
     private static func connectChallengeData(nonce: String) -> Data {
         let frame: [String: Any] = [
             "type": "event",
@@ -290,7 +331,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private static func connectOkData(
         id: String,
         auth: [String: Any]? = nil,
-        methods: [String] = []) -> Data
+        methods: [String] = [],
+        sessionDefaults: [String: Any]? = nil) -> Data
     {
         var payload: [String: Any] = [
             "type": "hello-ok",
@@ -321,6 +363,18 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         ]
         if let auth {
             payload["auth"] = auth
+        }
+        if let sessionDefaults {
+            payload["snapshot"] = [
+                "presence": [["ts": 1]],
+                "health": [:],
+                "stateVersion": [
+                    "presence": 0,
+                    "health": 0,
+                ],
+                "uptimeMs": 0,
+                "sessionDefaults": sessionDefaults,
+            ]
         }
         let frame: [String: Any] = [
             "type": "res",
@@ -365,12 +419,17 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 }
 
-private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked Sendable {
+private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
+    @unchecked Sendable
+{
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
+    private let helloSessionDefaults: [String: Any]?
+    private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
+    let effectiveTLSFingerprintSHA256: String?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var requests: [URLRequest] = []
     private var makeCount = 0
@@ -378,13 +437,19 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
     init(
         helloAuth: [String: Any]? = nil,
         helloMethods: [String] = [],
+        helloSessionDefaults: [String: Any]? = nil,
+        helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
-        cancelGate: FirstCancelGate? = nil)
+        cancelGate: FirstCancelGate? = nil,
+        effectiveTLSFingerprintSHA256: String? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
+        self.helloSessionDefaults = helloSessionDefaults
+        self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
         self.cancelGate = cancelGate
+        self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
     }
 
     func snapshotMakeCount() -> Int {
@@ -410,6 +475,8 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
             let task = FakeGatewayWebSocketTask(
                 helloAuth: self.helloAuth,
                 helloMethods: self.helloMethods,
+                helloSessionDefaults: self.helloSessionDefaults,
+                helloDelayNanoseconds: self.helloDelayNanoseconds,
                 connectError: self.connectError,
                 cancelGate: self.cancelGate)
             self.tasks.append(task)
@@ -527,6 +594,23 @@ private actor ComputerInvokeProbe {
     }
 }
 
+private actor NodeInvokeControlProbe {
+    private var inputs: [NodeInvokeInputEvent] = []
+    private var cancellations: [String] = []
+
+    func recordInput(_ input: NodeInvokeInputEvent) {
+        self.inputs.append(input)
+    }
+
+    func recordCancellation(_ invokeId: String) {
+        self.cancellations.append(invokeId)
+    }
+
+    func values() -> ([String], [String]) {
+        (self.inputs.map { "\($0.id):\($0.seq):\($0.payloadjson)" }, self.cancellations)
+    }
+}
+
 private func nodeInvokePush(id: String, command: String) -> GatewayPush {
     .event(EventFrame(
         type: "event",
@@ -543,6 +627,404 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `operator canvas refresh uses the operator surface method`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [OpenClawGatewayClientCapability.inlineWidgets],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        async let refreshed = gateway.refreshCanvasHostUrl(replacing: nil)
+        try await waitUntil("operator surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "plugin.surface.refresh") == 1
+        }
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "plugin.surface.refresh").first)
+        try task.emitResponse(
+            id: #require(request["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/operator-token",
+                ],
+            ])
+
+        #expect(await refreshed?.hasSuffix("/operator-token") == true)
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 0)
+        await gateway.disconnect()
+    }
+
+    @Test func `canvas surface refresh is shared across callers with different timeouts`() async throws {
+        let expectedFingerprint = String(repeating: "ab", count: 32)
+        let session = FakeGatewayWebSocketSession(effectiveTLSFingerprintSHA256: expectedFingerprint)
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "wss://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        async let first = gateway.refreshCanvasHostUrl(replacing: nil)
+        async let second = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
+        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 2)
+        try await waitUntil("single surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        }
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
+        let requestID = try #require(request["id"] as? String)
+        task.emitResponse(
+            id: requestID,
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/new-token",
+                ],
+            ])
+
+        let values = await (first, second, third)
+        #expect(values.0 == values.1)
+        #expect(values.0 == values.2)
+        #expect(values.0?.hasSuffix("/new-token") == true)
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
+        let route = try #require(await gateway.currentCanvasHostRoute())
+        #expect(route.url == values.0)
+        #expect(route.tlsFingerprintSHA256 == expectedFingerprint)
+        await gateway.disconnect()
+    }
+
+    @Test func `timed out surface caller does not cancel rotation with longer waiter`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        async let shortWait = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
+        try await waitUntil("single surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        }
+        async let longWait = gateway.refreshCanvasHostUrl(replacing: nil)
+        let shortValue = await shortWait
+        #expect(shortValue == nil)
+
+        async let joinedWait = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 8)
+        let task = try #require(session.latestTask())
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
+        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
+        try task.emitResponse(
+            id: #require(request["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/new-token",
+                ],
+            ])
+
+        let values = await (longWait, joinedWait)
+        #expect(values.0 == values.1)
+        #expect(values.0?.hasSuffix("/new-token") == true)
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
+        await gateway.disconnect()
+    }
+
+    @Test func `last timed out surface waiter releases stalled rotation for retry`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        let first = await gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
+        #expect(first == nil)
+
+        async let retry = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
+        let task = try #require(session.latestTask())
+        try await waitUntil("second surface refresh sent") {
+            task.sentRequestCount(method: "node.pluginSurface.refresh") == 2
+        }
+        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").last)
+        try task.emitResponse(
+            id: #require(request["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/retry-token",
+                ],
+            ])
+
+        let retryValue = await retry
+        #expect(retryValue?.hasSuffix("/retry-token") == true)
+        await gateway.disconnect()
+    }
+
+    @Test func `cancelled unbounded surface waiter releases stalled rotation for retry`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        let stalled = Task { await gateway.refreshCanvasHostUrl(timeoutSeconds: 0) }
+        try await waitUntil("first surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        }
+        stalled.cancel()
+        #expect(await stalled.value == nil)
+
+        async let retry = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
+        let task = try #require(session.latestTask())
+        try await waitUntil("second surface refresh sent") {
+            task.sentRequestCount(method: "node.pluginSurface.refresh") == 2
+        }
+        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").last)
+        try task.emitResponse(
+            id: #require(request["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/retry-token",
+                ],
+            ])
+
+        let retryValue = await retry
+        #expect(retryValue?.hasSuffix("/retry-token") == true)
+        await gateway.disconnect()
+    }
+
+    @Test func `lagging canvas refresh reuses the rotated capability`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        async let seeded = gateway.refreshCanvasHostUrl(replacing: nil)
+        try await waitUntil("seed surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        }
+        let task = try #require(session.latestTask())
+        let seedRequest = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
+        try task.emitResponse(
+            id: #require(seedRequest["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/old-token",
+                ],
+            ])
+        let oldURL = try #require(await seeded)
+
+        async let rotated = gateway.refreshCanvasHostUrl(replacing: oldURL)
+        try await waitUntil("rotating surface refresh sent") {
+            task.sentRequestCount(method: "node.pluginSurface.refresh") == 2
+        }
+        let rotateRequest = try #require(task.sentRequests(method: "node.pluginSurface.refresh").last)
+        let rotateParams = try #require(rotateRequest["params"] as? [String: Any])
+        #expect(rotateParams["observedUrl"] as? String == oldURL)
+        try task.emitResponse(
+            id: #require(rotateRequest["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/new-token",
+                ],
+            ])
+        let newURL = try #require(await rotated)
+
+        let laggingURL = await gateway.refreshCanvasHostUrl(replacing: oldURL)
+
+        #expect(laggingURL == newURL)
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 2)
+        await gateway.disconnect()
+    }
+
+    @Test func `node requests preserve numeric JSON params`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["terminal"],
+            commands: ["codex.terminal.resume.v1"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        let pending = Task {
+            try await gateway.request(
+                method: "node.invoke.progress",
+                paramsJSON: #"{"invokeId":"terminal-1","nodeId":"node-1","seq":0,"ratio":1.5}"#,
+                timeoutSeconds: 30)
+        }
+        try await waitUntil("progress request sent") {
+            session.latestTask()?.sentRequestCount(method: "node.invoke.progress") == 1
+        }
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "node.invoke.progress").first)
+        let params = try #require(request["params"] as? [String: Any])
+        let seq = try #require(params["seq"] as? NSNumber)
+        let ratio = try #require(params["ratio"] as? NSNumber)
+
+        #expect(CFGetTypeID(seq) != CFBooleanGetTypeID())
+        #expect(seq.intValue == 0)
+        #expect(ratio.doubleValue == 1.5)
+
+        await gateway.disconnect()
+        _ = try? await pending.value
+    }
+
+    @Test func `node invoke input and cancellation reach route callbacks`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let probe = NodeInvokeControlProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["terminal"],
+            commands: ["codex.terminal.resume.v1"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) },
+            onInvokeInput: { input in await probe.recordInput(input) },
+            onInvokeCancel: { invokeId in await probe.recordCancellation(invokeId) })
+
+        await gateway._test_handlePush(
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.input",
+                payload: AnyCodable([
+                    "id": AnyCodable("terminal-1"),
+                    "nodeId": AnyCodable("test-node"),
+                    "seq": AnyCodable(3),
+                    "payloadJSON": AnyCodable(#"{"data":"hello"}"#),
+                ]),
+                seq: nil,
+                stateversion: nil)),
+            socketGeneration: 1)
+        await gateway._test_handlePush(
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.cancel",
+                payload: AnyCodable(["invokeId": AnyCodable("terminal-1")]),
+                seq: nil,
+                stateversion: nil)),
+            socketGeneration: 1)
+
+        let values = await probe.values()
+        #expect(values.0 == [#"terminal-1:3:{"data":"hello"}"#])
+        #expect(values.1 == ["terminal-1"])
+        await gateway.disconnect()
+    }
+
     @Test func `node connections use the node protocol floor`() {
         #expect(
             GatewayChannelActor.minimumProtocolVersion(role: "node", clientMode: "node") ==
@@ -1039,6 +1521,9 @@ struct GatewayNodeSessionTests {
         // Model an old push callback that was already queued on the session actor:
         // cleanup retires socket 1, then socket 2 becomes the active route before it runs.
         await gateway._test_handleChannelDisconnected("socket 1 lost", socketGeneration: 1)
+        // Replacement invokes are intentionally rejected until disconnect lifecycle cleanup
+        // clears its barrier, so establish the post-cleanup state this test models.
+        await gateway._test_waitForLifecycleCallbacks()
         await gateway._test_handlePush(
             .event(EventFrame(
                 type: "event",
@@ -1651,6 +2136,142 @@ struct GatewayNodeSessionTests {
 
         await gateway.disconnect()
         #expect(await gateway.supportsServerMethod("approval.get", ifCurrentRoute: route) == nil)
+    }
+
+    @Test
+    func `route bound node event request distinguishes handled and legacy acknowledgements`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos-test",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let task = try #require(session.latestTask())
+
+        let handledRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("handled node event request sent") {
+            task.sentRequestCount(method: "node.event") == 1
+        }
+        let firstRequest = try #require(task.sentRequests(method: "node.event").first)
+        try task.emitResponse(
+            id: #require(firstRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": true,
+                "reason": "cleared",
+            ])
+        let handled = try await handledRequest.value
+        #expect(handled?.handled == true)
+        #expect(handled?.reason == "cleared")
+
+        let unsupportedRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("unsupported node event request sent") {
+            task.sentRequestCount(method: "node.event") == 2
+        }
+        let secondRequest = try #require(task.sentRequests(method: "node.event").last)
+        try task.emitResponse(
+            id: #require(secondRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": false,
+                "reason": "invalid_payload",
+            ])
+        let unsupported = try await unsupportedRequest.value
+        #expect(unsupported?.handled == false)
+        #expect(unsupported?.reason == "invalid_payload")
+
+        let legacyRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("legacy node event request sent") {
+            task.sentRequestCount(method: "node.event") == 3
+        }
+        let thirdRequest = try #require(task.sentRequests(method: "node.event").last)
+        try task.emitResponse(
+            id: #require(thirdRequest["id"] as? String),
+            payload: ["ok": true])
+        let legacy = try await legacyRequest.value
+        #expect(legacy == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `route bound request rejects a response after its socket is retired`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let socket = try #require(session.latestTask())
+        let request = Task {
+            try await gateway.request(
+                method: "sessions.list",
+                paramsJSON: "{}",
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("route bound request sent") {
+            socket.sentRequestCount(method: "sessions.list") == 1
+        }
+        let sent = try #require(socket.sentRequests(method: "sessions.list").first)
+
+        await gateway._test_handleChannelDisconnected("socket retired", socketGeneration: 1)
+        try socket.emitResponse(
+            id: #require(sent["id"] as? String),
+            payload: ["sessions": []])
+
+        do {
+            _ = try await request.value
+            Issue.record("late response unexpectedly crossed the retired route")
+        } catch is CancellationError {
+            // Expected: the response belongs to the retired admission generation.
+        }
     }
 
     @Test
@@ -2591,15 +3212,13 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `failed device token write is not reported as an issued role`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let blocker = tempDir.appendingPathComponent("not-a-directory", isDirectory: false)
+        let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
+        let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: false)
         try Data().write(to: blocker)
-        // Repoint the pinned state dir at a plain file to force write failures;
-        // the isolation trait restores the env var after the test.
-        setenv("OPENCLAW_STATE_DIR", blocker.path, 1)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        // Block only the legacy auth directory. SQLite identity creation must
+        // still succeed so this test reaches the token persistence failure.
+        defer { try? FileManager.default.removeItem(at: blocker) }
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -2877,20 +3496,54 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `normalize canvas host url preserves explicit secure canvas port`() {
-        let normalized = canonicalizeCanvasHostUrl(
+        let normalized = GatewayPluginSurfaceURL.canonicalize(
             raw: "https://canvas.example.com:9443/__openclaw__/cap/token",
-            activeURL: URL(string: "wss://gateway.example.com"))
+            against: URL(string: "wss://gateway.example.com"))
 
         #expect(normalized == "https://canvas.example.com:9443/__openclaw__/cap/token")
     }
 
     @Test
     func `normalize canvas host url backfills gateway host for loopback canvas`() {
-        let normalized = canonicalizeCanvasHostUrl(
+        let normalized = GatewayPluginSurfaceURL.canonicalize(
             raw: "http://127.0.0.1:18789/__openclaw__/cap/token",
-            activeURL: URL(string: "wss://gateway.example.com:7443"))
+            against: URL(string: "wss://gateway.example.com:7443"))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
+    }
+
+    @Test
+    func `resolve gateway HTTP url supports relative broker routes and preserves absolute providers`() {
+        let gateway = URL(string: "wss://gateway.example.com:7443")
+
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "/plugins/codex/realtime/calls",
+            against: gateway)?.absoluteString == "https://gateway.example.com:7443/plugins/codex/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "https://api.openai.com/v1/realtime/calls",
+            against: gateway)?.absoluteString == "https://api.openai.com/v1/realtime/calls")
+        #expect(GatewayPluginSurfaceURL.resolveHTTPURL(
+            raw: "wss://gateway.example.com/realtime",
+            against: gateway) == nil)
+    }
+
+    @Test
+    func `gateway TLS pin applies only to the same canvas endpoint`() {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let gateway = URL(string: "wss://gateway.example.com:7443")
+
+        #expect(GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+            fingerprint,
+            surfaceURL: "https://gateway.example.com:7443/__openclaw__/cap/token",
+            gatewayURL: gateway) == fingerprint)
+        #expect(GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+            fingerprint,
+            surfaceURL: "https://canvas.example.com:7443/__openclaw__/cap/token",
+            gatewayURL: gateway) == nil)
+        #expect(GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+            fingerprint,
+            surfaceURL: "https://gateway.example.com:9443/__openclaw__/cap/token",
+            gatewayURL: gateway) == nil)
     }
 
     @Test
@@ -3012,6 +3665,54 @@ struct GatewayNodeSessionTests {
         var iterator = stream.makeAsyncIterator()
         let event = await iterator.next()
         #expect(event?.event == "target")
+    }
+
+    @Test
+    func `main session key follows the current node snapshot route`() async throws {
+        let session = FakeGatewayWebSocketSession(
+            helloSessionDefaults: ["mainSessionKey": " agent:main:main "],
+            helloDelayNanoseconds: 750_000_000)
+        let gateway = GatewayNodeSession()
+        let capturedMainSessionKey = StringCapture()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            credentials: .init(),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {
+                let route = await gateway.currentRoute()
+                let key: String? = if let route {
+                    await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route)
+                } else {
+                    nil
+                }
+                await capturedMainSessionKey.set(key)
+            },
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let route = try #require(await gateway.currentRoute())
+        try await waitUntil("main session key captured", timeoutSeconds: 2) {
+            await capturedMainSessionKey.get() == "agent:main:main"
+        }
+        #expect(await capturedMainSessionKey.get() == "agent:main:main")
+        #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == "agent:main:main")
+
+        await gateway.disconnect()
+        #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == nil)
     }
 
     @Test

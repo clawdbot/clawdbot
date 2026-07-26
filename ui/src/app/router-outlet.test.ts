@@ -1,10 +1,10 @@
 import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetStaleChunkReloadStateForTest } from "./stale-chunk-reload.ts";
 import "./router-outlet.ts";
 
-type RouteId = "page";
+type RouteId = "page" | "next";
 type TestContext = { label: string };
 type TestData = { label: string };
 type TestModule = { render: (data: TestData | undefined) => unknown };
@@ -39,6 +39,12 @@ function createOutlet(router: TestRouter, context: TestContext): RouterOutletEle
   return outlet;
 }
 
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
 async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await Promise.resolve();
@@ -46,14 +52,58 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
   }
 }
 
-afterEach(() => {
-  document.body.replaceChildren();
-  resetStaleChunkReloadStateForTest();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
-
 describe("openclaw-router-outlet", () => {
+  it("keeps the current route mounted until nested MCP Apps finish teardown", async () => {
+    const teardown = deferred<void>();
+    const teardownView = vi.fn(() => teardown.promise);
+    const context = { label: "loaded" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            render: () => html`
+              <mcp-app-view
+                ${ref((element) => {
+                  if (element) {
+                    Reflect.set(element, "restartAfterTeardown", vi.fn());
+                    Reflect.set(element, "teardown", teardownView);
+                  }
+                })}
+              ></mcp-app-view>
+              <div data-testid="route-page">page</div>
+            `,
+          }),
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({
+            render: () => html`<div data-testid="route-next">next</div>`,
+          }),
+          loader: () => ({ label: "next" }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    await router.navigate("page", context);
+    await settleOutlet(outlet);
+
+    await router.navigate("next", context);
+    await settleOutlet(outlet);
+    expect(teardownView).toHaveBeenCalledOnce();
+    expect(outlet.querySelector('[data-testid="route-page"]')).not.toBeNull();
+    expect(outlet.querySelector('[data-testid="route-next"]')).toBeNull();
+
+    teardown.resolve(undefined);
+    await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
+    expect(outlet.querySelector("mcp-app-view")).toBeNull();
+    outlet.remove();
+    router.stop();
+  });
+
   it("renders route data through the public custom-element boundary", async () => {
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
@@ -122,7 +172,7 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("schedules stale-chunk recovery and falls back to revalidation while offline", async () => {
+  it("waits out a restarting gateway before falling back to revalidation", async () => {
     vi.useFakeTimers();
     let loadCount = 0;
     const fetchMock = vi.fn<typeof fetch>(
@@ -164,15 +214,27 @@ describe("openclaw-router-outlet", () => {
     expect(alert?.textContent).toContain("Reload to get the latest panel");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(loadCount).toBe(1);
-    outlet.querySelector<HTMLButtonElement>("button")?.click();
+    const button = outlet.querySelector<HTMLButtonElement>("button");
+    button?.click();
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The gateway restart is what stranded the chunk, so one failed probe must
+    // not end the retry: the click keeps waiting (and shows it) rather than
+    // silently degrading to a revalidation that cannot fix a replaced chunk.
     await vi.advanceTimersByTimeAsync(3_000);
     vi.runAllTicks();
     await settleOutlet(outlet);
-    expect(loadCount).toBe(2);
+    expect(loadCount).toBe(1);
+    expect(button?.disabled).toBe(true);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Past the bounded wait it still degrades to revalidation instead of
+    // navigating into a fatal error page against an unreachable gateway.
+    await vi.advanceTimersByTimeAsync(35_000);
+    vi.runAllTicks();
+    await settleOutlet(outlet);
+    expect(loadCount).toBe(2);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
     outlet.remove();
     router.stop();
   });

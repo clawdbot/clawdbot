@@ -10,13 +10,14 @@ import {
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
-  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
   shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
+import { resolveAgentToolSearchRuntimeConfig } from "../tool-search-runtime-config.js";
 import {
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
@@ -74,6 +75,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
   runtimeToolAllowlist?: readonly string[];
   sessionId?: string;
   sessionKey?: string;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   sourceReplyDeliveryMode?: string;
   toolsAllow?: readonly string[];
 }): AgentHarnessToolSurfaceRuntime {
@@ -85,13 +87,12 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     sessionKey: params.sessionKey,
   });
   const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
-  const toolSearchRuntimeConfig = forceDirectMessageTool
-    ? params.config
-    : applyLocalModelLeanToolSearchDefaults({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      });
+  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    forceDirectMessageTool,
+  });
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
     params.modelToolsEnabled &&
@@ -125,6 +126,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     runtimeToolAllowlist,
+    scheduledToolPolicy: params.scheduledToolPolicy,
   });
   const preserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,

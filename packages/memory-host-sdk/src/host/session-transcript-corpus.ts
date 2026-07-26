@@ -13,6 +13,7 @@ import {
   listSessionEntries,
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
+  readTranscriptContentRevisionSync,
   resolveSessionAgentId,
   resolveSessionFilePath,
   resolveStorePath,
@@ -25,6 +26,8 @@ export type SessionTranscriptCorpusEntry = {
   agentId: string;
   sessionFile: string;
   sessionId: string;
+  /** Canonical source revision used by derived transcript consumers. */
+  contentRevision?: string;
   artifactKind: SessionTranscriptCorpusArtifactKind;
   sessionKey?: string;
   /** Present when an active transcript is addressed by SQLite identity, not a JSONL path. */
@@ -36,6 +39,31 @@ export type SessionTranscriptCorpusEntry = {
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
 };
+
+function fileContentRevision(filePath: string): string | undefined {
+  try {
+    const stat = fsSync.statSync(filePath, { bigint: true });
+    if (!stat.isFile()) {
+      return undefined;
+    }
+    return `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function sqliteContentRevision(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey?: string;
+  storePath: string;
+}): string | undefined {
+  try {
+    return readTranscriptContentRevisionSync(params);
+  } catch {
+    return undefined;
+  }
+}
 
 type SessionEntrySummary = {
   sessionKey: string;
@@ -265,11 +293,21 @@ function toSessionStoreCorpusEntry(
     summary.entry,
     cronGeneratedSessionKeys,
   );
+  const contentRevision =
+    source.transcriptSource === "sqlite"
+      ? sqliteContentRevision({
+          agentId,
+          sessionId: source.sessionId,
+          ...(sessionKey ? { sessionKey } : {}),
+          storePath,
+        })
+      : fileContentRevision(source.sessionFile);
   return {
     agentId,
     artifactKind: "active-session",
     sessionFile: source.sessionFile,
     sessionId: source.sessionId,
+    ...(contentRevision ? { contentRevision } : {}),
     ...(source.transcriptSource === "sqlite" ? { transcriptSource: "sqlite" as const } : {}),
     ...(source.transcriptSource === "sqlite" && Number.isFinite(summary.entry.updatedAt)
       ? { updatedAtMs: summary.entry.updatedAt }
@@ -341,11 +379,13 @@ function toArtifactCorpusEntry(
     activeEntriesByPath,
     activeEntriesBySessionId,
   );
+  const contentRevision = fileContentRevision(artifactPath);
   return {
     agentId,
     artifactKind: "archive-artifact",
     sessionFile: artifactPath,
     sessionId,
+    ...(contentRevision ? { contentRevision } : {}),
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(classification.generatedByCronRun ? { generatedByCronRun: true } : {}),
   };

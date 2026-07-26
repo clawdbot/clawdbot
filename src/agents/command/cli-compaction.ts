@@ -629,8 +629,6 @@ export async function runCliTurnCompactionLifecycle(params: {
     reserveTokens: settingsManager.getCompactionReserveTokens(),
     toolResultMaxChars: cliCompactionDeps.resolveLiveToolResultMaxChars({
       contextWindowTokens: contextTokenBudget,
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
     }),
   });
   const tokenSnapshot = resolveSessionTokenSnapshot(params.sessionEntry);
@@ -807,3 +805,4 @@ export async function runCliTurnCompactionLifecycle(params: {
     })) ?? params.sessionEntry
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

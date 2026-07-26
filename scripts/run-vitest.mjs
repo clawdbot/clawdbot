@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
@@ -56,7 +57,7 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
 export const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
-  "test/scripts/openclaw-e2e-instance.test.ts",
+  ...toolingIsolatedTestFiles,
 ]);
 const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
@@ -349,25 +350,39 @@ function resolveExplicitVitestMode(argv) {
   return mode;
 }
 
+function resolveVitestCompileCacheSafeEnv(env) {
+  if (!env.NODE_COMPILE_CACHE && !env.NODE_COMPILE_CACHE_PORTABLE) {
+    return env;
+  }
+  // Coverage can be enabled inside a dynamic Vitest config, which this wrapper
+  // cannot know before spawning. Keep the cache for orchestration/build tools,
+  // but never let a Vitest child deserialize bytecode into V8 coverage.
+  const spawnEnv = { ...env, NODE_DISABLE_COMPILE_CACHE: "1" };
+  delete spawnEnv.NODE_COMPILE_CACHE;
+  delete spawnEnv.NODE_COMPILE_CACHE_PORTABLE;
+  return spawnEnv;
+}
+
 /**
  * Adds default watchdog env for non-watch Vitest runs.
  */
 export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
+  const baseEnv = resolveVitestCompileCacheSafeEnv(env);
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
-    return env;
+    return baseEnv;
   }
-  if (explicitMode !== "run" && !isTruthyEnvValue(env.CI)) {
-    return env;
+  if (explicitMode !== "run" && !isTruthyEnvValue(baseEnv.CI)) {
+    return baseEnv;
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
-  const hasTimeout = Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
+  const hasTimeout = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
   const timeoutMs = hasTimeout
-    ? parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
+    ? parsePositiveInt(baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
     : defaultTimeoutMs;
-  const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
+  const hasHeartbeat = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
-    ...env,
+    ...baseEnv,
     ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
@@ -525,7 +540,10 @@ function isExplicitProjectRouterTargetArg(arg, cwd = process.cwd(), fsImpl = fs)
     return true;
   }
   const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
-  return fsImpl.existsSync(filePath) && isDelegableBroadProjectRouterTarget(arg, cwd);
+  return fsImpl.existsSync(filePath)
+    ? isDelegableBroadProjectRouterTarget(arg, cwd)
+    : path.extname(arg) === "" &&
+        /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
 }
 
 function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {
@@ -552,6 +570,24 @@ function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg
 function collectExplicitProjectRouterTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
   return collectExplicitFileTargetArgs(argv, (arg) =>
     isExplicitProjectRouterTargetArg(arg, cwd, fsImpl),
+  );
+}
+
+function isExplicitDirectoryTargetArg(arg, cwd = process.cwd(), fsImpl = fs) {
+  if (!isPathLikeExplicitFileArg(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  const targetPath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+  try {
+    return fsImpl.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function collectExplicitDirectoryTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
+  return collectExplicitFileTargetArgs(argv, (arg) =>
+    isExplicitDirectoryTargetArg(arg, cwd, fsImpl),
   );
 }
 
@@ -735,6 +771,18 @@ function isToolingDockerTestTarget(target) {
 export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (hasExplicitVitestConfigArg(argv)) {
     return argv;
+  }
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs = separatorIndex < 0 ? argv : argv.slice(0, separatorIndex);
+  const hasExplicitIsolation = optionArgs.some(
+    (arg) => arg === "--isolate" || arg === "--no-isolate" || arg.startsWith("--isolate="),
+  );
+  if (!hasExplicitIsolation && collectExplicitDirectoryTargetArgs(argv, cwd).length > 1) {
+    // Mixed directory selectors can activate overlapping Vitest projects.
+    // Isolate their module caches so one project's mocks cannot poison another.
+    const resolved = [...argv];
+    resolved.splice(separatorIndex < 0 ? resolved.length : separatorIndex, 0, "--isolate");
+    return resolved;
   }
   const testTargets = argv
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))

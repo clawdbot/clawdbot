@@ -1,6 +1,8 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   acquireMaintenanceLock,
   classifyActions,
@@ -33,6 +35,7 @@ import {
   resolveManagedPluginSourceRoots,
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
+  runBuiltGatewayCli,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
@@ -44,6 +47,7 @@ import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
 const fixtureOrigins = new Map<string, string>();
+let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -93,29 +97,53 @@ function maintainFixture(
   });
 }
 
-function makeFixture() {
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-")));
+function initializeFixture(root: string) {
   const origin = path.join(root, "origin.git");
   const seed = path.join(root, "seed");
   const mirror = path.join(root, "mirror");
+  const gitTemplate = path.join(root, "git-template");
+  mkdirSync(gitTemplate);
   mkdirSync(seed);
-  git(root, "init", "--bare", origin);
-  git(seed, "init", "-b", "main");
+  git(root, "init", "--bare", "-b", "main", `--template=${gitTemplate}`, origin);
+  git(seed, "init", "-b", "main", `--template=${gitTemplate}`);
   git(seed, "config", "user.name", "Test");
   git(seed, "config", "user.email", "test@example.com");
   writeFileSync(path.join(seed, "README.md"), "one\n");
   writeFileSync(path.join(seed, ".gitignore"), "dist/\nnode_modules/\n");
   git(seed, "add", "README.md", ".gitignore");
   git(seed, "commit", "-m", "initial");
-  git(seed, "remote", "add", "origin", origin);
+  git(seed, "remote", "add", "origin", "../origin.git");
   git(seed, "push", "-u", "origin", "main");
-  git(root, "--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main");
-  git(root, "clone", origin, mirror);
+  git(root, "clone", `--template=${gitTemplate}`, origin, mirror);
   const canonicalOrigin = "https://github.com/openclaw/openclaw.git";
   git(mirror, "remote", "set-url", "origin", canonicalOrigin);
+  return { root, mirror, origin, seed };
+}
+
+type Fixture = ReturnType<typeof initializeFixture>;
+
+function makeFixture(): Omit<Fixture, "seed">;
+function makeFixture(options: { includeSeed: true }): Fixture;
+function makeFixture(options?: { includeSeed?: boolean }) {
+  if (!fixtureTemplate) {
+    throw new Error("fixture template is not initialized");
+  }
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-")));
+  const origin = path.join(root, "origin.git");
+  const seed = path.join(root, "seed");
+  const mirror = path.join(root, "mirror");
+  // Mutable refs and configs must stay isolated; copying one initialized repo
+  // set avoids rebuilding identical Git history for every test.
+  const copyOptions = { mode: fsConstants.COPYFILE_FICLONE, recursive: true };
+  cpSync(fixtureTemplate.origin, origin, copyOptions);
+  cpSync(fixtureTemplate.mirror, mirror, copyOptions);
+  if (options?.includeSeed) {
+    cpSync(fixtureTemplate.seed, seed, copyOptions);
+  }
   fixtureOrigins.set(mirror, origin);
   fixtureOrigins.set(realpathSync(mirror), origin);
-  return { root, mirror, origin, seed };
+  const fixture = { root, mirror, origin };
+  return options?.includeSeed ? { ...fixture, seed } : fixture;
 }
 
 function writeBuild(mirror: string) {
@@ -163,6 +191,18 @@ function fakeCommands(mirror: string) {
 }
 
 describe("openclaw live updater", () => {
+  beforeAll(() => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-template-")));
+    fixtureTemplate = initializeFixture(root);
+  });
+
+  afterAll(() => {
+    if (fixtureTemplate) {
+      rmSync(fixtureTemplate.root, { recursive: true, force: true });
+      fixtureTemplate = undefined;
+    }
+  });
+
   test("audits only error and warning logs emitted after Gateway restart", () => {
     const output = [
       { type: "meta", file: "/tmp/openclaw.log" },
@@ -504,6 +544,32 @@ describe("openclaw live updater", () => {
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
     ]);
+  });
+
+  test("bounds built Gateway CLI probes and cleans their config overlay", () => {
+    const { root, mirror } = makeFixture();
+    writeBuild(mirror);
+    const entrypoint = path.join(mirror, "dist/index.js");
+    writeFileSync(entrypoint, "setInterval(() => {}, 1_000);\n");
+
+    expect(() =>
+      runBuiltGatewayCli(
+        mirror,
+        ["gateway", "status"],
+        {
+          configPath: path.join(root, "openclaw.json"),
+          entrypoint,
+          executable: process.execPath,
+          invocationPrefix: [entrypoint],
+          port: 18789,
+          runtime: process.execPath,
+        },
+        { timeoutMs: 100 },
+      ),
+    ).toThrow();
+    expect(
+      readdirSync(root).filter((name) => name.startsWith(".openclaw-live-updater-config-")),
+    ).toEqual([]);
   });
 
   test("parses ready and busy atomic Gateway suspension responses", () => {
@@ -913,7 +979,7 @@ describe("openclaw live updater", () => {
   });
 
   test("fast-forwards, builds exact SHA, restarts Gateway, then proves exact Mac target", () => {
-    const { root, mirror, seed } = makeFixture();
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(seed, "apps/macos/Sources/OpenClaw"), { recursive: true });
     writeFileSync(path.join(seed, "apps/macos/Sources/OpenClaw/App.swift"), "// changed\n");
     git(seed, "add", ".");
@@ -1280,7 +1346,7 @@ describe("openclaw live updater", () => {
   });
 
   test("repoints an ancestor snapshot across the next source update", () => {
-    const { root, mirror, seed } = makeFixture();
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
     writeFileSync(path.join(seed, "README.md"), "snapshot update\n");
@@ -1748,7 +1814,7 @@ describe("openclaw live updater", () => {
   });
 
   test("retains failed exact-bundle Mac proof for the next heartbeat", () => {
-    const { root, mirror, seed } = makeFixture();
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(seed, "apps/macos/Sources/OpenClaw"), { recursive: true });
     writeFileSync(path.join(seed, "apps/macos/Sources/OpenClaw/App.swift"), "// changed\n");
     git(seed, "add", ".");
@@ -1795,7 +1861,7 @@ describe("openclaw live updater", () => {
   });
 
   test("records pending Mac work before Gateway maintenance can fail", () => {
-    const { root, mirror, seed } = makeFixture();
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
     mkdirSync(path.join(seed, "apps/macos/Sources/OpenClaw"), { recursive: true });
     writeFileSync(path.join(seed, "apps/macos/Sources/OpenClaw/App.swift"), "// changed\n");
     git(seed, "add", ".");
@@ -1882,6 +1948,34 @@ describe("openclaw live updater", () => {
     const { root, mirror } = makeFixture();
     const lockPath = path.join(root, "maintenance.lock");
     mkdirSync(lockPath);
+    const owner = { pid: process.pid, checkout: mirror, startedAt: "racing" };
+    const writer = spawn(
+      "sh",
+      ["-c", 'sleep 0.03; printf "%s\\n" "$OWNER_JSON" > "$LOCK_PATH/owner.json"'],
+      {
+        env: { ...process.env, LOCK_PATH: lockPath, OWNER_JSON: JSON.stringify(owner) },
+        stdio: "ignore",
+      },
+    );
+
+    try {
+      expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
+        acquired: false,
+        owner,
+      });
+    } finally {
+      writer.kill();
+    }
+  });
+
+  test("re-reads an empty owner file left by a racing writer's creation window", () => {
+    const { root, mirror } = makeFixture();
+    const lockPath = path.join(root, "maintenance.lock");
+    mkdirSync(lockPath);
+    // Freeze writeFileSync's open-truncate window (the #109140 flake class):
+    // owner.json exists but is still empty when the reader first sees it, and
+    // the racing writer publishes the owner content shortly after.
+    writeFileSync(path.join(lockPath, "owner.json"), "");
     const owner = { pid: process.pid, checkout: mirror, startedAt: "racing" };
     const writer = spawn(
       "sh",

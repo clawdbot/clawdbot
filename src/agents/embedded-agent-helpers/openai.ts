@@ -125,7 +125,10 @@ function normalizeOpenAIResponsesIdPart(params: {
 function normalizeOpenAIResponsesFunctionCallId(id: string): string {
   const { callId, itemId } = splitOpenAIFunctionCallPairing(id);
   const normalizedCallId = normalizeOpenAIResponsesIdPart({
-    value: callId,
+    // Hash the full pairing so repeated native ids sharing a `callId` (e.g.
+    // `functions.<tool>:<index>` reused across turns) don't collide into the
+    // same `call_*` id and break Responses replay.
+    value: itemId ? `${callId}|${itemId}` : callId,
     prefix: "call_",
     isValid: (value) => OPENAI_RESPONSES_CALL_ID_RE.test(value),
   });
@@ -153,37 +156,20 @@ function shouldNormalizeOpenAIResponsesToolCallId(id: string): boolean {
   return !OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE.test(pairing.itemId);
 }
 
-function createOpenAIResponsesToolCallIdResolver(): {
-  resolveAssistantId: (id: string) => string;
-  resolveToolResultId: (id: string) => string;
-} {
+function createOpenAIResponsesToolCallIdResolver(): (id: string) => string {
   const rewrittenByOriginalId = new Map<string, string>();
 
-  return {
-    resolveAssistantId(id: string): string {
-      const rewritten = rewrittenByOriginalId.get(id);
-      if (rewritten) {
-        return rewritten;
-      }
-      if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
-        return id;
-      }
-      const normalized = normalizeOpenAIResponsesFunctionCallId(id);
-      rewrittenByOriginalId.set(id, normalized);
-      return normalized;
-    },
-    resolveToolResultId(id: string): string {
-      const rewritten = rewrittenByOriginalId.get(id);
-      if (rewritten) {
-        return rewritten;
-      }
-      if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
-        return id;
-      }
-      const normalized = normalizeOpenAIResponsesFunctionCallId(id);
-      rewrittenByOriginalId.set(id, normalized);
-      return normalized;
-    },
+  return (id) => {
+    const rewritten = rewrittenByOriginalId.get(id);
+    if (rewritten) {
+      return rewritten;
+    }
+    if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
+      return id;
+    }
+    const normalized = normalizeOpenAIResponsesFunctionCallId(id);
+    rewrittenByOriginalId.set(id, normalized);
+    return normalized;
   };
 }
 
@@ -196,7 +182,7 @@ function createOpenAIResponsesToolCallIdResolver(): {
  */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
   let changed = false;
-  const resolver = createOpenAIResponsesToolCallIdResolver();
+  const resolveId = createOpenAIResponsesToolCallIdResolver();
   const rewrittenMessages: AgentMessage[] = [];
 
   for (const msg of messages) {
@@ -223,7 +209,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
           return block;
         }
 
-        const nextId = resolver.resolveAssistantId(toolCallBlock.id);
+        const nextId = resolveId(toolCallBlock.id);
         if (nextId === toolCallBlock.id) {
           return block;
         }
@@ -251,7 +237,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
       const updates: Record<string, string> = {};
 
       if (typeof toolResult.toolCallId === "string") {
-        const nextToolCallId = resolver.resolveToolResultId(toolResult.toolCallId);
+        const nextToolCallId = resolveId(toolResult.toolCallId);
         if (nextToolCallId !== toolResult.toolCallId) {
           updates.toolCallId = nextToolCallId;
           toolResultChanged = true;
@@ -259,7 +245,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
       }
 
       if (typeof toolResult.toolUseId === "string") {
-        const nextToolUseId = resolver.resolveToolResultId(toolResult.toolUseId);
+        const nextToolUseId = resolveId(toolResult.toolUseId);
         if (nextToolUseId !== toolResult.toolUseId) {
           updates.toolUseId = nextToolUseId;
           toolResultChanged = true;

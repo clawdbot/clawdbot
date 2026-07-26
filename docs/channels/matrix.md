@@ -103,7 +103,7 @@ The wizard converts a friendly name into a normalized account ID (`Ops Bot` -> `
 
 ### Cached credentials
 
-Matrix caches credentials under `~/.openclaw/credentials/matrix/`: `credentials.json` for the default account, `credentials-<account>.json` for named accounts. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status probes.
+Matrix caches account credentials in the shared `state/openclaw.sqlite` plugin state. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status probes. Upgrades import the retired `~/.openclaw/credentials/matrix/credentials*.json` files through `openclaw doctor --fix`, verify the SQLite rows, then archive the files.
 
 ### Environment variables
 
@@ -299,11 +299,12 @@ All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (
 
 ```bash
 openclaw matrix encryption setup
+printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix encryption setup --recovery-key-stdin
 ```
 
 Bootstraps secret storage and cross-signing, creates a room-key backup if needed, then prints status and next steps. Useful flags:
 
-- `--recovery-key <key>` apply a recovery key before bootstrapping (prefer the stdin form below)
+- `--recovery-key-stdin` reads a recovery key from stdin without exposing it in process arguments; `--recovery-key <key>` remains available for compatibility
 - `--force-reset-cross-signing` discard the current cross-signing identity and create a new one (intentional use only)
 
 For a new account, enable E2EE at creation time:
@@ -570,7 +571,7 @@ Matrix inherits global defaults from `session.threadBindings` and supports per-c
 - `threadBindings.idleHours`
 - `threadBindings.maxAgeHours`
 - `threadBindings.spawnSessions`: gates both subagent and ACP thread spawns.
-- `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions`: narrower overrides for subagent-only or ACP-only spawns.
+- Deprecated `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions` keys are migrated to `spawnSessions` by `openclaw doctor --fix`.
 - `threadBindings.defaultSpawnContext`
 
 Matrix thread-bound session spawns default on. Set `threadBindings.spawnSessions: false` to block top-level `/focus` and `/acp spawn --thread auto|here` from creating/binding Matrix threads. Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
@@ -863,7 +864,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
-- `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.list[].groupChat.mentionPatterns` apply per-room.
+- `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.
 - `dm.enabled`: when `false`, ignore all DMs. Default: `true`.
 - `dm.policy`: `"pairing"` (default), `"allowlist"`, `"open"`, or `"disabled"`. Applies after the bot has joined and classified the room as a DM; it does not affect invite handling.
 - `dm.allowFrom`: allowlist of user IDs for DM traffic.

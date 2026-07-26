@@ -81,7 +81,7 @@ function createRateLimitError(
   return new RateLimitErrorCtor(response, body, fallbackRequest);
 }
 
-export type VoiceMessageMetadata = {
+type VoiceMessageMetadata = {
   durationSecs: number;
   waveform: string; // base64 encoded
 };
@@ -389,6 +389,7 @@ async function uploadVoiceAttachment(params: {
     if (!uploadResponse.ok) {
       throw await createVoiceRequestError(uploadResponse, "Failed to upload voice message");
     }
+    await uploadResponse.body?.cancel().catch(() => undefined);
   } finally {
     await release();
   }

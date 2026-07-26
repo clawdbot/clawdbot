@@ -1,5 +1,6 @@
 // Config path diff helper used by gateway mutation diagnostics.
 import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
 
 /** Return dotted config paths whose values differ between two config snapshots. */
@@ -32,4 +33,24 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     }
   }
   return [prefix || "<root>"];
+}
+
+/** Preserve startup-only restart boundaries hidden by whole-object config changes. */
+export function diffGatewayReloadPaths(
+  prevConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): string[] {
+  const changedPaths = diffConfigPaths(prevConfig, nextConfig);
+  if (!changedPaths.includes("mcp")) {
+    return changedPaths;
+  }
+  // Adding or removing the whole `mcp` object collapses to the broad `mcp`
+  // path. Preserve the Apps boundary so the listener still restarts.
+  return [
+    ...changedPaths,
+    ...diffConfigPaths(
+      { mcp: { apps: prevConfig.mcp?.apps } },
+      { mcp: { apps: nextConfig.mcp?.apps } },
+    ),
+  ];
 }

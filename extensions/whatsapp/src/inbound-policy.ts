@@ -175,7 +175,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   policy?: ResolvedWhatsAppInboundPolicy;
   authDir?: string;
 }): Promise<boolean> {
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   if (!useAccessGroups) {
     return true;
   }

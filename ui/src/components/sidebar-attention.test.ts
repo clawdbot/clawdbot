@@ -1,139 +1,187 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
+import type { ExecApprovalRequest } from "../app/exec-approval.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   addDismissal,
   dismissalStoreKey,
   pruneDismissals,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
-import { buildSidebarAttentionItems } from "./sidebar-attention.ts";
+import { buildSidebarAttentionItems } from "./sidebar-attention-items.ts";
+import "./sidebar-attention.ts";
 
-const NOW = 1_750_000_000_000;
-
-function cronJob(overrides: Partial<CronJob>): CronJob {
-  return { id: "job", enabled: true, ...overrides } as CronJob;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
-function authStatus(providers: ReadonlyArray<Record<string, unknown>>): ModelAuthStatusResult {
-  return { ts: NOW, providers } as unknown as ModelAuthStatusResult;
+function cronJob(id: string): CronJob {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "test" },
+    state: { lastRunStatus: "error" },
+  };
 }
 
-describe("buildSidebarAttentionItems", () => {
-  it("returns nothing when everything is healthy", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [cronJob({ state: { lastRunStatus: "ok" } as CronJob["state"] })],
-      modelAuthStatus: authStatus([
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-        },
-      ]),
-      now: NOW,
-    });
-    expect(items).toEqual([]);
-  });
+type SidebarAttentionElement = HTMLElement & {
+  updateComplete: Promise<boolean>;
+  cronJobs: CronJob[];
+  modelAuthStatus: ModelAuthStatusResult | null;
+  loadedAtMs: number;
+};
 
-  it("flags enabled failing cron jobs but not disabled ones", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [
-        cronJob({ id: "beta", state: { lastRunStatus: "error" } as CronJob["state"] }),
-        cronJob({ id: "alpha", state: { lastRunStatus: "error" } as CronJob["state"] }),
-        cronJob({
-          id: "off",
-          enabled: false,
-          state: { lastRunStatus: "error" } as CronJob["state"],
-        }),
-      ],
-      modelAuthStatus: null,
-      now: NOW,
-    });
-    expect(items).toEqual([
-      {
-        kind: "cronFailed",
-        severity: "error",
-        icon: "clock",
-        label: "2 cron job(s) failed",
-        routeId: "cron",
-        signature: "alpha\nbeta",
-      },
-    ]);
-  });
+function approval(id: string): ExecApprovalRequest {
+  return {
+    id,
+    kind: "exec",
+    request: { command: "echo ok" },
+    createdAtMs: 1,
+    expiresAtMs: 2,
+  };
+}
 
-  it("flags overdue jobs only past the grace window", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [
-        cronJob({ id: "late", state: { nextRunAtMs: NOW - 400_000 } as CronJob["state"] }),
-        cronJob({ id: "soon", state: { nextRunAtMs: NOW - 100_000 } as CronJob["state"] }),
-        cronJob({
-          id: "off",
-          enabled: false,
-          state: { nextRunAtMs: NOW - 400_000 } as CronJob["state"],
-        }),
-      ],
-      modelAuthStatus: null,
-      now: NOW,
-    });
-    expect(items).toEqual([
+function approvalItems(queue: readonly ExecApprovalRequest[]) {
+  return buildSidebarAttentionItems({
+    cronJobs: [],
+    modelAuthStatus: null,
+    approvalQueue: queue,
+    now: 0,
+  }).filter((item) => item.kind === "pendingApproval");
+}
+
+describe("pending approval attention", () => {
+  it("builds a warning chip only while approvals are pending", () => {
+    expect(approvalItems([])).toEqual([]);
+
+    expect(approvalItems([approval("exec:b")])).toMatchObject([
       {
-        kind: "cronOverdue",
+        kind: "pendingApproval",
         severity: "warning",
-        icon: "clock",
-        label: "1 cron job(s) overdue",
-        routeId: "cron",
-        signature: `late@${NOW - 400_000}`,
+        icon: "shieldCheck",
+        action: { kind: "openApprovals" },
       },
     ]);
   });
 
-  it("splits monitored providers into expired and expiring chips", () => {
-    const items = buildSidebarAttentionItems({
-      cronJobs: [],
-      modelAuthStatus: authStatus([
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "expired",
-          profiles: [{ profileId: "codex", type: "oauth", status: "expired" }],
-        },
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          status: "expiring",
-          profiles: [{ profileId: "claude", type: "oauth", status: "ok" }],
-          expiry: { at: NOW + 6 * 86_400_000, label: "6d" },
-        },
-        {
-          // API-key-only providers are not monitored and must stay silent.
-          provider: "static",
-          displayName: "Static",
-          status: "expired",
-          profiles: [{ profileId: "static", type: "api-key", status: "ok" }],
-        },
-      ]),
-      now: NOW,
+  it("sorts queue ids into a signature that changes for a new approval", () => {
+    const first = approvalItems([approval("exec:b"), approval("exec:a")])[0];
+    const changed = approvalItems([approval("exec:b"), approval("exec:a"), approval("exec:c")])[0];
+
+    if (!first || !changed) {
+      throw new Error("expected pending approval attention items");
+    }
+
+    expect(first.signature).toBe("exec:a\nexec:b");
+    expect(changed.signature).toBe("exec:a\nexec:b\nexec:c");
+    expect(pruneDismissals({ pendingApproval: first.signature }, [changed])).toEqual({});
+  });
+});
+
+describe("sidebar attention refresh ownership", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the latest refresh when an older load on the same client finishes last", async () => {
+    const firstCron = deferred<unknown>();
+    const firstAuth = deferred<unknown>();
+    const secondCron = deferred<unknown>();
+    const secondAuth = deferred<unknown>();
+    const responses = {
+      "cron.list": [firstCron, secondCron],
+      "models.authStatus": [firstAuth, secondAuth],
+    };
+    const request = vi.fn((method: keyof typeof responses) => {
+      const response = responses[method].shift();
+      if (!response) {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return response.promise;
     });
-    expect(items).toEqual([
-      {
-        kind: "modelAuthExpired",
-        severity: "error",
-        icon: "plug",
-        label: "Model auth expired: Codex",
-        routeId: "model-providers",
-        signature: "openai",
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected",
+      hello: null,
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    };
+    const gateway = {
+      snapshot,
+      connection: {
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
       },
-      {
-        kind: "modelAuthExpiring",
-        severity: "warning",
-        icon: "plug",
-        label: "Model auth expiring: Claude (6d)",
-        routeId: "model-providers",
-        signature: "anthropic",
-      },
-    ]);
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationGateway;
+    const overlays = {
+      snapshot: { approvalQueue: [] },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationContext["overlays"];
+    const storage = createTestStorageMock();
+    vi.stubGlobal("localStorage", storage);
+    localStorage.setItem(
+      dismissalStoreKey(gateway.connection.gatewayUrl),
+      JSON.stringify({ cronFailed: "current" }),
+    );
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let now = 120_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    const provider = createApplicationContextProvider({ gateway, overlays } as ApplicationContext);
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    provider.append(element);
+    document.body.append(provider);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+
+    const currentAuth = { ts: 2, providers: [] } as ModelAuthStatusResult;
+    now = 200_000;
+    secondCron.resolve({ jobs: [cronJob("current")] });
+    secondAuth.resolve(currentAuth);
+    await waitForFast(() => expect(element.loadedAtMs).toBe(200_000));
+    expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]);
+    expect(element.modelAuthStatus).toBe(currentAuth);
+    expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
+
+    now = 300_000;
+    firstCron.resolve({ jobs: [cronJob("stale")] });
+    firstAuth.resolve({ ts: 1, providers: [] });
+    await Promise.all([firstCron.promise, firstAuth.promise]);
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+    await element.updateComplete;
+
+    expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]);
+    expect(element.modelAuthStatus).toBe(currentAuth);
+    expect(element.loadedAtMs).toBe(200_000);
+    expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
   });
 });
 

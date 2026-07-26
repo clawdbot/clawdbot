@@ -1,4 +1,5 @@
 // Signal tests cover send plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
@@ -28,28 +29,54 @@ const {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } = await import("./approval-reactions.js");
-const { clearSignalReplyAuthorsForTest } = await import("./reply-authors.js");
-const { sendMessageSignal } = await import("./send.js");
+const { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = {
   channels: {
     signal: {
       accounts: {
         default: {
-          httpUrl: "http://signal.test",
+          transport: { kind: "external-native", url: "http://signal.test" },
           account: "+15550001111",
         },
       },
     },
   },
-};
+} satisfies OpenClawConfig;
 
 describe("sendMessageSignal receipts", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     clearSignalApprovalReactionTargetsForTest();
-    await clearSignalReplyAuthorsForTest();
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
+  });
+
+  it("routes a named container account across send, typing, and receipt RPCs", async () => {
+    signalRpcRequestMock.mockResolvedValue({ timestamp: 1234567890 });
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            work: {
+              account: "+15550001111",
+              transport: { kind: "container" as const, url: "http://container:8080" },
+            },
+          },
+        },
+      },
+    };
+
+    await sendMessageSignal("+15551234567", "hello", { cfg, accountId: "work" });
+    await sendTypingSignal("+15551234567", { cfg, accountId: "work" });
+    await sendReadReceiptSignal("+15551234567", 1234567890, { cfg, accountId: "work" });
+
+    expect(signalRpcRequestMock).toHaveBeenCalledTimes(3);
+    for (const call of signalRpcRequestMock.mock.calls) {
+      expect(call[2]).toMatchObject({
+        baseUrl: "http://container:8080",
+        transportKind: "container",
+      });
+    }
   });
 
   it("attaches a text receipt for timestamp results", async () => {
@@ -89,6 +116,21 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
+    "sends %s through the canonical username parameter",
+    async (target) => {
+      signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567890 });
+
+      await sendMessageSignal(target, "hello", { cfg: SIGNAL_TEST_CFG });
+
+      expect(signalRpcRequestMock).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({ username: ["alice.42"] }),
+        expect.any(Object),
+      );
+    },
+  );
+
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
     const maxBytes = 12 * 1024 * 1024;
@@ -107,7 +149,7 @@ describe("sendMessageSignal receipts", () => {
     );
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "send",
-      expect.objectContaining({ attachments: ["/tmp/image.png"] }),
+      expect.objectContaining({ attachments: ["/tmp/image.png"], message: "" }),
       expect.objectContaining({ maxAttachmentBytes: maxBytes }),
     );
     expect(result.messageId).toBe("1234567891");
@@ -327,7 +369,7 @@ describe("sendMessageSignal receipts", () => {
           signal: {
             accounts: {
               default: {
-                httpUrl: "http://signal.test",
+                transport: { kind: "external-native" as const, url: "http://signal.test" },
                 account: "+15550001111",
               },
             },
@@ -363,7 +405,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -411,7 +453,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -472,7 +514,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -516,7 +558,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               account: "+15550001111",
               allowFrom: ["+15551234567"],
             },
@@ -567,7 +609,7 @@ describe("sendMessageSignal receipts", () => {
         signal: {
           accounts: {
             default: {
-              httpUrl: "http://signal.test",
+              transport: { kind: "external-native" as const, url: "http://signal.test" },
               accountUuid: "123e4567-e89b-12d3-a456-426614174000",
               allowFrom: ["+15551234567"],
             },

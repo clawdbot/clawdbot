@@ -13,7 +13,7 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
   const gatewaySnapshot = gateway.snapshot;
   const agents = context.agents;
   const client = gatewaySnapshot.client;
-  if (!gatewaySnapshot.connected || !client) {
+  if (gatewaySnapshot.phase !== "connected" || !client) {
     return {
       gateway,
       gatewaySnapshot,

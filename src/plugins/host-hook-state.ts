@@ -280,6 +280,7 @@ export async function patchPluginSessionExtension(params: {
   namespace: string;
   value?: PluginJsonValue;
   unset?: boolean;
+  assertCurrent?: () => void;
 }): Promise<{ ok: true; key: string; value?: PluginJsonValue } | { ok: false; error: string }> {
   const namespace = normalizeNamespace(params.namespace);
   const pluginId = params.pluginId.trim();
@@ -318,6 +319,7 @@ export async function patchPluginSessionExtension(params: {
   const updated = await updateResolvedSessionEntry(
     { cfg: params.cfg, sessionKey: params.sessionKey },
     (entry, context) => {
+      params.assertCurrent?.();
       const entryRecord = entry as Record<string, unknown>;
       const pluginExtensions = { ...entry.pluginExtensions };
       const pluginState = { ...pluginExtensions[pluginId] };

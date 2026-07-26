@@ -17,11 +17,12 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog: vi.fn(async () => []),
+    loadPreparedModelCatalog: vi.fn(async () => []),
   };
 });
 
 vi.mock("./slash-commands.runtime.js", () => {
+  const loginCommand = { key: "login", nativeName: "login" };
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
@@ -93,6 +94,9 @@ vi.mock("./slash-commands.runtime.js", () => {
     },
     findCommandByNativeName: (name: string) => {
       const normalized = name.trim().toLowerCase();
+      if (normalized === "login") {
+        return loginCommand;
+      }
       if (normalized === "usage") {
         return usageCommand;
       }
@@ -132,6 +136,12 @@ vi.mock("./slash-commands.runtime.js", () => {
       return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
+      {
+        name: "login",
+        description: "Login",
+        acceptsArgs: true,
+        args: [],
+      },
       {
         name: "usage",
         description: "Usage",
@@ -601,11 +611,13 @@ function mockSixDispatchedReplies() {
   dispatchMock.mockImplementation((params: unknown) => {
     const deliver = (
       params as {
-        dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+        dispatcherOptions: {
+          deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+        };
       }
     ).dispatcherOptions.deliver;
     for (let index = 0; index < 6; index += 1) {
-      void deliver({ text: `reply ${String(index + 1)}` });
+      void deliver({ text: `reply ${String(index + 1)}` }, { kind: "final" });
     }
     return { counts: { final: 6, tool: 0, block: 0 } };
   });
@@ -613,6 +625,7 @@ function mockSixDispatchedReplies() {
 
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
+  let loginHandler: (args: unknown) => Promise<void>;
   let usageHandler: (args: unknown) => Promise<void>;
   let reportHandler: (args: unknown) => Promise<void>;
   let reportCompactHandler: (args: unknown) => Promise<void>;
@@ -630,6 +643,7 @@ describe("Slack native command argument menus", () => {
   beforeAll(async () => {
     harness = createArgMenusHarness();
     await registerCommands(harness.ctx, harness.account);
+    loginHandler = requireHandler(harness.commands, "/login", "/login");
     usageHandler = requireHandler(harness.commands, "/usage", "/usage");
     reportHandler = requireHandler(harness.commands, "/report", "/report");
     reportCompactHandler = requireHandler(harness.commands, "/reportcompact", "/reportcompact");
@@ -659,6 +673,95 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
+  });
+
+  it("delivers native /login block replies before the command finishes", async () => {
+    const loginFinished = createDeferred<void>();
+    const codeDelivered = createDeferred<void>();
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
+      const replies = (params as { replies: Array<{ text?: string }> }).replies;
+      if (replies.some((reply) => reply.text === "Use code ABCD")) {
+        codeDelivered.resolve();
+      }
+    });
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (
+        implementation: (params: unknown) => Promise<unknown>,
+      ) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (
+              payload: { text: string },
+              info: { kind: "block" | "final" },
+            ) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      await deliver({ text: "Use code ABCD" }, { kind: "block" });
+      await loginFinished.promise;
+      await deliver({ text: "Codex login complete." }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 1 } };
+    });
+
+    const runPromise = runCommandHandler(loginHandler);
+    await codeDelivered.promise;
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
+    expect(deliverSlackSlashRepliesMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replies: [{ text: "Use code ABCD" }] }),
+    );
+
+    loginFinished.resolve();
+    await runPromise;
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledTimes(2);
+    expect(deliverSlackSlashRepliesMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replies: [{ text: "Codex login complete." }] }),
+    );
+  });
+
+  it("batches non-login block streams with the terminal reply", async () => {
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (
+        implementation: (params: unknown) => Promise<unknown>,
+      ) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (
+              payload: { text: string },
+              info: { kind: "block" | "final" },
+            ) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      for (let index = 1; index <= 5; index += 1) {
+        await deliver({ text: `progress ${String(index)}` }, { kind: "block" });
+      }
+      await deliver({ text: "final answer" }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 5 } };
+    });
+
+    await runCommandHandler(agentStatusHandler);
+
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          { text: "progress 1" },
+          { text: "progress 2" },
+          { text: "progress 3" },
+          { text: "progress 4" },
+          { text: "progress 5" },
+          { text: "final answer" },
+        ],
+      }),
+    );
   });
 
   it("prefers the configured slash command over native commands", async () => {
@@ -900,10 +1003,12 @@ describe("Slack native command argument menus", () => {
     dispatchMock.mockImplementation((params: unknown) => {
       const deliver = (
         params as {
-          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
         }
       ).dispatcherOptions.deliver;
-      void deliver({ text: "table reply" });
+      void deliver({ text: "table reply" }, { kind: "final" });
       return { counts: { final: 1, tool: 0, block: 0 } };
     });
 
@@ -1592,11 +1697,13 @@ describe("slack slash command session metadata", () => {
     dispatchMock.mockImplementation((params: unknown) => {
       const deliver = (
         params as {
-          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
         }
       ).dispatcherOptions.deliver;
-      void deliver({ text: "final answer" });
-      void deliver({ text: "second answer" });
+      void deliver({ text: "final answer" }, { kind: "final" });
+      void deliver({ text: "second answer" }, { kind: "final" });
       return { counts: { final: 2, tool: 0, block: 0 } };
     });
     const harness = createPolicyHarness({ groupPolicy: "open" });
@@ -1628,10 +1735,12 @@ describe("slack slash command session metadata", () => {
     dispatchMock.mockImplementation((params: unknown) => {
       const deliver = (
         params as {
-          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
         }
       ).dispatcherOptions.deliver;
-      void deliver({ text: "public answer" });
+      void deliver({ text: "public answer" }, { kind: "final" });
       return { counts: { final: 1, tool: 0, block: 0 } };
     });
     const harness = createPolicyHarness({
@@ -1679,3 +1788,4 @@ describe("slack slash command session metadata", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

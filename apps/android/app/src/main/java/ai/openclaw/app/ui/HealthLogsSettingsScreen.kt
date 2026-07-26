@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayLogEntry
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.takeUtf16Safe
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
@@ -168,7 +169,7 @@ private fun GatewayLogDetailSettingsScreen(
       Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(text = nativeString("Raw"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(
-          text = entry.raw.take(4_000),
+          text = entry.raw.takeUtf16Safe(4_000),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )

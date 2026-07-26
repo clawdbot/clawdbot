@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createFlowRecord as createFlowRecordOrNull,
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   deleteTaskFlowRecordById,
@@ -12,14 +11,17 @@ import {
   listTaskFlowRecords,
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,
-  resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
-  syncFlowFromTask,
+  syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  createFlowRecord as createFlowRecordOrNull,
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 function createFlowRecord(params: Parameters<typeof createFlowRecordOrNull>[0]): TaskFlowRecord {
   const flow = createFlowRecordOrNull(params);
@@ -47,6 +49,13 @@ function createTaskFlowForTask(
     throw new Error("expected task-mirrored TaskFlow creation to succeed");
   }
   return flow;
+}
+
+function syncFlowFromTaskForTest(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+): TaskFlowRecord | null {
+  const result = syncFlowFromTaskResult(task);
+  return result.ok ? result.flow : null;
 }
 
 async function withFlowRegistryTempDir<T>(run: () => Promise<T>): Promise<T> {
@@ -455,7 +464,7 @@ describe("task-flow-registry", () => {
         },
       });
 
-      const blocked = syncFlowFromTask({
+      const blocked = syncFlowFromTaskForTest({
         taskId: "task-blocked",
         parentFlowId: mirrored.flowId,
         status: "succeeded",
@@ -478,7 +487,7 @@ describe("task-flow-registry", () => {
       expect(blocked.endedAt).toBe(200);
       expect(blocked.updatedAt).toBe(200);
 
-      const delivered = syncFlowFromTask({
+      const delivered = syncFlowFromTaskForTest({
         taskId: "task-blocked",
         parentFlowId: mirrored.flowId,
         status: "succeeded",
@@ -523,7 +532,7 @@ describe("task-flow-registry", () => {
         status: "waiting",
         waitJson: { kind: "external_event" },
       });
-      const syncedManaged = syncFlowFromTask({
+      const syncedManaged = syncFlowFromTaskForTest({
         taskId: "task-child",
         parentFlowId: managed.flowId,
         status: "running",

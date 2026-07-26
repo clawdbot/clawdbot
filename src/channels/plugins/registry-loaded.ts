@@ -19,7 +19,7 @@ import type { ChannelId } from "./types.public.js";
 /**
  * Loaded channel plugin shape after id/meta normalization.
  */
-export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
+type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   id: string;
   meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
@@ -27,7 +27,7 @@ export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
 /**
  * Loaded channel registry entry with a normalized plugin payload.
  */
-export type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
+type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: LoadedChannelPlugin;
 };
 

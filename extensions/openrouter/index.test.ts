@@ -57,6 +57,9 @@ function createOpenRouterDoneStreamWithoutGeneration() {
 }
 
 type OpenRouterManifest = {
+  modelCatalog?: {
+    discovery?: Record<string, string>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -76,6 +79,10 @@ function readManifest(): OpenRouterManifest {
 }
 
 describe("openrouter provider hooks", () => {
+  it("declares runtime text catalog discovery", () => {
+    expect(readManifest().modelCatalog?.discovery).toEqual({ openrouter: "runtime" });
+  });
+
   it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const {
       providers,
@@ -558,12 +565,6 @@ describe("openrouter provider hooks", () => {
         modelId: "openrouter/deepseek/deepseek-v4-flash",
       } as never)?.defaultLevel,
     ).toBe("high");
-    expect(
-      provider.supportsXHighThinking?.({
-        provider: "openrouter",
-        modelId: "openrouter/deepseek/deepseek-v4-pro",
-      } as never),
-    ).toBe(true);
     expect(
       provider.resolveThinkingProfile?.({
         provider: "openrouter",
@@ -1232,3 +1233,4 @@ describe("openrouter provider hooks", () => {
     expect(payloads[1]?.reasoning).toEqual({ effort: "high" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

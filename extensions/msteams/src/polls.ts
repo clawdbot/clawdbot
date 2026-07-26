@@ -74,7 +74,7 @@ const MSTEAMS_POLL_VOTE_BUCKET_COUNT = 32;
 export const MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS =
   (MSTEAMS_MAX_POLLS + 1) * MSTEAMS_POLL_VOTE_BUCKET_COUNT;
 const MSTEAMS_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const POLL_LOCK_FILENAME = "msteams-polls.sqlite.lock";
+const POLL_MUTATION_KEY = "polls";
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -295,7 +295,7 @@ export function selectRetainedMSTeamsPolls(
   return retained.slice(retained.length - MSTEAMS_MAX_POLLS);
 }
 
-export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
+function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
     .map((entry) => parseStrictNonNegativeInteger(entry))
@@ -432,7 +432,7 @@ export function createMSTeamsPollStoreState(
   };
 
   const createPoll = async (poll: MSTeamsPoll) => {
-    await withMSTeamsSqliteMutationLock(params, POLL_LOCK_FILENAME, async () => {
+    await withMSTeamsSqliteMutationLock(params, POLL_MUTATION_KEY, async () => {
       const { metadata, votes } = splitMSTeamsPoll(poll);
       await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(metadata));
       await deletePollVotes(poll.id);
@@ -453,7 +453,7 @@ export function createMSTeamsPollStoreState(
   };
 
   const recordVote = async (vote: { pollId: string; voterId: string; selections: string[] }) => {
-    return await withMSTeamsSqliteMutationLock(params, POLL_LOCK_FILENAME, async () => {
+    return await withMSTeamsSqliteMutationLock(params, POLL_MUTATION_KEY, async () => {
       const pollKey = buildMSTeamsPollStateKey(vote.pollId);
       const poll = await pollStore.lookup(pollKey);
       if (!poll) {

@@ -5,7 +5,9 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
+  boolStatusKind,
   formatNullableBoolean,
+  renderChannelProbeRow,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
 } from "./view.shared.ts";
@@ -14,17 +16,21 @@ import type { ChannelsProps } from "./view.types.ts";
 export function renderGoogleChatCard(params: {
   props: ChannelsProps;
   googleChat?: GoogleChatStatus | null;
-  accountCountLabel: unknown;
+  accountCount?: number;
 }) {
-  const { props, googleChat, accountCountLabel } = params;
+  const { props, googleChat, accountCount } = params;
   const configured = resolveChannelConfigured("googlechat", props);
 
   return renderSingleAccountChannelCard({
     title: t("channels.googleChat.title"),
     subtitle: t("channels.googleChat.subtitle"),
-    accountCountLabel,
+    accountCount,
     statusRows: [
-      { label: t("common.configured"), value: formatNullableBoolean(configured) },
+      {
+        label: t("common.configured"),
+        value: formatNullableBoolean(configured),
+        kind: boolStatusKind(configured),
+      },
       {
         label: t("common.running"),
         value: googleChat
@@ -32,6 +38,7 @@ export function renderGoogleChatCard(params: {
             ? t("common.yes")
             : t("common.no")
           : t("common.na"),
+        kind: boolStatusKind(googleChat?.running),
       },
       { label: t("common.credential"), value: googleChat?.credentialSource ?? t("common.na") },
       {
@@ -54,15 +61,10 @@ export function renderGoogleChatCard(params: {
       },
     ],
     lastError: googleChat?.lastError,
-    secondaryCallout: googleChat?.probe
-      ? html`<div class="callout" style="margin-top: 12px;">
-          ${googleChat.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-          ${googleChat.probe.status ?? ""} ${googleChat.probe.error ?? ""}
-        </div>`
-      : nothing,
+    secondaryCallout: googleChat?.probe ? renderChannelProbeRow(googleChat.probe) : nothing,
     configSection: renderChannelConfigSection({ channelId: "googlechat", props }),
-    footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
-    </div>`,
+    footer: html`<button class="btn" @click=${() => props.onRefresh(true)}>
+      ${t("common.probe")}
+    </button>`,
   });
 }

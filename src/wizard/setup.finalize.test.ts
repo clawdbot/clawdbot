@@ -3,13 +3,15 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type {
-  DefaultModelAuthStatus,
-  DefaultModelCatalogFacts,
-} from "../commands/auth-choice.model-check.js";
+import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+
+type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
+type DefaultModelCatalogFacts = ReturnType<
+  typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
+>;
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
@@ -116,6 +118,15 @@ const inspectWindowsGatewayFirewall = vi.hoisted(() =>
 );
 
 vi.mock("../commands/onboard-helpers.js", () => ({
+  buildOnboardingControlUiUrl: (params: {
+    httpUrl: string;
+    authMode?: "token" | "password";
+    token?: string;
+    suppressTokenOutput?: boolean;
+  }) =>
+    params.authMode === "token" && params.token && !params.suppressTokenOutput
+      ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+      : params.httpUrl,
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   openUrl: vi.fn(async () => false),
@@ -234,8 +245,8 @@ vi.mock("../commands/auth-choice.js", () => ({
   warnIfModelConfigLooksOff: vi.fn(),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
     return { entries, routeVariants: entries };
   },
@@ -525,13 +536,6 @@ describe("finalizeSetupWizard", () => {
                 source: "env",
                 provider: "default",
                 id: "OPENCLAW_GATEWAY_PASSWORD",
-              },
-            },
-          },
-          tools: {
-            web: {
-              search: {
-                apiKey: "",
               },
             },
           },
@@ -1730,3 +1734,4 @@ describe("finalizeSetupWizard", () => {
     expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

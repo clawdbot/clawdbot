@@ -211,8 +211,8 @@ by default, plus git-checkout installs under the same prefix flow.
   </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
-    `openclaw gateway install --force`, then `openclaw gateway restart`, and
-    probes gateway health best-effort.
+    `openclaw gateway install --force`, which activates the replacement service,
+    and then probes gateway health best-effort.
   </Step>
 </Steps>
 

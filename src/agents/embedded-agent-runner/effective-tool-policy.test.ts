@@ -6,12 +6,13 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../plugins/tools.js";
-import {
-  type ConversationCapabilityProfileParams,
-  resolveConversationCapabilityProfile,
-} from "../conversation-capability-profile.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
+
+type ConversationCapabilityProfileParams = Parameters<
+  typeof resolveConversationCapabilityProfile
+>[0];
 
 function makeTool(name: string): AnyAgentTool {
   // Minimal tool shape keeps policy tests independent from executor/runtime

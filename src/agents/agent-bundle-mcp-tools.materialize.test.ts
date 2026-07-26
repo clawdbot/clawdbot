@@ -3,7 +3,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -14,33 +14,10 @@ import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { getMcpAppViewLease } from "./mcp-ui-resource.js";
+import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
-const mcpAppMocks = vi.hoisted(() => ({ fetchMcpAppView: vi.fn() }));
-
-vi.mock("./mcp-ui-resource.js", () => ({
-  fetchMcpAppView: mcpAppMocks.fetchMcpAppView,
-  buildMcpAppCanvasPayload: (view: {
-    viewId: string;
-    title: string;
-    serverName: string;
-    toolName: string;
-    uiResourceUri: string;
-    toolCallId?: string;
-    resultMetaState?: "unavailable";
-  }) => ({
-    kind: "canvas",
-    view: { id: view.viewId, title: view.title },
-    presentation: { target: "assistant_message", sandbox: "scripts" },
-    mcpApp: {
-      viewId: view.viewId,
-      serverName: view.serverName,
-      toolName: view.toolName,
-      uiResourceUri: view.uiResourceUri,
-      ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
-      ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
-    },
-  }),
-}));
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 function expectTextContentBlock(block: unknown, text: string) {
   const content = block as { type?: string; text?: string } | undefined;
@@ -114,8 +91,8 @@ function makeToolRuntime(
 }
 
 describe("createBundleMcpToolRuntime", () => {
-  beforeEach(() => {
-    mcpAppMocks.fetchMcpAppView.mockReset();
+  afterEach(() => {
+    mcpUiResourceTesting.clearViewStore();
   });
 
   it("keeps app-only MCP tools out of the model tool catalog", async () => {
@@ -164,14 +141,6 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("attaches app previews without converting typed image results to text", async () => {
-    mcpAppMocks.fetchMcpAppView.mockResolvedValue({
-      viewId: "cv_app",
-      title: "Demo UI",
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
-      toolCallId: "call-1",
-    });
     const tool: McpCatalogTool = {
       serverName: "demo",
       safeServerName: "demo",
@@ -188,7 +157,17 @@ describe("createBundleMcpToolRuntime", () => {
         _meta: { "ui/state": { selected: true } },
       },
     });
+    sessionRuntime.sessionKey = "agent:main:main";
     sessionRuntime.mcpAppsEnabled = true;
+    sessionRuntime.readResource = async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>demo</html>",
+        },
+      ],
+    });
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
     materialized.restrictAppTools?.(materialized.tools);
 
@@ -200,21 +179,47 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details).toMatchObject({
       mcpAppPreview: {
         mcpApp: {
-          viewId: "cv_app",
+          viewId: expect.stringMatching(/^mcp-app-/u),
           serverName: "demo",
           toolName: "show",
           uiResourceUri: "ui://demo/app",
           toolCallId: "call-1",
+          originSessionKey: "agent:main:main",
           resultMetaState: "unavailable",
         },
       },
     });
-    expect(mcpAppMocks.fetchMcpAppView).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolCallId: "call-1",
-        allowedAppToolNames: new Set(["show"]),
-      }),
-    );
+    const viewId = (result.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } })
+      .mcpAppPreview?.mcpApp?.viewId;
+    expect(
+      getMcpAppViewLease(
+        expectDefined(viewId, "MCP App preview view id test invariant"),
+        sessionRuntime,
+      )?.allowedAppToolNames,
+    ).toEqual(new Set(["show"]));
+  });
+
+  it("never mints app views for tools from requester-scoped servers", async () => {
+    const tool: McpCatalogTool = {
+      serverName: "user-mail",
+      safeServerName: "user-mail",
+      toolName: "show",
+      inputSchema: { type: "object" },
+      fallbackDescription: "show",
+      uiResourceUri: "ui://user-mail/app",
+    };
+    const sessionRuntime = makeToolRuntime({ tools: [tool], serverName: "user-mail" });
+    sessionRuntime.mcpAppsEnabled = true;
+    // View recovery (peek + transcript reconstruction) has no requester
+    // identity, so scoped servers stay fail-closed at view creation.
+    sessionRuntime.isRequesterScopedServer = (serverName) => serverName === "user-mail";
+    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+
+    const result = await expectDefined(
+      materialized.tools[0],
+      "materialized.tools[0] test invariant",
+    ).execute("call-1", {}, undefined, undefined);
+    expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
   });
 
   it("materializes bundle MCP tools and executes them", async () => {

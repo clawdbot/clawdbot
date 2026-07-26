@@ -30,10 +30,8 @@ import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
 } from "./mattermost/draft-stream.js";
-import {
-  deliverMattermostReplyWithDraftPreview,
-  resolveMattermostReplyRootId,
-} from "./mattermost/monitor.js";
+import { resolveMattermostReplyRootId } from "./mattermost/monitor-context.js";
+import { deliverMattermostReplyWithDraftPreview } from "./mattermost/monitor-draft-delivery.js";
 import { deliverMattermostReplyPayload } from "./mattermost/reply-delivery.js";
 
 const CHANNEL_ID = "channel-trace";

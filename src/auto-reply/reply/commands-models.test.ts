@@ -1,8 +1,8 @@
 // Tests model command output, catalog loading, and provider auth status rendering.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -113,9 +113,9 @@ function setFastModelsCliBackendDeps(): void {
   });
 }
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: modelCatalogMocks.loadModelCatalog,
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await modelCatalogMocks.loadModelCatalog(...args);
     return { entries, routeVariants: entries };
   },
@@ -365,12 +365,17 @@ describe("handleModelsCommand", () => {
   });
 
   it("keeps explicit all browse on the full catalog path", async () => {
-    await handleModelsCommand(buildParams("/models openai all"), true);
+    const params = buildParams("/models openai all");
+    params.workspaceDir = "/tmp/spawned-workspace";
+    await handleModelsCommand(params, true);
 
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.workspaceDir).toBe(
+      "/tmp/spawned-workspace",
+    );
   });
 
-  it("reuses the current plugin metadata snapshot for read-only catalog loading", async () => {
+  it("scopes the prepared catalog without passing plugin metadata", async () => {
     const metadataSnapshot = {
       plugins: [],
       owners: {
@@ -381,11 +386,34 @@ describe("handleModelsCommand", () => {
 
     await handleModelsCommand(buildParams("/models"), true);
 
+    const params = modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0];
+    expect(params).toMatchObject({ readOnly: true, workspaceDir: "/tmp" });
+    expect(params).not.toHaveProperty("metadataSnapshot");
+  });
+
+  it("loads the selected agent lifecycle catalog", async () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [
+          {
+            id: "worker",
+            agentDir: "/tmp/models-worker-agent",
+            workspace: "/tmp/models-worker-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    await buildModelsProviderData(cfg, "worker");
+
     expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
-        readOnly: true,
-        metadataSnapshot,
+        agentDir: "/tmp/models-worker-agent",
       }),
+    );
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
     );
   });
 
@@ -851,6 +879,24 @@ describe("handleModelsCommand", () => {
     });
   });
 
+  it("filters nested provider namespaces with the same prefix policy as enforcement", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "clawrouter", id: "anthropic/claude-haiku-4-5", name: "Claude Haiku" },
+      { provider: "clawrouter", id: "google/gemini-3.5-flash", name: "Gemini Flash" },
+      { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["clawrouter", "openai"]);
+
+    const data = await buildModelsProviderData({
+      agents: { defaults: { modelPolicy: { allow: ["clawrouter/anthropic/*"] } } },
+    } as OpenClawConfig);
+
+    expect(data.providers).toEqual(["clawrouter"]);
+    expect([...expectDefined(data.byProvider.get("clawrouter"), "clawrouter models")]).toEqual([
+      "anthropic/claude-haiku-4-5",
+    ]);
+  });
+
   it("keeps the telegram provider picker browse-only", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
@@ -1051,30 +1097,14 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.workspaceDir).toBe("/tmp/spawned-workspace");
   });
 
-  it("returns a deprecation message for /models add when no provider is given", async () => {
-    const result = await handleModelsCommand(buildParams("/models add"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
-    });
-  });
-
-  it("returns a deprecation message for /models add <provider>", async () => {
-    const result = await handleModelsCommand(buildParams("/models add ollama"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
-    });
-  });
-
-  it("returns a deprecation message for /models add <provider> <modelId>", async () => {
-    const result = await handleModelsCommand(buildParams("/models add openai gpt-5.5"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
-    });
-  });
+  it.each(["/models add", "/models add ollama", "/models add openai gpt-5.5"])(
+    "returns a deprecation message for %s",
+    async (command) => {
+      const result = await handleModelsCommand(buildParams(command), true);
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: { text: MODELS_ADD_DEPRECATED_TEXT },
+      });
+    },
+  );
 });

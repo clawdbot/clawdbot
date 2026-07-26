@@ -38,6 +38,8 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  /** Replace the pending event for this context and delivery route. Requires contextKey. */
+  replace?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -104,6 +106,9 @@ export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
+  if (options.replace) {
+    return replaceSystemEventEntry(text, options);
+  }
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   // These entries are rendered as `System:` lines, so strip nested system-marker
@@ -160,6 +165,48 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
+function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
+  const key = requireSessionKey(options.sessionKey);
+  const entry = getOrCreateSessionQueue(key);
+  const cleaned = sanitizeInboundSystemTags(text).trim();
+  if (!cleaned) {
+    return null;
+  }
+  const normalizedContextKey = normalizeContextKey(options.contextKey);
+  if (normalizedContextKey === null) {
+    throw new Error("replaced system events require a contextKey");
+  }
+  const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  const matching = entry.queue.filter(
+    (event) =>
+      (event.contextKey ?? null) === normalizedContextKey &&
+      areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
+  );
+  if (matching.length === 1 && matching[0]?.text === cleaned) {
+    return null;
+  }
+
+  // One keyed source owns one queue slot. Moving a replacement to the end keeps
+  // event ordering current without allowing repeated updates to evict other sources.
+  entry.queue = entry.queue.filter(
+    (event) =>
+      (event.contextKey ?? null) !== normalizedContextKey ||
+      !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
+  );
+  const event: SystemEvent = {
+    text: cleaned,
+    ts: Date.now(),
+    contextKey: normalizedContextKey,
+    deliveryContext: normalizedDeliveryContext,
+  };
+  entry.queue.push(event);
+  if (entry.queue.length > MAX_EVENTS) {
+    entry.queue.shift();
+  }
+  entry.lastContextKey = normalizedContextKey;
+  return cloneSystemEvent(event);
+}
+
 function isDuplicateSystemEvent(
   existing: SystemEvent,
   incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
@@ -211,7 +258,10 @@ export function consumeSystemEventEntries(
       areSystemEventsEqual(expectDefined(entry.queue[index], "queue entry at index"), event),
     )
   ) {
-    return [];
+    // A keyed replacement may remove one inspected entry while a prompt is in flight.
+    // Consume the unchanged inspected entries so unrelated work is not replayed,
+    // while leaving the replacement and all newly queued entries intact.
+    return consumeSelectedSystemEventEntries(key, consumedEntries);
   }
   const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
   resetQueueState(key, entry);

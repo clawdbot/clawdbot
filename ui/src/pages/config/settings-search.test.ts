@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
@@ -30,7 +31,7 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("matches visible quick-setting content and schema sections", () => {
+  it("matches schema sections to their owning settings page", () => {
     const matches = findSettingsSearchBlocks({
       query: "mcp",
       schema: {
@@ -45,20 +46,60 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: { mcp: { servers: {} } },
-      uiHints: {},
+      uiHints: { "mcp.servers": { advanced: false } },
     });
 
     expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "config",
-        label: "Automations",
-        hash: "#settings-general-automations",
-      }),
       expect.objectContaining({
         routeId: "mcp",
         label: "MCP",
         search: "?section=mcp",
         hash: "#config-section-mcp",
+      }),
+    ]);
+  });
+
+  it("routes moved static blocks to their dedicated pages", () => {
+    const security = findSettingsSearchBlocks({
+      query: "exec policy",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+    expect(security).toEqual([expect.objectContaining({ routeId: "security", label: "Security" })]);
+
+    const notifications = findSettingsSearchBlocks({
+      query: "push notifications",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        routeId: "notifications",
+        hash: "#settings-communications-notifications",
+      }),
+    ]);
+  });
+
+  it("routes uncurated schema sections to the Advanced page", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "secrets",
+      schema: {
+        type: "object",
+        properties: {
+          secrets: { type: "object", title: "Secrets" },
+        },
+      },
+      value: {},
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "advanced",
+        search: "?section=secrets&advanced=1",
+        hash: "#config-section-secrets",
       }),
     ]);
   });
@@ -82,7 +123,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: {},
-      uiHints: {},
+      uiHints: { "tools.profile": { advanced: false } },
     });
 
     expect(matches).toEqual([
@@ -113,7 +154,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: {},
-      uiHints: {},
+      uiHints: { "tools.profile": { advanced: false } },
     });
 
     expect(matches).toEqual([
@@ -130,7 +171,7 @@ describe("findSettingsSearchBlocks", () => {
     await i18n.setLocale("es");
 
     const matches = findSettingsSearchBlocks({
-      query: "apariencia",
+      query: "modelo",
       schema: null,
       value: null,
       uiHints: {},
@@ -139,8 +180,41 @@ describe("findSettingsSearchBlocks", () => {
     expect(matches).toEqual([
       expect.objectContaining({
         routeId: "config",
-        label: "Apariencia",
-        hash: "#settings-general-appearance",
+        hash: "#settings-general-model",
+      }),
+    ]);
+  });
+
+  it("finds the active-run follow-up preference by its action", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "steer",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
+    ]);
+  });
+
+  it("routes workspace queries to the sessions-hub pages", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "worktree",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "worktrees",
+        label: "Managed Worktrees",
+        hash: "",
       }),
     ]);
   });
@@ -154,5 +228,24 @@ describe("findSettingsSearchBlocks", () => {
         uiHints: {},
       }),
     ).toEqual([]);
+  });
+
+  it("only exposes the identity block when the connection has an identity", () => {
+    const search = (identityAvailable: boolean) =>
+      findSettingsSearchBlocks({
+        query: "avatar",
+        schema: null,
+        value: null,
+        uiHints: {},
+        identityAvailable,
+      });
+
+    expect(search(false)).toEqual([]);
+    expect(search(true)).toEqual([
+      expect.objectContaining({
+        routeId: "profile",
+        hash: "#settings-profile-identity",
+      }),
+    ]);
   });
 });

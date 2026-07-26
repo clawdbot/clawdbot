@@ -1,12 +1,12 @@
 /**
- * Shared Claude CLI backend normalization. It sanitizes command args, maps
- * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -94,8 +94,8 @@ const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const CLAUDE_CRESTODIAN_MCP_TOOL = "mcp__openclaw__crestodian";
-const CLAUDE_CRESTODIAN_SETTINGS =
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -136,13 +136,17 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const ask = exec?.ask ?? "off";
-  return security === "full" && ask === "off";
+  return (
+    resolveExecModePolicy({
+      mode: exec?.mode,
+      security: exec?.security ?? "full",
+      ask: exec?.ask ?? "off",
+    }).mode === "full"
+  );
 }
 
 /** Resolve Claude permission mode from OpenClaw exec security settings. */
-export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
+function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
   mode?: string;
   overrideExisting: boolean;
 } {
@@ -152,7 +156,7 @@ export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigC
 }
 
 /** Normalize Claude permission arguments, removing legacy skip-permissions flags. */
-export function normalizeClaudePermissionArgs(
+function normalizeClaudePermissionArgs(
   args?: string[],
   options?: { mode?: string; overrideExisting?: boolean },
 ): string[] | undefined {
@@ -205,7 +209,7 @@ export function normalizeClaudePermissionArgs(
 }
 
 /** Ensure Claude CLI setting sources stay restricted to user settings. */
-export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
+function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
   if (!args) {
     return args;
   }
@@ -305,13 +309,13 @@ const CLAUDE_TOOL_AVAILABILITY_ARGS = new Set([
   "--disallowed-tools",
 ]);
 
-const CLAUDE_CRESTODIAN_VARIADIC_VALUE_ARGS = new Set([
+const CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS = new Set([
   ...CLAUDE_TOOL_AVAILABILITY_ARGS,
   "--add-dir",
   "--file",
 ]);
 
-const CLAUDE_CRESTODIAN_VALUE_ARGS = new Set([
+const CLAUDE_RESTRICTED_VALUE_ARGS = new Set([
   CLAUDE_PERMISSION_MODE_ARG,
   CLAUDE_SETTING_SOURCES_ARG,
   CLAUDE_SETTINGS_ARG,
@@ -327,7 +331,7 @@ const CLAUDE_CRESTODIAN_VALUE_ARGS = new Set([
   "--append-system-prompt-file",
 ]);
 
-const CLAUDE_CRESTODIAN_BARE_ARGS = new Set([
+const CLAUDE_RESTRICTED_BARE_ARGS = new Set([
   CLAUDE_BARE_ARG,
   CLAUDE_SAFE_MODE_ARG,
   CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
@@ -421,33 +425,14 @@ function resolveClaudeCliSideQuestionExecutionArgs(baseArgs: readonly string[]):
   ];
 }
 
-function resolveClaudeCliToolAvailabilityArgs(
+function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): string[] {
   const normalized = stripClaudeArgs(baseArgs, {
-    variadicValue: CLAUDE_TOOL_AVAILABILITY_ARGS,
-  });
-  normalized.push(CLAUDE_TOOLS_ARG, availability.native.join(","));
-  if (availability.mcp.length > 0) {
-    normalized.push(CLAUDE_ALLOWED_TOOLS_ARG, availability.mcp.join(","));
-  } else {
-    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
-  }
-  return normalized;
-}
-
-function isCrestodianToolAvailability(
-  availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
-): boolean {
-  return availability.mcp.length === 1 && availability.mcp[0] === CLAUDE_CRESTODIAN_MCP_TOOL;
-}
-
-function resolveClaudeCliCrestodianExecutionArgs(baseArgs: readonly string[]): string[] {
-  const normalized = stripClaudeArgs(baseArgs, {
-    bare: CLAUDE_CRESTODIAN_BARE_ARGS,
-    variadicValue: CLAUDE_CRESTODIAN_VARIADIC_VALUE_ARGS,
-    value: CLAUDE_CRESTODIAN_VALUE_ARGS,
+    bare: CLAUDE_RESTRICTED_BARE_ARGS,
+    variadicValue: CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS,
+    value: CLAUDE_RESTRICTED_VALUE_ARGS,
   });
   // Safe mode also suppresses explicit MCP, while bare mode drops OAuth. Empty
   // setting sources plus restrictive flag settings isolate user customizations;
@@ -456,15 +441,21 @@ function resolveClaudeCliCrestodianExecutionArgs(baseArgs: readonly string[]): s
     CLAUDE_SETTING_SOURCES_ARG,
     "",
     CLAUDE_SETTINGS_ARG,
-    CLAUDE_CRESTODIAN_SETTINGS,
+    CLAUDE_RESTRICTED_SETTINGS,
     CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
-    CLAUDE_NO_TOOLS_VALUE,
-    CLAUDE_ALLOWED_TOOLS_ARG,
-    CLAUDE_CRESTODIAN_MCP_TOOL,
+    availability.native.join(","),
   );
+  if (availability.openClaw.length > 0) {
+    normalized.push(
+      CLAUDE_ALLOWED_TOOLS_ARG,
+      availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
+    );
+  } else {
+    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
+  }
   return normalized;
 }
 
@@ -491,9 +482,7 @@ export function resolveClaudeCliExecutionArgs(
   if (!context.toolAvailability) {
     return executionArgs;
   }
-  return isCrestodianToolAvailability(context.toolAvailability)
-    ? resolveClaudeCliCrestodianExecutionArgs(executionArgs)
-    : resolveClaudeCliToolAvailabilityArgs(executionArgs, context.toolAvailability);
+  return resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability);
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */

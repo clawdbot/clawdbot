@@ -10,6 +10,7 @@ import {
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listAgentEntries } from "../agent-scope-config.js";
 
 /** Provider/profile ids that may need external CLI auth discovery. */
 export type ExternalCliAuthScope = {
@@ -110,9 +111,9 @@ export function resolveExternalCliAuthScopeFromConfig(
   const defaults = cfg.agents?.defaults;
   addProviderScopeFromModelConfig(providerIds, defaults?.model);
   addProviderScopeFromModelConfig(providerIds, defaults?.imageModel);
-  addProviderScopeFromModelConfig(providerIds, defaults?.imageGenerationModel);
-  addProviderScopeFromModelConfig(providerIds, defaults?.videoGenerationModel);
-  addProviderScopeFromModelConfig(providerIds, defaults?.musicGenerationModel);
+  addProviderScopeFromModelConfig(providerIds, defaults?.mediaModels?.image);
+  addProviderScopeFromModelConfig(providerIds, defaults?.mediaModels?.video);
+  addProviderScopeFromModelConfig(providerIds, defaults?.mediaModels?.music);
   addProviderScopeFromModelConfig(providerIds, defaults?.voiceModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.pdfModel);
   addExternalCliRuntimeScopeFromModelMap(providerIds, defaults?.models);
@@ -123,8 +124,7 @@ export function resolveExternalCliAuthScopeFromConfig(
     }
   }
 
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
+  for (const agent of listAgentEntries(cfg)) {
     addProviderScopeFromModelConfig(providerIds, agent.model);
     addProviderScopeFromModelConfig(providerIds, agent.subagents?.model);
     addExternalCliRuntimeScopeFromModelMap(providerIds, agent.models);

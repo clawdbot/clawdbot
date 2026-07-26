@@ -4,7 +4,9 @@ import { html } from "lit";
 // rendered hint; menu hosts route non-Escape keydowns here so a bare letter
 // clicks the matching enabled item and disabled items swallow nothing.
 export function menuShortcutHint(key: string) {
-  return html`<span class="session-menu__shortcut" aria-hidden="true">${key.toUpperCase()}</span>`;
+  return html`<span slot="details" class="session-menu__shortcut" aria-hidden="true"
+    >${key.toUpperCase()}</span
+  >`;
 }
 
 export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): boolean {
@@ -18,8 +20,14 @@ export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): bo
   if (!/^[a-z0-9]$/.test(key)) {
     return false;
   }
-  const item = root.querySelector<HTMLButtonElement>(`button[data-shortcut="${key}"]`);
-  if (!item || item.disabled) {
+  const item = root.querySelector<HTMLElement & { disabled?: boolean }>(`[data-shortcut="${key}"]`);
+  if (!item || item.disabled || item.getAttribute("aria-disabled") === "true") {
+    return false;
+  }
+  const parentItem = item.closest<HTMLElement & { submenuOpen?: boolean }>(
+    'wa-dropdown-item:not([slot="submenu"])',
+  );
+  if (item.getAttribute("slot") === "submenu" && parentItem?.submenuOpen !== true) {
     return false;
   }
   event.preventDefault();

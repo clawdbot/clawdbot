@@ -199,7 +199,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog: agentRuntimeMocks.loadModelCatalog,
+    loadPreparedModelCatalog: agentRuntimeMocks.loadModelCatalog,
     resolveDefaultModelForAgent: agentRuntimeMocks.resolveDefaultModelForAgent,
   };
 });
@@ -293,7 +293,6 @@ function registerAndResolveStatusHandler(params: {
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
     storeAllowFrom,
-    useAccessGroups: true,
     telegramCfg,
     resolveTelegramGroupConfig,
   });
@@ -306,7 +305,6 @@ function registerAndResolveCommandHandlerBase(params: {
   allowFrom: string[];
   groupAllowFrom: string[];
   storeAllowFrom?: string[];
-  useAccessGroups: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
   pluginCommandSpecs?: TelegramPluginCommandSpecs;
@@ -322,7 +320,6 @@ function registerAndResolveCommandHandlerBase(params: {
     allowFrom,
     groupAllowFrom,
     storeAllowFrom,
-    useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
@@ -331,13 +328,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   const baseRuntimeCfg = runtimeCfg ?? cfg;
-  const commandRuntimeCfg =
-    (baseRuntimeCfg.commands?.useAccessGroups !== false) === useAccessGroups
-      ? baseRuntimeCfg
-      : {
-          ...baseRuntimeCfg,
-          commands: { ...baseRuntimeCfg.commands, useAccessGroups },
-        };
+  const commandRuntimeCfg = baseRuntimeCfg;
   const telegramDeps: TelegramNativeCommandDeps = {
     getRuntimeConfig: vi.fn(() => commandRuntimeCfg),
     readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),
@@ -380,7 +371,6 @@ function registerAndResolveCommandHandler(params: {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   storeAllowFrom?: string[];
-  useAccessGroups?: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
   pluginCommandSpecs?: TelegramPluginCommandSpecs;
@@ -395,7 +385,6 @@ function registerAndResolveCommandHandler(params: {
     allowFrom,
     groupAllowFrom,
     storeAllowFrom,
-    useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
@@ -407,7 +396,6 @@ function registerAndResolveCommandHandler(params: {
     allowFrom: allowFrom ?? [],
     groupAllowFrom: groupAllowFrom ?? [],
     storeAllowFrom,
-    useAccessGroups: useAccessGroups ?? true,
     telegramCfg,
     resolveTelegramGroupConfig,
     pluginCommandSpecs,
@@ -666,7 +654,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
     const commandModule = await import("./bot-native-commands.js");
     registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
-    await commandModule.testing.loadNativeCommandRuntime();
+    await import("./bot-native-commands.runtime.js");
     agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
   });
 
@@ -709,6 +697,36 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
     expect(dispatchCall.cfg).toBe(runtimeCfg);
   });
+
+  it.each([
+    { blockStreamingEnabled: false, expectedDisableBlockStreaming: true },
+    { blockStreamingEnabled: true, expectedDisableBlockStreaming: false },
+  ])(
+    "uses nested streaming.block.enabled=$blockStreamingEnabled for native command dispatch",
+    async ({ blockStreamingEnabled, expectedDisableBlockStreaming }) => {
+      const cfg = {
+        channels: {
+          telegram: {
+            streaming: { block: { enabled: blockStreamingEnabled } },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const { handler } = registerAndResolveStatusHandler({ cfg });
+
+      await handler(createTelegramPrivateCommandContext());
+
+      const dispatchCall = requireRecord(
+        firstMockArg(
+          replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+          "dispatchReplyWithBufferedBlockDispatcher",
+        ),
+        "dispatch call",
+      );
+      expect(dispatchCall.replyOptions).toMatchObject({
+        disableBlockStreaming: expectedDisableBlockStreaming,
+      });
+    },
+  );
 
   it("uses the target session model when building native argument menus", async () => {
     const cfg = {
@@ -1040,10 +1058,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(createTelegramPrivateCommandContext());
 
-    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      readOnly: true,
-    });
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        agentDir: expect.any(String),
+        readOnly: true,
+      }),
+    );
+    expect(agentRuntimeMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
+    );
     expectSendMessageCall({
       sendMessage,
       chatId: 100,
@@ -1463,7 +1487,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         cfg: {},
         allowFrom: ["200"],
         groupAllowFrom: ["200"],
-        useAccessGroups: true,
       });
       await handler(createTelegramTopicCommandContext());
 
@@ -1547,7 +1570,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       cfg: {},
       allowFrom: [],
       groupAllowFrom: [],
-      useAccessGroups: true,
     });
     await handler(createTelegramTopicCommandContext());
 
@@ -1564,7 +1586,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       cfg: {},
       allowFrom: [],
       groupAllowFrom: [],
-      useAccessGroups: true,
     });
     await handler(createTelegramTopicCommandContext());
 
@@ -1590,7 +1611,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       commandName: "codex",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
       groupAllowFrom: ["-1001234567890"],
-      useAccessGroups: false,
       pluginCommandSpecs: [
         {
           name: "codex",
@@ -1871,7 +1891,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     const { handler } = registerAndResolveCommandHandler({
       commandName: "codex",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
-      useAccessGroups: false,
       pluginCommandSpecs: [
         {
           name: "codex",
@@ -1918,7 +1937,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     const { handler } = registerAndResolveCommandHandler({
       commandName: "codex",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
-      useAccessGroups: false,
       pluginCommandSpecs: [
         {
           name: "codex",
@@ -1965,7 +1983,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     const { handler } = registerAndResolveCommandHandler({
       commandName: "codex",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
-      useAccessGroups: false,
       pluginCommandSpecs: [
         {
           name: "codex",
@@ -2005,7 +2022,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     const { handler } = registerAndResolveCommandHandler({
       commandName: "codex",
       cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
-      useAccessGroups: false,
       pluginCommandSpecs: [
         {
           name: "codex",
@@ -2037,3 +2053,4 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(deliveryCall.replies).toEqual([{ text: "No response generated. Please try again." }]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

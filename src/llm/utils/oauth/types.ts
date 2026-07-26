@@ -3,7 +3,6 @@ export type {
   OAuthCredentials,
   OAuthLoginCallbacks,
   OAuthPrompt,
-  OAuthProvider,
   OAuthProviderId,
   OAuthProviderInterface,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";

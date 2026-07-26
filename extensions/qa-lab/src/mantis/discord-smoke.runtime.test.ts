@@ -129,6 +129,40 @@ describe("mantis discord smoke runtime", () => {
     expect(await fs.readFile(result.reportPath, "utf8")).not.toContain("test-token");
   });
 
+  it("bounds Mantis Discord token files", async () => {
+    await fs.writeFile(tokenFile, "x".repeat(4 * 1024), "utf8");
+    const boundaryResult = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/token-boundary",
+      tokenFile,
+      skipPost: true,
+      env: {
+        OPENCLAW_QA_DISCORD_GUILD_ID: "1456350064065904867",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "1456744319972282449",
+      },
+    });
+    expect(boundaryResult.status).toBe("pass");
+    const fetchCallsAtBoundary = fetchWithSsrFGuard.mock.calls.length;
+
+    await fs.writeFile(tokenFile, "x".repeat(4 * 1024 + 1), "utf8");
+    const oversizedResult = await runMantisDiscordSmoke({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/mantis/token-oversized",
+      tokenFile,
+      skipPost: true,
+      env: {
+        OPENCLAW_QA_DISCORD_GUILD_ID: "1456350064065904867",
+        OPENCLAW_QA_DISCORD_CHANNEL_ID: "1456744319972282449",
+      },
+    });
+
+    expect(oversizedResult.status).toBe("fail");
+    expect(fetchWithSsrFGuard.mock.calls).toHaveLength(fetchCallsAtBoundary);
+    expect(await fs.readFile(path.join(oversizedResult.outputDir, "error.txt"), "utf8")).toContain(
+      `Mantis Discord token file at ${tokenFile} exceeds 4096 bytes.`,
+    );
+  });
+
   it("supports visibility-only smoke runs", async () => {
     const result = await runMantisDiscordSmoke({
       repoRoot,

@@ -75,6 +75,21 @@ class VoiceScreenLogicTest {
   }
 
   @Test
+  fun voiceRuntimeAttentionStatusPreservesUtf16BoundariesAtLimit() {
+    val splitPairPrefix = "failed: ${"x".repeat(78)}"
+    assertEquals(
+      "$splitPairPrefix...",
+      voiceRuntimeAttentionStatus("$splitPairPrefix😀${"y".repeat(10)}"),
+    )
+
+    val completePairPrefix = "failed: ${"x".repeat(77)}"
+    assertEquals(
+      "$completePairPrefix😀...",
+      voiceRuntimeAttentionStatus("$completePairPrefix😀${"y".repeat(10)}"),
+    )
+  }
+
+  @Test
   fun talkSessionWaveformPhaseFollowsTalkState() {
     assertEquals(
       TalkWaveformPhase.Speaking(0.4f),

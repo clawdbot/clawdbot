@@ -279,7 +279,7 @@ function buildNarrativeSessionKey(params: {
 
 // ── Prompt building ────────────────────────────────────────────────────
 
-export function buildNarrativePrompt(data: NarrativePhaseData): string {
+function buildNarrativePrompt(data: NarrativePhaseData): string {
   const lines: string[] = [];
   lines.push("Write a dream diary entry from these memory fragments:\n");
 
@@ -327,7 +327,7 @@ export function buildNarrativePrompt(data: NarrativePhaseData): string {
 
 // ── Message extraction ─────────────────────────────────────────────────
 
-export function extractNarrativeText(messages: unknown[]): string | null {
+function extractNarrativeText(messages: unknown[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
@@ -401,7 +401,7 @@ async function readSettledNarrativeText(params: {
 
 // ── Date formatting ────────────────────────────────────────────────────
 
-export function formatNarrativeDate(epochMs: number, timezone?: string): string {
+function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
     timeZone: timezone ?? process.env.TZ,
     year: "numeric",
@@ -579,7 +579,7 @@ function stripBackfillDiaryBlocks(existing: string): { updated: string; removed:
   };
 }
 
-export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): string {
+function formatBackfillDiaryDate(isoDay: string, _timezone?: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDay);
   if (!match) {
     return isoDay;
@@ -613,7 +613,7 @@ async function withNarrativeSessionLock<T>(sessionKey: string, fn: () => Promise
   }
 }
 
-export function buildBackfillDiaryEntry(params: {
+function buildBackfillDiaryEntry(params: {
   isoDay: string;
   bodyLines: string[];
   sourcePath?: string;
@@ -733,11 +733,11 @@ export async function dedupeDreamDiaryEntries(params: {
   });
 }
 
-export function buildDiaryEntry(narrative: string, dateStr: string): string {
+function buildDiaryEntry(narrative: string, dateStr: string): string {
   return `\n---\n\n*${dateStr}*\n\n${narrative}\n`;
 }
 
-export async function appendNarrativeEntry(params: {
+async function appendNarrativeEntry(params: {
   workspaceDir: string;
   narrative: string;
   nowMs: number;
@@ -1015,3 +1015,4 @@ export function runDetachedDreamNarrative(
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

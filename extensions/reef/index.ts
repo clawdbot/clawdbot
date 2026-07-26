@@ -1,22 +1,32 @@
 import {
-  buildChannelConfigSchema,
-  defineChannelPluginEntry,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/core";
-import { reefPlugin } from "./src/channel.js";
-import { registerReefCommands } from "./src/commands.js";
-import { ReefChannelConfigSchema } from "./src/config-schema.js";
-import { setReefRuntime } from "./src/runtime.js";
+  defineBundledChannelEntry,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { registerReefCliMetadata } from "./cli-metadata.js";
 
-export { reefPlugin } from "./src/channel.js";
-export { setReefRuntime } from "./src/runtime.js";
+const loadReefCommandsRuntime = createLazyRuntimeModule(() => import("./commands.runtime.js"));
 
-export default defineChannelPluginEntry({
+function registerReefFullRuntime(api: OpenClawPluginApi): void {
+  api.registerCommand({
+    name: "reef",
+    description: "Manage Reef friends and owner review approvals",
+    acceptsArgs: true,
+    requireAuth: true,
+    handler: async (params) => {
+      const { handleReefCommand } = await loadReefCommandsRuntime();
+      return await handleReefCommand(params);
+    },
+  });
+}
+
+export default defineBundledChannelEntry({
   id: "reef",
   name: "Reef",
   description: "Guarded end-to-end encrypted claw channel",
-  plugin: reefPlugin as ChannelPlugin,
-  configSchema: buildChannelConfigSchema(ReefChannelConfigSchema),
-  setRuntime: setReefRuntime,
-  registerFull: registerReefCommands,
+  importMetaUrl: import.meta.url,
+  plugin: { specifier: "./channel-plugin-api.js", exportName: "reefPlugin" },
+  runtime: { specifier: "./runtime-api.js", exportName: "setReefRuntime" },
+  registerCliMetadata: registerReefCliMetadata,
+  registerFull: registerReefFullRuntime,
 });

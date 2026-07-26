@@ -1,11 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-  type TrustedMessageAuditEvent,
-} from "../../audit/message-audit-events.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
@@ -14,7 +11,8 @@ import {
 } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { drainPendingDeliveries, type DeliverFn, loadPendingDeliveries } from "./delivery-queue.js";
+import { loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -98,7 +96,6 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   beforeEach(() => {
-    resetMessageAuditEventsForTest();
     tmpDir = fixtures.tmpDir();
     setActivePluginRegistry(
       createTestRegistry([
@@ -112,7 +109,6 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   afterEach(() => {
-    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
@@ -212,7 +208,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       }),
     ).rejects.toThrow("first payload send failed");
 
-    const entries = await import("./delivery-queue.js").then((m) =>
+    const entries = await import("./delivery-queue-storage.js").then((m) =>
       m.loadPendingDeliveries(tmpDir),
     );
     expect(entries).toHaveLength(1);

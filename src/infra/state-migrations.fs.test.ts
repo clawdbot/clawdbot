@@ -7,7 +7,6 @@ import {
   ensureMigrationDir,
   existsDir,
   fileExists,
-  isLegacyWhatsAppAuthFile,
   readSessionStoreJson5,
   safeReadDir,
 } from "./state-migrations.fs.js";
@@ -38,15 +37,6 @@ describe("state migration fs helpers", () => {
       expect(fileExists(dirPath)).toBe(false);
       expect(fileExists(path.join(base, "missing.json"))).toBe(false);
     });
-  });
-
-  it("recognizes legacy whatsapp auth file names", () => {
-    expect(isLegacyWhatsAppAuthFile("creds.json")).toBe(true);
-    expect(isLegacyWhatsAppAuthFile("creds.json.bak")).toBe(true);
-    expect(isLegacyWhatsAppAuthFile("session-123.json")).toBe(true);
-    expect(isLegacyWhatsAppAuthFile("pre-key-1.json")).toBe(true);
-    expect(isLegacyWhatsAppAuthFile("sender-key-1.txt")).toBe(false);
-    expect(isLegacyWhatsAppAuthFile("other.json")).toBe(false);
   });
 
   it("parses json5 session stores and rejects invalid shapes", async () => {

@@ -6,27 +6,32 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  testing,
   consumeGatewaySigusr1RestartIntent,
   deferGatewayRestartUntilIdle,
-  type RestartDeferralHooks,
+  resetGatewayRestartStateForInProcessRestart,
 } from "./restart.js";
+
+type RestartDeferralHooks = NonNullable<
+  Parameters<typeof deferGatewayRestartUntilIdle>[0]["hooks"]
+>;
+
+const sigusr1Handler = () => {};
 
 describe("deferGatewayRestartUntilIdle timeout", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    testing.resetSigusr1State();
+    resetGatewayRestartStateForInProcessRestart();
     resetGatewayWorkAdmission();
-    // Add a listener so emitGatewayRestart uses process.emit instead of process.kill
-    process.on("SIGUSR1", () => {});
+    // A listener makes restart emission use process.emit instead of process.kill.
+    process.on("SIGUSR1", sigusr1Handler);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    testing.resetSigusr1State();
+    resetGatewayRestartStateForInProcessRestart();
     resetGatewayWorkAdmission();
-    process.removeAllListeners("SIGUSR1");
+    process.removeListener("SIGUSR1", sigusr1Handler);
   });
 
   it("waits indefinitely when maxWaitMs is not specified", () => {
@@ -36,7 +41,6 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       onStillPending: vi.fn(),
     };
 
-    // Always return 1 pending item to prevent draining
     deferGatewayRestartUntilIdle({
       getPendingCount: () => 1,
       hooks,
@@ -57,27 +61,21 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       onReady: vi.fn(),
     };
 
-    const customTimeoutMs = 120_000; // 2 minutes
-
     deferGatewayRestartUntilIdle({
       getPendingCount: () => 1,
-      maxWaitMs: customTimeoutMs,
+      maxWaitMs: 120_000,
       hooks,
     });
 
-    // Advance to just before 2 minutes
     vi.advanceTimersByTime(119_999);
     expect(hooks.onTimeout).not.toHaveBeenCalled();
 
-    // Advance past 2 minutes
     vi.advanceTimersByTime(1);
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized poll intervals instead of polling immediately", () => {
-    const hooks: RestartDeferralHooks = {
-      onReady: vi.fn(),
-    };
+    const hooks: RestartDeferralHooks = { onReady: vi.fn() };
     let pending = 1;
 
     deferGatewayRestartUntilIdle({
@@ -118,7 +116,6 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       onTimeout: vi.fn(),
       onReady: vi.fn(),
     };
-
     let pending = 3;
 
     deferGatewayRestartUntilIdle({
@@ -126,12 +123,11 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       hooks,
     });
 
-    // Advance a few poll intervals, then drain
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(1_000);
     expect(hooks.onReady).not.toHaveBeenCalled();
 
     pending = 0;
-    await vi.advanceTimersByTimeAsync(500); // Next poll interval and fenced emission
+    await vi.advanceTimersByTimeAsync(500);
     expect(hooks.onReady).toHaveBeenCalledOnce();
     expect(hooks.onTimeout).not.toHaveBeenCalled();
   });

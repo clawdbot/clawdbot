@@ -34,6 +34,22 @@ Output format after main-content extraction.
 Truncate output to this many characters. Clamped to `tools.web.fetch.maxCharsCap`.
 </ParamField>
 
+## Result
+
+`web_fetch` returns a closed structured result with these fields:
+
+- Request metadata: `url`, `finalUrl`, `status`, `extractMode`, and `extractor`
+- Optional response metadata: `contentType`, `title`, and `warning` (omitted when absent)
+- Wrapped content metadata: `externalContent`, `truncated`, `length`, `rawLength`,
+  `fetchedAt`, `tookMs`, and `text`
+- Optional `cached: true` on a cache hit
+- Optional `spill: { path, chars, truncated? }` when truncated content was written
+  to a private temporary file; `truncated` is present only when that file contains
+  partial source content
+
+`length` is the wrapped `text` length. `rawLength` is the extracted content length
+before external-content wrapping.
+
 ## How it works
 
 <Steps>

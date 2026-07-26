@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  clearActiveSessionsForShutdownTracker,
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
@@ -20,7 +19,9 @@ import {
 const cfg: OpenClawConfig = {};
 
 afterEach(() => {
-  clearActiveSessionsForShutdownTracker();
+  for (const entry of listActiveSessionsForShutdown()) {
+    forgetActiveSessionForShutdown(entry.sessionId);
+  }
 });
 
 describe("active-sessions-shutdown-tracker", () => {
@@ -111,24 +112,5 @@ describe("active-sessions-shutdown-tracker", () => {
     snapshot.length = 0;
 
     expect(listActiveSessionsForShutdown()).toHaveLength(1);
-  });
-
-  it("clears the entire tracker for test isolation", () => {
-    noteActiveSessionForShutdown({
-      cfg,
-      sessionKey: "agent:main:a",
-      sessionId: "session-A",
-      storePath: "/tmp/store.json",
-    });
-    noteActiveSessionForShutdown({
-      cfg,
-      sessionKey: "agent:main:b",
-      sessionId: "session-B",
-      storePath: "/tmp/store.json",
-    });
-
-    clearActiveSessionsForShutdownTracker();
-
-    expect(listActiveSessionsForShutdown()).toEqual([]);
   });
 });

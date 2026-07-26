@@ -7,7 +7,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
-  DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
@@ -50,7 +49,7 @@ afterEach(async () => {
 });
 
 describe("device bootstrap tokens", () => {
-  it("issues bootstrap tokens and persists them with an expiry", async () => {
+  it("issues bootstrap tokens and persists them with a ten-minute expiry", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
 
@@ -58,15 +57,21 @@ describe("device bootstrap tokens", () => {
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
     expect(issued.token).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(issued.expiresAtMs).toBe(Date.now() + DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
-
-    const records = loadDeviceBootstrapTokenRecords(baseDir);
-    expect(records[issued.token]?.token).toBe(issued.token);
-    expect(records[issued.token]?.ts).toBe(Date.now());
-    expect(records[issued.token]?.issuedAtMs).toBe(Date.now());
-    expect(records[issued.token]?.profile).toEqual({
-      roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+    expect(issued.expiresAtMs).toBe(Date.now() + 10 * 60 * 1000);
+    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toMatchObject({
+      token: issued.token,
+      ts: Date.now(),
+      issuedAtMs: Date.now(),
+      profile: {
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+      },
     });
   });
 
@@ -155,7 +160,13 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
@@ -287,7 +298,7 @@ describe("device bootstrap tokens", () => {
     expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toBeDefined();
   });
 
-  it("rejects admin verification for the least-privilege default profile", async () => {
+  it("rejects bootstrap verification when scopes exceed the issued profile", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
@@ -500,7 +511,7 @@ describe("device bootstrap tokens", () => {
 
   it("accepts equivalent public key encodings after binding the bootstrap token", async () => {
     const baseDir = await createTempDir();
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "device.json"));
+    const identity = loadOrCreateDeviceIdentity({ path: path.join(baseDir, "device.sqlite") });
     const issued = await issueDeviceBootstrapToken({ baseDir });
     const rawPublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
 
@@ -525,7 +536,13 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      scopes: [
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
     });
   });
 
@@ -545,32 +562,29 @@ describe("device bootstrap tokens", () => {
   it("fails closed for profileless records and prunes expired tokens", async () => {
     vi.useFakeTimers();
     const baseDir = await createTempDir();
-
     vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
-    const profilelessTokenValue = ["profileless", "token"].join("-");
-    const expiredTokenValue = ["expired", "token"].join("-");
+    const tokenTtlMs = 10 * 60 * 1000;
     persistDeviceBootstrapTokenRecords(
       {
-        [profilelessTokenValue]: {
-          token: profilelessTokenValue,
+        "profileless-token": {
+          token: "profileless-token",
           ts: Date.now(),
           issuedAtMs: Date.now(),
         },
-        [expiredTokenValue]: {
-          token: expiredTokenValue,
-          ts: Date.now() - DEVICE_BOOTSTRAP_TOKEN_TTL_MS - 1,
-          issuedAtMs: Date.now() - DEVICE_BOOTSTRAP_TOKEN_TTL_MS - 1,
+        "expired-token": {
+          token: "expired-token",
+          ts: Date.now() - tokenTtlMs - 1,
+          issuedAtMs: Date.now() - tokenTtlMs - 1,
         },
       },
       baseDir,
     );
 
-    await expect(verifyBootstrapToken(baseDir, profilelessTokenValue)).resolves.toEqual({
+    await expect(verifyBootstrapToken(baseDir, "profileless-token")).resolves.toEqual({
       ok: false,
       reason: "bootstrap_token_invalid",
     });
-
-    await expect(verifyBootstrapToken(baseDir, expiredTokenValue)).resolves.toEqual({
+    await expect(verifyBootstrapToken(baseDir, "expired-token")).resolves.toEqual({
       ok: false,
       reason: "bootstrap_token_invalid",
     });

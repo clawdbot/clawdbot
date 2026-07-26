@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
   isStaleChunkImportError,
-  resetStaleChunkReloadStateForTest,
-  retryStaleChunkReload,
+  retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
@@ -63,9 +63,10 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 afterEach(() => {
-  resetStaleChunkReloadStateForTest();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
+  document.body.replaceChildren();
 });
 
 describe("isStaleChunkImportError", () => {
@@ -115,10 +116,9 @@ describe("scheduleStaleChunkReload", () => {
       }),
     ).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
-    resetStaleChunkReloadStateForTest();
     await expect(
       scheduleStaleChunkReload({
-        now: () => 2000,
+        now: () => 7000,
         buildId: "build-b",
         storage,
         reload,
@@ -153,7 +153,6 @@ describe("scheduleStaleChunkReload", () => {
         reload,
       }),
     ).resolves.toBe(false);
-    resetStaleChunkReloadStateForTest();
     await expect(
       scheduleStaleChunkReload({
         now: () => 1000,
@@ -197,7 +196,7 @@ describe("scheduleStaleChunkReload", () => {
     vi.useFakeTimers();
     const reload = vi.fn();
     const fetchMock = stubHangingDocumentFetch();
-    const retry = retryStaleChunkReload({ reload });
+    const retry = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
 
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -220,30 +219,73 @@ describe("scheduleStaleChunkReload", () => {
     const storage = memoryStorage();
 
     const automatic = scheduleStaleChunkReload({ now: () => 1000, storage, reload });
-    const manual = retryStaleChunkReload({ reload });
+    const manual = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     firstProbe.resolve(new Response(null, { status: 503 }));
     await expect(Promise.all([automatic, manual])).resolves.toEqual([false, false]);
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("retryStaleChunkReload", () => {
+describe("retryStaleChunkReloadWhenReachable single-shot", () => {
   it("reloads without the rate guard when the gateway is reachable", async () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(true);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it("does not reload while the gateway is unreachable", async () => {
     const reload = vi.fn();
     stubDocumentFetch(new Response(null, { status: 503 }));
-    await expect(retryStaleChunkReload({ reload })).resolves.toBe(false);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 })).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("retryStaleChunkReloadWhenReachable", () => {
+  it("reloads immediately when the gateway already answers", async () => {
+    const reload = vi.fn();
+    const probe = vi.fn().mockResolvedValue(true);
+    await expect(retryStaleChunkReloadWhenReachable({ reload, probe })).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits out a restarting gateway and then reloads", async () => {
+    // The stale chunk exists because the gateway just restarted, so the first
+    // probes legitimately fail; declining here is what stranded the user.
+    const reload = vi.fn();
+    const probe = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, probe, wait, intervalMs: 5 }),
+    ).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up at the deadline without navigating into an error page", async () => {
+    const reload = vi.fn();
+    const probe = vi.fn().mockResolvedValue(false);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    let clock = 0;
+    const now = () => {
+      clock += 400;
+      return clock;
+    };
+    await expect(
+      retryStaleChunkReloadWhenReachable({ reload, probe, wait, now, timeoutMs: 1_000 }),
+    ).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
   });
 });
@@ -268,4 +310,186 @@ describe("installStaleChunkReloadListener", () => {
       uninstall();
     }
   });
+});
+
+describe("installMissingStylesheetRecovery", () => {
+  function setReadyState(readyState: DocumentReadyState) {
+    return vi.spyOn(document, "readyState", "get").mockReturnValue(readyState);
+  }
+
+  function dispatchStylesheetError() {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    document.head.append(link);
+    link.dispatchEvent(new Event("error"));
+    link.remove();
+  }
+
+  it("does nothing when the stylesheet sentinel is present and removes listeners", () => {
+    setReadyState("complete");
+    const schedule = vi.fn(async () => false);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => true,
+      schedule,
+    });
+    try {
+      window.dispatchEvent(new Event("load"));
+      dispatchStylesheetError();
+      expect(schedule).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("schedules recovery when the sentinel is missing at load", async () => {
+    setReadyState("loading");
+    const schedule = vi.fn(async () => true);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule,
+    });
+    try {
+      window.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("shows a reload banner when automatic recovery is unavailable", async () => {
+    setReadyState("complete");
+    const retry = vi.fn(async () => false);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule: vi.fn(async () => false),
+      retry,
+    });
+    try {
+      await Promise.resolve();
+      const banner = document.querySelector<HTMLElement>('[role="alert"]');
+      const reloadButton = banner?.querySelector<HTMLButtonElement>("button");
+      expect(banner?.textContent).toContain("Styles failed to load, so the page may look broken.");
+      expect(reloadButton?.textContent).toBe("Reload");
+      reloadButton?.click();
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(banner?.isConnected).toBe(true);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("detects a capture-phase stylesheet error before load", async () => {
+    setReadyState("loading");
+    const schedule = vi.fn(async () => true);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => true,
+      schedule,
+    });
+    try {
+      dispatchStylesheetError();
+      await Promise.resolve();
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("detects at most once when the resource error and load paths both fire", async () => {
+    setReadyState("loading");
+    const schedule = vi.fn(async () => true);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule,
+    });
+    try {
+      dispatchStylesheetError();
+      window.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("uninstall removes the banner and listeners", async () => {
+    const readyState = setReadyState("loading");
+    const listenerSchedule = vi.fn(async () => true);
+    const uninstallListeners = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule: listenerSchedule,
+    });
+    uninstallListeners();
+    dispatchStylesheetError();
+    window.dispatchEvent(new Event("load"));
+    expect(listenerSchedule).not.toHaveBeenCalled();
+
+    readyState.mockReturnValue("complete");
+    const schedule = vi.fn(async () => false);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule,
+    });
+    try {
+      await Promise.resolve();
+      expect(document.querySelector('[role="alert"]')).not.toBeNull();
+
+      uninstall();
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+      dispatchStylesheetError();
+      window.dispatchEvent(new Event("load"));
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+});
+
+describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
+  it("resolves at the deadline even when the probe never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const reload = vi.fn();
+      // A caller-supplied probe need not time out itself; the bound must still
+      // hold or the pending UI would be stranded forever.
+      const probe = vi.fn(() => new Promise<boolean>(() => {}));
+      const pending = retryStaleChunkReloadWhenReachable({
+        reload,
+        probe,
+        timeoutMs: 5_000,
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(pending).resolves.toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("never starts an unbounded probe once the wait carried past the deadline", async () => {
+  const reload = vi.fn();
+  let calls = 0;
+  // A second probe would hang forever; the loop must not start one, or the
+  // caller's disabled Reload button would be stranded past its own bound.
+  const probe = vi.fn(async () => {
+    calls += 1;
+    return calls === 1 ? false : new Promise<boolean>(() => {});
+  });
+  let clock = 0;
+  const wait = vi.fn(async () => {
+    clock += 10_000;
+  });
+
+  await expect(
+    retryStaleChunkReloadWhenReachable({
+      reload,
+      probe,
+      wait,
+      now: () => clock,
+      timeoutMs: 5_000,
+    }),
+  ).resolves.toBe(false);
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(reload).not.toHaveBeenCalled();
 });

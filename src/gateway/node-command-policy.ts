@@ -5,37 +5,41 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_DEVICE_APPS_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_FS_LIST_DIR_COMMAND,
+  NODE_FILE_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
+import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
+
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 // Desktop computer use (pointer/keyboard injection). Declarable at pairing on
-// macOS but invocable only with explicit allowCommands opt-in (arming).
+// desktop platforms (macOS/Windows/Linux) but invocable only with explicit
+// commands.allow opt-in (arming).
 const COMPUTER_DANGEROUS_COMMANDS = ["computer.act"];
 
-const LOCATION_COMMANDS = ["location.get"];
-const NOTIFICATION_COMMANDS = ["notifications.list"];
-const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
+// Android accessibility tree reads and UI actions expose or control sensitive
+// on-screen content. Keep both declarable, but require explicit arming.
+const MOBILE_UI_DANGEROUS_COMMANDS = ["mobile.ui.observe", "mobile.ui.act"];
 
-const DEVICE_COMMANDS = ["device.info", "device.status"];
 const ANDROID_DEVICE_COMMANDS = [
-  ...DEVICE_COMMANDS,
+  ...MOBILE_NODE_COMMANDS.device,
   "device.permissions",
   "device.health",
-  "device.apps",
+  NODE_DEVICE_APPS_COMMAND,
 ];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
@@ -57,11 +61,16 @@ const HEALTH_DANGEROUS_COMMANDS = ["health.summary"];
 
 const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
-const TALK_PTT_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
+export const TALK_PTT_COMMANDS = [
+  "talk.ptt.start",
+  "talk.ptt.stop",
+  "talk.ptt.cancel",
+  "talk.ptt.once",
+];
 
 // The iPhone node owns the relay to its companion Watch. Keep these commands
 // out of the direct watchOS node surface, which has a separate fixed policy.
-const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
+export const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
@@ -69,31 +78,34 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_FS_LIST_DIR_COMMAND,
+  ...NODE_FILE_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_FS_LIST_DIR_COMMAND,
+  ...NODE_FILE_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   ...SCREEN_COMMANDS,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CAMERA_COMMANDS,
-  ...LOCATION_COMMANDS,
+  ...MOBILE_NODE_COMMANDS.location,
   NODE_SYSTEM_NOTIFY_COMMAND,
 ];
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
-// `gateway.nodes.allowCommands` (and ensuring they're not blocked by denyCommands).
+// `gateway.nodes.commands.allow` (and ensuring they're not blocked by commands.deny).
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
   ...COMPUTER_DANGEROUS_COMMANDS,
+  ...MOBILE_UI_DANGEROUS_COMMANDS,
   ...CONTACTS_DANGEROUS_COMMANDS,
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
@@ -101,11 +113,11 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...HEALTH_DANGEROUS_COMMANDS,
 ];
 
-const PLATFORM_DEFAULTS: Record<string, string[]> = {
+export const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ios: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -113,11 +125,11 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...IOS_SYSTEM_COMMANDS,
   ],
-  watchos: [...DEVICE_COMMANDS, ...IOS_SYSTEM_COMMANDS],
+  watchos: [...MOBILE_NODE_COMMANDS.device, ...IOS_SYSTEM_COMMANDS],
   android: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...ANDROID_NOTIFICATION_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.androidNotification,
     NODE_SYSTEM_NOTIFY_COMMAND,
     ...ANDROID_DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
@@ -126,11 +138,15 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
+    // Dangerous: pairing may approve the advertised surface, while runtime
+    // policy strips it until gateway.nodes.commands.allow explicitly arms it.
+    ...MOBILE_UI_DANGEROUS_COMMANDS,
   ],
   macos: [
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
+    NODE_DEVICE_APPS_COMMAND,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,
@@ -143,18 +159,28 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     // resolveNodeCommandAllowlistInternal).
     ...COMPUTER_DANGEROUS_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS],
-  windows: [
-    ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
+  linux: [
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    // Dangerous: declarable at pairing so the surface gets approved once, but
+    // excluded from the runtime allowlist until explicitly armed (see
+    // resolveNodeCommandAllowlistInternal).
+    ...COMPUTER_DANGEROUS_COMMANDS,
+  ],
+  windows: [
+    ...CAMERA_COMMANDS,
+    ...MOBILE_NODE_COMMANDS.location,
+    ...MOBILE_NODE_COMMANDS.device,
+    ...SYSTEM_COMMANDS,
+    ...SCREEN_COMMANDS,
+    // Dangerous: declarable at pairing so the surface gets approved once, but
+    // excluded from the runtime allowlist until explicitly armed (see
+    // resolveNodeCommandAllowlistInternal).
+    ...COMPUTER_DANGEROUS_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
-
 type PlatformId = "ios" | "watchos" | "android" | "macos" | "windows" | "linux" | "unknown";
 
 const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
@@ -314,33 +340,6 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
 }
-
-export function filterLegacyNodeProtocolFeatures(params: {
-  caps: readonly string[];
-  commands: readonly string[];
-  pluginSurfaces: readonly string[];
-}): { caps: string[]; commands: string[] } {
-  // N-1 nodes predate plugin-hosted surfaces. Preserve their durable pairing
-  // declarations elsewhere, but hide unusable plugin features from this session.
-  const registry = getActivePluginGatewayNodePolicyRegistry();
-  if (!registry) {
-    return { caps: [...params.caps], commands: [...params.commands] };
-  }
-  const pluginIds = new Set([
-    ...registry.nodeHostCommands.map((entry) => entry.pluginId),
-    ...registry.nodeInvokePolicies.map((entry) => entry.pluginId),
-  ]);
-  const pluginCaps = new Set([...params.pluginSurfaces, ...pluginIds]);
-  const pluginCommands = new Set([
-    ...registry.nodeHostCommands.map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies.flatMap((entry) => entry.policy.commands),
-  ]);
-  return {
-    caps: params.caps.filter((cap) => !pluginCaps.has(cap)),
-    commands: params.commands.filter((command) => !pluginCommands.has(command)),
-  };
-}
-
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
   Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
     approvedCommands?: readonly string[];
@@ -419,10 +418,10 @@ function resolveNodeCommandAllowlistInternal(
     platformId,
     commands: node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : []),
   });
-  const extra = cfg.gateway?.nodes?.allowCommands ?? [];
-  const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
+  const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
+  const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
-  // Dangerous built-ins in PLATFORM_DEFAULTS (e.g. computer.act on macOS) stay
+  // Dangerous built-ins in PLATFORM_DEFAULTS (e.g. computer.act on desktop nodes) stay
   // declarable/approvable at pairing but never enter the runtime allowlist by
   // default; the pairing variant opts in via includeDangerousDefaults.
   const dangerousBuiltinCommands =
@@ -430,7 +429,7 @@ function resolveNodeCommandAllowlistInternal(
       ? new Set<string>()
       : new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
-  // gateway.nodes.allowCommands below can still opt them in for operators.
+  // gateway.nodes.commands.allow below can still opt them in for operators.
   const allow = new Set(
     [...base, ...watchRelayCommands, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
@@ -444,11 +443,14 @@ function resolveNodeCommandAllowlistInternal(
       allow.add(trimmed);
     }
   }
+  if (cfg.wizard?.appRecommendations === false) {
+    allow.delete(NODE_DEVICE_APPS_COMMAND);
+  }
   // In pairing mode, denylisted dangerous defaults stay declarable so a node
   // retains the surface it can later be armed for: arming removes them from
-  // denyCommands and adds them to allowCommands. Fresh setup seeds denyCommands
+  // commands.deny and adds them to commands.allow. Fresh setup seeds commands.deny
   // with DEFAULT_DANGEROUS_NODE_COMMANDS, so without this exemption a declarable
-  // dangerous default (e.g. computer.act on macOS) would be stripped from the
+  // dangerous default (e.g. computer.act on desktop nodes) would be stripped from the
   // pairing surface and stay uninvocable even after arming, because the live
   // node session never retained the command. Invoke-time policy still gates
   // every call on the runtime allowlist, which honors deny in full.

@@ -3,14 +3,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
-  type ProviderCatalogContext,
-  type ProviderCatalogResult,
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderAuthMethodNonInteractiveContext,
   type UnifiedModelCatalogEntry,
   type UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   applyAuthProfileConfig,
   coerceSecretRef,
@@ -21,28 +20,28 @@ import {
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
-import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { resolveFirstGithubToken } from "./auth.js";
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
+import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
-import {
-  PROVIDER_ID,
-  fetchCopilotModelCatalog,
-  resolveCopilotForwardCompatModel,
-} from "./models.js";
+import { DEFAULT_COPILOT_MODEL, resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import { PROVIDER_ID } from "./models.js";
 import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
 } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
+import {
+  COPILOT_TOKEN_CACHE_MAX_ENTRIES,
+  COPILOT_TOKEN_CACHE_NAMESPACE,
+  type CachedCopilotToken,
+} from "./token-cache.js";
+import { configureCopilotTokenCacheStore } from "./token.js";
 
 const COPILOT_ENV_VARS: [string, string, string] = [
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",
   "GITHUB_TOKEN",
 ];
-const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 
 type GithubCopilotPluginConfig = {
@@ -341,6 +340,16 @@ export default definePluginEntry({
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
     const startupPluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
+    let tokenCacheStore: PluginStateSyncKeyedStore<CachedCopilotToken> | undefined;
+    const openTokenCacheStore = () => {
+      tokenCacheStore ??= api.runtime.state.openSyncKeyedStore<CachedCopilotToken>({
+        namespace: COPILOT_TOKEN_CACHE_NAMESPACE,
+        maxEntries: COPILOT_TOKEN_CACHE_MAX_ENTRIES,
+        overflowPolicy: "evict-oldest",
+      });
+      return tokenCacheStore;
+    };
+    configureCopilotTokenCacheStore(openTokenCacheStore);
 
     function resolveCurrentPluginConfig(config?: OpenClawConfig): GithubCopilotPluginConfig {
       const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");
@@ -349,72 +358,14 @@ export default definePluginEntry({
       }
       return config ? {} : startupPluginConfig;
     }
-
-    async function runGithubCopilotCatalog(
-      ctx: ProviderCatalogContext,
-    ): Promise<ProviderCatalogResult> {
-      const pluginConfig = resolveCurrentPluginConfig(ctx.config);
-      const discoveryEnabled = pluginConfig.discovery?.enabled;
-      if (discoveryEnabled === false) {
-        return null;
-      }
-      const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
-        await loadGithubCopilotRuntime();
-      const { githubToken, hasProfile } = await resolveFirstGithubToken({
-        agentDir: ctx.agentDir,
-        config: ctx.config,
-        env: ctx.env,
-      });
-      if (!hasProfile && !githubToken) {
-        return null;
-      }
-      let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-      let copilotApiToken: string | undefined;
-      if (githubToken) {
-        try {
-          const token = await resolveCopilotApiToken({
-            githubToken,
-            env: ctx.env,
-            githubDomain: resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
-          });
-          baseUrl = token.baseUrl;
-          copilotApiToken = token.token;
-        } catch {
-          baseUrl = DEFAULT_COPILOT_API_BASE_URL;
-        }
-      }
-      // Try to fetch the live model catalog from Copilot's /models endpoint so
-      // the runtime tracks per-account entitlements and accurate token limits
-      // without manifest churn. On any
-      // failure we return an empty model list, which lets the static manifest
-      // catalog continue to be the visible fallback for users.
-      let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
-      if (copilotApiToken) {
-        try {
-          discoveredModels = await getCachedLiveCatalogValue({
-            keyParts: [PROVIDER_ID, "models", baseUrl, copilotApiToken],
-            load: async () =>
-              await fetchCopilotModelCatalog({
-                copilotApiToken,
-                baseUrl,
-              }),
-          });
-        } catch {
-          discoveredModels = [];
-        }
-      }
-      return {
-        provider: {
-          baseUrl,
-          models: discoveredModels,
-        },
-      };
-    }
+    const dynamicModels = createGithubCopilotDynamicModelHooks({
+      discoveryEnabled: (config) => resolveCurrentPluginConfig(config).discovery?.enabled !== false,
+    });
 
     async function runGithubCopilotUnifiedLiveCatalog(
       ctx: UnifiedModelCatalogProviderContext,
     ): Promise<UnifiedModelCatalogEntry[] | null> {
-      const result = await runGithubCopilotCatalog(ctx);
+      const result = await dynamicModels.runCatalog(ctx);
       if (!result || !("provider" in result)) {
         return null;
       }
@@ -662,9 +613,11 @@ export default definePluginEntry({
       },
       catalog: {
         order: "late",
-        run: runGithubCopilotCatalog,
+        run: dynamicModels.runCatalog,
       },
-      resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
+      prepareDynamicModel: dynamicModels.prepareDynamicModel,
+      resolveDynamicModel: dynamicModels.resolveDynamicModel,
+      preferRuntimeResolvedModel: dynamicModels.preferRuntimeResolvedModel,
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,

@@ -21,19 +21,40 @@ const taskRuntimeMocks = vi.hoisted(() => ({
   completeTaskRunByRunId: vi.fn(),
   failTaskRunByRunId: vi.fn(),
 }));
+const sessionAccessorMocks = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
+}));
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,
+}));
 
-let sessionAccessor: typeof import("../../config/sessions/session-accessor.js");
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
-let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.js").resetRecentMediaGenerationDuplicateGuardsForTests;
-let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
-let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
+let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
+let createImageGenerateToolImpl: typeof import("./image-generate-tool.js").createImageGenerateTool;
+let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.test-support.js").resolveImageGenerationModelConfigForTool;
+import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
+
+function createImageGenerateTool(
+  params: Parameters<typeof createImageGenerateToolImpl>[0],
+): ReturnType<typeof createImageGenerateToolImpl> {
+  const options = params ?? {};
+  return createImageGenerateToolImpl({
+    ...options,
+    config: canonicalizeMediaGenerationTestConfig(
+      options.config ?? {},
+      "image",
+      "imageGenerationModel",
+    ),
+  });
+}
 
 const GENERATION_PROVIDER_ENV_VARS = [
   "BYTEPLUS_API_KEY",
@@ -331,14 +352,15 @@ describe("createImageGenerateTool", () => {
     });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
     imageOps = await import("../../media/media-services.js");
-    sessionAccessor = await import("../../config/sessions/session-accessor.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
     ({ resetRecentMediaGenerationDuplicateGuardsForTests } =
-      await import("../media-generation-task-status-shared.js"));
-    ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
+      await import("../media-generation-task-status-shared.test-support.js"));
+    ({ createImageGenerateTool: createImageGenerateToolImpl } =
       await import("./image-generate-tool.js"));
+    ({ resolveImageGenerationModelConfigForTool } =
+      await import("./image-generate-tool.test-support.js"));
   });
 
   beforeEach(() => {
@@ -349,6 +371,7 @@ describe("createImageGenerateTool", () => {
     taskRuntimeMocks.recordTaskRunProgressByRunId.mockReset();
     taskRuntimeMocks.completeTaskRunByRunId.mockReset();
     taskRuntimeMocks.failTaskRunByRunId.mockReset();
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
@@ -394,8 +417,10 @@ describe("createImageGenerateTool", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -465,8 +490,10 @@ describe("createImageGenerateTool", () => {
         cfg: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -657,8 +684,10 @@ describe("createImageGenerateTool", () => {
           agents: {
             defaults: {
               mediaMaxMb: 8,
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                },
               },
             },
           },
@@ -680,8 +709,10 @@ describe("createImageGenerateTool", () => {
       agents: {
         defaults: {
           mediaMaxMb: 8,
-          imageGenerationModel: {
-            primary: "openai/gpt-image-1",
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-1",
+            },
           },
         },
       },
@@ -768,14 +799,16 @@ describe("createImageGenerateTool", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "bootstrap/unused",
+          mediaModels: {
+            image: {
+              primary: "bootstrap/unused",
+            },
           },
         },
       },
     };
     const tool = requireImageGenerateTool(createImageGenerateTool({ config }));
-    config.agents!.defaults!.imageGenerationModel = { timeoutMs: 180_000 };
+    config.agents!.defaults!.mediaModels!.image = { timeoutMs: 180_000 };
 
     const result = await tool.execute("call-explicit-foundry", {
       prompt: "A product render",
@@ -788,7 +821,7 @@ describe("createImageGenerateTool", () => {
     const cfg = requireRecord(generateArgs.cfg, "generateImage config");
     const agents = requireRecord(cfg.agents, "generateImage agents config");
     const defaults = requireRecord(agents.defaults, "generateImage defaults config");
-    expect(defaults.imageGenerationModel).toEqual({
+    expect(requireRecord(defaults.mediaModels, "mediaModels").image).toEqual({
       primary: "microsoft-foundry/prod-image",
       timeoutMs: 180_000,
     });
@@ -885,7 +918,7 @@ describe("createImageGenerateTool", () => {
   it("starts run-scoped cron image generation as a tracked async task", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue({
+    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
       sessionId: "run-123",
       updatedAt: 1,
       cronRunContinuation: {
@@ -2732,3 +2765,4 @@ describe("createImageGenerateTool", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

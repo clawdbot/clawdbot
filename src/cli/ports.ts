@@ -10,13 +10,15 @@ import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
-export type PortProcess = { pid: number; command?: string };
+type PortProcess = { pid: number; command?: string };
 
 type ForceFreePortResult = {
   killed: PortProcess[];
   waitedMs: number;
   escalatedToSigkill: boolean;
 };
+
+type BeforePortSignal = (context: { port: number; pid?: number; signal: NodeJS.Signals }) => void;
 
 type ExecFileError = NodeJS.ErrnoException & {
   status?: number | null;
@@ -29,6 +31,9 @@ const FUSER_SIGNALS: Record<"SIGTERM" | "SIGKILL", string> = {
   SIGTERM: "TERM",
   SIGKILL: "KILL",
 };
+// Node waits for synchronous children to exit after a timeout signal.
+// SIGKILL keeps a tool from ignoring the startup deadline.
+const PORT_TOOL_TIMEOUT_MS = 10_000;
 
 function readExecOutput(value: string | Buffer | undefined): string {
   if (typeof value === "string") {
@@ -82,29 +87,37 @@ function parseFuserPidList(output: string): number[] {
     return [];
   }
   const values = new Set<number>();
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
+  for (const token of output.split(/\s+/)) {
+    if (!token) {
       continue;
     }
-    const pidRegion = line.includes(":") ? line.slice(line.indexOf(":") + 1) : line;
-    const pidMatches = pidRegion.match(/\d+/g) ?? [];
-    for (const match of pidMatches) {
-      const pid = Number.parseInt(match, 10);
-      if (Number.isFinite(pid) && pid > 0) {
-        values.add(pid);
-      }
+    const pid = parseStrictPositiveInteger(token);
+    if (pid !== undefined) {
+      values.add(pid);
     }
   }
   return [...values];
 }
 
-function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortProcess[] {
+function killPortWithFuser(
+  port: number,
+  signal: "SIGTERM" | "SIGKILL",
+  beforeSignal?: BeforePortSignal,
+): PortProcess[] {
+  if (beforeSignal) {
+    const listeners = listPortListenersWithFuser(port);
+    // fuser's resource-targeted -k can select a different PID at exec time.
+    // A guard therefore freezes concrete victims before signaling directly.
+    killPids(port, listeners, signal, beforeSignal);
+    return listeners;
+  }
   const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
   try {
     const stdout = execFileSync("fuser", args, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: PORT_TOOL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     return parseFuserPidList(stdout).map((pid) => ({ pid }));
   } catch (err: unknown) {
@@ -132,6 +145,42 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
   }
 }
 
+function listPortListenersWithFuser(port: number): PortProcess[] {
+  try {
+    const stdout = execFileSync("fuser", [`${port}/tcp`], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: PORT_TOOL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    return parseFuserPidList(stdout).map((pid) => ({ pid }));
+  } catch (err: unknown) {
+    const execErr = err as ExecFileError;
+    const stdout = readExecOutput(execErr.stdout);
+    // fuser writes resource labels and diagnostics to stderr. Only its stdout
+    // PID stream is safe to turn into direct signal targets.
+    const parsed = parseFuserPidList(stdout);
+    if (execErr.status === 1) {
+      return parsed.map((pid) => ({ pid }));
+    }
+    if (execErr.code === "ENOENT") {
+      throw withErrnoCode(
+        "fuser not found; required for --force when lsof is unavailable",
+        "ENOENT",
+        err,
+      );
+    }
+    if (execErr.code === "EACCES" || execErr.code === "EPERM") {
+      throw withErrnoCode(
+        "fuser permission denied while inspecting gateway port",
+        execErr.code,
+        err,
+      );
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 async function isPortBusy(port: number): Promise<boolean> {
   // Route through probePortUsage which probes all four endpoints
   // (127.0.0.1, 0.0.0.0, ::1, ::) instead of a single hostless bind
@@ -141,7 +190,7 @@ async function isPortBusy(port: number): Promise<boolean> {
   return (await probePortUsage(port)) !== "free";
 }
 
-export function parseLsofOutput(output: string): PortProcess[] {
+function parseLsofOutput(output: string): PortProcess[] {
   const lines = output.split(/\r?\n/).filter(Boolean);
   const results: PortProcess[] = [];
   let current: Partial<PortProcess> = {};
@@ -170,11 +219,13 @@ export function parseLsofOutput(output: string): PortProcess[] {
   return results;
 }
 
-export function listPortListeners(port: number): PortProcess[] {
+function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
       const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
         encoding: "utf-8",
+        timeout: PORT_TOOL_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       });
       const listeners = parseWindowsNetstatListeners(out, port);
       const seenPids = new Set<number>();
@@ -196,6 +247,8 @@ export function listPortListeners(port: number): PortProcess[] {
     const lsof = resolveLsofCommandSync();
     const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
       encoding: "utf-8",
+      timeout: PORT_TOOL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     return parseLsofOutput(out);
   } catch (err: unknown) {
@@ -226,24 +279,24 @@ export function listPortListeners(port: number): PortProcess[] {
   }
 }
 
-export function forceFreePort(port: number): PortProcess[] {
+export function forceFreePort(
+  port: number,
+  opts: { beforeSignal?: BeforePortSignal } = {},
+): PortProcess[] {
   const listeners = listPortListeners(port);
-  for (const proc of listeners) {
-    try {
-      process.kill(proc.pid, "SIGTERM");
-    } catch (err) {
-      throw new Error(
-        `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
-        { cause: err },
-      );
-    }
-  }
+  killPids(port, listeners, "SIGTERM", opts.beforeSignal);
   return listeners;
 }
 
-function killPids(listeners: PortProcess[], signal: NodeJS.Signals) {
+function killPids(
+  port: number,
+  listeners: PortProcess[],
+  signal: NodeJS.Signals,
+  beforeSignal?: BeforePortSignal,
+) {
   for (const proc of listeners) {
     try {
+      beforeSignal?.({ port, pid: proc.pid, signal });
       process.kill(proc.pid, signal);
     } catch (err) {
       throw new Error(
@@ -263,6 +316,8 @@ export async function forceFreePortAndWait(
     intervalMs?: number;
     /** How long to wait after SIGTERM before escalating to SIGKILL. */
     sigtermTimeoutMs?: number;
+    /** Last-moment ownership guard invoked before each destructive signal. */
+    beforeSignal?: BeforePortSignal;
   } = {},
 ): Promise<ForceFreePortResult> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
@@ -276,7 +331,7 @@ export async function forceFreePortAndWait(
   let useFuserFallback = false;
 
   try {
-    killed = forceFreePort(port);
+    killed = forceFreePort(port, opts.beforeSignal ? { beforeSignal: opts.beforeSignal } : {});
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
@@ -287,7 +342,7 @@ export async function forceFreePortAndWait(
       return { killed, waitedMs: 0, escalatedToSigkill: false };
     }
     useFuserFallback = true;
-    killed = killPortWithFuser(port, "SIGTERM");
+    killed = killPortWithFuser(port, "SIGTERM", opts.beforeSignal);
   }
 
   if (killed.length === 0) {
@@ -321,10 +376,10 @@ export async function forceFreePortAndWait(
   }
 
   if (useFuserFallback) {
-    killPortWithFuser(port, "SIGKILL");
+    killPortWithFuser(port, "SIGKILL", opts.beforeSignal);
   } else {
     const remaining = listPortListeners(port);
-    killPids(remaining, "SIGKILL");
+    killPids(port, remaining, "SIGKILL", opts.beforeSignal);
   }
 
   while (waitedMs < timeoutMs) {
@@ -362,7 +417,7 @@ export async function forceFreePortAndWait(
  * - EACCES: bind to a privileged port as non-root.
  * - EINVAL, etc.: other unrecoverable OS errors.
  */
-export function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
+function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const srv = createServer();
     srv.unref();

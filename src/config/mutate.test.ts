@@ -12,6 +12,7 @@ import {
   mutateConfigFile,
   replaceConfigFile,
   transformConfigFileWithRetry,
+  withConfigMutationExclusive,
 } from "./mutate.js";
 import { resolveConfigPath } from "./paths.js";
 import {
@@ -426,6 +427,34 @@ describe("config mutate helpers", () => {
       },
       { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
     );
+  });
+
+  it("allows nested mutation helpers while holding the exclusive config lock", async () => {
+    const configPath = resolveConfigPath();
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      path: configPath,
+      sourceConfig: { agents: { list: [] } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: configPath },
+    });
+    ioMocks.writeConfigFile.mockResolvedValue(undefined);
+
+    const result = await withConfigMutationExclusive(async () => {
+      return await transformConfigFileWithRetry({
+        maxAttempts: 1,
+        transform: (config) => ({
+          nextConfig: { ...config, agents: { list: [{ id: "work" }] } },
+          result: "created",
+        }),
+      });
+    });
+
+    expect(result.result).toBe("created");
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
   it("rejects stale replace attempts when the base hash changed", async () => {
@@ -1115,7 +1144,7 @@ describe("config mutate helpers", () => {
     await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(concurrentRaw);
   });
 
-  it("keeps single-file top-level plugins include writes when plugin validation is skipped", async () => {
+  it("warns before a single-file include write with plugin validation skipped", async () => {
     const home = await suiteRootTracker.make("include-skip-plugin-validation");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
@@ -1125,7 +1154,8 @@ describe("config mutate helpers", () => {
       `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
       "utf-8",
     );
-    await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
+    const pluginsRaw = "{\n  // Keep this plugin note.\n  entries: {},\n}\n";
+    await fs.writeFile(pluginsPath, pluginsRaw, "utf-8");
     const snapshot = createSnapshot({
       hash: "hash-include-skip",
       path: configPath,
@@ -1156,19 +1186,34 @@ describe("config mutate helpers", () => {
       },
     };
 
-    await replaceConfigFile({
-      baseHash: snapshot.hash,
-      snapshot,
-      writeOptions: {
-        expectedConfigPath: snapshot.path,
-        assertConfigPathForWrite: allowConfigPathWrite,
-        includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-        skipPluginValidation: true,
-      },
-      nextConfig,
+    const commentWarnings: string[] = [];
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation((message: string) => {
+      if (!message.startsWith("Config write will strip JSON5 comments")) {
+        return;
+      }
+      expect(fsNode.readFileSync(pluginsPath, "utf-8")).toBe(pluginsRaw);
+      commentWarnings.push(message);
     });
+    try {
+      await replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+          skipPluginValidation: true,
+        },
+        nextConfig,
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
 
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(commentWarnings).toEqual([
+      `Config write will strip JSON5 comments from ${pluginsPath}.`,
+    ]);
     expect(validationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledWith(nextConfig, {
       pluginValidation: "skip",
     });
@@ -1184,6 +1229,7 @@ describe("config mutate helpers", () => {
       entries?: Record<string, unknown>;
     };
     expect(persistedPlugins.entries?.["strict-plugin"]).toEqual({ enabled: true });
+    await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(pluginsRaw);
   });
 
   it("rejects direct mutations to external include roots", async () => {
@@ -2553,3 +2599,4 @@ describe("config mutate helpers", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

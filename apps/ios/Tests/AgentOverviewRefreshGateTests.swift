@@ -3,6 +3,30 @@ import Testing
 @testable import OpenClaw
 
 struct AgentOverviewRefreshGateTests {
+    @Test func `legacy skill missing requirements default new fields`() throws {
+        let report = try JSONDecoder().decode(
+            SkillStatusReportLite.self,
+            from: Data(#"{"skills":[{"name":"Legacy","missing":{"bins":[],"env":[],"config":[]}}]}"#.utf8))
+        let skill = try #require(report.skills.first)
+
+        #expect(skill.missing?.anyBins == [])
+        #expect(skill.missing?.os == [])
+        #expect(!skill.hasMissingRequirements)
+    }
+
+    @Test func `any binary requirements participate in skill setup state`() throws {
+        let report = try JSONDecoder().decode(
+            SkillStatusReportLite.self,
+            from: Data(
+                #"{"skills":[{"name":"Search","missing":{"bins":[],"anyBins":["rg","grep"],"env":[],"config":[],"os":[]}}]}"#
+                    .utf8))
+        let skill = try #require(report.skills.first)
+
+        #expect(skill.hasMissingRequirements)
+        #expect(skill.missingSummary == "rg, grep")
+        #expect(skill.missingBins == ["rg", "grep"])
+    }
+
     @Test func `new overview refresh invalidates an older result`() {
         var gate = AgentOverviewRefreshGate()
 

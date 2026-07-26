@@ -76,6 +76,9 @@ describe("live model error helpers", () => {
       isModelNotFoundErrorMessage("This model is not supported when using tool calling."),
     ).toBe(false);
     expect(isModelNotFoundErrorMessage("This model does not support image inputs.")).toBe(false);
+    expect(
+      isModelNotFoundErrorMessage("HTTP 404: No endpoints found that support image input"),
+    ).toBe(false);
     expect(isModelNotFoundErrorMessage("Reasoning effort is not supported for this model.")).toBe(
       false,
     );

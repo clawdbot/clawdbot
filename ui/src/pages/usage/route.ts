@@ -36,7 +36,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
     timeZone: "local",
     agentId: context.agentSelection.state.scopeId,
   };
-  if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
+  if (gatewaySnapshot.phase !== "connected" || !gatewaySnapshot.client) {
     return {
       gateway,
       gatewaySnapshot,
@@ -44,6 +44,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       result: null,
       costSummary: null,
       providerUsageSummary: null,
+      loadedAtMs: null,
       error: null,
     };
   }
@@ -69,6 +70,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       result,
       costSummary,
       providerUsageSummary,
+      loadedAtMs: Date.now(),
       error: null,
     };
   } catch (error) {
@@ -79,6 +81,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       result: null,
       costSummary: null,
       providerUsageSummary: null,
+      loadedAtMs: null,
       error: errorMessage(error),
     };
   }

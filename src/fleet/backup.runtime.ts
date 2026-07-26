@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
   cellAuthSecretDir,
@@ -79,10 +80,6 @@ type FleetRestoreResult = {
   started: boolean;
   url: string;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function timestampBasename(tenant: string, nowMs: number): string {
   const stamp = new Date(nowMs)
@@ -429,7 +426,7 @@ function restoreEntryKind(entry: Stats | tar.ReadEntry): "file" | "directory" | 
 // explicit non-root user mapping when one exists, else the image default
 // (uid 1000). Rootless mappings (uid 0) keep root ownership, which the user
 // namespace translates to the daemon user.
-export function resolveRestoreOwner(
+function resolveRestoreOwner(
   hostIdentity: HostIdentity | undefined,
   containerUser: CellContainerProfile["containerUser"],
 ): { uid: number; gid: number } | undefined {
@@ -499,7 +496,7 @@ export async function restoreFleetCell(params: {
   );
   if (inspectionResult.kind === "missing") {
     throw new Error(
-      `Fleet cell container is missing for ${params.record.tenantId}; create the cell (openclaw fleet create ${params.record.tenantId}) and then restore into it.`,
+      `Fleet cell container is missing for ${params.record.tenantId}; remove the stale registration without purging data (openclaw fleet rm ${params.record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${params.record.tenantId} --no-start --image <image>), then retry fleet restore.`,
     );
   }
   const inspection = assertManagedInspection(params.record, inspectionResult);
@@ -538,9 +535,6 @@ export async function restoreFleetCell(params: {
       preservePaths: false,
       preserveOwner: false,
       strict: true,
-      onwarn: () => {
-        invalidArchive = true;
-      },
       filter: (entryPath, entry) => {
         if (exceeded || tooManyEntries) {
           return false;
@@ -814,3 +808,4 @@ export async function restoreFleetCell(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

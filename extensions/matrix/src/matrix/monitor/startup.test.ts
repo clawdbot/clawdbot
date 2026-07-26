@@ -6,8 +6,9 @@ import type { MatrixManagedDeviceInfo } from "../device-health.js";
 import type { MatrixProfileSyncResult } from "../profile.js";
 import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
 import type { MatrixStartupVerificationOutcome } from "./startup-verification.js";
-import type { MatrixStartupMaintenanceDeps } from "./startup.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
+
+type MatrixStartupMaintenanceDeps = NonNullable<Parameters<typeof runMatrixStartupMaintenance>[1]>;
 
 function createVerificationStatus(
   overrides: Partial<MatrixOwnDeviceVerificationStatus> = {},

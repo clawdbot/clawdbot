@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
   SandboxBackendHandle,
@@ -297,33 +297,36 @@ export function createMxcSandboxBackendHandle(params: {
           sandboxTempDir,
         );
         const argv = buildMxcLauncherArgv(payloadFile.payloadFile);
-        const [binaryPath, ...args] = argv;
         try {
-          return await execFileBuffered(binaryPath, args, {
-            env: buildLauncherEnv(),
+          const result = await runCommandBuffered(argv, {
+            baseEnv: buildLauncherEnv(),
             input: execInput,
-            timeout: 30_000,
-            maxBuffer: 10 * 1024 * 1024,
+            maxOutputBytes: { stdout: 10 * 1024 * 1024, stderr: 10 * 1024 * 1024 },
             signal: cmdParams.signal,
+            timeoutMs: 30_000,
           });
-        } catch (err: unknown) {
-          if (isAbortError(err)) {
-            throw err;
+          if (cmdParams.signal?.aborted) {
+            throw cmdParams.signal.reason instanceof Error
+              ? cmdParams.signal.reason
+              : (result.error ?? new Error("MXC command aborted"));
           }
-          const execErr = err as {
-            stdout?: Buffer | string;
-            stderr?: Buffer | string;
-            status?: number;
-            code?: number;
-          };
-          if (cmdParams.allowFailure) {
-            return {
-              stdout: toOptionalBuffer(execErr.stdout),
-              stderr: toOptionalBuffer(execErr.stderr),
-              code: execErr.status ?? execErr.code ?? 1,
-            };
+          const { stdout, stderr } = result;
+          const code = result.termination === "exit" ? (result.code ?? 1) : 1;
+          if ((result.termination !== "exit" || code !== 0) && !cmdParams.allowFailure) {
+            const commandError =
+              result.error ??
+              new Error(
+                result.termination === "exit"
+                  ? `MXC command exited with code ${code}`
+                  : `MXC command terminated: ${result.termination}`,
+              );
+            throw Object.assign(commandError, {
+              stdout,
+              stderr,
+              status: code,
+            });
           }
-          throw err;
+          return { stdout, stderr, code };
         } finally {
           cleanupLauncherPayloadFile(payloadFile);
         }
@@ -333,69 +336,6 @@ export function createMxcSandboxBackendHandle(params: {
       }
     },
   };
-}
-
-function execFileBuffered(
-  binaryPath: string,
-  args: readonly string[],
-  options: {
-    env: NodeJS.ProcessEnv;
-    input: Buffer;
-    timeout: number;
-    maxBuffer: number;
-    signal?: AbortSignal;
-  },
-): Promise<SandboxBackendCommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      binaryPath,
-      [...args],
-      {
-        encoding: "buffer",
-        env: options.env,
-        timeout: options.timeout,
-        maxBuffer: options.maxBuffer,
-        signal: options.signal,
-      },
-      (error, stdout, stderr) => {
-        const stdoutBuffer = toOptionalBuffer(stdout);
-        const stderrBuffer = toOptionalBuffer(stderr);
-        if (error) {
-          const errorStatus = (error as { status?: unknown }).status;
-          const status =
-            typeof error.code === "number"
-              ? error.code
-              : typeof errorStatus === "number"
-                ? errorStatus
-                : 1;
-          const rejection: Error = Object.assign(error, {
-            stdout: stdoutBuffer,
-            stderr: stderrBuffer,
-            status,
-          });
-          reject(rejection);
-          return;
-        }
-        resolve({ stdout: stdoutBuffer, stderr: stderrBuffer, code: 0 });
-      },
-    );
-    child.stdin?.end(options.input);
-  });
-}
-
-function isAbortError(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    (err.name === "AbortError" ||
-      ("code" in err && (err as { code?: unknown }).code === "ABORT_ERR"))
-  );
-}
-
-function toOptionalBuffer(value: Buffer | string | undefined): Buffer {
-  if (value === undefined) {
-    return Buffer.alloc(0);
-  }
-  return toBuffer(value);
 }
 
 function toBuffer(value: Buffer | string): Buffer {

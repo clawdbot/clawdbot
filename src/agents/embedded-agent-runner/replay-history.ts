@@ -1,6 +1,7 @@
 /**
  * Sanitizes and validates replayed session history before model calls.
  */
+import { isDeepStrictEqual } from "node:util";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,6 +19,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
@@ -30,7 +32,10 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
+import {
+  hasOnlyAssistantReasoningContent,
+  isReasoningOnlyLengthAssistantTurn,
+} from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -51,6 +56,7 @@ import {
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
 import {
+  hasNonzeroUsage,
   makeZeroUsageSnapshot,
   normalizeUsage,
   type AssistantUsageSnapshot,
@@ -183,7 +189,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   }
   const replayContent = (message as { content?: unknown }).content;
   if (typeof replayContent === "string") {
-    return replayContent.trim() ? message : null;
+    return replayContent.trim() || hasPersistedMedia(message) ? message : null;
   }
   if (!Array.isArray(replayContent)) {
     return message;
@@ -205,7 +211,7 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
     return false;
   });
   if (sanitizedContent.length === 0) {
-    return null;
+    return hasPersistedMedia(message) ? ({ ...message, content: "" } as AgentMessage) : null;
   }
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }
@@ -224,6 +230,7 @@ function normalizeAssistantReplayTextContent(message: AgentMessage, replayConten
 
 function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
   let touched = false;
+  let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
     if (!block || typeof block !== "object") {
@@ -241,14 +248,18 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
         sanitizedContent.push(block);
       } else {
         touched = true;
+        removedSilentText = true;
       }
       continue;
     }
     touched = true;
     const trimmed = strippedText.trim();
-    if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+    const isSilentText =
+      trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
+    if (trimmed && !isSilentText) {
       sanitizedContent.push({ ...block, text: strippedText });
     }
+    removedSilentText ||= isSilentText;
   }
   if (!touched) {
     return message;
@@ -256,7 +267,36 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   if (sanitizedContent.length === 0) {
     return null;
   }
-  return { ...message, content: sanitizedContent } as AgentMessage;
+  const normalized = { ...message, content: sanitizedContent } as AgentMessage;
+  // A silent reply has no visible assistant output. Do not let its signed
+  // reasoning merge into the next assistant turn during strict replay.
+  return removedSilentText && hasOnlyAssistantReasoningContent(normalized) ? null : normalized;
+}
+
+function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
+  const previous = out.at(-1);
+  if (!previous || previous.role !== "assistant") {
+    return false;
+  }
+  const usage = (next as { usage?: unknown }).usage;
+  if (
+    !usage ||
+    typeof usage !== "object" ||
+    hasNonzeroUsage(normalizeUsage(usage as UsageLike)) ||
+    (next as { stopReason?: unknown }).stopReason !== "stop" ||
+    extractToolCallsFromAssistant(previous).length > 0 ||
+    extractToolCallsFromAssistant(next).length > 0
+  ) {
+    return false;
+  }
+  const previousContent = (previous as { content?: unknown }).content;
+  const nextContent = (next as { content?: unknown }).content;
+  return (
+    Array.isArray(previousContent) &&
+    previousContent.length > 0 &&
+    Array.isArray(nextContent) &&
+    isDeepStrictEqual(previousContent, nextContent)
+  );
 }
 
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
@@ -342,6 +382,13 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
         touched = true;
         continue;
       }
+    }
+    // Historical side-branch rebuilds could strip every mirror marker while
+    // retaining the zero-usage receipt immediately after its source reply.
+    // Keep this recovery shape narrow; ordinary repeated model turns survive.
+    if (isBareDeliveryMirrorDuplicate(out, assistantMessage)) {
+      touched = true;
+      continue;
     }
     out.push(assistantMessage);
   }
@@ -746,8 +793,9 @@ export async function sanitizeSessionHistory(params: {
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds:
-        policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
+      // Pair raw provider-id occurrences before rewriting ids. On a damaged transcript,
+      // FIFO id rewriting can otherwise bind a later-adjacent result to an older call.
+      sanitizeToolCallIds: false,
       toolCallIdMode: policy.toolCallIdMode,
       duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
@@ -810,25 +858,22 @@ export async function sanitizeSessionHistory(params: {
         ),
       )
     : sanitizedToolCalls;
+  const pairedToolCalls =
+    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(openAISafeToolCalls, {
+          erroredAssistantResultPolicy: "drop",
+        })
+      : openAISafeToolCalls;
   const sanitizedToolIds =
     policy.sanitizeToolCallIds && policy.toolCallIdMode
-      ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
+      ? sanitizeToolCallIdsForCloudCodeAssist(pairedToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
           duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
           allowedToolNames: params.allowedToolNames,
         })
-      : openAISafeToolCalls;
-  // Gemini/Anthropic-class providers also require tool results to stay adjacent
-  // to their assistant tool calls. They do not use Codex's "aborted" text, but
-  // the same ordering repair is live-tested with Gemini 3 Flash.
-  const repairedTools =
-    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
-          erroredAssistantResultPolicy: "drop",
-        })
-      : sanitizedToolIds;
-  const sanitizedToolResults = stripToolResultDetails(repairedTools);
+      : pairedToolCalls;
+  const sanitizedToolResults = stripToolResultDetails(sanitizedToolIds);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );
@@ -935,3 +980,4 @@ export async function validateReplayTurns(params: {
     : params.messages;
   return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

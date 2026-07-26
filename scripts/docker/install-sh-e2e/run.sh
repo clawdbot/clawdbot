@@ -150,15 +150,21 @@ preinstall_previous_version() {
   fi
 }
 
-run_official_installer() {
+run_official_installer() (
+  local installer
+  # time_phase disables errexit, so setup and download failures must return explicitly.
+  installer="$(mktemp)" || return
+  trap 'rm -f "$installer"' EXIT
+
+  curl -fsSL --connect-timeout 10 --max-time 120 "$INSTALL_URL" -o "$installer" || return
   if [[ "$INSTALL_TAG" == "beta" ]]; then
-    curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash
+    OPENCLAW_BETA=1 bash "$installer"
   elif [[ "$INSTALL_TAG" != "latest" ]]; then
-    curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash
+    OPENCLAW_VERSION="$INSTALL_TAG" bash "$installer"
   else
-    curl -fsSL "$INSTALL_URL" | bash
+    bash "$installer"
   fi
-}
+)
 
 verify_installed_version() {
   INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"
@@ -569,9 +575,29 @@ NODE
 }
 
 assert_session_used_tools() {
-  local jsonl="$1"
-  shift
-  node - <<'NODE' "$jsonl" "$@"
+  local profile="$1"
+  local session_id="$2"
+  shift 2
+  local jsonl
+  local export_workspace=""
+  jsonl="$(session_jsonl_path "$profile" "$session_id")"
+  if [[ ! -f "$jsonl" ]]; then
+    export_workspace="$(mktemp -d)"
+    local export_status=0
+    openclaw --profile "$profile" sessions export-trajectory \
+      --session-key "agent:main:explicit:${session_id}" \
+      --agent main \
+      --workspace "$export_workspace" \
+      --output scan \
+      --json >/dev/null || export_status="$?"
+    if [[ "$export_status" -ne 0 ]]; then
+      rm -rf "$export_workspace"
+      return "$export_status"
+    fi
+    jsonl="$export_workspace/.openclaw/trajectory-exports/scan/events.jsonl"
+  fi
+  local scan_status=0
+  node - <<'NODE' "$jsonl" "$@" || scan_status="$?"
 const fs = require("node:fs");
 const jsonl = process.argv[2];
 const required = new Set(process.argv.slice(3));
@@ -752,6 +778,10 @@ scan()
     process.exit(1);
   });
 NODE
+  if [[ -n "$export_workspace" ]]; then
+    rm -rf "$export_workspace"
+  fi
+  return "$scan_status"
 }
 
 session_jsonl_path() {
@@ -1027,11 +1057,11 @@ run_profile() {
   phase_mark_start "Verify tool usage via session transcript ($profile)"
   # Give the gateway a moment to flush transcripts.
   sleep 1
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2_SESSION_ID")" write
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2B_SESSION_ID")" read
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3_SESSION_ID")" exec
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3B_SESSION_ID")" write
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN4_SESSION_ID")" image write
+  assert_session_used_tools "$profile" "$TURN2_SESSION_ID" write
+  assert_session_used_tools "$profile" "$TURN2B_SESSION_ID" read
+  assert_session_used_tools "$profile" "$TURN3_SESSION_ID" exec
+  assert_session_used_tools "$profile" "$TURN3B_SESSION_ID" write
+  assert_session_used_tools "$profile" "$TURN4_SESSION_ID" image write
   phase_mark_passed "Verify tool usage via session transcript ($profile)"
 
   cleanup_profile

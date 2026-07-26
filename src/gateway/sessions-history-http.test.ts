@@ -43,7 +43,7 @@ afterEach(async () => {
 const AGENT_ID = "main";
 type SessionHistoryTestDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_entries" | "session_routes" | "sessions"
+  "session_nodes" | "session_windows"
 >;
 
 async function createSessionStoreFile(): Promise<string> {
@@ -117,7 +117,28 @@ function seedRawSessionRows(params: {
         executeSqliteQuerySync(
           database.db,
           db
-            .insertInto("sessions")
+            .insertInto("session_nodes")
+            .values({
+              current_session_id: row.sessionId,
+              entry_json: JSON.stringify({
+                sessionId: row.sessionId,
+                updatedAt: row.updatedAt,
+              }),
+              session_key: row.sessionKey,
+              updated_at: row.updatedAt,
+            })
+            .onConflict((conflict) =>
+              conflict.column("session_key").doUpdateSet({
+                current_session_id: (eb) => eb.ref("excluded.current_session_id"),
+                entry_json: (eb) => eb.ref("excluded.entry_json"),
+                updated_at: (eb) => eb.ref("excluded.updated_at"),
+              }),
+            ),
+        );
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("session_windows")
             .values({
               session_id: row.sessionId,
               session_key: row.sessionKey,
@@ -127,43 +148,6 @@ function seedRawSessionRows(params: {
             .onConflict((conflict) =>
               conflict.column("session_id").doUpdateSet({
                 session_key: (eb) => eb.ref("excluded.session_key"),
-                updated_at: (eb) => eb.ref("excluded.updated_at"),
-              }),
-            ),
-        );
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .insertInto("session_routes")
-            .values({
-              session_key: row.sessionKey,
-              session_id: row.sessionId,
-              updated_at: row.updatedAt,
-            })
-            .onConflict((conflict) =>
-              conflict.column("session_key").doUpdateSet({
-                session_id: (eb) => eb.ref("excluded.session_id"),
-                updated_at: (eb) => eb.ref("excluded.updated_at"),
-              }),
-            ),
-        );
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .insertInto("session_entries")
-            .values({
-              session_id: row.sessionId,
-              session_key: row.sessionKey,
-              entry_json: JSON.stringify({
-                sessionId: row.sessionId,
-                updatedAt: row.updatedAt,
-              }),
-              updated_at: row.updatedAt,
-            })
-            .onConflict((conflict) =>
-              conflict.column("session_key").doUpdateSet({
-                session_id: (eb) => eb.ref("excluded.session_id"),
-                entry_json: (eb) => eb.ref("excluded.entry_json"),
                 updated_at: (eb) => eb.ref("excluded.updated_at"),
               }),
             ),
@@ -474,7 +458,7 @@ describe("session history HTTP endpoints", () => {
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("hello from history");
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
-        seq: 2,
+        seq: 1,
       });
     });
   });
@@ -614,7 +598,6 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
-    testState.agentsConfig = { list: [{ id: "main", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     await replaceTranscriptEvents(
@@ -691,9 +674,9 @@ describe("session history HTTP endpoints", () => {
         "second message",
         "third message",
       ]);
-      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([3, 4]);
+      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2, 3]);
       expect(firstBody.hasMore).toBe(true);
-      expect(firstBody.nextCursor).toBe("3");
+      expect(firstBody.nextCursor).toBe("2");
 
       const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
         query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
@@ -703,7 +686,7 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
         "first message",
       ]);
-      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2]);
+      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([1]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
     });
@@ -737,6 +720,44 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test.each(["", " ", "abc", "0", "-5", "1.5"])(
+    "rejects invalid limit %j with 400",
+    async (limit) => {
+      await seedSession({ text: "first message" });
+      await withGatewayHarness(async (harness) => {
+        const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error?.type).toBe("invalid_request_error");
+        expect(body.error?.message).toBe("limit must be a positive integer");
+      });
+    },
+  );
+
+  test.each(["1", "+1"])(
+    "returns the requested bounded history for valid limit %s",
+    async (limit) => {
+      const { storePath } = await seedSession({ text: "first message" });
+      await appendVisibleAssistantMessage({
+        sessionKey: "agent:main:main",
+        text: "second message",
+        storePath,
+      });
+
+      await withGatewayHarness(async (harness) => {
+        const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+          query: `?limit=${encodeURIComponent(limit)}`,
+        });
+        expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+          "second message",
+        ]);
+        expect(body.hasMore).toBe(true);
+      });
+    },
+  );
+
   test("streams bounded history windows over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
@@ -761,7 +782,7 @@ describe("session history HTTP endpoints", () => {
       expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
       expectOpenClawMetadata(nextData.messages?.[0]?.["__openclaw"], {
         id: thirdMessageId,
-        seq: 4,
+        seq: 3,
       });
 
       await stream.reader.cancel();
@@ -787,7 +808,7 @@ describe("session history HTTP endpoints", () => {
         messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
       };
       expect(refreshData.messages?.[0]?.content?.[0]?.text).toBe("second message");
-      expect(refreshData.messages?.[0]?.["__openclaw"]?.seq).toBe(3);
+      expect(refreshData.messages?.[0]?.["__openclaw"]?.seq).toBe(2);
 
       await stream.reader.cancel();
     });
@@ -851,7 +872,7 @@ describe("session history HTTP endpoints", () => {
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         id: visibleMessageId,
-        seq: 3,
+        seq: 2,
       });
     });
   });
@@ -867,7 +888,7 @@ describe("session history HTTP endpoints", () => {
       });
       await expectMessageEventMatch(stream, {
         text: "second message",
-        seq: 3,
+        seq: 2,
         id: appendedId,
       });
     });
@@ -968,7 +989,7 @@ describe("session history HTTP endpoints", () => {
 
       await expectMessageEventMatch(stream, {
         text: "third visible message",
-        seq: 4,
+        seq: 3,
       });
     });
   });
@@ -991,7 +1012,7 @@ describe("session history HTTP endpoints", () => {
       });
       await expectMessageEventMatch(stream, {
         text: "third visible message",
-        seq: 4,
+        seq: 3,
         id: visibleId,
       });
     });
@@ -1009,7 +1030,7 @@ describe("session history HTTP endpoints", () => {
 
       await expectMessageEventMatch(stream, {
         text: "second visible message",
-        seq: 3,
+        seq: 2,
       });
       await appendTranscriptMessage({
         sessionKey: "agent:main:main",
@@ -1027,7 +1048,7 @@ describe("session history HTTP endpoints", () => {
       });
       await expectMessageEventMatch(stream, {
         text: "third visible message",
-        seq: 5,
+        seq: 4,
         id: thirdId,
       });
     });
@@ -1111,7 +1132,7 @@ describe("session history HTTP endpoints", () => {
 
       await expectMessageEventMatch(stream, {
         text: "bearer sse update",
-        seq: 3,
+        seq: 2,
         id: appendedId,
       });
 
@@ -1123,3 +1144,4 @@ describe("session history HTTP endpoints", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

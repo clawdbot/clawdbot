@@ -299,13 +299,17 @@ describe("sanitizeToolResult", () => {
     expect(text).not.toContain("abcdef0123456789QWERTY=");
   });
 
-  it("preserves image content stripping behavior", () => {
+  it("reports decoded byte size when stripping image content", () => {
+    const data = Buffer.from([0, 1, 2, 3, 4]).toString("base64");
     const result = {
-      content: [{ type: "image", data: "base64imagedata", mimeType: "image/png" }],
+      content: [{ type: "image", data, mimeType: "image/png" }],
     };
+
     const sanitized = sanitizeToolResult(result) as {
       content: Array<{ data?: string; bytes?: number; omitted?: boolean }>;
     };
+
+    expect(data).toHaveLength(8);
     expect(
       expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").data,
     ).toBeUndefined();
@@ -313,7 +317,20 @@ describe("sanitizeToolResult", () => {
       true,
     );
     expect(expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").bytes).toBe(
-      "base64imagedata".length,
+      5,
+    );
+  });
+
+  it("preserves an existing image byte size when data is already omitted", () => {
+    const result = {
+      content: [{ type: "image", mimeType: "image/png", bytes: 5, omitted: true }],
+    };
+
+    const sanitized = sanitizeToolResult(result) as {
+      content: Array<{ data?: string; bytes?: number; omitted?: boolean }>;
+    };
+    expect(expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").bytes).toBe(
+      5,
     );
   });
 
@@ -392,7 +409,6 @@ describe("sanitizeToolResult", () => {
 
   it("applies configured redact patterns to Control UI tool payloads", () => {
     vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({
-      redactSensitive: "off",
       redactPatterns: [String.raw`\bcustom-secret-[A-Za-z0-9]+\b`],
     });
 

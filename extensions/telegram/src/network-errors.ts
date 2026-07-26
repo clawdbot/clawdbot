@@ -6,25 +6,15 @@ import {
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 
-const RECOVERABLE_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
+const TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES = new Set([
   "ENETDOWN",
-  "ETIMEDOUT",
   "ESOCKETTIMEDOUT",
-  "ENETUNREACH",
   "EHOSTUNREACH",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_SOCKET",
   "UND_ERR_ABORTED",
   "ECONNABORTED",
   "ERR_NETWORK",
@@ -36,18 +26,13 @@ const RECOVERABLE_ERROR_CODES = new Set([
  * These represent failures that occur *before* the request reaches Telegram's servers,
  * meaning the message was definitely not delivered and it is safe to retry.
  *
- * Contrast with RECOVERABLE_ERROR_CODES which includes codes like ECONNRESET and ETIMEDOUT
+ * Contrast with the full transient set, which includes codes like ECONNRESET and ETIMEDOUT
  * that can fire *after* Telegram has already received and delivered a message — retrying
  * those would cause duplicate messages.
  */
-const PRE_CONNECT_ERROR_CODES = new Set([
-  "ECONNREFUSED", // Server actively refused the connection (never reached Telegram)
-  "ENOTFOUND", // DNS resolution failed (never sent)
-  "EAI_AGAIN", // Transient DNS failure (never sent)
+const TELEGRAM_ADDITIONAL_PRE_CONNECT_ERROR_CODES = new Set([
   "ENETDOWN", // Local network interface is down before connect completes (never sent)
-  "ENETUNREACH", // No route to host (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
-  "UND_ERR_CONNECT_TIMEOUT", // TCP/TLS connect timeout (request never sent)
 ]);
 
 const RECOVERABLE_ERROR_NAMES = new Set([
@@ -106,6 +91,18 @@ function getErrorCode(err: unknown): string | undefined {
     return String(errno);
   }
   return undefined;
+}
+
+function classifyTelegramTransientNetworkError(err: unknown) {
+  const code = normalizeCode(getErrorCode(err));
+  return (
+    classifyTransientNetworkErrorCode(code) ??
+    (TELEGRAM_ADDITIONAL_PRE_CONNECT_ERROR_CODES.has(code)
+      ? "pre-connect"
+      : TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES.has(code)
+        ? "ambiguous"
+        : undefined)
+  );
 }
 
 function getNumericHttpStatus(err: unknown): number | undefined {
@@ -177,7 +174,7 @@ export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErr
   });
 }
 
-export function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
+function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object") {
       continue;
@@ -213,8 +210,7 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     return true;
   }
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    const code = normalizeCode(getErrorCode(candidate));
-    if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+    if (classifyTelegramTransientNetworkError(candidate) === "pre-connect") {
       return true;
     }
   }
@@ -318,8 +314,7 @@ export function isRecoverableTelegramNetworkError(
       : options.context !== "send";
 
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    const code = normalizeCode(getErrorCode(candidate));
-    if (code && RECOVERABLE_ERROR_CODES.has(code)) {
+    if (classifyTelegramTransientNetworkError(candidate)) {
       return true;
     }
 

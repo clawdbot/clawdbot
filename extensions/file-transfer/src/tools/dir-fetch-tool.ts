@@ -1,16 +1,14 @@
 // File Transfer plugin module implements dir fetch tool behavior.
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import {
-  appendBoundedTextTail,
-  projectBoundedTextTail,
-} from "../shared/append-bounded-text-tail.js";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { projectBoundedTextTail } from "../shared/append-bounded-text-tail.js";
 import { appendFileTransferAudit } from "../shared/audit.js";
-import { consumeChildOutput } from "../shared/child-output.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
 import { humanSize, readBoolean, readClampedInt } from "../shared/params.js";
 import {
@@ -53,113 +51,69 @@ async function listTarOutputLines<T>(input: {
   mapLine: (line: string) => T;
   maxValues: number;
 }): Promise<{ ok: true; values: T[] } | { ok: false; reason: string }> {
-  return new Promise((resolve) => {
-    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, input.args, { stdio: ["pipe", "pipe", "pipe"] });
-    const values: T[] = [];
-    let pending = "";
-    let outputChars = 0;
-    let stderr = "";
-    let settled = false;
-
-    const finish = (result: { ok: true; values: T[] } | { ok: false; reason: string }): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(watchdog);
-      resolve(result);
-    };
-    const stopChild = (): void => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* gone */
-      }
-    };
-    const appendLine = (line: string): boolean => {
-      if (settled) {
-        return false;
-      }
-      if (!line) {
-        return true;
-      }
-      values.push(input.mapLine(line));
-      if (values.length >= input.maxValues) {
-        stopChild();
-        finish({ ok: true, values });
-        return false;
-      }
+  const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+  const decoder = new StringDecoder("utf8");
+  const values: T[] = [];
+  let pending = "";
+  let outputBytes = 0;
+  let outputTooLarge = false;
+  let valueLimitReached = false;
+  const appendLine = (line: string): boolean => {
+    if (!line) {
       return true;
-    };
-    const consumeChunk = (chunk: Buffer): void => {
-      if (settled) {
-        return;
-      }
-      const text = chunk.toString();
-      outputChars += text.length;
-      if (outputChars > TAR_LIST_OUTPUT_MAX_CHARS) {
-        stopChild();
-        finish({ ok: false, reason: `${input.label} output too large` });
-        return;
-      }
-      const lines = `${pending}${text}`.split("\n");
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!appendLine(line)) {
-          return;
+    }
+    values.push(input.mapLine(line));
+    valueLimitReached = values.length >= input.maxValues;
+    return !valueLimitReached;
+  };
+  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+  try {
+    result = await runCommandWithTimeout([tarBin, ...input.args], {
+      input: input.tarBuffer,
+      maxOutputBytes: { stderr: TAR_STDERR_TAIL_CHARS },
+      onOutputChunk: (chunk, stream) => {
+        if (stream !== "stdout") {
+          return true;
         }
-      }
+        outputBytes += chunk.byteLength;
+        if (outputBytes > TAR_LIST_OUTPUT_MAX_CHARS) {
+          outputTooLarge = true;
+          return false;
+        }
+        const lines = `${pending}${decoder.write(chunk)}`.split("\n");
+        pending = lines.pop() ?? "";
+        return lines.every(appendLine);
+      },
+      outputCapture: { stdout: "discard", stderr: "tail" },
+      tolerateOutputError: { stderr: true },
+      timeoutMs: 30_000,
+    });
+  } catch (error) {
+    return { ok: false, reason: `${input.label} error: ${formatErrorMessage(error)}` };
+  }
+  if (result.termination === "timeout") {
+    return { ok: false, reason: `${input.label} timed out` };
+  }
+  if (valueLimitReached) {
+    return { ok: true, values };
+  }
+  if (outputTooLarge) {
+    return { ok: false, reason: `${input.label} output too large` };
+  }
+  if (result.termination !== "exit") {
+    return {
+      ok: false,
+      reason: `${input.label} error: ${result.termination}`,
     };
-
-    const watchdog: ReturnType<typeof setTimeout> = setTimeout(() => {
-      stopChild();
-      finish({ ok: false, reason: `${input.label} timed out` });
-    }, 30_000);
-    consumeChildOutput(child.stdout, {
-      onData: consumeChunk,
-      onError: (error) => {
-        stopChild();
-        finish({ ok: false, reason: `${input.label} stdout error: ${String(error)}` });
-      },
-    });
-    consumeChildOutput(child.stderr, {
-      onData: (chunk) => {
-        stderr = appendBoundedTextTail(stderr, chunk, TAR_STDERR_TAIL_CHARS);
-      },
-      onError: (error) => {
-        // stderr is diagnostic only; preserve that fact for a later nonzero
-        // close without invalidating complete stdout validation data.
-        stderr = `[stderr unavailable: ${String(error)}]`;
-      },
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      if (code !== 0) {
-        finish({
-          ok: false,
-          reason: `${input.label} exited ${code}: ${projectBoundedTextTail(stderr, TAR_ERROR_REASON_STDERR_CHARS)}`,
-        });
-        return;
-      }
-      if (pending) {
-        appendLine(pending);
-      }
-      finish({ ok: true, values });
-    });
-    child.on("error", (e) => {
-      finish({ ok: false, reason: `${input.label} error: ${String(e)}` });
-    });
-    child.stdin.on("error", (e: NodeJS.ErrnoException) => {
-      if (settled && e.code === "EPIPE") {
-        return;
-      }
-      finish({ ok: false, reason: `${input.label} input error: ${String(e)}` });
-    });
-    child.stdin.end(input.tarBuffer);
-  });
+  }
+  if (result.code !== 0) {
+    return {
+      ok: false,
+      reason: `${input.label} exited ${result.code}: ${projectBoundedTextTail(result.stderr, TAR_ERROR_REASON_STDERR_CHARS)}`,
+    };
+  }
+  appendLine(pending + decoder.end());
+  return { ok: true, values };
 }
 
 async function computeFileSha256(filePath: string): Promise<string> {
@@ -287,101 +241,55 @@ async function preValidateTarball(
   return { ok: true };
 }
 
-export async function validateTarUncompressedBudget(
+async function validateTarUncompressedBudget(
   tarBuffer: Buffer,
   maxBytes = DIR_FETCH_MAX_UNCOMPRESSED_BYTES,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  return new Promise((resolve) => {
-    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, ["-xOzf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
-    let totalBytes = 0;
-    let stderr = "";
-    let settled = false;
-    const finish = (result: { ok: true } | { ok: false; reason: string }): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(watchdog);
-      resolve(result);
-    };
-    const watchdog: ReturnType<typeof setTimeout> = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* gone */
-      }
-      finish({ ok: false, reason: "tar uncompressed budget validation timed out" });
-    }, TAR_UNPACK_TIMEOUT_MS);
-
-    consumeChildOutput(child.stdout, {
-      onData: (chunk) => {
-        if (settled) {
-          return;
+  const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+  let totalBytes = 0;
+  let budgetExceeded = false;
+  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+  try {
+    result = await runCommandWithTimeout([tarBin, "-xOzf", "-"], {
+      input: tarBuffer,
+      maxOutputBytes: { stderr: TAR_STDERR_TAIL_CHARS },
+      onOutputChunk: (chunk, stream) => {
+        if (stream !== "stdout") {
+          return true;
         }
         totalBytes += chunk.byteLength;
-        if (totalBytes > maxBytes) {
-          try {
-            child.kill("SIGKILL");
-          } catch {
-            /* gone */
-          }
-          finish({
-            ok: false,
-            reason: `archive expands past uncompressed budget ${maxBytes} bytes`,
-          });
-        }
+        budgetExceeded = totalBytes > maxBytes;
+        return !budgetExceeded;
       },
-      onError: (error) => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* gone */
-        }
-        finish({
-          ok: false,
-          reason: `tar uncompressed budget validation stdout error: ${String(error)}`,
-        });
-      },
+      outputCapture: { stdout: "discard", stderr: "tail" },
+      tolerateOutputError: { stderr: true },
+      timeoutMs: TAR_UNPACK_TIMEOUT_MS,
     });
-    consumeChildOutput(child.stderr, {
-      onData: (chunk) => {
-        stderr = appendBoundedTextTail(stderr, chunk, TAR_STDERR_TAIL_CHARS);
-      },
-      onError: (error) => {
-        stderr = `[stderr unavailable: ${String(error)}]`;
-      },
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      if (code !== 0) {
-        finish({
-          ok: false,
-          reason: `tar uncompressed budget validation exited ${code}: ${projectBoundedTextTail(stderr, TAR_ERROR_REASON_STDERR_CHARS)}`,
-        });
-        return;
-      }
-      finish({ ok: true });
-    });
-    child.on("error", (error) => {
-      finish({
-        ok: false,
-        reason: `tar uncompressed budget validation error: ${String(error)}`,
-      });
-    });
-    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-      if (settled && error.code === "EPIPE") {
-        return;
-      }
-      finish({
-        ok: false,
-        reason: `tar uncompressed budget validation input error: ${String(error)}`,
-      });
-    });
-    child.stdin.end(tarBuffer);
-  });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `tar uncompressed budget validation error: ${formatErrorMessage(error)}`,
+    };
+  }
+  if (result.termination === "timeout") {
+    return { ok: false, reason: "tar uncompressed budget validation timed out" };
+  }
+  if (budgetExceeded) {
+    return { ok: false, reason: `archive expands past uncompressed budget ${maxBytes} bytes` };
+  }
+  if (result.termination !== "exit") {
+    return {
+      ok: false,
+      reason: `tar uncompressed budget validation error: ${result.termination}`,
+    };
+  }
+  if (result.code !== 0) {
+    return {
+      ok: false,
+      reason: `tar uncompressed budget validation exited ${result.code}: ${projectBoundedTextTail(result.stderr, TAR_ERROR_REASON_STDERR_CHARS)}`,
+    };
+  }
+  return { ok: true };
 }
 
 type UnpackedFileEntry = {
@@ -417,73 +325,28 @@ type UnpackedFileEntry = {
  */
 async function unpackTar(tarBuffer: Buffer, destDir: string): Promise<void> {
   await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
-  return new Promise((resolve, reject) => {
-    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(
-      tarBin,
-      ["-xzf", "-", "-C", destDir, "--no-same-owner", "--no-same-permissions"],
-      {
-        stdio: ["pipe", "ignore", "pipe"],
-      },
+  const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+  const result = await runCommandWithTimeout(
+    [tarBin, "-xzf", "-", "-C", destDir, "--no-same-owner", "--no-same-permissions"],
+    {
+      input: tarBuffer,
+      maxOutputBytes: { stderr: TAR_STDERR_TAIL_CHARS },
+      outputCapture: { stdout: "discard", stderr: "tail" },
+      tolerateOutputError: { stderr: true },
+      timeoutMs: TAR_UNPACK_TIMEOUT_MS,
+    },
+  );
+  if (result.termination === "timeout") {
+    throw new Error(`tar unpack timed out after ${TAR_UNPACK_TIMEOUT_MS}ms`);
+  }
+  if (result.termination !== "exit") {
+    throw new Error(`tar unpack failed: ${result.termination}`);
+  }
+  if (result.code !== 0) {
+    throw new Error(
+      `tar unpack exited ${result.code}: ${projectBoundedTextTail(result.stderr, TAR_UNPACK_ERROR_STDERR_CHARS)}`,
     );
-    let stderrOut = "";
-    let settled = false;
-    const fail = (error: Error): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(watchdog);
-      reject(error);
-    };
-    const succeed = (): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(watchdog);
-      resolve();
-    };
-    const watchdog: ReturnType<typeof setTimeout> = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-      fail(new Error(`tar unpack timed out after ${TAR_UNPACK_TIMEOUT_MS}ms`));
-    }, TAR_UNPACK_TIMEOUT_MS);
-    consumeChildOutput(child.stderr, {
-      onData: (chunk) => {
-        stderrOut = appendBoundedTextTail(stderrOut, chunk, TAR_STDERR_TAIL_CHARS);
-      },
-      onError: (error) => {
-        // Extraction success is authoritative; a diagnostic read failure only
-        // replaces stderr context if tar later exits nonzero.
-        stderrOut = `[stderr unavailable: ${String(error)}]`;
-      },
-    });
-    child.on("close", (code) => {
-      if (code !== 0) {
-        fail(
-          new Error(
-            `tar unpack exited ${code}: ${projectBoundedTextTail(stderrOut, TAR_UNPACK_ERROR_STDERR_CHARS)}`,
-          ),
-        );
-        return;
-      }
-      succeed();
-    });
-    child.on("error", (e) => {
-      fail(e);
-    });
-    child.stdin.on("error", (e: NodeJS.ErrnoException) => {
-      if (settled && e.code === "EPIPE") {
-        return;
-      }
-      fail(e);
-    });
-    child.stdin.end(tarBuffer);
-  });
+  }
 }
 
 /**
@@ -705,9 +568,3 @@ export function createDirFetchTool(): AnyAgentTool {
     },
   };
 }
-
-export const testing = {
-  preValidateTarball,
-  unpackTar,
-  validateTarUncompressedBudget,
-};

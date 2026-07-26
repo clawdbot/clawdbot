@@ -1,11 +1,7 @@
 // Memory Core plugin module implements manager cache behavior.
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 
-type Closable = {
-  close?: () => Promise<void> | void;
-};
-
-export type ManagedCache<T> = {
+type ManagedCache<T> = {
   cache: Map<string, T>;
   pending: Map<string, Promise<T>>;
 };
@@ -64,29 +60,6 @@ export async function getOrCreateManagedCacheEntry<T>(params: {
   } finally {
     if (params.pending.get(params.key) === createPromise) {
       params.pending.delete(params.key);
-    }
-  }
-}
-
-export async function closeManagedCacheEntries<T extends Closable>(params: {
-  cache: Map<string, T>;
-  pending: Map<string, Promise<T>>;
-  onCloseError?: (err: unknown) => void;
-}): Promise<void> {
-  const pending = Array.from(params.pending.values());
-  if (pending.length > 0) {
-    await Promise.allSettled(pending);
-  }
-  const entries = Array.from(params.cache.values());
-  params.cache.clear();
-  for (const entry of entries) {
-    if (typeof entry.close !== "function") {
-      continue;
-    }
-    try {
-      await entry.close();
-    } catch (err) {
-      params.onCloseError?.(err);
     }
   }
 }

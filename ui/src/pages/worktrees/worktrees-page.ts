@@ -3,13 +3,20 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsPage,
+  renderSettingsRow,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
@@ -45,7 +52,6 @@ class WorktreesPage extends OpenClawLightDomElement {
   @state() private createBaseRef = "";
   @state() private createBranches: string[] = [];
   @state() private creating = false;
-
   private client: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
   private gatewaySource?: ApplicationContext["gateway"];
@@ -83,10 +89,10 @@ class WorktreesPage extends OpenClawLightDomElement {
     sourceChanged = false,
   ) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.gatewayConnected;
+    const connectionChanged = (snapshot.phase === "connected") !== this.gatewayConnected;
     const identityChanged = sourceChanged || clientChanged;
     this.client = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     if (identityChanged || connectionChanged) {
       this.invalidateLoad();
       this.invalidateOperations();
@@ -95,7 +101,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       this.records = [];
       this.error = null;
     }
-    if (snapshot.connected && snapshot.client) {
+    if (snapshot.phase === "connected" && snapshot.client) {
       void this.load();
     }
   }
@@ -157,7 +163,8 @@ class WorktreesPage extends OpenClawLightDomElement {
     try {
       const result = await client.request<WorktreesListResult>("worktrees.list", {});
       if (generation === this.loadGeneration && client === this.client) {
-        this.records = result.worktrees;
+        // Registry order is insertion order; recently used checkouts matter most.
+        this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
       }
     } catch (error) {
       if (generation === this.loadGeneration && client === this.client) {
@@ -334,7 +341,11 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private renderOwner(record: WorktreeRecord) {
     if (record.ownerKind === "session" && record.ownerId) {
-      const href = `${pathForRoute("chat", this.context.basePath)}${searchForSession(record.ownerId)}`;
+      const href = sessionNavigationTarget({
+        context: this.context,
+        face: "chat",
+        sessionKey: record.ownerId,
+      }).href;
       return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;
     }
     if (record.ownerKind === "workboard") {
@@ -343,16 +354,18 @@ class WorktreesPage extends OpenClawLightDomElement {
     return html`<span>${t("worktrees.ownerManual")}</span>`;
   }
 
-  private renderCreateForm() {
+  private renderCreateRows() {
     if (!this.createOpen) {
       return nothing;
     }
     return html`
-      <div class="worktrees-create">
-        <label>
-          ${t("worktrees.repo")}
+      ${renderSettingsRow({
+        title: t("worktrees.repo"),
+        control: html`
           <input
+            class="settings-input"
             type="text"
+            aria-label=${t("worktrees.repo")}
             ?disabled=${this.creating}
             .value=${this.createRepoRoot}
             @change=${(event: Event) => {
@@ -361,11 +374,15 @@ class WorktreesPage extends OpenClawLightDomElement {
               this.loadCreateBranches();
             }}
           />
-        </label>
-        <label>
-          ${t("worktrees.name")}
+        `,
+      })}
+      ${renderSettingsRow({
+        title: t("worktrees.name"),
+        control: html`
           <input
+            class="settings-input"
             type="text"
+            aria-label=${t("worktrees.name")}
             ?disabled=${this.creating}
             placeholder=${t("newSession.worktreeNamePlaceholder")}
             .value=${this.createName}
@@ -373,11 +390,15 @@ class WorktreesPage extends OpenClawLightDomElement {
               this.createName = (event.target as HTMLInputElement).value;
             }}
           />
-        </label>
-        <label>
-          ${t("newSession.baseBranch")}
+        `,
+      })}
+      ${renderSettingsRow({
+        title: t("newSession.baseBranch"),
+        control: html`
           <input
+            class="settings-input"
             type="text"
+            aria-label=${t("newSession.baseBranch")}
             ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
@@ -388,93 +409,86 @@ class WorktreesPage extends OpenClawLightDomElement {
           <datalist id="worktrees-create-branches">
             ${this.createBranches.map((name) => html`<option value=${name}></option>`)}
           </datalist>
-        </label>
-        <button
-          class="btn btn--sm"
-          ?disabled=${this.operationPending || !this.createRepoRoot.trim()}
-          @click=${() => void this.createWorktree()}
-        >
-          ${this.creating ? t("common.loading") : t("common.create")}
-        </button>
-      </div>
+        `,
+      })}
+      ${renderSettingsRow({
+        title: t("worktrees.newWorktree"),
+        control: html`
+          <button
+            class="btn btn--sm"
+            ?disabled=${this.operationPending || !this.createRepoRoot.trim()}
+            @click=${() => void this.createWorktree()}
+          >
+            ${this.creating ? t("common.loading") : t("common.create")}
+          </button>
+        `,
+      })}
     `;
   }
 
+  private renderRecordRow(record: WorktreeRecord) {
+    return renderSettingsRow({
+      title: record.name,
+      description: html`
+        <span title=${record.repoRoot}>${repoName(record.repoRoot)}</span> · ${record.branch} ·
+        ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
+      `,
+      control: html`
+        ${record.removedAt
+          ? renderSettingsStatus({ kind: "muted", label: t("worktrees.restorable") })
+          : renderSettingsStatus({ kind: "ok", label: t("common.active") })}
+        <button
+          class=${record.removedAt ? "btn btn--sm" : "btn btn--sm danger"}
+          ?disabled=${this.operationPending}
+          @click=${() =>
+            void (record.removedAt ? this.restore(record) : this.removeWorktree(record))}
+        >
+          ${record.removedAt ? t("worktrees.restore") : t("common.delete")}
+        </button>
+      `,
+    });
+  }
+
   override render() {
-    const body = html`
-      <section class="card">
-        <div class="row" style="justify-content: space-between;">
-          <div>
-            <div class="card-title">${t("worktrees.title")}</div>
-            <div class="card-sub">${t("worktrees.subtitle")}</div>
-          </div>
-          <div class="row" style="gap: 8px;">
-            <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
-              ${t("worktrees.newWorktree")}
-            </button>
-            <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>
-              ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
-            </button>
-          </div>
-        </div>
-        ${this.renderCreateForm()}
-        ${this.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${this.error}</div>`
-          : nothing}
-        <div class="table worktrees-table" style="margin-top: 16px;">
-          <div class="table-head">
-            <div>${t("worktrees.name")}</div>
-            <div>${t("worktrees.repo")}</div>
-            <div>${t("worktrees.branch")}</div>
-            <div>${t("worktrees.owner")}</div>
-            <div>${t("worktrees.status")}</div>
-            <div>${t("worktrees.lastActive")}</div>
-            <div>${t("worktrees.actions")}</div>
-          </div>
-          ${this.records.length === 0
-            ? html`<div class="muted" style="padding: 16px;">${t("worktrees.empty")}</div>`
-            : this.records.map(
-                (record) => html`
-                  <div class="table-row">
-                    <div>${record.name}</div>
-                    <div title=${record.repoRoot}>${repoName(record.repoRoot)}</div>
-                    <div>${record.branch}</div>
-                    <div>${this.renderOwner(record)}</div>
-                    <div>${record.removedAt ? t("worktrees.restorable") : t("common.active")}</div>
-                    <div>${formatRelativeTimestamp(record.lastActiveAt)}</div>
-                    <div class="row" style="gap: 8px;">
-                      ${record.removedAt
-                        ? html`<button
-                            class="btn btn--sm"
-                            ?disabled=${this.operationPending}
-                            @click=${() => void this.restore(record)}
-                          >
-                            ${t("worktrees.restore")}
-                          </button>`
-                        : html`<button
-                            class="btn btn--sm danger"
-                            ?disabled=${this.operationPending}
-                            @click=${() => void this.removeWorktree(record)}
-                          >
-                            ${t("common.delete")}
-                          </button>`}
-                    </div>
-                  </div>
-                `,
-              )}
-        </div>
-      </section>
+    const actions = html`
+      <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
+        ${t("worktrees.newWorktree")}
+      </button>
+      <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>
+        ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
+      </button>
     `;
+    const rows = html`
+      ${this.renderCreateRows()}
+      ${this.records.length === 0
+        ? renderSettingsEmpty(t("worktrees.empty"))
+        : this.records.map((record) => this.renderRecordRow(record))}
+    `;
+    const body = renderSettingsPage(
+      html`
+        ${this.error ? html`<div class="callout danger">${this.error}</div>` : nothing}
+        ${renderSettingsSection(
+          { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },
+          rows,
+        )}
+      `,
+      { wide: true },
+    );
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("worktrees")}</div>
-          <div class="page-sub">${subtitleForRoute("worktrees")}</div>
-        </div>
-      </section>
-      ${renderSettingsWorkspace(body)}
+      ${renderSessionsHubHeader({
+        active: "worktrees",
+        title: titleForRoute("sessions"),
+        onSelect: (tab) => {
+          if (tab !== "worktrees") {
+            this.context?.navigate(tab);
+          }
+        },
+      })}
+      ${renderSettingsWorkspace(body, { id: "sessions-hub-panel" })}
     `;
   }
 }
 
-customElements.define("openclaw-worktrees-page", WorktreesPage);
+if (!customElements.get("openclaw-worktrees-page")) {
+  customElements.define("openclaw-worktrees-page", WorktreesPage);
+}

@@ -254,7 +254,7 @@ function resolvePortableTableCellCharacterCount(
 }
 
 /** True when a portable table fits Slack's per-table and per-message contracts. */
-export function canRenderSlackDataTable(
+function canRenderSlackDataTable(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
 ): boolean {

@@ -43,7 +43,6 @@ export type {
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
-  MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "./host/openclaw-runtime-config.js";
 export type { MemorySearchConfig } from "./host/openclaw-runtime-config.js";

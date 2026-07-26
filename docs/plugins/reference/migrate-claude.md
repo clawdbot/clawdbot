@@ -16,4 +16,4 @@ Imports Claude Code and Claude Desktop instructions, MCP servers, skills, and sa
 
 ## Surface
 
-contracts: migrationProviders
+contracts: `migrationProviders`

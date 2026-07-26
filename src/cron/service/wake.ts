@@ -2,6 +2,27 @@
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { CronServiceState } from "./state.js";
 
+export function enqueueCronSystemEvent(
+  state: CronServiceState,
+  text: string,
+  opts?: Parameters<CronServiceState["deps"]["enqueueSystemEvent"]>[1],
+) {
+  return state.deps.enqueueSystemEvent(text, opts);
+}
+
+export function requestCronHeartbeat(
+  state: CronServiceState,
+  opts: {
+    intent: "immediate" | "event";
+    reason: string;
+    agentId?: string;
+    sessionKey?: string;
+    heartbeat?: { target?: "last" };
+  },
+) {
+  state.deps.requestHeartbeat({ source: "cron", ...opts });
+}
+
 /** Enqueues a manual cron wake event and optionally pokes the targeted heartbeat loop. */
 export function wake(
   state: CronServiceState,

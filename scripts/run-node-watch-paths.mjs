@@ -4,6 +4,7 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 
 const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   // Root runtime code imports these package sources through tsconfig aliases,
@@ -67,9 +68,16 @@ const isRestartRelevantExtensionPath = (relativePath) => {
   return isBuildRelevantSourcePath(normalizedPath);
 };
 
-const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
+const isRelevantRunNodePath = (
+  repoPath,
+  isRelevantBundledPluginPath,
+  generatedPluginAssetPaths,
+) => {
   const normalizedPath = normalizeRunNodePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))) {
+  if (
+    generatedPluginAssetPaths.has(normalizedPath) ||
+    ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))
+  ) {
     return false;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {
@@ -89,10 +97,41 @@ const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   return false;
 };
 
+/** Creates a path classifier whose generated-output metadata can be refreshed. */
+export function createRunNodePathClassifier(params = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  let generatedPluginAssetPaths = new Set();
+
+  return {
+    refreshGeneratedPluginAssetPaths() {
+      generatedPluginAssetPaths = new Set(listGeneratedExtensionAssetSources({ rootDir }));
+    },
+    isBuildRelevantRunNodePath(repoPath) {
+      return isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath, generatedPluginAssetPaths);
+    },
+    isRestartRelevantRunNodePath(repoPath) {
+      return isRelevantRunNodePath(
+        repoPath,
+        isRestartRelevantExtensionPath,
+        generatedPluginAssetPaths,
+      );
+    },
+  };
+}
+
+let defaultRunNodePathClassifier;
+const getDefaultRunNodePathClassifier = () => {
+  if (!defaultRunNodePathClassifier) {
+    defaultRunNodePathClassifier = createRunNodePathClassifier();
+    defaultRunNodePathClassifier.refreshGeneratedPluginAssetPaths();
+  }
+  return defaultRunNodePathClassifier;
+};
+
 /** Returns true when a repo path should trigger a dev rebuild. */
 export const isBuildRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
+  getDefaultRunNodePathClassifier().isBuildRelevantRunNodePath(repoPath);
 
 /** Returns true when a repo path should restart the running dev process. */
 export const isRestartRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
+  getDefaultRunNodePathClassifier().isRestartRelevantRunNodePath(repoPath);

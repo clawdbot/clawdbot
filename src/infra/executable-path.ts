@@ -92,7 +92,7 @@ export function isRegularFile(filePath: string): boolean {
   }
 }
 
-export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
+function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
   if (!isRegularFile(filePath)) {
     return false;
   }

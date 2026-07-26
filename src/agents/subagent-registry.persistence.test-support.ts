@@ -75,6 +75,11 @@ export function createSubagentRegistryTestDeps(
     ensureContextEnginesInitialized: vi.fn(),
     ensureRuntimePluginsLoaded: vi.fn(),
     getRuntimeConfig: vi.fn(() => ({})),
+    getGatewayRecoveryRuntime: vi.fn(() => ({
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    })),
     resolveAgentTimeoutMs: vi.fn(() => 100),
     resolveContextEngine: vi.fn(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },

@@ -15,6 +15,7 @@ const probeFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
+  registerFeishuAiAgent: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock("./client.js", async () => {
@@ -27,7 +28,8 @@ vi.mock("./client.js", async () => {
 
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
-import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
+import { monitorFeishuProvider } from "./monitor.js";
 import { httpServers } from "./monitor.state.js";
 
 beforeAll(async () => {
@@ -72,8 +74,8 @@ async function postSignedPayload(url: string, payload: Record<string, unknown>) 
   });
 }
 
-afterEach(async () => {
-  await stopFeishuMonitor();
+afterEach(() => {
+  cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {

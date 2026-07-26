@@ -41,6 +41,7 @@ type AgentRuntimeFailoverReason =
   | "billing"
   | "server_error"
   | "timeout"
+  | "tls_certificate"
   | "context_overflow"
   | "model_not_found"
   | "session_expired"
@@ -88,11 +89,17 @@ type AgentRuntimeTextTransforms = {
 /** Resolved provider runtime handle forwarded to plugin-owned hooks. */
 type AgentRuntimeProviderHandle = {
   provider: string;
+  modelId?: string | null;
   config?: AgentRuntimeConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
   bundledProviderVitestCompat?: boolean;
+};
+
+type PreparedAgentRuntimeProviderHandle = AgentRuntimeProviderHandle & {
+  modelId: string | null;
+  prepared: true;
 };
 
 type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
@@ -113,12 +120,23 @@ type AgentRuntimeMessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
       type: "url";
       url: string;
     }
   | {
       type: "web-app";
       url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
     };
 
 /** Portable action control exposed to agent runtime reply payloads. */
@@ -153,39 +171,16 @@ type AgentRuntimeMessagePresentationOption = {
   value?: string;
 };
 
-/**
- * @deprecated Use AgentRuntimeMessagePresentationButton.
- */
-type AgentRuntimeInteractiveReplyButton = AgentRuntimeMessagePresentationButton;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationOption.
- */
-type AgentRuntimeInteractiveReplyOption = AgentRuntimeMessagePresentationOption;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationBlock.
- */
-type AgentRuntimeInteractiveReplyBlock =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "buttons";
-      buttons: AgentRuntimeInteractiveReplyButton[];
-    }
-  | {
-      type: "select";
-      placeholder?: string;
-      options: AgentRuntimeInteractiveReplyOption[];
-    };
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentation.
- */
-type AgentRuntimeInteractiveReply = {
-  blocks: AgentRuntimeInteractiveReplyBlock[];
+type AgentRuntimeLegacyInteractiveReply = {
+  blocks: Array<
+    | { type: "text"; text: string }
+    | { type: "buttons"; buttons: AgentRuntimeMessagePresentationButton[] }
+    | {
+        type: "select";
+        placeholder?: string;
+        options: AgentRuntimeMessagePresentationOption[];
+      }
+  >;
 };
 
 /** Portable reply presentation severity/style hint. */
@@ -276,16 +271,21 @@ type AgentRuntimeReplyPayloadLocation = {
 /** Portable reply payload emitted by agent runtimes before channel rendering. */
 type AgentRuntimeReplyPayload = {
   text?: string;
+  fallbackText?: {
+    text: string;
+    replacesPayloadIndex?: number;
+  };
   mediaUrl?: string;
   mediaUrls?: string[];
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;
   presentation?: AgentRuntimeMessagePresentation;
+  presentationTextMode?: "fallback";
   delivery?: AgentRuntimeReplyPayloadDelivery;
   /**
    * @deprecated Use presentation.
    */
-  interactive?: AgentRuntimeInteractiveReply;
+  interactive?: AgentRuntimeLegacyInteractiveReply;
   btw?: {
     question: string;
   };
@@ -520,7 +520,7 @@ type AgentRuntimeTransportPlan = {
 /** Complete prepared runtime plan consumed by embedded-agent attempts. */
 export type AgentRuntimePlan = {
   resolvedRef: AgentRuntimeResolvedRef;
-  providerRuntimeHandle?: AgentRuntimeProviderHandle;
+  providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
   auth: AgentRuntimeAuthPlan;
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
@@ -553,7 +553,7 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
   agentDir?: string;
   provider: string;
   modelId: string;
-  providerRuntimeHandle?: AgentRuntimeProviderHandle;
+  providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
 };
 
 /** Inputs needed to build the full prepared runtime plan. */
@@ -581,5 +581,8 @@ export type BuildAgentRuntimePlanParams = {
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;
   resolvedTransport?: AgentRuntimeTransport;
-  providerRuntimeHandle?: AgentRuntimeProviderHandle;
+  /** Omit only when a standalone caller intentionally resolves provider hooks lazily. */
+  providerRuntimeHandle?: PreparedAgentRuntimeProviderHandle;
+  /** Lifecycle-owned plugin metadata prepared before the attempt starts. */
+  metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
 };

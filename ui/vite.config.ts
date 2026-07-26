@@ -6,15 +6,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
-import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
-import {
-  deriveControlUiBuildId,
-  normalizeControlUiBuildId,
-  normalizeControlUiBranch,
-  normalizeControlUiBuildTimestamp,
-  normalizeControlUiCommit,
-  type ControlUiBuildInfo,
-} from "./src/build-info.ts";
+import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
+import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -129,6 +123,20 @@ function readGitBranch(): string | null {
   }
 }
 
+function readGitCommitTimestamp(commit: string): string | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "show", "-s", "--format=%ct", commit], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const seconds = Number.parseInt(raw.trim(), 10);
+    const date = new Date(seconds * 1000);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  } catch {
+    return null;
+  }
+}
+
 function readGitDirty(): boolean | null {
   try {
     const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
@@ -146,6 +154,7 @@ type ControlUiBuildInfoSources = {
   now?: () => Date;
   readPackageVersion?: () => string | null;
   readGitCommit?: () => string | null;
+  readGitCommitTimestamp?: (commit: string) => string | null;
   readGitBranch?: () => string | null;
   readGitDirty?: () => boolean | null;
 };
@@ -153,7 +162,7 @@ type ControlUiBuildInfoSources = {
 function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
   const explicit = value?.trim();
   if (explicit) {
-    const timestamp = normalizeControlUiBuildTimestamp(explicit);
+    const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
     if (!timestamp) {
       throw new Error(
         "OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z",
@@ -175,22 +184,32 @@ export function resolveControlUiBuildInfo(
     { name: "GIT_SHA", value: env.GIT_SHA?.trim() },
   ].find((source) => source.value);
   const explicitCommit = explicitCommitSource?.value;
-  const envCommit = explicitCommit ? normalizeControlUiCommit(explicitCommit) : null;
+  const envCommit = explicitCommit
+    ? normalizeControlUiBuildInfo({ commit: explicitCommit }).commit
+    : null;
   if (explicitCommitSource && !envCommit) {
     throw new Error(`${explicitCommitSource.name} must be a full 40-character hexadecimal SHA`);
   }
   const gitCommit = explicitCommit ? null : (sources.readGitCommit ?? readGitCommit)();
-  const normalizedGitCommit = normalizeControlUiCommit(gitCommit);
+  const normalizedGitCommit = normalizeControlUiBuildInfo({ commit: gitCommit }).commit;
   if (gitCommit?.trim() && !normalizedGitCommit) {
     throw new Error("git rev-parse HEAD must return a full 40-character hexadecimal SHA");
   }
   // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
   const githubCommit = explicitCommit || gitCommit?.trim() ? null : env.GITHUB_SHA?.trim();
-  const normalizedGithubCommit = normalizeControlUiCommit(githubCommit);
+  const normalizedGithubCommit = normalizeControlUiBuildInfo({ commit: githubCommit }).commit;
   if (githubCommit && !normalizedGithubCommit) {
     throw new Error("GITHUB_SHA must be a full 40-character hexadecimal SHA");
   }
   const commit = envCommit ?? normalizedGitCommit ?? normalizedGithubCommit;
+  // Commit time is advisory identity like branch/dirty: read from the local
+  // object store for the exact embedded commit, null when no checkout has it
+  // (e.g. GITHUB_SHA-only builds). It must never block a build.
+  const commitAt = commit
+    ? normalizeControlUiBuildInfo({
+        commitAt: (sources.readGitCommitTimestamp ?? readGitCommitTimestamp)(commit),
+      }).commitAt
+    : null;
   const builtAt = normalizeBuildTimestamp(
     env.OPENCLAW_BUILD_TIMESTAMP,
     sources.now ?? (() => new Date()),
@@ -200,19 +219,20 @@ export function resolveControlUiBuildInfo(
   // Tags must not be presented as branches in GitHub-built artifacts.
   const githubBranch = env.GITHUB_REF_TYPE === "branch" ? env.GITHUB_REF_NAME : null;
   const branch =
-    normalizeControlUiBranch(env.GIT_BRANCH) ??
-    normalizeControlUiBranch(githubBranch) ??
-    normalizeControlUiBranch((sources.readGitBranch ?? readGitBranch)());
+    normalizeControlUiBuildInfo({ branch: env.GIT_BRANCH }).branch ??
+    normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
+    normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
   const dirty = (sources.readGitDirty ?? readGitDirty)();
   const metadata = { version, commit, builtAt };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
   return {
     ...metadata,
+    commitAt,
     branch,
     dirty,
-    buildId: explicitBuildId
-      ? normalizeControlUiBuildId(explicitBuildId)
-      : deriveControlUiBuildId(metadata),
+    buildId: normalizeControlUiBuildInfo(
+      explicitBuildId ? { ...metadata, buildId: explicitBuildId } : metadata,
+    ).buildId,
   };
 }
 
@@ -281,30 +301,31 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "number-coercion"),
+    sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
+    sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract"),
+    sourcePackageAlias("workboard-contract"),
   ];
 }
 
-export function resolveExternalPackageAliasesForVite(): ControlUiViteAlias[] {
+export function resolveExternalPackageAliasesForVite(
+  resolvePackage: (specifier: string) => string = require.resolve,
+): ControlUiViteAlias[] {
+  const packageRoot = (specifier: string) =>
+    path.dirname(resolvePackage(`${specifier}/package.json`));
   return [
     {
       find: "@openclaw/libterminal/browser",
-      replacement: path.join(
-        repoRoot,
-        "node_modules",
-        "@openclaw",
-        "libterminal",
-        "dist",
-        "browser.js",
-      ),
+      replacement: path.join(packageRoot("@openclaw/libterminal"), "dist/browser.js"),
     },
     {
       find: "@openclaw/uirouter",
-      replacement: path.join(repoRoot, "node_modules", "@openclaw", "uirouter", "dist", "index.js"),
+      replacement: path.join(packageRoot("@openclaw/uirouter"), "dist/index.js"),
     },
   ];
 }
@@ -424,9 +445,13 @@ export default function controlUiViteConfig(): UserConfig {
       outDir,
       emptyOutDir: true,
       sourcemap: true,
-      rollupOptions: {
+      rolldownOptions: {
+        // Explicit groups do not absorb each other's dependencies. These settings
+        // preserve execution order while keeping the startup chunks bounded.
+        preserveEntrySignatures: "allow-extension",
         output: {
-          manualChunks: controlUiManualChunk,
+          codeSplitting: controlUiCodeSplitting,
+          strictExecutionOrder: true,
         },
       },
       // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.

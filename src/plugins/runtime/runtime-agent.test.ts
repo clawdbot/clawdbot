@@ -84,6 +84,7 @@ describe("plugin runtime session creation", () => {
         sessionId: created.entry.sessionId,
         entry: {
           agentHarnessId: "codex",
+          delivery: { kind: "none" },
           modelSelectionLocked: true,
           label: "Native Codex thread",
           pluginExtensions: {
@@ -130,6 +131,8 @@ describe("plugin runtime session creation", () => {
       const created = await runtime.session.createSessionEntry({
         cfg: {},
         key,
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         initialEntry: {
           cliBackendId: "claude-cli",
           model: "claude-opus-4-8",
@@ -143,10 +146,16 @@ describe("plugin runtime session creation", () => {
         },
       });
       expect(created.entry).toMatchObject({
+        createdVia: "plugin",
+        createdActor: { type: "system", id: "anthropic" },
+        createdAt: expect.any(Number),
         pluginOwnerId: "anthropic",
         providerOverride: "claude-cli",
         modelOverride: "claude-opus-4-8",
         modelSelectionLocked: true,
+        execHost: "node",
+        execNode: "node-a",
+        execCwd: "/work/on-node",
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "claude-source",
@@ -601,6 +610,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-workspace-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -648,6 +658,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -696,6 +707,7 @@ describe("plugin runtime session creation", () => {
       const existing = {
         sessionId: "foreign-initializer",
         updatedAt: Date.now(),
+        delivery: { kind: "none" as const },
         initializationPending: true as const,
         modelSelectionLocked: true,
         pluginOwnerId: "other-plugin",

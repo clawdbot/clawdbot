@@ -18,32 +18,28 @@ import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import {
-  hasDeliberateSilentTerminalReply,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import {
-  isFallbackSummaryError,
-  runWithModelFallback,
-  type ModelFallbackResultClassification,
-} from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import {
   isAgentRunRestartAbortReason,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
-import {
-  buildAgentRuntimeDeliveryPlan,
-  buildAgentRuntimeOutcomePlan,
-} from "../../agents/runtime-plan/build.js";
+import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -57,6 +53,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
@@ -66,9 +63,9 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createAgentLifecycleTerminalBackstop,
-  resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -76,13 +73,12 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import {
   buildEmptyInteractiveReplyPayload,
-  buildTerminalAgentRunFailureReplyPayload,
-  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
-  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-} from "./agent-runner-execution.js";
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -100,6 +96,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -114,6 +111,7 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   refreshQueuedFollowupSession,
+  resolveFollowupAbortSignal,
   type FollowupRun,
   resolveQueueSettings,
 } from "./queue.js";
@@ -133,42 +131,6 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
-
-const PRESERVED_FOLLOWUP_RESULT_CODES = new Set([
-  "empty_result",
-  "reasoning_only_result",
-  "planning_only_result",
-]);
-
-function preserveNonVisibleFollowupResult(
-  classification: ModelFallbackResultClassification,
-): ModelFallbackResultClassification {
-  if (
-    !classification ||
-    !("code" in classification) ||
-    !classification.code ||
-    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code)
-  ) {
-    return classification;
-  }
-  // Follow-up delivery owns its terminal fallback. Preserve the classified result
-  // so that owner can route a visible failure instead of losing it to a thrown summary.
-  return {
-    ...classification,
-    preserveResultOnExhaustion: true,
-    // Prefer any earlier result that carries a user-facing terminal presentation.
-    preserveResultPriority: -1,
-  };
-}
-
-function resolveFollowupAbortSignal(
-  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
-): AbortSignal | undefined {
-  const signals = [run.abortSignal, run.queueAbortSignal].filter(
-    (signal): signal is AbortSignal => signal !== undefined,
-  );
-  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
-}
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
@@ -301,7 +263,7 @@ async function forwardFollowupProgressEvent(params: {
       phase: readStringValue(evt.data.phase),
       title: readStringValue(evt.data.title),
       explanation: readStringValue(evt.data.explanation),
-      steps: filterStringArray(evt.data.steps),
+      steps: normalizeAgentPlanSteps(evt.data.steps),
       source: readStringValue(evt.data.source),
     });
   }
@@ -401,7 +363,7 @@ async function forwardFollowupProgressEvent(params: {
 
 /** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(params: {
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   typingMode: TypingMode;
   sessionEntry?: SessionEntry;
@@ -603,6 +565,7 @@ export function createFollowupRunner(params: {
       .filter((end): end is () => void => typeof end === "function");
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
+    const queuedMedia = queued.media ?? opts?.media;
     let replyOperation: ReplyOperation | undefined;
     let deferred = false;
     let failed = false;
@@ -635,7 +598,7 @@ export function createFollowupRunner(params: {
       const resolveCurrentVerboseLevel = () => {
         if (replySessionKey && storePath) {
           try {
-            const level = loadSessionEntry({
+            const level = loadSessionEntryReadOnly({
               storePath,
               sessionKey: replySessionKey,
             })?.verboseLevel;
@@ -702,7 +665,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
-        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
+        onReplyAdmissionWaitChange: effectiveQueued.onReplyAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -723,6 +686,9 @@ export function createFollowupRunner(params: {
       if (isFollowupRunAborted(effectiveQueued)) {
         return;
       }
+      // Channel delivery state belongs to one admitted run. Give the active
+      // dispatcher a boundary before callbacks from this followup can reuse it.
+      await opts?.onQueuedFollowupAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -1016,37 +982,39 @@ export function createFollowupRunner(params: {
         resetAnnounced: false,
       };
       try {
-        const outcomePlan = buildAgentRuntimeOutcomePlan();
-        const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
-          ...resolveModelFallbackOptions(run, runtimeConfig),
-          cfg: runtimeConfig,
-          runId,
-          sessionId: run.sessionId,
-          abortSignal: runAbortSignal,
-          resolveAgentHarnessRuntimeOverride: (provider) =>
-            resolveSessionRuntimeOverrideForProvider({
-              provider,
-              entry: activeSessionEntry,
-              cfg: runtimeConfig,
-            }),
-          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
-            await ensureSelectedAgentHarnessPlugin({
-              config: runtimeConfig,
-              provider,
-              modelId: model,
-              agentId: run.agentId,
-              sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
-              agentHarnessId: agentHarnessRuntimeOverride,
-              agentHarnessRuntimeOverride,
-              workspaceDir: run.workspaceDir,
-            });
+        const selection = resolveModelFallbackOptions(run, runtimeConfig);
+        const fallbackResult = await runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
+          selection: {
+            cfg: selection.cfg,
+            provider: selection.provider,
+            model: selection.model,
+            agentDir: selection.agentDir,
+            fallbacksOverride: selection.fallbacksOverride,
           },
-          classifyResult: ({ result, provider, model }) =>
-            preserveNonVisibleFollowupResult(
-              outcomePlan.classifyRunResult({ result, provider, model }),
-            ),
-          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-          run: async (provider, model, runOptions) => {
+          identity: {
+            runId,
+            agentId: run.agentId,
+            sessionId: run.sessionId,
+            sessionKey: selection.sessionKey,
+          },
+          harness: {
+            workspaceDir: run.workspaceDir,
+            sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+            preparation: { kind: "direct" },
+            resolveRuntimeOverride: (provider) =>
+              resolveSessionRuntimeOverrideForProvider({
+                provider,
+                entry: activeSessionEntry,
+                cfg: runtimeConfig,
+              }),
+          },
+          behavior: { kind: "followup-delivery" },
+          sessionOverride: {
+            kind: "reconcile-completed",
+            reconcile: clearRecoveredAutoFallbackPrimaryProbe,
+          },
+          abortSignal: runAbortSignal,
+          runCandidate: async (provider, model, runOptions) => {
             const suppressQueuedUserPersistenceForCandidate =
               (run.suppressNextUserMessagePersistence ?? false) ||
               queuedUserMessagePersistedAcrossFallback;
@@ -1168,186 +1136,204 @@ export function createFollowupRunner(params: {
                   shouldEmitToolOutput: shouldEmitToolOutputProgress,
                   deliver: deliverFollowupToolSummary,
                 });
-                const result = await runCliAgentWithLifecycle({
-                  runId,
-                  lifecycleGeneration,
-                  provider: cliExecutionProvider,
-                  startedAt: cliLifecycleStartedAt,
-                  emitLifecycleTerminal: false,
-                  onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
-                  suppressAssistantBridge: run.silentExpected,
-                  onActivity: () => replyOperation?.recordActivity(),
-                  preserveProgressCallbackStartOrder,
-                  onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
-                  onReasoningProgress: async (payload) => {
-                    await progressOpts?.onReasoningProgress?.(payload);
+                const result = await withLocalSessionPlacementTurnAdmission(
+                  {
+                    sessionId: run.sessionId,
+                    sessionKey: replySessionKey,
+                    agentId: run.agentId,
+                    runId,
                   },
-                  onToolEvent: async (payload) => {
-                    if (!preserveProgressCallbackStartOrder) {
-                      await cliToolSummaryTracker.noteToolEvent(payload);
-                      if (payload.phase === "result") {
-                        return;
-                      }
-                      await forwardFollowupProgressEvent({
-                        evt: {
-                          stream: "tool",
-                          data: { name: payload.name, phase: payload.phase, args: payload.args },
-                        },
-                        opts: progressOpts,
-                        detailMode: toolProgressDetail,
-                        emitChannelProgress: shouldEmitToolResultProgress(),
-                      });
-                      return;
-                    }
-                    if (payload.phase === "result") {
-                      await cliToolSummaryTracker.noteToolEvent(payload);
-                      return;
-                    }
-                    // CLI bridges drain independently. Start channel presentation before
-                    // summary bookkeeping can yield and let later progress overtake this tool.
-                    const presentationPromise = forwardFollowupProgressEvent({
-                      evt: {
-                        stream: "tool",
-                        data: { name: payload.name, phase: payload.phase, args: payload.args },
+                  () =>
+                    runCliAgentWithLifecycle({
+                      runId,
+                      lifecycleGeneration,
+                      provider: cliExecutionProvider,
+                      startedAt: cliLifecycleStartedAt,
+                      emitLifecycleTerminal: false,
+                      onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
+                      suppressAssistantBridge: run.silentExpected,
+                      onActivity: () => replyOperation?.recordActivity(),
+                      preserveProgressCallbackStartOrder,
+                      onReasoningText: createCliReasoningStreamBridge(
+                        progressOpts?.onReasoningStream,
+                      ),
+                      onPlanUpdate: progressOpts?.onPlanUpdate,
+                      onReasoningProgress: async (payload) => {
+                        await progressOpts?.onReasoningProgress?.(payload);
                       },
-                      opts: progressOpts,
-                      detailMode: toolProgressDetail,
-                      emitChannelProgress: shouldEmitToolResultProgress(),
-                    });
-                    await Promise.all([
-                      presentationPromise,
-                      cliToolSummaryTracker.noteToolEvent(payload),
-                    ]);
-                  },
-                  onCommentaryText:
-                    progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
-                      ? async ({ text, itemId }) => {
+                      onToolEvent: async (payload) => {
+                        if (!preserveProgressCallbackStartOrder) {
+                          await cliToolSummaryTracker.noteToolEvent(payload);
+                          if (payload.phase === "result") {
+                            return;
+                          }
                           await forwardFollowupProgressEvent({
                             evt: {
-                              stream: "item",
-                              data: { kind: "preamble", progressText: text, itemId },
+                              stream: "tool",
+                              data: {
+                                name: payload.name,
+                                phase: payload.phase,
+                                args: payload.args,
+                              },
                             },
                             opts: progressOpts,
                             detailMode: toolProgressDetail,
+                            emitChannelProgress: shouldEmitToolResultProgress(),
                           });
+                          return;
                         }
-                      : undefined,
-                  onFastModeAutoProgress: async (payload) => {
-                    await enqueueProgressDelivery(async () => {
-                      // Mirrors direct dispatch progress suppression: ambient
-                      // room events never get automatic fast-mode notices.
-                      if (isRoomEventFollowup()) {
-                        return;
-                      }
-                      await sendRunPayloads(
-                        [payload],
-                        effectiveQueued,
-                        {
-                          provider,
-                          modelId: model,
-                        },
-                        { kind: "tool", mirror: false, runId },
-                      );
-                    });
-                  },
-                  transformResult:
-                    queued.currentInboundEventKind === "room_event"
-                      ? (resultLocal) =>
-                          keepCliSessionBindingOnlyWhenReused({
-                            result: resultLocal,
-                            existingSessionId: cliSessionBinding?.sessionId,
-                            onDroppedReplacement: () => {
-                              droppedCliSessionReplacement = true;
+                        if (payload.phase === "result") {
+                          await cliToolSummaryTracker.noteToolEvent(payload);
+                          return;
+                        }
+                        // CLI bridges drain independently. Start channel presentation before
+                        // summary bookkeeping can yield and let later progress overtake this tool.
+                        const presentationPromise = forwardFollowupProgressEvent({
+                          evt: {
+                            stream: "tool",
+                            data: { name: payload.name, phase: payload.phase, args: payload.args },
+                          },
+                          opts: progressOpts,
+                          detailMode: toolProgressDetail,
+                          emitChannelProgress: shouldEmitToolResultProgress(),
+                        });
+                        await Promise.all([
+                          presentationPromise,
+                          cliToolSummaryTracker.noteToolEvent(payload),
+                        ]);
+                      },
+                      onCommentaryText:
+                        progressOpts?.onItemEvent && shouldBridgeCliPreambleEvents(progressOpts)
+                          ? async ({ text, itemId }) => {
+                              await forwardFollowupProgressEvent({
+                                evt: {
+                                  stream: "item",
+                                  data: { kind: "preamble", progressText: text, itemId },
+                                },
+                                opts: progressOpts,
+                                detailMode: toolProgressDetail,
+                              });
+                            }
+                          : undefined,
+                      onFastModeAutoProgress: async (payload) => {
+                        await enqueueProgressDelivery(async () => {
+                          // Mirrors direct dispatch progress suppression: ambient
+                          // room events never get automatic fast-mode notices.
+                          if (isRoomEventFollowup()) {
+                            return;
+                          }
+                          await sendRunPayloads(
+                            [payload],
+                            effectiveQueued,
+                            {
+                              provider,
+                              modelId: model,
                             },
-                          })
-                      : undefined,
-                  runParams: {
-                    replyOperation,
-                    sessionId: run.sessionId,
-                    sessionKey: replySessionKey,
-                    runtimePolicySessionKey: run.runtimePolicySessionKey,
-                    agentId: run.agentId,
-                    trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
-                    sessionFile: run.sessionFile,
-                    workspaceDir: run.workspaceDir,
-                    cwd: run.cwd,
-                    config: runtimeConfig,
-                    prompt: queued.prompt,
-                    transcriptPrompt: queued.transcriptPrompt,
-                    suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                    userTurnTranscriptRecorder,
-                    onUserMessagePersisted: notifyUserMessagePersisted,
-                    persistAssistantTranscript:
-                      queued.currentInboundEventKind !== "room_event" &&
-                      run.suppressTranscriptOnlyAssistantPersistence !== true,
-                    storePath,
-                    currentInboundEventKind: queued.currentInboundEventKind,
-                    currentInboundAudio: queued.currentInboundAudio,
-                    currentInboundContext,
-                    inputProvenance: run.inputProvenance,
-                    modelProvider: provider,
-                    provider: cliExecutionProvider,
-                    execOverrides: run.execOverrides,
-                    bashElevated: run.bashElevated,
-                    model,
-                    ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
-                      config: runtimeConfig,
+                            { kind: "tool", mirror: false, runId },
+                          );
+                        });
+                      },
+                      transformResult:
+                        queued.currentInboundEventKind === "room_event"
+                          ? (resultLocal) =>
+                              keepCliSessionBindingOnlyWhenReused({
+                                result: resultLocal,
+                                existingSessionId: cliSessionBinding?.sessionId,
+                                onDroppedReplacement: () => {
+                                  droppedCliSessionReplacement = true;
+                                },
+                              })
+                          : undefined,
+                      runParams: {
+                        replyOperation,
+                        sessionId: run.sessionId,
+                        sessionKey: replySessionKey,
+                        runtimePolicySessionKey: run.runtimePolicySessionKey,
+                        agentId: run.agentId,
+                        trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
+                        sessionFile: run.sessionFile,
+                        workspaceDir: run.workspaceDir,
+                        cwd: run.cwd,
+                        config: runtimeConfig,
+                        prompt: queued.prompt,
+                        transcriptPrompt: queued.transcriptPrompt,
+                        suppressNextUserMessagePersistence:
+                          suppressQueuedUserPersistenceForCandidate,
+                        userTurnTranscriptRecorder,
+                        onUserMessagePersisted: notifyUserMessagePersisted,
+                        persistAssistantTranscript:
+                          queued.currentInboundEventKind !== "room_event" &&
+                          run.suppressTranscriptOnlyAssistantPersistence !== true,
+                        storePath,
+                        currentInboundEventKind: queued.currentInboundEventKind,
+                        currentInboundAudio: queued.currentInboundAudio,
+                        currentInboundContext,
+                        inputProvenance: run.inputProvenance,
+                        modelProvider: provider,
+                        provider: cliExecutionProvider,
+                        execOverrides: run.execOverrides,
+                        bashElevated: run.bashElevated,
+                        model,
+                        ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
+                          config: runtimeConfig,
+                        }),
+                        thinkLevel: candidateThinkLevel,
+                        fastMode: candidateFastMode.fastMode,
+                        fastModeStartedAtMs,
+                        fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                        fastModeAutoProgressState,
+                        isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                        timeoutMs: run.timeoutMs,
+                        runTimeoutOverrideMs: run.runTimeoutOverrideMs,
+                        runId,
+                        extraSystemPrompt: run.extraSystemPrompt,
+                        sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                        taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
+                        silentReplyPromptMode: run.silentReplyPromptMode,
+                        allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
+                        extraSystemPromptStatic: run.extraSystemPromptStatic,
+                        cliSessionBindingFacts: run.cliSessionBindingFacts,
+                        ownerNumbers: run.ownerNumbers,
+                        cliSessionId: cliSessionBinding?.sessionId,
+                        cliSessionBinding,
+                        bootstrapPromptWarningSignaturesSeen,
+                        bootstrapPromptWarningSignature:
+                          bootstrapPromptWarningSignaturesSeen[
+                            bootstrapPromptWarningSignaturesSeen.length - 1
+                          ],
+                        images: queuedImages,
+                        imageOrder: queuedImageOrder,
+                        media: queuedMedia,
+                        skillsSnapshot: run.skillsSnapshot,
+                        messageChannel: queued.originatingChannel ?? undefined,
+                        messageProvider: resolveOriginMessageProvider({
+                          originatingChannel: queued.originatingChannel,
+                          provider: run.messageProvider,
+                        }),
+                        clientCaps: run.clientCaps,
+                        currentChannelId: queued.originatingTo,
+                        senderId: run.senderId,
+                        senderName: run.senderName,
+                        senderUsername: run.senderUsername,
+                        senderE164: run.senderE164,
+                        groupId: run.groupId,
+                        groupChannel: run.groupChannel,
+                        groupSpace: run.groupSpace,
+                        spawnedBy: run.spawnedBy,
+                        chatId: queued.originatingChatId,
+                        channelContext: run.channelContext,
+                        currentThreadTs:
+                          queued.originatingThreadId != null
+                            ? String(queued.originatingThreadId)
+                            : undefined,
+                        currentMessageId: followupCurrentMessageId,
+                        agentAccountId: run.agentAccountId,
+                        senderIsOwner: run.senderIsOwner,
+                        disableTools: opts?.disableTools,
+                        abortSignal: runAbortSignal,
+                      },
                     }),
-                    thinkLevel: candidateThinkLevel,
-                    fastMode: candidateFastMode.fastMode,
-                    fastModeStartedAtMs,
-                    fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
-                    fastModeAutoProgressState,
-                    isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-                    timeoutMs: run.timeoutMs,
-                    runTimeoutOverrideMs: run.runTimeoutOverrideMs,
-                    runId,
-                    extraSystemPrompt: run.extraSystemPrompt,
-                    sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
-                    taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
-                    silentReplyPromptMode: run.silentReplyPromptMode,
-                    allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
-                    extraSystemPromptStatic: run.extraSystemPromptStatic,
-                    cliSessionBindingFacts: run.cliSessionBindingFacts,
-                    ownerNumbers: run.ownerNumbers,
-                    cliSessionId: cliSessionBinding?.sessionId,
-                    cliSessionBinding,
-                    bootstrapPromptWarningSignaturesSeen,
-                    bootstrapPromptWarningSignature:
-                      bootstrapPromptWarningSignaturesSeen[
-                        bootstrapPromptWarningSignaturesSeen.length - 1
-                      ],
-                    images: queuedImages,
-                    imageOrder: queuedImageOrder,
-                    skillsSnapshot: run.skillsSnapshot,
-                    messageChannel: queued.originatingChannel ?? undefined,
-                    messageProvider: resolveOriginMessageProvider({
-                      originatingChannel: queued.originatingChannel,
-                      provider: run.messageProvider,
-                    }),
-                    clientCaps: run.clientCaps,
-                    currentChannelId: queued.originatingTo,
-                    senderId: run.senderId,
-                    senderName: run.senderName,
-                    senderUsername: run.senderUsername,
-                    senderE164: run.senderE164,
-                    groupId: run.groupId,
-                    groupChannel: run.groupChannel,
-                    groupSpace: run.groupSpace,
-                    spawnedBy: run.spawnedBy,
-                    chatId: queued.originatingChatId,
-                    channelContext: run.channelContext,
-                    currentThreadTs:
-                      queued.originatingThreadId != null
-                        ? String(queued.originatingThreadId)
-                        : undefined,
-                    currentMessageId: followupCurrentMessageId,
-                    agentAccountId: run.agentAccountId,
-                    senderIsOwner: run.senderIsOwner,
-                    disableTools: opts?.disableTools,
-                    abortSignal: runAbortSignal,
-                  },
-                });
+                );
                 if (droppedCliSessionReplacement) {
                   await clearDroppedCliSessionBinding({
                     provider: cliExecutionProvider,
@@ -1470,6 +1456,7 @@ export function createFollowupRunner(params: {
                 },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
+                media: queuedMedia,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 blockReplyBreak: run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
@@ -1567,7 +1554,7 @@ export function createFollowupRunner(params: {
           deferredLifecycleError ??
           userFacingErrorPayload ??
           (runResult.meta?.error ? "Agent run failed" : undefined);
-        const terminalMetadata = resolveAgentLifecycleTerminalMetadata(runResult.meta);
+        const terminalMetadata = fallbackResult.terminal.metadata;
         if (fallbackExhausted) {
           const exhaustionError = new Error(
             terminalErrorMessage ?? "All model fallback candidates failed",
@@ -1587,10 +1574,7 @@ export function createFollowupRunner(params: {
           settledLifecycleTerminal?.emit("end", runResult);
         }
         if (!fallbackExhausted) {
-          await clearRecoveredAutoFallbackPrimaryProbe({
-            provider: fallbackProvider,
-            model: fallbackModel,
-          });
+          await fallbackResult.settleSessionOverride();
         }
       } catch (err) {
         if (
@@ -1661,7 +1645,9 @@ export function createFollowupRunner(params: {
             entry: activeSessionEntry,
             sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
             channel:
-              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+              queued.originatingChannel ??
+              run.messageProvider ??
+              sessionDeliveryChannel(activeSessionEntry),
             chatType: activeSessionEntry?.chatType,
           }),
         });
@@ -1714,7 +1700,9 @@ export function createFollowupRunner(params: {
             entry: activeSessionEntry,
             sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
             channel:
-              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+              queued.originatingChannel ??
+              run.messageProvider ??
+              sessionDeliveryChannel(activeSessionEntry),
             chatType: activeSessionEntry?.chatType,
           }),
         });
@@ -1739,7 +1727,10 @@ export function createFollowupRunner(params: {
         }
         warnPrivateMessageToolFinal({
           sessionKey: replySessionKey,
-          channel: queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+          channel:
+            queued.originatingChannel ??
+            run.messageProvider ??
+            sessionDeliveryChannel(activeSessionEntry),
           finalTextLength: assistantFinalText.trim().length,
         });
         const retryEnqueued =
@@ -1994,7 +1985,12 @@ export function createFollowupRunner(params: {
             getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
         );
         if (suppressionDeliverablePayloads.length > 0) {
-          await sendFollowupPayloads(
+          // Marked runtime output bypasses source-reply suppression, not the
+          // admission-time send policy or ambient room-event silence.
+          if (isRoomEventFollowup()) {
+            return;
+          }
+          await sendRunPayloads(
             suppressionDeliverablePayloads,
             effectiveQueued,
             {
@@ -2057,3 +2053,4 @@ export function createFollowupRunner(params: {
   };
   return runFollowupTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

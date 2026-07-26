@@ -15,7 +15,7 @@ import {
   resolvePairingPaths,
 } from "./pairing-files.js";
 
-export type LegacyDevicePairingMigrationResult = {
+type LegacyDevicePairingMigrationResult = {
   imported: number;
   skippedExisting: number;
 };

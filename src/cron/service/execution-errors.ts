@@ -1,12 +1,12 @@
 /** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
+import { CRON_JOB_EXECUTION_TIMEOUT_ERROR } from "../execution-error-constants.js";
 import type { CronAgentExecutionStarted } from "../types.js";
 
 function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
   return formatEmbeddedAgentExecutionPhase(execution?.phase);
 }
 
-const CRON_JOB_EXECUTION_TIMEOUT_ERROR = "cron: job execution timed out";
 const CRON_SETUP_TIMEOUT_ERROR = "cron: isolated agent setup timed out before runner start";
 const CRON_PRE_EXECUTION_TIMEOUT_ERROR = "cron: isolated agent run stalled before execution start";
 const CRON_TIMEOUT_ERROR_PREFIXES: readonly string[] = [
@@ -83,7 +83,7 @@ function isAbortError(err: unknown): boolean {
   return err.name === "AbortError" || err.message === timeoutErrorMessage();
 }
 
-/** Normalizes thrown cron run failures into stable log/run-log text. */
+/** Normalizes thrown cron run failures into stable log/run-history text. */
 export function normalizeCronRunErrorText(err: unknown): string {
   if (isAbortError(err)) {
     return timeoutErrorMessage();

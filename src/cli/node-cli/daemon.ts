@@ -46,6 +46,7 @@ type NodeDaemonInstallOptions = {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  shareInstalledApps?: boolean;
   runtime?: string;
   force?: boolean;
   json?: boolean;
@@ -162,6 +163,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       tlsFingerprint: tlsFingerprint || undefined,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
+      installedAppsSharing: opts.shareInstalledApps,
       runtime: runtimeRaw,
       warn: (message) => {
         if (json) {

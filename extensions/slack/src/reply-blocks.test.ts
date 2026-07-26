@@ -3,12 +3,13 @@ import {
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveSlackReplyBlockResolution, resolveSlackReplyText } from "./reply-blocks.js";
+import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
+import { resolveSlackReplyBlockResolution } from "./reply-blocks.js";
 
-describe("resolveSlackReplyText", () => {
+describe("renderSlackMessagePresentationFallbackText", () => {
   it("includes complete portable table data in Slack accessibility text", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         text: "Pipeline summary",
         presentation: {
           blocks: [
@@ -31,7 +32,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps raw table values literal without changing authored Slack text", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         text: "Intentional <!here>",
         presentation: {
           title: "Report <@U999>",
@@ -52,7 +53,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps plain-text controls literal when they accompany structured data", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         presentation: {
           blocks: [
             { type: "table", caption: "Data", headers: ["Value"], rows: [[1]] },
@@ -92,7 +93,7 @@ describe("resolveSlackReplyText", () => {
   });
 
   it("marks command fallbacks with backticks as not copyable", () => {
-    const rendered = resolveSlackReplyText({
+    const rendered = renderSlackMessagePresentationFallbackText({
       presentation: {
         blocks: [
           {
@@ -121,7 +122,7 @@ describe("resolveSlackReplyText", () => {
 
   it("keeps safe command fallback bytes exact", () => {
     expect(
-      resolveSlackReplyText({
+      renderSlackMessagePresentationFallbackText({
         presentation: {
           blocks: [
             {
@@ -251,7 +252,7 @@ describe("resolveSlackReplyText", () => {
         },
       ],
     });
-    expect(resolveSlackReplyText(payload)).toContain("- Account: account-99");
+    expect(renderSlackMessagePresentationFallbackText(payload)).toContain("- Account: account-99");
   });
 
   it("coalesces adjacent fallbacks without changing their authored order", () => {

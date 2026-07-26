@@ -9,6 +9,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import {
   channelRouteTargetsMatchExact,
   stringifyRouteThreadId,
@@ -46,7 +47,7 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
   const sentSet = new Set<string>();
   for (const sentMediaUrl of sentMediaUrls) {
-    const normalized = normalizeMediaForDedupe(sentMediaUrl);
+    const normalized = normalizeMediaReferenceForComparison(sentMediaUrl);
     if (normalized) {
       sentSet.add(normalized);
     }
@@ -67,13 +68,13 @@ export function filterMessagingToolMediaDuplicates(params: {
     }
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
+    const stripSingle = mediaUrl && sentSet.has(normalizeMediaReferenceForComparison(mediaUrl));
 
     let filteredUrls: string[] | undefined;
     let strippedMediaUrls = false;
     if (mediaUrls?.length) {
       for (const [mediaIndex, url] of mediaUrls.entries()) {
-        if (sentSet.has(normalizeMediaForDedupe(url))) {
+        if (sentSet.has(normalizeMediaReferenceForComparison(url))) {
           strippedMediaUrls = true;
           if (!filteredUrls) {
             filteredUrls = mediaUrls.slice(0, mediaIndex);
@@ -115,25 +116,6 @@ export function filterMessagingToolMediaDuplicates(params: {
 export function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
   const pin = payload.delivery?.pin;
   return pin === true || (typeof pin === "object" && pin.enabled);
-}
-
-function normalizeMediaForDedupe(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file://")) {
-    return trimmed;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol === "file:") {
-      return decodeURIComponent(parsed.pathname || "");
-    }
-  } catch {
-    // Keep fallback below for non-URL-like inputs.
-  }
-  return trimmed.replace(/^file:\/\//i, "");
 }
 
 function normalizeProviderForComparison(value?: string): string | undefined {
@@ -269,7 +251,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
 }
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */
-export function getMatchingMessagingToolReplyTargets(params: {
+function getMatchingMessagingToolReplyTargets(params: {
   config?: OpenClawConfig;
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];

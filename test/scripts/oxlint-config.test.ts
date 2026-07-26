@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
   ignorePatterns?: string[];
-  overrides?: Array<{ files?: string[]; rules?: Record<string, unknown> }>;
+  overrides?: Array<{
+    excludeFiles?: string[];
+    files?: string[];
+    rules?: Record<string, unknown>;
+  }>;
   rules?: Record<string, unknown>;
 };
 
@@ -142,6 +146,7 @@ describe("oxlint config", () => {
       "dist-runtime/",
       "docs/_layouts/",
       "**/a2ui.bundle.js",
+      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
       "extensions/diffs/assets/viewer-runtime.js",
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
       "node_modules/",
@@ -160,10 +165,16 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps lint overrides limited to the indexed-access and test-file policies", () => {
+  it("preserves the indexed-access and test-file policies", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
-    expect(config.overrides).toEqual([
+    expect(config.overrides?.slice(0, 3)).toEqual([
+      {
+        files: ["extensions/browser/src/browser/routes/*.ts"],
+        rules: {
+          "oxc/no-async-endpoint-handlers": "off",
+        },
+      },
       {
         files: [
           "packages/markdown-core/**/*.ts",
@@ -203,6 +214,27 @@ describe("oxlint config", () => {
         },
       },
     ]);
+  });
+
+  it("enforces scoped max-lines budgets while excluding generated output", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+    const maxLinesOverrides = (config.overrides ?? []).filter(
+      (override) => override.rules?.["max-lines"],
+    );
+
+    expect(maxLinesOverrides).toHaveLength(4);
+    expect(maxLinesOverrides.map((override) => override.rules?.["max-lines"])).toEqual([
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 800, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 1000, skipBlankLines: true, skipComments: true }],
+    ]);
+    for (const override of maxLinesOverrides) {
+      expect(override.excludeFiles).toContain("**/protocol-gen/**");
+      expect(override.excludeFiles).toContain("**/*.generated.*");
+      expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
+      expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
+    }
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
   pluginSdkEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
@@ -45,6 +46,7 @@ function parsePluginSdkSurfaceReportArgs(argv) {
 }
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
+const packagedPrivateRuntimeEntrypointSet = new Set(packagedPrivatePluginSdkRuntimeEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
@@ -92,106 +94,51 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
-  health: 1,
-  lmstudio: 1,
-  "provider-setup": 1,
-  "self-hosted-provider-setup": 14,
   routing: 1,
-  runtime: 3,
-  "runtime-logger": 3,
-  "runtime-secret-resolution": 5,
-  "setup-adapter-runtime": 1,
-  "channel-streaming": 49,
+  health: 0,
+  "channel-streaming": 54,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
-  "approval-reply-runtime": 3,
-  "approval-runtime": 1,
-  "config-runtime": 123,
-  "config-contracts": 1,
-  "config-types": 424,
-  "config-schema": 3,
-  "reply-dedupe": 1,
-  "inbound-reply-dispatch": 33,
+  "approval-reply-runtime": 0,
+  "config-runtime": 115,
+  "config-contracts": 0,
+  "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
-  "channel-reply-options-runtime": 2,
-  "channel-runtime": 144,
-  "interactive-runtime": 13,
-  "outbound-send-deps": 4,
-  "outbound-runtime": 16,
-  "file-access-runtime": 2,
-  "infra-runtime": 595,
+  "interactive-runtime": 11,
+  // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+  "infra-runtime": 596,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
-  "media-runtime": 2,
+  // +1: deprecated agent media projection re-export during the media migration window.
+  "media-runtime": 3,
+  // +3: deprecated media projection type, builder, and local-roots compatibility re-export.
+  "agent-media-payload": 3,
+  // +2: deprecated media projection type and builder.
+  "reply-payload": 2,
   "text-runtime": 191,
-  "agent-core": 1,
-  "agent-runtime": 7,
-  "plugin-runtime": 13,
+  "agent-runtime": 2,
   "channel-secret-runtime": 23,
-  "secret-file-runtime": 1,
-  "security-runtime": 7,
-  "agent-harness": 7,
-  "agent-harness-runtime": 11,
-  types: 6,
+  "agent-harness-runtime": 4,
   "agent-config-primitives": 2,
-  "command-auth": 81,
-  compat: 152,
-  "direct-dm": 9,
-  "direct-dm-access": 5,
-  discord: 48,
-  mattermost: 7,
+  "command-auth": 78,
+  discord: 47,
   matrix: 1,
-  "channel-config-schema-legacy": 22,
-  "channel-actions": 2,
-  "channel-envelope": 3,
-  "channel-inbound": 21,
-  "channel-inbound-roots": 1,
+  // +4: deprecated media projection type, builder, and turn aliases.
+  "channel-inbound": 18,
   "channel-logging": 4,
-  "channel-location": 4,
-  "channel-mention-gating": 7,
   "channel-lifecycle": 23,
-  "channel-ingress": 8,
-  "channel-message": 232,
-  "channel-message-runtime": 229,
-  "channel-pairing-paths": 1,
-  // Deprecated pairing/conversation exports from the SQLite pairing migration
-  // landed on main (#105802) without entrypoint pins; not touched by this PR.
-  "channel-pairing": 1,
-  "conversation-runtime": 4,
+  "channel-message": 129,
+  "channel-pairing": 0,
+  "channel-policy": 7,
   "channel-send-result": 1,
-  "channel-policy": 8,
-  "channel-route": 5,
   "session-store-runtime": 4,
-  "session-transcript-runtime": 2,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "group-access": 13,
-  "media-generation-runtime-shared": 3,
-  "music-generation-core": 20,
-  "reply-history": 8,
+  "reply-history": 6,
   "messaging-targets": 12,
-  "memory-core": 45,
-  "memory-core-engine-runtime": 15,
-  "memory-core-host-multimodal": 3,
-  "memory-core-host-query": 2,
-  "memory-core-host-events": 12,
-  "memory-core-host-status": 1,
-  "memory-core-host-runtime-core": 1,
-  "memory-host-core": 1,
-  "memory-host-files": 7,
-  "memory-host-status": 72,
-  "provider-auth": 20,
-  "provider-oauth-runtime": 2,
-  "provider-auth-login": 3,
-  "provider-model-shared": 30,
-  "provider-stream-family": 40,
-  "provider-stream-shared": 29,
-  "provider-stream": 40,
-  "provider-web-search": 1,
-  "provider-zai-endpoint": 3,
+  "provider-auth": 19,
   "telegram-account": 3,
-  "telegram-command-config": 7,
-  "webhook-ingress": 2,
-  "webhook-path": 2,
-  zalouser: 5,
   zod: 282,
 });
 
@@ -199,27 +146,78 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      327,
+      // +1: session-discussion binds one external discussion provider to sessions.
+      // +1: focused media-local-roots replacement for the legacy agent-media facade.
+      // +1: account-aware channel DM policy setup descriptors.
+      142,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10645,
+      // +4: session discussion state, info, provider, and registration contracts.
+      // +2: structured media placeholder formatter and its text-fact contract.
+      // +2: narrow settled-turn finalization result and safe full-attempt projector.
+      // +1: channel-owned setup contract factory.
+      // +18: generic schema primitives needed by plugin-owned channel config schemas.
+      // +2: shared Teams reply-style and TTS schema leaves.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +2: attributed-range renderer and its options contract.
+      // +1: agent-harness transcript visibility projector.
+      // +1: outbound formatting capability profile.
+      // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +3: typed channel partial-delivery error, creator, and structural guard.
+      // +1: closed attempt-terminal merge, normalization, and projection helper.
+      // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
+      // +1: canonical unknown-value to Error coercion.
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      // +5: focused media-local-roots helpers and typed hook media contracts.
+      // +1: model-independent agent-harness preflight failure contract.
+      // +3: channel DM policy factory and its account/patch callback contracts.
+      // +1: typed owner-required error for session store path resolution.
+      // +1: native approval messaging target resolver.
+      // +1: shared plugin SecretRef setup plan helper.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      4724,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5358,
+      // +1: session discussion provider registration.
+      // +1: structured media placeholder formatter for text-only channel carriers.
+      // +1: settled-turn full-attempt projector.
+      // +1: channel-owned setup contract factory.
+      // +4: generic channel schema shape builders.
+      // +1: plugin-owned sensitive-schema registration.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +1: attributed-range renderer.
+      // +1: agent-harness transcript visibility projector.
+      // +2: plugin approval detail truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +2: channel partial-delivery error creator and structural guard.
+      // +1: harness-native MCP App preview helper.
+      // +1: canonical unknown-value to Error coercion.
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      // +2: focused media-local-roots helpers.
+      // +3: channel DM policy factory and its account/patch callbacks.
+      // +1: native approval messaging target resolver.
+      // +1: shared multi-claim ingress lifecycle fan-in.
+      2862,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3282,
+      // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      // +10: named media legacy projection deprecations across public compatibility barrels.
+      1698,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      209,
+      83,
       env,
     ),
   };
@@ -440,8 +438,9 @@ export function collectPluginSdkSurfaceReport() {
   const leakedForbiddenExports = readPackageExportedSubpaths().filter((subpath) =>
     forbiddenPublicSubpaths.has(subpath),
   );
-  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter((entrypoint) =>
-    publicEntrypointSet.has(entrypoint),
+  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter(
+    (entrypoint) =>
+      publicEntrypointSet.has(entrypoint) && !packagedPrivateRuntimeEntrypointSet.has(entrypoint),
   );
   const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
     (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),

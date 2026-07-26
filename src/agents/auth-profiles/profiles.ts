@@ -220,6 +220,58 @@ export async function removeProviderAuthProfilesWithLock(params: {
   });
 }
 
+/** Removes selected auth profiles and every state pointer that references them. */
+export async function removeAuthProfilesWithLock(params: {
+  profileIds: readonly string[];
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const profileIds = new Set(dedupeProfileIds([...params.profileIds]));
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      let changed = false;
+      for (const profileId of profileIds) {
+        if (store.profiles[profileId]) {
+          delete store.profiles[profileId];
+          changed = true;
+        }
+        if (store.usageStats?.[profileId]) {
+          delete store.usageStats[profileId];
+          changed = true;
+        }
+      }
+      for (const [provider, order] of Object.entries(store.order ?? {})) {
+        const next = order.filter((profileId) => !profileIds.has(profileId));
+        if (next.length === order.length) {
+          continue;
+        }
+        changed = true;
+        if (next.length > 0) {
+          store.order![provider] = next;
+        } else {
+          delete store.order![provider];
+        }
+      }
+      for (const [provider, profileId] of Object.entries(store.lastGood ?? {})) {
+        if (profileIds.has(profileId)) {
+          delete store.lastGood![provider];
+          changed = true;
+        }
+      }
+      if (store.order && Object.keys(store.order).length === 0) {
+        store.order = undefined;
+      }
+      if (store.lastGood && Object.keys(store.lastGood).length === 0) {
+        store.lastGood = undefined;
+      }
+      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
+        store.usageStats = undefined;
+      }
+      return changed;
+    },
+  });
+}
+
 /** Clear the last-good profile pointer for a provider under the store lock. */
 export async function clearLastGoodProfileWithLock(params: {
   provider: string;

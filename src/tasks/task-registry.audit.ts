@@ -8,7 +8,7 @@ import {
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
 import type { TaskRecord } from "./task-registry.types.js";
-import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
+import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
 
 type TaskAuditOptions = {
   now?: number;
@@ -132,8 +132,11 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
     }
 
     if (task.status === "lost") {
+      const effectiveCleanupAfter = resolveEffectiveTaskCleanupAfter(task);
       const retainedUntilCleanup =
-        typeof task.cleanupAfter === "number" && resolveEffectiveTaskCleanupAfter(task) > now;
+        typeof task.cleanupAfter === "number" &&
+        effectiveCleanupAfter !== undefined &&
+        effectiveCleanupAfter > now;
       findings.push(
         createFinding({
           severity: retainedUntilCleanup ? "warn" : "error",
@@ -164,7 +167,8 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
       task.status !== "lost" &&
       task.status !== "queued" &&
       task.status !== "running" &&
-      typeof task.cleanupAfter !== "number"
+      typeof task.cleanupAfter !== "number" &&
+      resolveTaskCleanupAfter(task) !== undefined
     ) {
       findings.push(
         createFinding({
@@ -192,6 +196,7 @@ function isRetainedLostTaskAuditFinding(finding: TaskAuditFinding, now = Date.no
     finding.code === "lost" &&
     finding.task.status === "lost" &&
     typeof finding.task.cleanupAfter === "number" &&
+    typeof cleanupAfter === "number" &&
     cleanupAfter > now
   );
 }

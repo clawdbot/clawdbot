@@ -16,7 +16,7 @@ OpenClaw PixVerse video generation provider plugin.
 
 ## Surface
 
-contracts: videoGenerationProviders
+contracts: `videoGenerationProviders`
 
 ## Related docs
 

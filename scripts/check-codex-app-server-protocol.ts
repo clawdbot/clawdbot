@@ -71,7 +71,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "ReviewDecision.ts",
-    snippets: ['"approved"', '"approved_for_session"', '"denied"', '"abort"'],
+    snippets: ['"approved"', '"approved_for_session"', "denied: { rejection: string }", '"abort"'],
   },
   {
     file: "v2/PlanDeltaNotification.ts",
@@ -141,6 +141,7 @@ async function checkMaintainedProtocolTypes(sourceRoot: string): Promise<void> {
     relativeTypeScriptImport(probePath, path.join(sourceRoot, file));
   const probe = `
 import type {
+  CodexAppServerRequestParams,
   CodexDynamicToolSpec,
   CodexDynamicToolCallParams,
   CodexErrorNotification,
@@ -152,7 +153,6 @@ import type {
   CodexThreadStartParams,
   CodexThreadStartResponse,
   CodexTurnEnvironmentParams,
-  CodexTurnInterruptParams,
   CodexTurnStartParams,
 } from ${JSON.stringify(protocolImport)};
 import type { DynamicToolCallParams } from ${JSON.stringify(generatedImport("v2/DynamicToolCallParams.ts"))};
@@ -179,7 +179,7 @@ declare const openClawThreadResumeParams: CodexThreadResumeParams;
 const generatedThreadResumeParams: ThreadResumeParams = openClawThreadResumeParams;
 declare const openClawThreadForkParams: CodexThreadForkParams;
 const generatedThreadForkParams: ThreadForkParams = openClawThreadForkParams;
-declare const openClawTurnInterruptParams: CodexTurnInterruptParams;
+declare const openClawTurnInterruptParams: CodexAppServerRequestParams<"turn/interrupt">;
 const generatedTurnInterruptParams: TurnInterruptParams = openClawTurnInterruptParams;
 declare const openClawTurnStartParams: CodexTurnStartParams;
 const generatedTurnStartParams: TurnStartParams = openClawTurnStartParams;

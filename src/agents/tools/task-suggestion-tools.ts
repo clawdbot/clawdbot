@@ -40,6 +40,11 @@ const SpawnTaskToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const SpawnTaskOutputSchema = Type.Object(
+  { task_id: Type.String() },
+  { additionalProperties: false },
+);
+
 const DismissTaskToolSchema = Type.Object(
   {
     task_id: Type.String({
@@ -73,6 +78,7 @@ export function createTaskSuggestionTools(params: {
         "Operator suggestion only; does not start work.",
       ].join(" "),
       parameters: SpawnTaskToolSchema,
+      outputSchema: SpawnTaskOutputSchema,
       execute: async (_toolCallId, args) => {
         const input = args as Record<string, unknown>;
         const title = readStringParam(input, "title", { required: true });

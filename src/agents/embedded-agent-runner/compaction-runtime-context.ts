@@ -1,18 +1,17 @@
 /**
  * Builds runtime context for context-engine backed embedded compaction.
  */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
-import type { ExecElevatedDefaults } from "../bash-tools.js";
-import { DEFAULT_PROVIDER } from "../defaults.js";
+import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
@@ -20,42 +19,77 @@ import {
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
+import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+import { readAgentModelContextTokens } from "./model-context-tokens.js";
+import { normalizeContextTokenBudget } from "./utils.js";
 
-type EmbeddedCompactionRuntimeContext = {
-  sessionKey?: string;
-  messageChannel?: string;
-  messageProvider?: string;
-  clientCaps?: string[];
-  chatType?: ChatType;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  runtimeAuthPlan?: AgentRuntimeAuthPlan;
-  agentHarnessId?: string;
-  modelSelectionLocked?: boolean;
+type EmbeddedCompactionRuntimeContextParams = Omit<
+  Partial<CompactEmbeddedAgentSessionParams>,
+  | "workspaceDir"
+  | "sessionKey"
+  | "messageChannel"
+  | "messageProvider"
+  | "chatType"
+  | "agentAccountId"
+  | "currentChannelId"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "authProfileId"
+  | "cwd"
+  | "senderId"
+  | "provider"
+  | "model"
+> & {
   workspaceDir: string;
-  cwd?: string;
-  agentDir: string;
-  config?: OpenClawConfig;
-  skillsSnapshot?: SkillSnapshot;
-  senderIsOwner?: boolean;
-  senderId?: string;
-  provider?: string;
-  runtimeProvider?: string;
-  model?: string;
-  modelFallbacksOverride?: string[];
-  thinkLevel?: ThinkLevel;
-  reasoningLevel?: ReasoningLevel;
-  bashElevated?: ExecElevatedDefaults;
-  extraSystemPrompt?: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  ownerNumbers?: string[];
+  sessionKey?: string | null;
+  messageChannel?: string | null;
+  messageProvider?: string | null;
+  chatType?: ChatType | null;
+  agentAccountId?: string | null;
+  currentChannelId?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  authProfileId?: string | null;
+  cwd?: string | null;
+  senderId?: string | null;
+  provider?: string | null;
+  modelId?: string | null;
+  harnessRuntime?: string | null;
   activeProcessSessions?: ActiveProcessSessionReference[];
 };
+
+/** Resolve the configured compaction override against the actual model/runtime candidate. */
+export function resolveEmbeddedCompactionThinkingLevel(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  inheritedLevel?: ThinkLevel;
+  agentId?: string;
+  sessionKey?: string;
+  agentRuntime?: string | null;
+}): ThinkLevel {
+  const requestedLevel =
+    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+  if (!requestedLevel) {
+    return "off";
+  }
+  // A compaction model override or fallback can change the supported level set.
+  // Revalidate the immutable request for every concrete candidate instead of
+  // carrying a level clamped for an earlier model into a later attempt.
+  return (
+    resolveCandidateThinkingLevel({
+      cfg: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+      level: requestedLevel,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      agentRuntime: params.agentRuntime,
+    }) ?? "off"
+  );
+}
 
 /**
  * Resolve the effective compaction target from config, falling back to the
@@ -265,39 +299,37 @@ export function resolveCompactionHarnessRuntime(params: {
   return normalizeOptionalAgentRuntimeId(params.configuredHarnessRuntime);
 }
 
-export function buildEmbeddedCompactionRuntimeContext(params: {
-  sessionKey?: string | null;
-  messageChannel?: string | null;
-  messageProvider?: string | null;
-  clientCaps?: string[];
-  chatType?: ChatType | null;
-  agentAccountId?: string | null;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  authProfileId?: string | null;
-  authProfileIdSource?: "auto" | "user";
-  runtimeAuthPlan?: AgentRuntimeAuthPlan;
-  workspaceDir: string;
-  cwd?: string | null;
-  agentDir: string;
+/** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
+export function resolveCompactionContextTokenBudget(params: {
   config?: OpenClawConfig;
-  skillsSnapshot?: SkillSnapshot;
-  senderIsOwner?: boolean;
-  senderId?: string | null;
-  provider?: string | null;
-  modelId?: string | null;
-  harnessRuntime?: string | null;
-  modelSelectionLocked?: boolean;
-  modelFallbacksOverride?: string[];
-  thinkLevel?: ThinkLevel;
-  reasoningLevel?: ReasoningLevel;
-  bashElevated?: ExecElevatedDefaults;
-  extraSystemPrompt?: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  ownerNumbers?: string[];
-  activeProcessSessions?: ActiveProcessSessionReference[];
-}): EmbeddedCompactionRuntimeContext {
+  provider: string;
+  modelId: string;
+  model?: ProviderRuntimeModel;
+  requestedTokenBudget?: number;
+  fallbackTokenBudget?: number;
+}) {
+  const resolvedBudget =
+    normalizeContextTokenBudget(
+      resolveContextWindowInfo({
+        cfg: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextTokens: readAgentModelContextTokens(params.model),
+        modelContextWindow: params.model?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens,
+    ) ?? DEFAULT_CONTEXT_TOKENS;
+  return Math.min(
+    normalizeContextTokenBudget(params.requestedTokenBudget) ??
+      normalizeContextTokenBudget(params.fallbackTokenBudget) ??
+      resolvedBudget,
+    resolvedBudget,
+  );
+}
+
+export function buildEmbeddedCompactionRuntimeContext(
+  params: EmbeddedCompactionRuntimeContextParams,
+) {
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,

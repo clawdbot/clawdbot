@@ -275,6 +275,46 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
   });
 
+  it("extracts only localizable usage descriptions from Apple plists", () => {
+    const entries = extractNativeI18nCandidates(
+      "apple",
+      "apps/ios/Fixture/Info.plist",
+      `<plist><dict>
+        <key>CFBundleDisplayName</key>
+        <string>OpenClaw Fixture</string>
+        <key>NSCameraUsageDescription</key>
+        <string>OpenClaw uses the camera to scan setup codes &amp; documents.</string>
+        <key>OpenClawFixtureValue</key>
+        <string>Runtime configuration value</string>
+      </dict></plist>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual([
+      "OpenClaw uses the camera to scan setup codes & documents.",
+    ]);
+  });
+
+  it("respects non-translatable Android collections and retains lowercase choices", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/wear.xml",
+      `<resources>
+        <string-array name="capabilities" translatable="false">
+          <item>@string/native_capability</item>
+          <item>openclaw_wear_companion_v1</item>
+          <item>Visible choice</item>
+        </string-array>
+        <string-array name="modes">
+          <item>@string/native_mode</item>
+          <item>off</item>
+          <item>Visible choice</item>
+        </string-array>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["off", "Visible choice"]);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
@@ -303,6 +343,40 @@ describe("native app i18n inventory", () => {
           ),
         ),
     ).toBe(true);
+    expect(
+      entries
+        .filter((entry) => entry.surface === "android")
+        .every(
+          (entry) =>
+            entry.path.startsWith("apps/android/app/src/main/") ||
+            entry.path.startsWith("apps/android/app/src/play/") ||
+            entry.path.startsWith("apps/android/app/src/thirdParty/") ||
+            entry.path === "apps/android/wear/src/main/res/values/strings.xml",
+        ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/android/wear/src/main/res/values/strings.xml" &&
+          entry.source === "Current session",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith(
+            "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
+          ) && entry.source === "Control other apps",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/accessibility/AccessibilityDevActivity.kt") &&
+          entry.source === "Accessibility executor",
+      ),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "n${nodes.size}")).toBe(false);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(
       entries.some((entry) =>
@@ -413,10 +487,10 @@ describe("native app i18n inventory", () => {
           entry.source === "Open Settings",
       ),
     ).toBe(true);
-    expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
+    expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);
     expect(
       entries.some(
-        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search sessions",
+        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search threads",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
@@ -456,13 +530,6 @@ describe("native app i18n inventory", () => {
       entries.some(
         (entry) =>
           entry.source ===
-          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source ===
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
       ),
     ).toBe(true);
@@ -478,7 +545,6 @@ describe("native app i18n inventory", () => {
         [
           "Your AI-powered setup helper. It can check status, fix config, ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
-          "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from ",
           "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
           "Paste the token configured on the gateway host. ",
         ].includes(entry.source),
@@ -1156,6 +1222,16 @@ describe("native app i18n inventory", () => {
   });
 
   it("validates locale refresh arguments before write paths run", () => {
+    expect(parseNativeI18nCommand(["baseline", "--write"])).toEqual({
+      command: "baseline",
+      locale: undefined,
+      write: true,
+    });
+    expect(parseNativeI18nCommand(["verify"])).toEqual({
+      command: "verify",
+      locale: undefined,
+      write: false,
+    });
     expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv"])).toEqual({
       command: "sync",
       locale: "sv",
@@ -1172,6 +1248,10 @@ describe("native app i18n inventory", () => {
     );
     expect(() => parseNativeI18nCommand(["check", "--locale", "sv"])).toThrow(
       "requires `sync --write",
+    );
+    expect(() => parseNativeI18nCommand(["baseline"])).toThrow("requires `--write`");
+    expect(() => parseNativeI18nCommand(["verify", "--write"])).toThrow(
+      "does not accept `--write`",
     );
   });
 });

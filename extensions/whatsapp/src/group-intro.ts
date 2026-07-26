@@ -1,11 +1,4 @@
-// Whatsapp plugin module implements group intro behavior.
-const WHATSAPP_GROUP_INTRO_HINT =
-  "WhatsApp IDs: SenderId is the participant JID (group participant id).";
-
-export function resolveWhatsAppGroupIntroHint(): string {
-  return WHATSAPP_GROUP_INTRO_HINT;
-}
-
+// Whatsapp plugin module implements group mention normalization.
 export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
   const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/i, "");
   if (!selfE164) {

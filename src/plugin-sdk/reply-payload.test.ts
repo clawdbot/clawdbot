@@ -18,8 +18,11 @@ import {
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
   sendMediaWithLeadingCaption,
+  sendPayloadTextChunkSequence,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
 
@@ -116,7 +119,152 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
   });
 });
 
+describe("sendPayloadTextChunkSequence", () => {
+  it.each([
+    { name: "empty", chunks: [], expectedCalls: [], expectedResult: undefined },
+    { name: "single", chunks: ["one"], expectedCalls: [["one", 0, true]], expectedResult: "one" },
+    {
+      name: "multiple",
+      chunks: ["one", "two"],
+      expectedCalls: [
+        ["one", 0, true],
+        ["two", 1, false],
+      ],
+      expectedResult: "two",
+    },
+  ])("sends $name chunk sequences", async ({ chunks, expectedCalls, expectedResult }) => {
+    const calls: Array<[string, number, boolean]> = [];
+    const results: string[] = [];
+    const result = await sendPayloadTextChunkSequence({
+      chunks,
+      send: async ({ text, index, isFirst }) => {
+        calls.push([text, index, isFirst]);
+        return text;
+      },
+      onResult: (value) => {
+        results.push(value);
+      },
+    });
+
+    expect(calls).toEqual(expectedCalls);
+    expect(results).toEqual(chunks);
+    expect(result).toBe(expectedResult);
+  });
+});
+
+describe("sendPayloadMediaSequence", () => {
+  it("treats the first non-empty URL as the first media send", async () => {
+    const calls: Array<{ text: string; mediaUrl: string; index: number; isFirst: boolean }> = [];
+
+    const result = await sendPayloadMediaSequence({
+      text: "caption",
+      mediaUrls: ["", "https://example.com/image.png"],
+      send: async (input) => {
+        calls.push(input);
+        return input.mediaUrl;
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        index: 1,
+        isFirst: true,
+      },
+    ]);
+    expect(result).toBe("https://example.com/image.png");
+  });
+
+  it("returns undefined when every media URL is empty", async () => {
+    const send = vi.fn();
+
+    await expect(
+      sendPayloadMediaSequence({ text: "caption", mediaUrls: [""], send }),
+    ).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("uses the no-media fallback when every media URL is empty", async () => {
+    const send = vi.fn();
+    const sendNoMedia = vi.fn(async () => "text-result");
+
+    await expect(
+      sendPayloadMediaSequenceOrFallback({
+        text: "caption",
+        mediaUrls: ["", ""],
+        send,
+        sendNoMedia,
+        fallbackResult: "fallback-result",
+      }),
+    ).resolves.toBe("text-result");
+    expect(send).not.toHaveBeenCalled();
+    expect(sendNoMedia).toHaveBeenCalledOnce();
+  });
+
+  it("does not use the no-media fallback when a media send returns undefined", async () => {
+    const send = vi.fn(async () => undefined);
+    const sendNoMedia = vi.fn(async () => undefined);
+
+    await expect(
+      sendPayloadMediaSequenceOrFallback({
+        text: "caption",
+        mediaUrls: ["https://example.com/image.png"],
+        send,
+        sendNoMedia,
+        fallbackResult: undefined,
+      }),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledOnce();
+    expect(sendNoMedia).not.toHaveBeenCalled();
+  });
+});
+
 describe("sendTextMediaPayload", () => {
+  it("does not duplicate a caption when a media sender returns undefined", async () => {
+    const sendMediaMock = vi.fn(async () => undefined);
+    const sendText = vi.fn();
+    const sendMedia = sendMediaMock as unknown as NonNullable<
+      Parameters<typeof sendTextMediaPayload>[0]["adapter"]["sendMedia"]
+    >;
+
+    await expect(
+      sendTextMediaPayload({
+        channel: "test",
+        ctx: {
+          cfg: {},
+          to: "target",
+          text: "caption",
+          payload: { text: "caption", mediaUrl: "https://example.com/image.png" },
+        },
+        adapter: { sendMedia, sendText },
+      }),
+    ).resolves.toBeUndefined();
+    expect(sendMediaMock).toHaveBeenCalledOnce();
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to text when every media URL is empty", async () => {
+    const sendMedia = vi.fn();
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+
+    const result = await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "caption",
+        payload: { text: "caption", mediaUrls: ["", ""] },
+      },
+      adapter: { sendMedia, sendText },
+    });
+
+    expect(sendMedia).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "caption" }));
+    expect(result).toEqual({ channel: "test", messageId: "caption" });
+  });
+
   it("reports each completed text chunk before a later chunk fails", async () => {
     const sendText = vi
       .fn()
@@ -321,6 +469,7 @@ describe("normalizeOutboundReplyPayload", () => {
     expect(
       normalizeOutboundReplyPayload({
         presentation,
+        presentationTextMode: "fallback",
         interactive,
         channelData,
         trustedLocalMedia: true,
@@ -330,6 +479,7 @@ describe("normalizeOutboundReplyPayload", () => {
       mediaUrls: undefined,
       mediaUrl: undefined,
       presentation,
+      presentationTextMode: "fallback",
       interactive,
       channelData,
       sensitiveMedia: undefined,

@@ -28,7 +28,7 @@ type AssistantFailoverOutcome =
       action: "retry";
       overloadProfileRotations: number;
       lastRetryFailoverReason: FailoverReason | null;
-      retryKind?: "same_model_idle_timeout" | "same_model_rate_limit";
+      retryKind: "profile_rotation" | "same_model_idle_timeout" | "same_model_rate_limit";
     }
   | {
       action: "throw";
@@ -227,6 +227,7 @@ export async function handleAssistantFailover(params: {
       return {
         action: "retry",
         overloadProfileRotations,
+        retryKind: "profile_rotation",
         lastRetryFailoverReason: mergeRetryFailoverReason({
           previous: params.previousRetryFailoverReason,
           failoverReason: params.failoverReason,

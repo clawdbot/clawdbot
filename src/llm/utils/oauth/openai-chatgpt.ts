@@ -85,9 +85,7 @@ async function refreshViaProviderRuntime(refreshToken: string): Promise<OAuthCre
 }
 
 /** Runs the ChatGPT/Codex OAuth login flow and returns normalized credentials. */
-export async function loginOpenAICodex(
-  callbacks: OpenAICodexLoginCallbacks,
-): Promise<OAuthCredentials> {
+async function loginOpenAICodex(callbacks: OpenAICodexLoginCallbacks): Promise<OAuthCredentials> {
   throwIfOAuthLoginAborted(callbacks.signal);
   const { loginOpenAICodexOAuth } =
     await import("../../../plugins/provider-openai-chatgpt-oauth.js");
@@ -116,7 +114,7 @@ export async function loginOpenAICodex(
 }
 
 /** Refreshes a ChatGPT/Codex OAuth token through the provider runtime or bundled facade. */
-export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
+async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
   return await refreshViaProviderRuntime(refreshToken);
 }
 

@@ -17,7 +17,7 @@ import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 const OC_SCHEME = "oc://";
 
 // Hard caps bound resource use under pathological / hostile input.
-export const MAX_PATH_LENGTH = 4096;
+const MAX_PATH_LENGTH = 4096;
 const MAX_SUB_SEGMENTS_PER_SLOT = 64;
 export const MAX_TRAVERSAL_DEPTH = 256;
 
@@ -133,9 +133,10 @@ export function parseOcPath(input: string): OcPath {
     fail("oc:// path must be a string", String(input), "OC_PATH_NOT_STRING");
   }
 
-  if (input.length > MAX_PATH_LENGTH) {
+  const inputBytes = Buffer.byteLength(input, "utf8");
+  if (inputBytes > MAX_PATH_LENGTH) {
     fail(
-      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes (length: ${input.length})`,
+      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes (length: ${inputBytes})`,
       truncateUtf16Safe(input, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
@@ -146,9 +147,10 @@ export function parseOcPath(input: string): OcPath {
   let normalized = input.startsWith(BOM) ? input.slice(BOM.length) : input;
   normalized = normalized.normalize("NFC");
 
-  if (normalized.length > MAX_PATH_LENGTH) {
+  const normalizedBytes = Buffer.byteLength(normalized, "utf8");
+  if (normalizedBytes > MAX_PATH_LENGTH) {
     fail(
-      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes after NFC (length: ${normalized.length})`,
+      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes after NFC (length: ${normalizedBytes})`,
       truncateUtf16Safe(input, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
@@ -315,9 +317,10 @@ export function formatOcPath(path: OcPath): string {
     out += "?session=" + path.session;
   }
 
-  if (out.length > MAX_PATH_LENGTH) {
+  const outputBytes = Buffer.byteLength(out, "utf8");
+  if (outputBytes > MAX_PATH_LENGTH) {
     fail(
-      `Formatted oc:// exceeds ${MAX_PATH_LENGTH} bytes (length: ${out.length})`,
+      `Formatted oc:// exceeds ${MAX_PATH_LENGTH} bytes (length: ${outputBytes})`,
       truncateUtf16Safe(out, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
@@ -328,19 +331,6 @@ export function formatOcPath(path: OcPath): string {
     throw new OcEmitSentinelError(out);
   }
   return out;
-}
-
-/** True iff `input` is a string `parseOcPath` would accept. */
-export function isValidOcPath(input: unknown): input is string {
-  if (typeof input !== "string") {
-    return false;
-  }
-  try {
-    parseOcPath(input);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -417,7 +407,7 @@ export const WILDCARD_RECURSIVE = "**";
  * union `{a,b,c}`, or predicate `[k=v]`). Single-match verbs reject
  * these; only `findOcPaths` consumes them.
  */
-export function isPattern(path: OcPath): boolean {
+function isPattern(path: OcPath): boolean {
   for (const slot of [path.section, path.item, path.field]) {
     if (slot === undefined) {
       continue;
@@ -537,32 +527,6 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
     }
   }
   return false;
-}
-
-/**
- * Flatten the path into a concrete sub-segment list plus slot offsets,
- * so a caller can reconstruct an `OcPath` from a concrete walk by
- * re-packing sub-segments back into their original slots.
- */
-interface PathSegmentLayout {
-  readonly subs: readonly string[];
-  readonly sectionLen: number;
-  readonly itemLen: number;
-  readonly fieldLen: number;
-}
-
-export function getPathLayout(path: OcPath): PathSegmentLayout {
-  // Quote-aware split — `.split('.')` would shred a quoted segment
-  // containing a literal `.` (e.g. `"a.b"`).
-  const sectionSubs = path.section === undefined ? [] : splitRespectingBrackets(path.section, ".");
-  const itemSubs = path.item === undefined ? [] : splitRespectingBrackets(path.item, ".");
-  const fieldSubs = path.field === undefined ? [] : splitRespectingBrackets(path.field, ".");
-  return {
-    subs: [...sectionSubs, ...itemSubs, ...fieldSubs],
-    sectionLen: sectionSubs.length,
-    itemLen: itemSubs.length,
-    fieldLen: fieldSubs.length,
-  };
 }
 
 function extractSession(queryPart: string, input: string): string | undefined {

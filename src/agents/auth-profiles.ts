@@ -36,6 +36,7 @@ export {
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
+  removeAuthProfilesWithLock,
   removeProviderAuthProfilesWithLock,
   resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
@@ -54,6 +55,7 @@ export {
   type AuthProfilePortabilityReason,
 } from "./auth-profiles/portability.js";
 export {
+  clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -69,6 +71,8 @@ export {
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
+  withEnvOnlyAuthProfileStore,
+  withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,

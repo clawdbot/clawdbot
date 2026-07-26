@@ -28,8 +28,8 @@ export function attachChannelToResult<T extends object>(
   result: T,
 ) {
   return {
-    channel,
     ...result,
+    channel,
   };
 }
 
@@ -88,6 +88,16 @@ export function createAttachedChannelResultAdapter(params: {
   };
 }
 
+function buildRawChannelAdapterResult(
+  channel: string,
+  result: ChannelSendRawResult,
+): OutboundDeliveryResult {
+  if (!result.ok) {
+    throw new Error(result.error?.trim() || `Channel send failed for ${channel}`);
+  }
+  return buildChannelSendResult(channel, result);
+}
+
 /** Wraps legacy raw text/media send methods and normalizes their results. */
 export function createRawChannelSendResultAdapter(params: {
   /** Channel id attached to every normalized legacy send result. */
@@ -99,10 +109,10 @@ export function createRawChannelSendResultAdapter(params: {
 }): Pick<ChannelOutboundAdapter, "sendText" | "sendMedia"> {
   return {
     sendText: params.sendText
-      ? async (ctx) => buildChannelSendResult(params.channel, await params.sendText!(ctx))
+      ? async (ctx) => buildRawChannelAdapterResult(params.channel, await params.sendText!(ctx))
       : undefined,
     sendMedia: params.sendMedia
-      ? async (ctx) => buildChannelSendResult(params.channel, await params.sendMedia!(ctx))
+      ? async (ctx) => buildRawChannelAdapterResult(params.channel, await params.sendMedia!(ctx))
       : undefined,
   };
 }

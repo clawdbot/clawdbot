@@ -5,7 +5,7 @@ import {
   readConfiguredProviderCatalogEntries,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
@@ -104,7 +104,7 @@ export default defineSingleProviderPluginEntry({
     normalizeConfig: ({ providerConfig }) => providerConfig,
     normalizeTransport: ({ api, baseUrl }) =>
       baseUrl === "https://api.deepinfra.com/v1/openai" ? { api, baseUrl } : undefined,
-    ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+    ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     wrapStreamFn: (ctx) => {
       const thinkingLevel = isProxyReasoningUnsupported(ctx.modelId)
         ? undefined

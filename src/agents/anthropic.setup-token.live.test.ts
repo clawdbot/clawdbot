@@ -10,8 +10,6 @@ import path from "node:path";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { validateAnthropicSetupToken } from "../commands/auth-token.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { ANTHROPIC_SETUP_TOKEN_PREFIX } from "../plugins/provider-auth-token.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
@@ -19,7 +17,7 @@ import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
-import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -40,7 +38,7 @@ type TokenSource = {
 };
 
 function isSetupToken(value: string): boolean {
-  return value.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX);
+  return validateAnthropicSetupToken(value) === undefined;
 }
 
 function listSetupTokenProfiles(store: {
@@ -98,7 +96,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     };
   }
 
-  const agentDir = resolveDefaultAgentDir(getRuntimeConfig());
+  const agentDir = resolveDefaultAgentDir(await readLiveTestConfig());
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -187,7 +185,7 @@ describeLive("live anthropic setup-token", () => {
     async () => {
       const tokenSource = await resolveTokenSource();
       try {
-        const cfg = getRuntimeConfig();
+        const cfg = await readLiveTestConfig();
         await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
         const authStorage = discoverAuthStorage(tokenSource.agentDir);

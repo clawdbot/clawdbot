@@ -6,6 +6,7 @@ import type {
   SubagentCompletionDeliveryState,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+import { selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 // Steering queue utilities for delivering completed subagent results back into
 // the requester session. Items are leased before injection to avoid duplicate
@@ -43,7 +44,7 @@ function isStaleLease(delivery: SubagentCompletionDeliveryState, now: number): b
 }
 
 function selectResultText(payload: PendingFinalDeliveryPayload): string | undefined {
-  return payload.frozenResultText?.trim() || payload.fallbackFrozenResultText?.trim() || undefined;
+  return selectDeliverableSessionsReply(payload.frozenResultText, payload.fallbackFrozenResultText);
 }
 
 function describeOutcome(payload: PendingFinalDeliveryPayload): string {
@@ -81,7 +82,7 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
 }
 
 /** List pending completion payloads that should be steered into a requester turn. */
-export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
+function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   requesterSessionKey: string;
   now?: number;
@@ -114,7 +115,7 @@ export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
 }
 
 /** Build the merged runtime prompt for one or more pending steering items. */
-export function buildMergedAgentSteeringPrompt(
+function buildMergedAgentSteeringPrompt(
   items: readonly AgentSteeringQueueItem[],
 ): string | undefined {
   const sections: string[] = [];

@@ -1,4 +1,6 @@
 // Plugin install planning helpers for bundled, official external, and npm fallback paths.
+import fs from "node:fs";
+import path from "node:path";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
@@ -9,25 +11,34 @@ type BundledLookup = (params: {
   value: string;
 }) => BundledPluginSource | undefined;
 
-type OfficialExternalPluginLookup = (pluginId: string) =>
-  | {
-      pluginId: string;
-      npmSpec?: string;
-      expectedIntegrity?: string;
-    }
-  | undefined;
-
-type OfficialExternalPackageLookup = (packageName: string) =>
-  | {
-      pluginId: string;
-      npmSpec?: string;
-      expectedIntegrity?: string;
-    }
-  | undefined;
-
 function isBareNpmPackageName(spec: string): boolean {
   const trimmed = spec.trim();
   return /^[a-z0-9][a-z0-9-._~]*$/.test(trimmed);
+}
+
+function isSourceCheckoutBundledPath(localPath: string): boolean {
+  const extensionsDir = path.dirname(path.resolve(localPath));
+  if (path.basename(extensionsDir) !== "extensions") {
+    return false;
+  }
+  const extensionsParent = path.dirname(extensionsDir);
+  const packageRoot = ["dist", "dist-runtime"].includes(path.basename(extensionsParent))
+    ? path.dirname(extensionsParent)
+    : extensionsParent;
+  try {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+    ) as { name?: unknown };
+    return (
+      packageJson.name === "openclaw" &&
+      fs.existsSync(path.join(packageRoot, ".git")) &&
+      fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+      fs.existsSync(path.join(packageRoot, "src")) &&
+      fs.existsSync(path.join(packageRoot, "extensions"))
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function resolveBundledInstallPlanForCatalogEntry(params: {
@@ -102,58 +113,18 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
   if (!bundledSource) {
     return null;
   }
+  // An explicit npm request from a Git source checkout is package intent, not a
+  // request to persist disposable build output from that checkout. Packaged
+  // bundles remain image-owned, and bare plugin ids still select local source.
+  if (
+    !isBareNpmPackageName(params.rawSpec) &&
+    isSourceCheckoutBundledPath(bundledSource.localPath)
+  ) {
+    return null;
+  }
   return {
     bundledSource,
     warning: `Using bundled plugin "${bundledSource.pluginId}" from ${shortenHomePath(bundledSource.localPath)} for npm install spec "${rawSpec}" because this plugin ships with the current OpenClaw build. To force an external npm override, use npm:${rawSpec}.`,
-  };
-}
-
-export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
-  rawSpec: string;
-  findOfficialExternalPlugin: OfficialExternalPluginLookup;
-}): { pluginId: string; npmSpec: string; expectedIntegrity?: string } | null {
-  if (!isBareNpmPackageName(params.rawSpec)) {
-    return null;
-  }
-  const entry = params.findOfficialExternalPlugin(params.rawSpec);
-  const npmSpec = entry?.npmSpec?.trim();
-  if (!entry?.pluginId || !npmSpec) {
-    return null;
-  }
-  return {
-    pluginId: entry.pluginId,
-    npmSpec,
-    ...(entry.expectedIntegrity ? { expectedIntegrity: entry.expectedIntegrity } : {}),
-  };
-}
-
-export function resolveOfficialExternalNpmPackageTrust(params: {
-  npmSpec: string;
-  findOfficialExternalPackage: OfficialExternalPackageLookup;
-}): {
-  pluginId: string;
-  expectedIntegrity?: string;
-  trustedSourceLinkedOfficialInstall: true;
-} | null {
-  const parsed = parseRegistryNpmSpec(params.npmSpec);
-  if (!parsed) {
-    return null;
-  }
-  const entry = params.findOfficialExternalPackage(parsed.name);
-  if (!entry?.pluginId) {
-    return null;
-  }
-  const catalogSpec = entry.npmSpec?.trim();
-  const catalogPackageName = catalogSpec ? parseRegistryNpmSpec(catalogSpec)?.name : undefined;
-  if (catalogPackageName && catalogPackageName !== parsed.name) {
-    return null;
-  }
-  return {
-    pluginId: entry.pluginId,
-    ...(entry.expectedIntegrity && catalogSpec === params.npmSpec.trim()
-      ? { expectedIntegrity: entry.expectedIntegrity }
-      : {}),
-    trustedSourceLinkedOfficialInstall: true,
   };
 }
 
@@ -170,6 +141,12 @@ export function resolveBundledInstallPlanForNpmFailure(params: {
     value: params.rawSpec,
   });
   if (!bundledSource) {
+    return null;
+  }
+  if (
+    !isBareNpmPackageName(params.rawSpec) &&
+    isSourceCheckoutBundledPath(bundledSource.localPath)
+  ) {
     return null;
   }
   return {

@@ -10,7 +10,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 
 // Generated catalog files live under each agent profile so provider model
 // discovery can reuse plugin-owned catalogs without loading plugin runtimes.
-export const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 export const PLUGIN_MODEL_CATALOG_GENERATED_BY = "openclaw-plugin-model-catalog-v1";
 
 export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "owners"> & {

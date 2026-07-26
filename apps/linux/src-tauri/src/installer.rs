@@ -1,14 +1,27 @@
+#[cfg(not(target_os = "windows"))]
 use crate::cli::openclaw_home;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(not(target_os = "windows"))]
+use serde::Serialize;
+#[cfg(not(target_os = "windows"))]
 use std::collections::VecDeque;
+#[cfg(not(target_os = "windows"))]
 use std::io::{BufRead, BufReader};
+#[cfg(not(target_os = "windows"))]
 use std::process::{Command, Stdio};
+#[cfg(not(target_os = "windows"))]
 use std::sync::mpsc;
+#[cfg(not(target_os = "windows"))]
 use std::thread;
+#[cfg(not(target_os = "windows"))]
 use tauri::path::BaseDirectory;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
+#[cfg(not(target_os = "windows"))]
+use tauri::{Emitter, Manager};
 
+#[cfg(not(target_os = "windows"))]
 const INSTALL_EVENT: &str = "install-progress";
+#[cfg(not(target_os = "windows"))]
 const ERROR_TAIL_LINES: usize = 24;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -20,6 +33,7 @@ pub enum InstallChannel {
 }
 
 impl InstallChannel {
+    #[cfg(not(target_os = "windows"))]
     fn version(self) -> &'static str {
         match self {
             Self::Stable => "latest",
@@ -29,6 +43,7 @@ impl InstallChannel {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InstallProgress<'a> {
@@ -36,6 +51,12 @@ struct InstallProgress<'a> {
     line: &'a str,
 }
 
+#[cfg(target_os = "windows")]
+pub fn install(_app: &AppHandle, _channel: InstallChannel) -> Result<(), String> {
+    Err("CLI installation is unavailable in this Windows test build.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
 pub fn install(app: &AppHandle, channel: InstallChannel) -> Result<(), String> {
     let script = app
         .path()
@@ -107,6 +128,7 @@ pub fn install(app: &AppHandle, channel: InstallChannel) -> Result<(), String> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn stream_lines<R>(
     stream: &'static str,
     reader: R,

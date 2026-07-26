@@ -12,7 +12,6 @@ import { createOperatorApprovalSessionEventRuntime } from "./operator-approval-s
 import {
   insertOperatorApproval,
   resolveOperatorApproval,
-  type NewOperatorApproval,
   type OperatorApprovalRecord,
 } from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
@@ -23,6 +22,7 @@ const SOURCE_SESSION_KEY = "agent:main:child";
 const PARENT_SESSION_KEY = "agent:main:parent";
 const SIBLING_SESSION_KEY = "agent:main:parent:sibling";
 const tempDirs: string[] = [];
+type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-events-"));

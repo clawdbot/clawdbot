@@ -2,12 +2,18 @@
 import { html } from "lit";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
-import "../../components/tooltip.ts";
-import { icons } from "../../components/icons.ts";
+import {
+  renderSettingsPage,
+  renderSettingsRow,
+  renderSettingsSecretInput,
+  renderSettingsSection,
+  renderSettingsStatus,
+  renderSettingsValue,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDurationHuman, formatRelativeTimestamp } from "../../lib/format.ts";
 
-export type ConnectionProps = {
+type ConnectionProps = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   settings: UiSettings;
@@ -25,7 +31,7 @@ export type ConnectionProps = {
   onRefresh: () => void;
 };
 
-function renderSecretField(params: {
+function renderSecretRow(params: {
   label: string;
   value: string;
   placeholder: string;
@@ -36,32 +42,8 @@ function renderSecretField(params: {
   onInput: (next: string) => void;
   onToggle: () => void;
 }) {
-  return html`
-    <label class="field">
-      <span>${params.label}</span>
-      <div class="connection-secret-row">
-        <input
-          type=${params.visible ? "text" : "password"}
-          autocomplete="off"
-          spellcheck="false"
-          .value=${params.value}
-          @input=${(e: Event) => params.onInput((e.target as HTMLInputElement).value)}
-          placeholder=${params.placeholder}
-        />
-        <openclaw-tooltip .content=${params.visible ? params.hideLabel : params.showLabel}>
-          <button
-            type="button"
-            class="btn btn--icon ${params.visible ? "active" : ""}"
-            aria-label=${params.toggleLabel}
-            aria-pressed=${params.visible}
-            @click=${params.onToggle}
-          >
-            ${params.visible ? icons.eye : icons.eyeOff}
-          </button>
-        </openclaw-tooltip>
-      </div>
-    </label>
-  `;
+  const { label, ...secret } = params;
+  return renderSettingsRow({ title: label, control: renderSettingsSecretInput(secret) });
 }
 
 export function renderConnection(props: ConnectionProps) {
@@ -78,103 +60,119 @@ export function renderConnection(props: ConnectionProps) {
     : t("common.na");
   const isTrustedProxy = snapshot?.authMode === "trusted-proxy";
 
-  return html`
-    <div class="card">
-      <div class="card-title">${t("connection.access.title")}</div>
-      <div class="card-sub">${t("connection.access.subtitle")}</div>
-      <div class="connection-form-grid" style="margin-top: 16px;">
-        <label class="field connection-form-grid__full">
-          <span>${t("connection.access.wsUrl")}</span>
-          <input
-            .value=${props.settings.gatewayUrl}
-            @input=${(e: Event) => {
-              const settings = props.settings;
-              const v = (e.target as HTMLInputElement).value;
-              props.onConnectionChange({
-                gatewayUrl: v,
-                token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, v, settings.token),
-              });
-            }}
-            placeholder="ws://100.x.y.z:18789"
-          />
-        </label>
-        ${isTrustedProxy
-          ? ""
-          : html`
-              ${renderSecretField({
-                label: t("connection.access.token"),
-                value: props.settings.token,
-                placeholder: "OPENCLAW_GATEWAY_TOKEN",
-                visible: props.showGatewayToken,
-                showLabel: t("connection.access.showToken"),
-                hideLabel: t("connection.access.hideToken"),
-                toggleLabel: t("connection.access.toggleTokenVisibility"),
-                onInput: (next) => props.onConnectionChange({ token: next }),
-                onToggle: props.onToggleGatewayTokenVisibility,
-              })}
-              ${renderSecretField({
-                label: t("connection.access.password"),
-                value: props.password,
-                placeholder: t("connection.access.passwordPlaceholder"),
-                visible: props.showGatewayPassword,
-                showLabel: t("connection.access.showPassword"),
-                hideLabel: t("connection.access.hidePassword"),
-                toggleLabel: t("connection.access.togglePasswordVisibility"),
-                onInput: props.onPasswordChange,
-                onToggle: props.onToggleGatewayPasswordVisibility,
-              })}
-            `}
-        <label class="field">
-          <span>${t("connection.access.sessionKey")}</span>
-          <input
-            .value=${props.settings.sessionKey}
-            @input=${(e: Event) => props.onSessionKeyChange((e.target as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
-      <div class="row" style="margin-top: 14px;">
-        <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-        <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-        <span class="muted"
+  const accessRows = html`
+    ${renderSettingsRow({
+      title: t("connection.access.wsUrl"),
+      control: html`
+        <input
+          class="settings-input"
+          .value=${props.settings.gatewayUrl}
+          @input=${(e: Event) => {
+            const settings = props.settings;
+            const v = (e.target as HTMLInputElement).value;
+            props.onConnectionChange({
+              gatewayUrl: v,
+              token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, v, settings.token),
+            });
+          }}
+          placeholder="ws://100.x.y.z:18789"
+        />
+      `,
+    })}
+    ${isTrustedProxy
+      ? ""
+      : html`
+          ${renderSecretRow({
+            label: t("connection.access.token"),
+            value: props.settings.token,
+            placeholder: "OPENCLAW_GATEWAY_TOKEN",
+            visible: props.showGatewayToken,
+            showLabel: t("connection.access.showToken"),
+            hideLabel: t("connection.access.hideToken"),
+            toggleLabel: t("connection.access.toggleTokenVisibility"),
+            onInput: (next) => props.onConnectionChange({ token: next }),
+            onToggle: props.onToggleGatewayTokenVisibility,
+          })}
+          ${renderSecretRow({
+            label: t("connection.access.password"),
+            value: props.password,
+            placeholder: t("connection.access.passwordPlaceholder"),
+            visible: props.showGatewayPassword,
+            showLabel: t("connection.access.showPassword"),
+            hideLabel: t("connection.access.hidePassword"),
+            toggleLabel: t("connection.access.togglePasswordVisibility"),
+            onInput: props.onPasswordChange,
+            onToggle: props.onToggleGatewayPasswordVisibility,
+          })}
+        `}
+    ${renderSettingsRow({
+      title: t("connection.access.sessionKey"),
+      control: html`
+        <input
+          class="settings-input"
+          .value=${props.settings.sessionKey}
+          @input=${(e: Event) => props.onSessionKeyChange((e.target as HTMLInputElement).value)}
+        />
+      `,
+    })}
+    <div class="settings-row">
+      <div class="settings-row__text">
+        <span class="settings-row__desc"
           >${isTrustedProxy
             ? t("connection.access.trustedProxy")
             : t("connection.access.connectHint")}</span
         >
       </div>
-    </div>
-
-    <div class="card" style="margin-top: 16px;">
-      <div class="card-title">${t("connection.snapshot.title")}</div>
-      <div class="card-sub">${t("connection.snapshot.subtitle")}</div>
-      <div class="stat-grid" style="margin-top: 16px;">
-        <div class="stat">
-          <div class="stat-label">${t("connection.snapshot.status")}</div>
-          <div class="stat-value ${props.connected ? "ok" : "warn"}">
-            ${props.connected ? t("common.ok") : t("common.offline")}
-          </div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">${t("connection.snapshot.uptime")}</div>
-          <div class="stat-value">${uptime}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">${t("connection.snapshot.tickInterval")}</div>
-          <div class="stat-value">${tick}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">${t("connection.snapshot.lastChannelsRefresh")}</div>
-          <div class="stat-value">
-            ${props.lastChannelsRefresh
-              ? formatRelativeTimestamp(props.lastChannelsRefresh)
-              : t("common.na")}
-          </div>
-        </div>
+      <div class="settings-row__control">
+        <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
+        <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
       </div>
-      ${props.lastError
-        ? html`<div class="callout danger" style="margin-top: 14px;">
-            <div>${props.lastError}</div>
-          </div>`
-        : ""}
     </div>
   `;
+
+  const snapshotRows = html`
+    ${renderSettingsRow({
+      title: t("connection.snapshot.status"),
+      control: renderSettingsStatus({
+        kind: props.connected ? "ok" : "warn",
+        label: props.connected ? t("common.ok") : t("common.offline"),
+      }),
+    })}
+    ${renderSettingsRow({
+      title: t("connection.snapshot.uptime"),
+      control: renderSettingsValue(uptime),
+    })}
+    ${renderSettingsRow({
+      title: t("connection.snapshot.tickInterval"),
+      control: renderSettingsValue(tick),
+    })}
+    ${renderSettingsRow({
+      title: t("connection.snapshot.lastChannelsRefresh"),
+      control: renderSettingsValue(
+        props.lastChannelsRefresh
+          ? formatRelativeTimestamp(props.lastChannelsRefresh)
+          : t("common.na"),
+      ),
+    })}
+    ${props.lastError
+      ? renderSettingsRow({
+          title: renderSettingsStatus({
+            kind: "danger",
+            label: t("connection.snapshot.lastError"),
+          }),
+          description: props.lastError,
+        })
+      : ""}
+  `;
+
+  return renderSettingsPage([
+    renderSettingsSection(
+      { title: t("connection.access.title"), description: t("connection.access.subtitle") },
+      accessRows,
+    ),
+    renderSettingsSection(
+      { title: t("connection.snapshot.title"), description: t("connection.snapshot.subtitle") },
+      snapshotRows,
+    ),
+  ]);
 }

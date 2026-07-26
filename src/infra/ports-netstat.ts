@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import type { PortListener } from "./ports-types.js";
 
-export type WindowsNetstatListener = PortListener & { pid: number; address: string };
+type WindowsNetstatListener = PortListener & { pid: number; address: string };
 
 function normalizeTcpHost(host: string): string {
   const normalized = host.toLowerCase();

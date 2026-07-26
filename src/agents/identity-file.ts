@@ -5,8 +5,17 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { IdentityConfig } from "../config/types.base.js";
+import { readRegularFile, readRegularFileSync } from "../infra/regular-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
+
+// IDENTITY.md may contain the supported 2 MiB avatar encoded as a roughly
+// 2.7 MiB data URL. Keep bounded headroom for the remaining identity fields.
+const MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
 /** Parsed rich identity values from a workspace `IDENTITY.md` file. */
 export type AgentIdentityFile = {
@@ -36,6 +45,41 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "workspace-relative path, http(s) url, or data uri",
 ]);
 
+export function sanitizeAgentIdentityLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+const IDENTITY_CONFIG_FIELDS = ["name", "theme", "emoji", "avatar"] as const;
+
+function compactIdentityConfig(identity: IdentityConfig): IdentityConfig | undefined {
+  const resolved: IdentityConfig = {};
+  for (const field of IDENTITY_CONFIG_FIELDS) {
+    const value = identity[field]?.trim();
+    if (value) {
+      resolved[field] = value;
+    }
+  }
+  return Object.keys(resolved).length ? resolved : undefined;
+}
+
+export function createAgentIdentityConfig(params: {
+  name?: string;
+  emoji?: unknown;
+  avatar?: unknown;
+}): IdentityConfig | undefined {
+  return compactIdentityConfig({
+    ...(params.name ? { name: sanitizeAgentIdentityLine(params.name) } : {}),
+    emoji: sanitizeAgentIdentityLine(normalizeOptionalString(params.emoji) ?? ""),
+    avatar: sanitizeAgentIdentityLine(normalizeOptionalString(params.avatar) ?? ""),
+  });
+}
+
+export function normalizeIdentityForFile(
+  identity: IdentityConfig | undefined,
+): IdentityConfig | undefined {
+  return identity ? compactIdentityConfig(identity) : undefined;
+}
+
 function normalizeIdentityValue(value: string): string {
   // Normalize markdown decoration and punctuation so generated template
   // placeholders do not accidentally become real identity values.
@@ -58,7 +102,7 @@ function isIdentityPlaceholder(value: string): boolean {
 }
 
 /** Parse rich identity fields from human-authored markdown content. */
-export function parseIdentityMarkdown(content: string): AgentIdentityFile {
+function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const identity: AgentIdentityFile = {};
   const lines = content.split(/\r?\n/);
   for (const line of lines) {
@@ -211,13 +255,50 @@ export function mergeIdentityMarkdownContent(
 
 function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   try {
-    const content = fs.readFileSync(identityPath, "utf-8");
-    const parsed = parseIdentityMarkdown(content);
+    const resolvedPath = fs.realpathSync(identityPath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolvedPath,
+      maxBytes: MAX_IDENTITY_FILE_BYTES,
+    });
+    const parsed = parseIdentityMarkdown(buffer.toString("utf-8"));
     if (!identityHasValues(parsed)) {
       return null;
     }
     return parsed;
   } catch {
+    return null;
+  }
+}
+
+/** Load a specific identity file when it exists and contains real values. */
+export async function loadAgentIdentityFromFile(
+  identityPath: string,
+): Promise<AgentIdentityFile | null> {
+  let resolvedPath: string | undefined;
+  try {
+    resolvedPath = await fs.promises.realpath(identityPath);
+    const { buffer } = await readRegularFile({
+      filePath: resolvedPath,
+      maxBytes: MAX_IDENTITY_FILE_BYTES,
+    });
+    const parsed = parseIdentityMarkdown(buffer.toString("utf-8"));
+    if (!identityHasValues(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    // fs-safe currently exposes this legacy overflow as a plain Error, so use
+    // its complete message contract; path substrings must not change diagnosis.
+    if (
+      resolvedPath &&
+      error instanceof Error &&
+      error.message === `File exceeds ${MAX_IDENTITY_FILE_BYTES} bytes: ${resolvedPath}`
+    ) {
+      throw new Error(
+        `Identity file ${identityPath} exceeds the maximum size of ${MAX_IDENTITY_FILE_BYTES} bytes`,
+        { cause: error },
+      );
+    }
     return null;
   }
 }

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
-import { DEFAULT_MAX_BYTES } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() => vi.fn(() => ""));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,6 +41,21 @@ function textContent(
 ): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
+}
+
+const plainTheme = {
+  fg: (_token: string, text: string) => text,
+  bold: (text: string) => text,
+} as never;
+
+function renderReadCall(args: { path: string; offset?: number; limit?: number }): string {
+  const tool = createReadToolDefinition("/workspace");
+  const component = tool.renderCall?.(args, plainTheme, {
+    lastComponent: undefined,
+    expanded: true,
+    cwd: "/workspace",
+  } as never);
+  return component?.render(120).join("\n").trimEnd() ?? "";
 }
 
 describe("read tool", () => {
@@ -149,6 +164,14 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  it.each([
+    { limit: -1, range: ":1-1" },
+    { limit: 1.5, range: ":1-1" },
+    { limit: Number.POSITIVE_INFINITY, range: `:1-${DEFAULT_MAX_LINES}` },
+  ])("normalizes read call line ranges for limit $limit", ({ limit, range }) => {
+    expect(renderReadCall({ path: "notes.txt", limit })).toBe(`read notes.txt${range}`);
   });
 
   it.each([0, -1, 1.5])("rejects invalid offset %s before accessing the file", async (offset) => {

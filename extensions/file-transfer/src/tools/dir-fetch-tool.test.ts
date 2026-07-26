@@ -1,12 +1,10 @@
-// File Transfer tests cover dir fetch tool plugin behavior.
-import { spawn } from "node:child_process";
-import { EventEmitter } from "node:events";
+// File Transfer tests cover dir fetch tar validation through the tool boundary.
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectBoundedTextTail } from "../shared/append-bounded-text-tail.js";
-import { validateTarUncompressedBudget } from "./dir-fetch-tool.js";
 
 let tmpRoot: string;
 
@@ -15,311 +13,227 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.doUnmock("openclaw/plugin-sdk/media-store");
+  vi.doUnmock("openclaw/plugin-sdk/process-runtime");
+  vi.doUnmock("../shared/audit.js");
+  vi.doUnmock("./node-tool-invoke.js");
+  vi.resetModules();
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
-async function tarDirectory(dir: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, ["-czf", "-", "-C", dir, "."], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const chunks: Buffer[] = [];
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`tar exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve(Buffer.concat(chunks));
-    });
-    child.on("error", reject);
+function commandResult(overrides: Record<string, unknown> = {}) {
+  return {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    ...overrides,
+  };
+}
+
+type MockCommandResult = Record<string, unknown> & {
+  outputByteLength?: number;
+};
+
+async function importToolWithCommandResults(tarBuffer: Buffer, ...results: MockCommandResult[]) {
+  const runCommandWithTimeout = vi.fn();
+  for (const result of results) {
+    runCommandWithTimeout.mockImplementationOnce(
+      async (
+        _argv: string[],
+        options: { onOutputChunk?: (chunk: Buffer, stream: string) => boolean | void },
+      ) => {
+        if (result.error instanceof Error && result.termination === "error") {
+          throw result.error;
+        }
+        let stopped = false;
+        const stdout = typeof result.stdout === "string" ? result.stdout : "";
+        if (stdout) {
+          stopped = options.onOutputChunk?.(Buffer.from(stdout), "stdout") === false;
+        } else if (typeof result.outputByteLength === "number") {
+          stopped =
+            options.onOutputChunk?.({ byteLength: result.outputByteLength } as Buffer, "stdout") ===
+            false;
+        }
+        return commandResult({
+          ...result,
+          stdout: "",
+          ...(stopped
+            ? { code: null, killed: true, outputLimitExceeded: true, termination: "signal" }
+            : {}),
+        });
+      },
+    );
+  }
+  runCommandWithTimeout.mockResolvedValue(commandResult());
+  vi.resetModules();
+  vi.doMock("openclaw/plugin-sdk/process-runtime", () => ({
+    runCommandWithTimeout,
+  }));
+  vi.doMock("openclaw/plugin-sdk/media-store", () => ({
+    saveMediaBuffer: vi.fn(async () => ({ path: path.join(tmpRoot, "archive.tar.gz") })),
+  }));
+  vi.doMock("../shared/audit.js", () => ({
+    appendFileTransferAudit: vi.fn(async () => undefined),
+  }));
+  vi.doMock("./node-tool-invoke.js", () => ({
+    readRequiredNodePath: (params: Record<string, unknown>) => ({
+      node: String(params.node),
+      requestedPath: String(params.path),
+    }),
+    invokeNodeToolPayload: vi.fn(async () => ({
+      nodeId: "node-1",
+      nodeDisplayName: "Node One",
+      payload: {
+        ok: true,
+        path: "/tmp/project",
+        tarBase64: tarBuffer.toString("base64"),
+        tarBytes: tarBuffer.byteLength,
+        sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
+        fileCount: 1,
+      },
+      startedAt: Date.now(),
+    })),
+  }));
+  return {
+    module: await import("./dir-fetch-tool.js"),
+    runCommandWithTimeout,
+  };
+}
+
+async function executeDirFetch(module: typeof import("./dir-fetch-tool.js")) {
+  return await module.createDirFetchTool().execute("tool-call-1", {
+    node: "node-1",
+    path: "/tmp/project",
   });
 }
 
-const testUnlessWindows = process.platform === "win32" ? it.skip : it;
-
-function mockTarSpawn(
-  script: (
-    child: EventEmitter & {
-      kill: ReturnType<typeof vi.fn>;
-      stderr: EventEmitter;
-      stdin: EventEmitter & { end: () => void };
-      stdout: EventEmitter;
-    },
-  ) => void,
-) {
-  return vi.fn(() => {
-    const child = new EventEmitter() as EventEmitter & {
-      kill: ReturnType<typeof vi.fn>;
-      stderr: EventEmitter;
-      stdin: EventEmitter & { end: () => void };
-      stdout: EventEmitter;
-    };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.stdin = new EventEmitter() as EventEmitter & { end: () => void };
-    child.kill = vi.fn();
-    child.stdin.end = () => {
-      queueMicrotask(() => script(child));
-    };
-    return child;
-  });
-}
-
-describe("validateTarUncompressedBudget", () => {
-  testUnlessWindows(
-    "rejects an archive before extraction when expanded bytes exceed budget",
-    async () => {
-      await fs.writeFile(path.join(tmpRoot, "zeros.txt"), "0".repeat(128));
-      const tarBuffer = await tarDirectory(tmpRoot);
-
-      await expect(validateTarUncompressedBudget(tarBuffer, 64)).resolves.toEqual({
-        ok: false,
-        reason: "archive expands past uncompressed budget 64 bytes",
-      });
-      await expect(validateTarUncompressedBudget(tarBuffer, 256)).resolves.toEqual({
-        ok: true,
-      });
-    },
-  );
-
-  it("fails closed when tar stdout cannot be read", async () => {
-    vi.resetModules();
-    const spawnMock = mockTarSpawn((child) => {
-      child.stdout.emit("data", Buffer.from("partial"));
-      child.stdout.emit("error", new Error("budget read failed"));
-      child.emit("close", 0);
-    });
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return { ...actual, spawn: spawnMock };
-    });
-
-    try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      await expect(testing.validateTarUncompressedBudget(Buffer.from("x"))).resolves.toEqual({
-        ok: false,
-        reason: "tar uncompressed budget validation stdout error: Error: budget read failed",
-      });
-      expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledWith("SIGKILL");
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-    }
-  });
-
-  it("keeps complete budget output authoritative after diagnostic stderr errors", async () => {
-    vi.resetModules();
-    const spawnMock = mockTarSpawn((child) => {
-      child.stderr.emit("error", new Error("diagnostics unavailable"));
-      child.stdout.emit("data", Buffer.alloc(16));
-      child.emit("close", 0);
-    });
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return { ...actual, spawn: spawnMock };
-    });
-
-    try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      await expect(testing.validateTarUncompressedBudget(Buffer.from("x"), 32)).resolves.toEqual({
-        ok: true,
-      });
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-    }
-  });
-});
+const validListingResults = [{ stdout: "./ok.txt\n" }, { stdout: "-ok.txt\n" }] as const;
 
 describe("dir.fetch tar validation", () => {
-  it("fails tar listing closed when stdout cannot be read", async () => {
-    vi.resetModules();
-    const spawnMock = mockTarSpawn((child) => {
-      child.stdout.emit("data", Buffer.from("partial.txt\n"));
-      child.stdout.emit("error", new Error("listing read failed"));
-      child.emit("close", 0);
-    });
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return { ...actual, spawn: spawnMock };
-    });
+  it("rejects an archive before extraction when expanded bytes exceed budget", async () => {
+    const { module } = await importToolWithCommandResults(
+      Buffer.from("archive"),
+      ...validListingResults,
+      { outputByteLength: 64 * 1024 * 1024 + 1 },
+    );
 
-    try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      await expect(testing.preValidateTarball(Buffer.from("x"))).resolves.toEqual({
-        ok: false,
-        reason: "tar -tzf stdout error: Error: listing read failed",
-      });
-      expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledWith("SIGKILL");
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-    }
+    await expect(executeDirFetch(module)).rejects.toThrow(
+      "dir.fetch UNCOMPRESSED_TOO_LARGE: archive expands past uncompressed budget 67108864 bytes",
+    );
   });
 
-  it("keeps successful unpack authoritative after diagnostic stderr errors", async () => {
-    vi.resetModules();
-    const spawnMock = mockTarSpawn((child) => {
-      child.stderr.emit("error", new Error("diagnostics unavailable"));
-      child.emit("close", 0);
-    });
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return { ...actual, spawn: spawnMock };
-    });
+  it("fails uncompressed budget checks closed on wrapper errors", async () => {
+    const { module, runCommandWithTimeout } = await importToolWithCommandResults(
+      Buffer.from("archive"),
+      ...validListingResults,
+      {
+        code: null,
+        termination: "error",
+        error: new Error("budget read failed"),
+      },
+    );
 
-    try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      await expect(testing.unpackTar(Buffer.from("x"), tmpRoot)).resolves.toBeUndefined();
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-    }
+    await expect(executeDirFetch(module)).rejects.toThrow(
+      "dir.fetch UNCOMPRESSED_TOO_LARGE: tar uncompressed budget validation error: budget read failed",
+    );
+    expect(runCommandWithTimeout).toHaveBeenLastCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ tolerateOutputError: { stderr: true } }),
+    );
   });
 
-  it("ignores late stdin EPIPE after tar listing has already settled", async () => {
-    vi.resetModules();
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return {
-        ...actual,
-        spawn: vi.fn(() => {
-          const child = new EventEmitter() as EventEmitter & {
-            kill: ReturnType<typeof vi.fn>;
-            stderr: EventEmitter;
-            stdin: EventEmitter & { end: () => void };
-            stdout: EventEmitter;
-          };
-          const stdout = new EventEmitter();
-          const stderr = new EventEmitter();
-          const stdin = new EventEmitter() as EventEmitter & { end: () => void };
-          child.stdout = stdout;
-          child.stderr = stderr;
-          child.stdin = stdin;
-          child.kill = vi.fn();
-          stdin.end = () => {
-            queueMicrotask(() => {
-              stderr.emit("data", Buffer.from("invalid archive"));
-              child.emit("close", 2);
-              stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
-            });
-          };
-          return child;
-        }),
-      };
+  it("fails tar listing closed on wrapper errors", async () => {
+    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
+      code: null,
+      termination: "error",
+      error: new Error("listing read failed"),
     });
 
-    try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      await expect(testing.preValidateTarball(Buffer.from("x"))).resolves.toEqual({
-        ok: false,
-        reason: "tar -tzf exited 2: invalid archive",
-      });
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-    }
+    await expect(executeDirFetch(module)).rejects.toThrow(
+      "dir.fetch UNSAFE_ARCHIVE: tar -tzf error: listing read failed",
+    );
   });
 
-  it("stops tar name listing once the entry cap is exceeded", async () => {
-    vi.resetModules();
+  it("accepts successful validation and unpack", async () => {
+    const { module, runCommandWithTimeout } = await importToolWithCommandResults(
+      Buffer.from("archive"),
+      ...validListingResults,
+      {},
+      {},
+    );
+
+    await expect(executeDirFetch(module)).resolves.toMatchObject({
+      details: {
+        path: "/tmp/project",
+        fileCount: 1,
+      },
+    });
+    expect(runCommandWithTimeout).toHaveBeenLastCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        outputCapture: { stdout: "discard", stderr: "tail" },
+        tolerateOutputError: { stderr: true },
+      }),
+    );
+  });
+
+  it("keeps tar exit diagnostics", async () => {
+    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
+      code: 2,
+      stderr: "invalid archive",
+    });
+
+    await expect(executeDirFetch(module)).rejects.toThrow(
+      "dir.fetch UNSAFE_ARCHIVE: tar -tzf exited 2: invalid archive",
+    );
+  });
+
+  it("stops name validation at the entry cap", async () => {
     const tarLines = Array.from({ length: 5001 }, (_, index) => `file-${index}`).join("\n") + "\n";
-    const spawnMock = mockTarSpawn((child) => {
-      child.stdout.emit("data", Buffer.from(tarLines));
-    });
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return {
-        ...actual,
-        spawn: spawnMock,
-      };
-    });
+    const { module, runCommandWithTimeout } = await importToolWithCommandResults(
+      Buffer.from("archive"),
+      { stdout: tarLines },
+    );
 
-    try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      await expect(testing.preValidateTarball(Buffer.from("x"))).resolves.toEqual({
-        ok: false,
-        reason: "archive contains 5001 entries; limit 5000",
-      });
-      expect(spawnMock).toHaveBeenCalledTimes(1);
-      const child = spawnMock.mock.results[0]?.value;
-      expect(child?.kill).toHaveBeenCalledWith("SIGKILL");
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-    }
+    await expect(executeDirFetch(module)).rejects.toThrow(
+      "dir.fetch UNSAFE_ARCHIVE: archive contains 5001 entries; limit 5000",
+    );
+    expect(runCommandWithTimeout).toHaveBeenCalledOnce();
   });
 
   it("keeps recent tar stderr when listing fails noisily", async () => {
-    vi.resetModules();
     const oldNoise = "old-noise\n".repeat(600);
     const recent = "recent-invalid-archive-details\n".repeat(12);
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return {
-        ...actual,
-        spawn: mockTarSpawn((child) => {
-          child.stderr.emit("data", Buffer.from(oldNoise));
-          child.stderr.emit("data", Buffer.from(recent));
-          child.emit("close", 2);
-        }),
-      };
+    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
+      code: 2,
+      stderr: oldNoise + recent,
     });
 
-    try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      const result = await testing.preValidateTarball(Buffer.from("x"));
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.reason).toContain(projectBoundedTextTail(recent, 200));
-        expect(result.reason).not.toContain(oldNoise.slice(0, 40));
-      }
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
-    }
+    await expect(executeDirFetch(module)).rejects.toThrow(projectBoundedTextTail(recent, 200));
   });
 
-  it("surfaces UTF-16 safe tar stderr tail when listing fails with emoji at projection boundary", async () => {
-    vi.resetModules();
+  it("surfaces a UTF-16-safe tar stderr tail", async () => {
     const oldNoise = "n".repeat(250);
-    // Length 201: raw slice(-200) would start on the low surrogate of 🤖.
     const recent = "🤖" + "f".repeat(199);
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:child_process")>();
-      return {
-        ...actual,
-        spawn: mockTarSpawn((child) => {
-          child.stderr.emit("data", Buffer.from(oldNoise));
-          child.stderr.emit("data", Buffer.from(recent));
-          child.emit("close", 2);
-        }),
-      };
+    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
+      code: 2,
+      stderr: oldNoise + recent,
     });
 
+    let message = "";
     try {
-      const { testing } = await import("./dir-fetch-tool.js");
-      const result = await testing.preValidateTarball(Buffer.from("x"));
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.reason).toContain(projectBoundedTextTail(recent, 200));
-        expect(result.reason).toContain("f".repeat(199));
-        expect(result.reason).not.toContain("🤖");
-        expect(
-          /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
-            result.reason,
-          ),
-        ).toBe(false);
-      }
-    } finally {
-      vi.doUnmock("node:child_process");
-      vi.resetModules();
+      await executeDirFetch(module);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
     }
+    expect(message).toContain(projectBoundedTextTail(recent, 200));
+    expect(message).toContain("f".repeat(199));
+    expect(message).not.toContain("🤖");
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(message),
+    ).toBe(false);
   });
 });

@@ -42,7 +42,7 @@ function isPrecomputedSubcommandHelpName(value: string): value is PrecomputedSub
   return PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.has(value as PrecomputedSubcommandHelpName);
 }
 
-export function resolvePrecomputedSubcommandHelpCommand(
+function resolvePrecomputedSubcommandHelpCommand(
   argv: string[],
 ): PrecomputedSubcommandHelpName | null {
   const args = argv.slice(2);

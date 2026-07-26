@@ -1,7 +1,14 @@
 // sessions_list tool tests cover session metadata projection, visibility
 // helpers, and numeric argument validation.
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
+
+const VALID_CONFIG: OpenClawConfig = {
+  agents: { entries: { main: { default: true } } },
+};
 
 const mocks = vi.hoisted(() => ({
   gatewayCall: vi.fn(),
@@ -29,6 +36,7 @@ vi.mock("../../gateway/call.js", () => ({
 vi.mock("../../sessions/session-state-events.js", () => ({
   getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
     mocks.getSessionStateVersions(refs),
+  listAmbientGroupWatchTargets: () => new Set<string>(),
 }));
 
 vi.mock("./sessions-helpers.js", async (importActual) => {
@@ -45,26 +53,10 @@ vi.mock("./sessions-helpers.js", async (importActual) => {
 type SessionsListDetails = {
   sessions?: Array<{
     channel?: string;
-    deliveryContext?: {
-      accountId?: string;
-      channel?: string;
-      threadId?: string | number;
-      to?: string;
-    };
-    elevatedLevel?: string;
-    effectiveFastMode?: boolean | "auto";
-    effectiveFastModeSource?: "session" | "agent" | "config" | "default";
-    fastMode?: boolean | "auto";
-    fastAutoOnSeconds?: number;
     archived?: boolean;
-    archivedAt?: number;
     pinned?: boolean;
-    pinnedAt?: number;
     stateVersion?: number;
-    reasoningLevel?: string;
-    responseUsage?: string;
-    thinkingLevel?: string;
-    verboseLevel?: string;
+    [key: string]: unknown;
   }>;
 };
 
@@ -101,7 +93,7 @@ describe("sessions-list-tool", () => {
       main: { "agent:main:main": 7, "agent:main:subagent:child": 0 },
     });
 
-    const result = await createSessionsListTool({ config: {} as never }).execute("call-state", {});
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("call-state", {});
 
     expect(mocks.getSessionStateVersions).toHaveBeenCalledWith([
       { sessionKey: "agent:main:main", agentId: "main" },
@@ -111,9 +103,88 @@ describe("sessions-list-tool", () => {
     expect(getSessionsListDetails(result).sessions?.[1]?.stateVersion).toBeUndefined();
   });
 
-  it("keeps deliveryContext.threadId in sessions_list results", async () => {
-    // Thread/topic ids are required for channel-specific follow-up routing, so
-    // list results must preserve both string and numeric variants.
+  it("never exposes incognito rows to cross-session tools", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "(multiple)",
+      sessions: [
+        { key: "agent:main:dashboard:visible", kind: "other" },
+        { key: "agent:main:dashboard:incognito-private", kind: "other", incognito: true },
+      ],
+    });
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("blind", {});
+
+    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
+      "agent:main:dashboard:visible",
+    ]);
+  });
+
+  it("declares a complete focused row contract", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:subagent:child",
+          agentId: "main",
+          kind: "other",
+          channel: "discord",
+          label: "worker",
+          displayName: "Worker",
+          derivedTitle: "Investigate queue",
+          lastMessagePreview: "done",
+          spawnedBy: "agent:main:main",
+          updatedAt: 100,
+          archived: false,
+          pinned: true,
+          model: "openai/gpt-5.4-mini",
+          contextTokens: 20_000,
+          totalTokens: 1_200,
+          status: "done",
+          abortedLastRun: false,
+          childSessions: ["agent:main:subagent:grandchild"],
+        },
+      ],
+    });
+    mocks.getSessionStateVersions.mockReturnValue({
+      main: { "agent:main:subagent:child": 4 },
+    });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
+    const result = await tool.execute("contract", {});
+
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
+    );
+    expect(result.details).toEqual({
+      count: 1,
+      sessions: [
+        {
+          key: "agent:main:subagent:child",
+          agentId: "main",
+          kind: "other",
+          channel: "discord",
+          archived: false,
+          pinned: true,
+          label: "worker",
+          displayName: "Worker",
+          derivedTitle: "Investigate queue",
+          lastMessagePreview: "done",
+          parentSessionKey: "agent:main:main",
+          updatedAt: 100,
+          stateVersion: 4,
+          model: "openai/gpt-5.4-mini",
+          contextTokens: 20_000,
+          totalTokens: 1_200,
+          status: "done",
+          abortedLastRun: false,
+          childSessions: ["agent:main:subagent:grandchild"],
+        },
+      ],
+    });
+  });
+
+  it("keeps channel discovery but omits delivery routing metadata", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -147,63 +218,38 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-1", {});
     const details = getSessionsListDetails(result);
 
-    expect(details.sessions?.[0]?.deliveryContext).toEqual({
-      channel: "discord",
-      to: "discord:child",
-      accountId: "acct-1",
-      threadId: "thread-1",
-    });
-    expect(Object.hasOwn(details.sessions?.[0] ?? {}, "effectiveFastMode")).toBe(false);
-    expect(details.sessions?.[1]?.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "telegram:topic",
-      accountId: "acct-2",
-      threadId: 271,
-    });
+    expect(details.sessions?.map((session) => session.channel)).toEqual(["discord", "telegram"]);
+    expect(details.sessions?.every((session) => !Object.hasOwn(session, "deliveryContext"))).toBe(
+      true,
+    );
   });
 
-  it("keeps numeric deliveryContext.threadId in sessions_list results", async () => {
-    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [
-            {
-              key: "agent:main:telegram:group:-100123:topic:99",
-              kind: "group",
-              sessionId: "sess-telegram-topic",
-              deliveryContext: {
-                channel: "telegram",
-                to: "-100123",
-                accountId: "acct-1",
-                threadId: 99,
-              },
-            },
-          ],
-        };
-      }
-      return {};
+  it("prefers the explicit parent key over the legacy spawner", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:subagent:child",
+          kind: "other",
+          parentSessionKey: "agent:main:subagent:parent",
+          spawnedBy: "agent:main:main",
+        },
+      ],
     });
-    const tool = createSessionsListTool({ config: {} as never });
 
-    const result = await tool.execute("call-2", {});
-    const details = getSessionsListDetails(result);
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("lineage", {});
 
-    expect(details.sessions?.[0]?.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "-100123",
-      accountId: "acct-1",
-      threadId: 99,
-    });
+    expect(getSessionsListDetails(result).sessions?.[0]?.parentSessionKey).toBe(
+      "agent:main:subagent:parent",
+    );
   });
 
-  it("derives channels only from structurally valid group session keys", async () => {
+  it("omits malformed agent keys and derives channels only from valid group keys", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -240,7 +286,7 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-agent-scoped-channel", {});
     const details = getSessionsListDetails(result);
@@ -250,11 +296,10 @@ describe("sessions-list-tool", () => {
       "discord",
       "matrix",
       "unknown",
-      "unknown",
     ]);
   });
 
-  it("keeps live session setting metadata in sessions_list results", async () => {
+  it("omits detailed runtime settings from discovery rows", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -280,24 +325,23 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-3", {});
     const details = getSessionsListDetails(result);
 
     const session = details.sessions?.[0];
-    expect(session?.thinkingLevel).toBe("high");
-    expect(session?.fastMode).toBe("auto");
-    expect(session?.effectiveFastMode).toBe("auto");
-    expect(session?.effectiveFastModeSource).toBe("config");
-    expect(session?.fastAutoOnSeconds).toBe(30);
-    expect(session?.verboseLevel).toBe("on");
-    expect(session?.reasoningLevel).toBe("deep");
-    expect(session?.elevatedLevel).toBe("on");
-    expect(session?.responseUsage).toBe("full");
+    expect(session).toEqual({
+      key: "main",
+      agentId: "main",
+      kind: "main",
+      channel: "unknown",
+      archived: false,
+      pinned: false,
+    });
   });
 
-  it("requests archived sessions and keeps management metadata", async () => {
+  it("requests archived sessions and keeps management state", async () => {
     mocks.gatewayCall.mockResolvedValue({
       path: "/tmp/sessions.json",
       sessions: [
@@ -310,7 +354,7 @@ describe("sessions-list-tool", () => {
         },
       ],
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-archived", { archived: true });
 
@@ -322,9 +366,9 @@ describe("sessions-list-tool", () => {
     );
     expect(getSessionsListDetails(result).sessions?.[0]).toMatchObject({
       archived: true,
-      archivedAt: 20,
       pinned: false,
     });
+    expect(getSessionsListDetails(result).sessions?.[0]).not.toHaveProperty("archivedAt");
   });
 
   it.each([
@@ -335,7 +379,7 @@ describe("sessions-list-tool", () => {
   ])("rejects invalid numeric parameter %o", async (params, message) => {
     // Reject before gateway dispatch so malformed limits cannot reach session
     // store queries.
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     await expect(tool.execute("call-4", params)).rejects.toThrow(message);
     expect(mocks.gatewayCall).not.toHaveBeenCalled();

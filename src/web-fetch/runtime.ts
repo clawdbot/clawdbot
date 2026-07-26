@@ -68,7 +68,6 @@ function hasEntryCredential(
     | "envVars"
     | "getConfiguredCredentialFallback"
     | "getConfiguredCredentialValue"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -78,9 +77,8 @@ function hasEntryCredential(
     provider,
     config,
     toolConfig: fetch as Record<string, unknown> | undefined,
-    resolveRawValue: ({ provider: currentProvider, config: currentConfig, toolConfig }) =>
-      currentProvider.getConfiguredCredentialValue?.(currentConfig) ??
-      currentProvider.getCredentialValue(toolConfig),
+    resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialValue?.(currentConfig),
     resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
       currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
     resolveEnvValue: ({ provider: currentProvider }) =>
@@ -94,7 +92,6 @@ function hasAutoDetectCredential(
     | "envVars"
     | "getConfiguredCredentialFallback"
     | "getConfiguredCredentialValue"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,

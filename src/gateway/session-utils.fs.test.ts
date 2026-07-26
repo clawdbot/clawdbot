@@ -3,33 +3,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
+import { readSessionTranscriptIndex } from "./session-transcript-index.fs.js";
 import {
-  clearSessionTranscriptIndexCache,
-  readSessionTranscriptIndex,
-} from "./session-transcript-index.fs.js";
-import {
-  archiveSessionTranscripts,
-  readFirstUserMessageFromTranscript,
-  readLatestSessionUsageFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
-  readLatestRecentSessionUsageFromTranscriptAsync,
-  readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscript,
   readRecentSessionMessagesAsync,
-  readRecentSessionMessages,
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionMessagesWithStats,
-  readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
-  readSessionMessageCount,
   readSessionMessagesAsync,
   readSessionMessages,
+  readSessionMessagesPageWithStatsAsync,
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
@@ -93,6 +81,49 @@ function writeResetArchive(
   const archivePath = path.join(tmpDir, `${sessionId}.jsonl.reset.${timestamp}`);
   fs.writeFileSync(archivePath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
   return archivePath;
+}
+
+function installAsyncPositionalShortReadProxy(maxPerCall = 16) {
+  const realOpen = fs.promises.open.bind(fs.promises);
+  let shortReadCalls = 0;
+  vi.spyOn(fs.promises, "open").mockImplementation(async (...args: unknown[]) => {
+    const handle = await realOpen(...(args as Parameters<typeof realOpen>));
+    const realRead = handle.read.bind(handle);
+    return new Proxy(handle, {
+      get(target, prop, receiver) {
+        if (prop !== "read") {
+          return Reflect.get(target, prop, receiver);
+        }
+        return (buf: Buffer, offset: number, length: number, position: number | null) => {
+          const cappedLength = position !== null ? maxPerCall : length;
+          if (cappedLength < length) {
+            shortReadCalls += 1;
+          }
+          return realRead(buf, offset, Math.min(length, cappedLength), position);
+        };
+      },
+    });
+  });
+  return () => shortReadCalls;
+}
+
+function installSyncPositionalShortReadProxy(maxPerCall = 16) {
+  const realReadSync = fs.readSync.bind(fs);
+  let shortReadCalls = 0;
+  const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+    fd: number,
+    buffer: NodeJS.ArrayBufferView,
+    offset: number,
+    length: number,
+    position: fs.ReadPosition | null,
+  ) => {
+    const cappedLength = typeof position === "number" ? maxPerCall : length;
+    if (cappedLength < length) {
+      shortReadCalls += 1;
+    }
+    return realReadSync(fd, buffer, offset, Math.min(length, cappedLength), position);
+  }) as typeof fs.readSync);
+  return { readSpy, getShortReadCalls: () => shortReadCalls };
 }
 
 function appendBlockedUserMessageWithSessionManager(params: {
@@ -179,178 +210,6 @@ function expectUsageFields(usage: unknown, fields: Record<string, unknown>) {
     expect(record[key]).toEqual(value);
   }
 }
-
-describe("readFirstUserMessageFromTranscript", () => {
-  let tmpDir: string;
-  let storePath: string;
-
-  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
-    tmpDir = nextTmpDir;
-    storePath = nextStorePath;
-  });
-
-  test.each([
-    {
-      sessionId: "test-session-1",
-      lines: [
-        JSON.stringify({ type: "session", version: 1, id: "test-session-1" }),
-        JSON.stringify({ message: { role: "user", content: "Hello world" } }),
-        JSON.stringify({ message: { role: "assistant", content: "Hi there" } }),
-      ],
-      expected: "Hello world",
-    },
-    {
-      sessionId: "test-session-2",
-      lines: [
-        JSON.stringify({ type: "session", version: 1, id: "test-session-2" }),
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "Array message content" }],
-          },
-        }),
-      ],
-      expected: "Array message content",
-    },
-    {
-      sessionId: "test-session-2b",
-      lines: [
-        JSON.stringify({ type: "session", version: 1, id: "test-session-2b" }),
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "input_text", text: "Input text content" }],
-          },
-        }),
-      ],
-      expected: "Input text content",
-    },
-  ] as const)("extracts first user text for $sessionId", ({ sessionId, lines, expected }) => {
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
-    expect(result, sessionId).toBe(expected);
-  });
-  test("skips non-user messages to find first user message", () => {
-    const sessionId = "test-session-3";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "system", content: "System prompt" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Greeting" } }),
-      JSON.stringify({ message: { role: "user", content: "First user question" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
-    expect(result).toBe("First user question");
-  });
-
-  test("skips inter-session user messages by default", () => {
-    const sessionId = "test-session-inter-session";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({
-        message: {
-          role: "user",
-          content: "Forwarded by session tool",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        },
-      }),
-      JSON.stringify({
-        message: { role: "user", content: "Real user message" },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
-    expect(result).toBe("Real user message");
-  });
-
-  test("returns null when no user messages exist", () => {
-    const sessionId = "test-session-4";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "system", content: "System prompt" } }),
-      JSON.stringify({ message: { role: "assistant", content: "Greeting" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
-    expect(result).toBeNull();
-  });
-
-  test("handles malformed JSON lines gracefully", () => {
-    const sessionId = "test-session-5";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      "not valid json",
-      JSON.stringify({ message: { role: "user", content: "Valid message" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
-    expect(result).toBe("Valid message");
-  });
-
-  test("returns null for empty content", () => {
-    const sessionId = "test-session-8";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ message: { role: "user", content: "" } }),
-      JSON.stringify({ message: { role: "user", content: "Second message" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
-    expect(result).toBe("Second message");
-  });
-});
-
-describe("shared transcript read behaviors", () => {
-  let tmpDir: string;
-  let storePath: string;
-
-  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
-    tmpDir = nextTmpDir;
-    storePath = nextStorePath;
-  });
-
-  test("returns null for missing transcript files", () => {
-    expect(readFirstUserMessageFromTranscript("missing-session", storePath)).toBeNull();
-  });
-
-  test("uses sessionFile overrides when provided", () => {
-    const sessionId = "test-shared-custom";
-    const firstPath = path.join(tmpDir, "custom-first.jsonl");
-
-    fs.writeFileSync(
-      firstPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: sessionId }),
-        JSON.stringify({ message: { role: "user", content: "Custom file message" } }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    expect(readFirstUserMessageFromTranscript(sessionId, storePath, firstPath)).toBe(
-      "Custom file message",
-    );
-  });
-
-  test("trims whitespace in extracted previews", () => {
-    const firstSessionId = "test-shared-first-trim";
-
-    fs.writeFileSync(
-      path.join(tmpDir, `${firstSessionId}.jsonl`),
-      JSON.stringify({ message: { role: "user", content: "  Padded message  " } }),
-      "utf-8",
-    );
-
-    expect(readFirstUserMessageFromTranscript(firstSessionId, storePath)).toBe("Padded message");
-  });
-});
 
 describe("readSessionTitleFieldsFromTranscript cache", () => {
   let tmpDir: string;
@@ -523,123 +382,6 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
-  test("reads recent messages from the transcript tail without loading the whole file", () => {
-    const sessionId = "test-session-recent-tail";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "old" } },
-      { message: { role: "assistant", content: "middle" } },
-      { message: { role: "user", content: "recent" } },
-      { message: { role: "assistant", content: "latest" } },
-    ]);
-
-    const out = readRecentSessionMessages(sessionId, storePath, undefined, {
-      maxMessages: 2,
-      maxBytes: 1024,
-    });
-
-    expect(out).toHaveLength(2);
-    expectMessageFields(out[0], { role: "user", content: "recent", openclaw: { seq: 3 } });
-    expectMessageFields(out[1], { role: "assistant", content: "latest", openclaw: { seq: 4 } });
-  });
-
-  test("returns no recent messages for non-finite maxMessages", async () => {
-    const sessionId = "test-session-recent-non-finite-max-messages";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "old" } },
-      { message: { role: "assistant", content: "latest" } },
-    ]);
-
-    expect(
-      readRecentSessionMessages(sessionId, storePath, undefined, {
-        maxMessages: Number.NaN,
-        maxBytes: 1024,
-      }),
-    ).toEqual([]);
-    await expect(
-      readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
-        maxMessages: Number.POSITIVE_INFINITY,
-        maxBytes: 1024,
-      }),
-    ).resolves.toEqual([]);
-  });
-
-  test("uses the default recent byte cap for non-finite maxBytes", async () => {
-    const sessionId = "test-session-recent-non-finite-max-bytes";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "old" } },
-      { message: { role: "assistant", content: "latest" } },
-    ]);
-
-    const syncOut = readRecentSessionMessages(sessionId, storePath, undefined, {
-      maxMessages: 1,
-      maxBytes: Number.NaN,
-    });
-    const asyncOut = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
-      maxMessages: 1,
-      maxBytes: Number.POSITIVE_INFINITY,
-    });
-
-    expect(syncOut).toHaveLength(1);
-    expectMessageFields(syncOut[0], { role: "assistant", content: "latest" });
-    expect(asyncOut).toHaveLength(1);
-    expectMessageFields(asyncOut[0], { role: "assistant", content: "latest" });
-  });
-
-  test("bounds recent-message reads for large append-only transcripts", () => {
-    const sessionId = "test-session-recent-large";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      ...Array.from({ length: 2500 }, (_, index) =>
-        JSON.stringify({
-          message: {
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: `message ${index} ${"x".repeat(700)}`,
-          },
-        }),
-      ),
-      JSON.stringify({ message: { role: "assistant", content: "tail" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
-
-    try {
-      const out = readRecentSessionMessages(sessionId, storePath, undefined, {
-        maxMessages: 1,
-        maxBytes: 64 * 1024,
-      });
-      expect(out).toHaveLength(1);
-      expectMessageFields(out[0], { role: "assistant", content: "tail" });
-      expect(readFileSpy).not.toHaveBeenCalled();
-    } finally {
-      readFileSpy.mockRestore();
-    }
-  });
-
-  test("preserves real sequence metadata for bounded recent-message reads", () => {
-    const sessionId = "test-session-recent-seq";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "old" } },
-      { message: { role: "assistant", content: "middle" } },
-      { message: { role: "user", content: "recent" } },
-      { message: { role: "assistant", content: "latest" } },
-    ]);
-
-    const result = readRecentSessionMessagesWithStats(sessionId, storePath, undefined, {
-      maxMessages: 2,
-      maxBytes: 256,
-    });
-
-    expect(result.totalMessages).toBe(4);
-    expect(result.messages).toHaveLength(2);
-    expectMessageFields(result.messages[0], { content: "recent", openclaw: { seq: 3 } });
-    expectMessageFields(result.messages[1], { content: "latest", openclaw: { seq: 4 } });
-  });
-
   test("preserves real sequence metadata for async bounded recent-message reads", async () => {
     const sessionId = "test-session-recent-seq-async";
     writeTranscript(tmpDir, sessionId, [
@@ -750,72 +492,6 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("honors byte caps for sync recent tree-message reads", () => {
-    const sessionId = "test-session-recent-tree-byte-cap";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const hugeContent = "huge ".repeat(4096);
-    const lines = [
-      JSON.stringify({ type: "session", version: 3, id: sessionId }),
-      JSON.stringify({
-        type: "message",
-        id: "root",
-        parentId: null,
-        message: { role: "user", content: "root" },
-      }),
-      JSON.stringify({
-        type: "message",
-        id: "huge",
-        parentId: "root",
-        message: { role: "assistant", content: hugeContent },
-      }),
-      JSON.stringify({
-        type: "message",
-        id: "tail",
-        parentId: "huge",
-        message: { role: "assistant", content: "tail" },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
-    const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
-
-    try {
-      const out = readRecentSessionMessages(sessionId, storePath, undefined, {
-        maxMessages: 2,
-        maxBytes: 2048,
-      });
-
-      expect(out).toHaveLength(1);
-      expectMessageFields(out[0], { role: "assistant", content: "tail" });
-      expect(JSON.stringify(out)).not.toContain("huge");
-      expect(readFileSpy).not.toHaveBeenCalled();
-      expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-    } finally {
-      readFileSpy.mockRestore();
-      sessionManagerOpenSpy.mockRestore();
-    }
-  });
-
-  test("counts transcript messages without loading the whole file", () => {
-    const sessionId = "test-session-count-large";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      ...Array.from({ length: 2500 }, (_, index) =>
-        JSON.stringify({ message: { role: "user", content: `message ${index}` } }),
-      ),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
-
-    try {
-      expect(readSessionMessageCount(sessionId, storePath)).toBe(2500);
-      expect(readFileSpy).not.toHaveBeenCalled();
-    } finally {
-      readFileSpy.mockRestore();
-    }
-  });
-
   test("counts transcript messages asynchronously without loading the whole file", async () => {
     const sessionId = "test-session-count-large-async";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -882,7 +558,6 @@ describe("readSessionMessages", () => {
         parentId: "delivery-side-branch",
       },
     ]);
-    clearSessionTranscriptIndexCache();
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
@@ -946,7 +621,6 @@ describe("readSessionMessages", () => {
         targetId: "active-assistant",
       },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const activeIndex = await readSessionTranscriptIndex(transcriptPath);
     const allIndex = await readSessionTranscriptIndex(transcriptPath, { view: "all" });
@@ -956,6 +630,57 @@ describe("readSessionMessages", () => {
       "root",
       "side-assistant",
       "active-assistant",
+    ]);
+  });
+
+  test("applies reset kept-tail projection to file-backed history", async () => {
+    const sessionId = "test-session-reset-boundary";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
+      {
+        type: "message",
+        id: "kept-user",
+        parentId: "old",
+        message: { role: "user", content: "kept question" },
+      },
+      {
+        type: "message",
+        id: "kept-tool",
+        parentId: "kept-user",
+        message: { role: "toolResult", content: "hidden tool" },
+      },
+      {
+        type: "message",
+        id: "kept-assistant",
+        parentId: "kept-tool",
+        message: { role: "assistant", content: "kept answer" },
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "kept-assistant",
+        timestamp: "2026-07-22T00:00:00.000Z",
+        reason: "new",
+        firstKeptEntryId: "kept-user",
+      },
+      {
+        type: "message",
+        id: "post-reset",
+        parentId: "reset-boundary",
+        message: { role: "user", content: "new turn" },
+      },
+    ]);
+
+    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test reset boundary",
+    });
+
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "kept question",
+      "kept answer",
+      "new turn",
     ]);
   });
 
@@ -992,7 +717,6 @@ describe("readSessionMessages", () => {
         appendParentId: "linear-metadata",
       },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
@@ -1024,7 +748,6 @@ describe("readSessionMessages", () => {
       { message: { role: "user", content: "restored prompt" } },
       { message: { role: "assistant", content: "restored archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
@@ -1042,6 +765,7 @@ describe("readSessionMessages", () => {
       maxBytes: 2048,
       allowResetArchiveFallback: true,
     });
+    expect(recent.transcriptSource).toBe("reset-archive");
     expect(recent.totalMessages).toBe(2);
     expect(recent.messages).toHaveLength(1);
     expectMessageFields(recent.messages[0], {
@@ -1057,7 +781,6 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "stale archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const originalReaddir = fs.promises.readdir.bind(fs.promises);
     let wroteActiveTranscript = false;
@@ -1073,7 +796,6 @@ describe("readSessionMessages", () => {
           { type: "session", version: 1, id: sessionId },
           { message: { role: "assistant", content: "active transcript" } },
         ]);
-        clearSessionTranscriptIndexCache();
       }
       return result;
     }) as typeof fs.promises.readdir);
@@ -1100,7 +822,6 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "cached archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const readdirSpy = vi.spyOn(fs.promises, "readdir");
     try {
@@ -1142,7 +863,6 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "newer legacy archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
     await withEnvAsync({ OPENCLAW_HOME: tmpDir }, async () => {
       const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
         mode: "full",
@@ -1168,7 +888,6 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "current archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, staleSessionFile, {
       mode: "full",
@@ -1189,7 +908,6 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "valid stale-name archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, staleSessionFile, {
       mode: "full",
@@ -1213,7 +931,6 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "preferred topic archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, topicSessionFile, {
       mode: "full",
@@ -1234,7 +951,6 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: previousSessionId },
       { message: { role: "assistant", content: "previous session archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
       mode: "full",
@@ -1268,17 +984,22 @@ describe("readSessionMessages", () => {
       { type: "session", version: 1, id: previousSessionId },
       { message: { role: "assistant", content: "newer invalid archive" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
-    const fullMessages = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
-      mode: "full",
-      reason: "test newest valid custom archive",
-      allowResetArchiveFallback: true,
-    });
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(16);
+    try {
+      const fullMessages = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+        mode: "full",
+        reason: "test newest valid custom archive",
+        allowResetArchiveFallback: true,
+      });
 
-    expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "older valid archive",
-    ]);
+      expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
+        "older valid archive",
+      ]);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   test("keeps async rows when imported parent links are incomplete without leaf control", async () => {
@@ -1303,7 +1024,6 @@ describe("readSessionMessages", () => {
         message: { role: "assistant", content: "reachable orphan tail" },
       },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
@@ -1336,7 +1056,6 @@ describe("readSessionMessages", () => {
         message: { role: "assistant", content: "tree hello" },
       },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
@@ -1358,7 +1077,6 @@ describe("readSessionMessages", () => {
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
     ]);
-    clearSessionTranscriptIndexCache();
     expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
 
     const openSpy = vi.spyOn(fs.promises, "open");
@@ -1377,7 +1095,6 @@ describe("readSessionMessages", () => {
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
     ]);
-    clearSessionTranscriptIndexCache();
 
     const openSpy = vi.spyOn(fs.promises, "open");
     try {
@@ -1400,7 +1117,6 @@ describe("readSessionMessages", () => {
       { message: { role: "assistant", content: "x".repeat(32 * 1024) } },
       { message: { role: "user", content: "latest" } },
     ]);
-    clearSessionTranscriptIndexCache();
     const openSpy = vi.spyOn(fs.promises, "open");
 
     try {
@@ -1415,177 +1131,6 @@ describe("readSessionMessages", () => {
       expect(openSpy).toHaveBeenCalledTimes(1);
     } finally {
       openSpy.mockRestore();
-    }
-  });
-
-  test("reads recent session usage asynchronously from the transcript tail", async () => {
-    const sessionId = "test-session-async-recent-usage";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "assistant", content: "older", usage: { input: 10, output: 1 } } },
-      { message: { role: "assistant", content: "x".repeat(32 * 1024) } },
-      { message: { role: "assistant", content: "latest", usage: { input: 42, output: 7 } } },
-    ]);
-
-    const usage = await readRecentSessionUsageFromTranscriptAsync(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      2048,
-    );
-
-    expectUsageFields(usage, {
-      inputTokens: 42,
-      outputTokens: 7,
-    });
-  });
-
-  test("reads latest recent session usage separately from tail aggregates", async () => {
-    const sessionId = "test-session-async-latest-recent-usage";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "assistant", content: "older", usage: { input: 50, output: 5 } } },
-      {
-        message: {
-          role: "assistant",
-          content: "latest",
-          usage: {
-            input: 70,
-            output: 9,
-            contextUsage: { state: "unavailable" },
-          },
-        },
-      },
-    ]);
-
-    const aggregate = await readRecentSessionUsageFromTranscriptAsync(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      2048,
-    );
-    const latest = await readLatestRecentSessionUsageFromTranscriptAsync(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      2048,
-    );
-
-    expectUsageFields(aggregate, {
-      inputTokens: 120,
-      outputTokens: 14,
-      contextUsage: { state: "unavailable" },
-    });
-    expect(aggregate).not.toHaveProperty("totalTokens");
-    expect(aggregate).not.toHaveProperty("totalTokensFresh");
-    expectUsageFields(latest, {
-      inputTokens: 70,
-      outputTokens: 9,
-      contextUsage: { state: "unavailable" },
-      trailingBytes: 0,
-    });
-  });
-
-  test("counts transcript bytes appended after the latest usage snapshot", async () => {
-    const sessionId = "test-session-latest-usage-trailing-bytes";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      {
-        message: {
-          role: "assistant",
-          content: "latest",
-          usage: {
-            input: 70,
-            output: 9,
-            contextUsage: {
-              state: "available",
-              promptTokens: 70,
-              totalTokens: 79,
-            },
-          },
-        },
-      },
-      { message: { role: "tool", content: "appended tool result" } },
-    ]);
-
-    const latest = await readLatestRecentSessionUsageFromTranscriptAsync(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      2048,
-    );
-
-    expectUsageFields(latest, {
-      contextUsage: {
-        state: "available",
-        promptTokens: 70,
-        totalTokens: 79,
-      },
-    });
-    expect(latest?.trailingBytes).toBeGreaterThan(0);
-  });
-
-  test("clears an older context marker when aggregate usage has a newer plain snapshot", async () => {
-    const sessionId = "test-session-aggregate-clears-context-marker";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      {
-        message: {
-          role: "assistant",
-          content: "older",
-          usage: {
-            input: 50,
-            output: 5,
-            contextUsage: { state: "unavailable" },
-          },
-        },
-      },
-      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
-    ]);
-
-    const aggregate = await readRecentSessionUsageFromTranscriptAsync(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      2048,
-    );
-
-    expectUsageFields(aggregate, { inputTokens: 120, outputTokens: 14 });
-    expect(aggregate).not.toHaveProperty("contextUsage");
-  });
-
-  test("tails transcript lines for manual compaction without loading the whole file", () => {
-    const sessionId = "test-session-line-tail";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      ...Array.from({ length: 10 }, (_, index) =>
-        JSON.stringify({ message: { role: "user", content: `message ${index}` } }),
-      ),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
-
-    try {
-      const result = readRecentSessionTranscriptLines({
-        sessionId,
-        storePath,
-        maxLines: 3,
-      });
-      expect(result?.totalLines).toBe(11);
-      expect(result?.lines.map((line) => JSON.parse(line).message?.content)).toEqual([
-        "message 7",
-        "message 8",
-        "message 9",
-      ]);
-      expect(readFileSpy).not.toHaveBeenCalled();
-    } finally {
-      readFileSpy.mockRestore();
     }
   });
 
@@ -1832,6 +1377,68 @@ describe("readSessionMessages", () => {
       { role: "user", content: "active prompt", kind: undefined },
       { role: "assistant", content: "active answer", kind: undefined },
     ]);
+  });
+
+  test("keeps active-branch compaction markers reachable through pagination", async () => {
+    const sessionId = "paginated-branch-with-compaction";
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "old-user",
+        parentId: null,
+        message: { role: "user", content: "old prompt" },
+      },
+      {
+        type: "message",
+        id: "old-assistant",
+        parentId: "old-user",
+        message: { role: "assistant", content: "old answer" },
+      },
+      {
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+        summary: "Compacted history",
+      },
+      {
+        type: "message",
+        id: "active-user",
+        parentId: null,
+        message: { role: "user", content: "active prompt" },
+      },
+      {
+        type: "message",
+        id: "active-assistant",
+        parentId: "active-user",
+        message: { role: "assistant", content: "active answer" },
+      },
+      {
+        type: "message",
+        id: "side-branch",
+        parentId: "active-assistant",
+        message: { role: "assistant", content: "side branch" },
+      },
+      { type: "leaf", id: "active-leaf", parentId: "side-branch", targetId: "active-assistant" },
+    ]);
+    const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 0,
+      maxMessages: 2,
+    });
+    const oldest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 2,
+      maxMessages: 1,
+    });
+
+    expect(newest.totalMessages).toBe(3);
+    expectMessageFields(newest.messages[0], { content: "active prompt", openclaw: { seq: 2 } });
+    expectMessageFields(newest.messages[1], { content: "active answer", openclaw: { seq: 3 } });
+    expect(oldest.totalMessages).toBe(3);
+    expectMessageFields(oldest.messages[0], {
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      openclaw: { kind: "compaction", id: "comp-1", seq: 1 },
+    });
   });
 
   test("keeps blocked hook messages on the current active branch", () => {
@@ -2108,88 +1715,6 @@ describe("readLatestSessionUsageFromTranscript", () => {
     storePath = nextStorePath;
   });
 
-  test("returns the latest assistant usage snapshot and skips delivery mirrors", () => {
-    const sessionId = "usage-session";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      {
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 1200,
-            output: 300,
-            cacheRead: 50,
-            cost: { total: 0.0042 },
-          },
-        },
-      },
-      {
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        },
-      },
-    ]);
-
-    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toEqual({
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      inputTokens: 1200,
-      outputTokens: 300,
-      cacheRead: 50,
-      totalTokens: 1250,
-      totalTokensFresh: true,
-      costUsd: 0.0042,
-    });
-  });
-
-  test("aggregates assistant usage across the full transcript and keeps the latest context snapshot", () => {
-    const sessionId = "usage-aggregate";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      {
-        message: {
-          role: "assistant",
-          provider: "anthropic",
-          model: "claude-sonnet-4-6",
-          usage: {
-            input: 1_800,
-            output: 400,
-            cacheRead: 600,
-            cost: { total: 0.0055 },
-          },
-        },
-      },
-      {
-        message: {
-          role: "assistant",
-          usage: {
-            input: 2_400,
-            output: 250,
-            cacheRead: 900,
-            cost: { total: 0.006 },
-          },
-        },
-      },
-    ]);
-
-    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
-    expectUsageFields(snapshot, {
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      inputTokens: 4200,
-      outputTokens: 650,
-      cacheRead: 1500,
-      totalTokens: 3300,
-      totalTokensFresh: true,
-    });
-    expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
-  });
-
   test("aggregates assistant usage asynchronously without readFileSync", async () => {
     const sessionId = "usage-aggregate-async";
     writeTranscript(tmpDir, sessionId, [
@@ -2239,53 +1764,6 @@ describe("readLatestSessionUsageFromTranscript", () => {
     }
   });
 
-  test("reads earlier assistant usage outside the old tail window", () => {
-    const sessionId = "usage-full-transcript";
-    const filler = "x".repeat(20_000);
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      {
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 1_000,
-            output: 200,
-            cacheRead: 100,
-            cost: { total: 0.0042 },
-          },
-        },
-      },
-      ...Array.from({ length: 80 }, () => ({ message: { role: "user", content: filler } })),
-      {
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 500,
-            output: 150,
-            cacheRead: 50,
-            cost: { total: 0.0021 },
-          },
-        },
-      },
-    ]);
-
-    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
-    expectUsageFields(snapshot, {
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      inputTokens: 1500,
-      outputTokens: 350,
-      cacheRead: 150,
-      totalTokens: 550,
-      totalTokensFresh: true,
-    });
-    expect(snapshot?.costUsd).toBeCloseTo(0.0063, 8);
-  });
-
   test("bounds recent usage reads for bulk session listing", () => {
     const sessionId = "usage-recent-large";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -2329,7 +1807,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     }
   });
 
-  test("estimates transcript context when local model usage telemetry is missing", () => {
+  test("estimates recent transcript context when local model telemetry is missing", () => {
     const sessionId = "usage-local-missing-telemetry";
     const userText = "local prompt ".repeat(200);
     const assistantText = "local response ".repeat(120);
@@ -2345,17 +1823,10 @@ describe("readLatestSessionUsageFromTranscript", () => {
         },
       },
     ]);
-
     const expectedTotalTokens = estimateTokensFromChars(
       estimateStringChars(userText) + estimateStringChars(assistantText),
     );
 
-    expectUsageFields(readLatestSessionUsageFromTranscript(sessionId, storePath), {
-      modelProvider: "openai-completions",
-      model: "local-llama",
-      totalTokens: expectedTotalTokens,
-      totalTokensFresh: true,
-    });
     expectUsageFields(
       readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
       {
@@ -2365,17 +1836,6 @@ describe("readLatestSessionUsageFromTranscript", () => {
         totalTokensFresh: true,
       },
     );
-  });
-
-  test("returns null when the transcript has no assistant usage snapshot", () => {
-    const sessionId = "usage-empty";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "hello" } },
-      { message: { role: "assistant", content: "hi" } },
-    ]);
-
-    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
   });
 });
 
@@ -2505,83 +1965,6 @@ describe("resolveSessionTranscriptCandidates safety", () => {
   });
 });
 
-describe("archiveSessionTranscripts", () => {
-  let tmpDir: string;
-  let storePath: string;
-
-  registerTempSessionStore("openclaw-archive-test-", (nextTmpDir, nextStorePath) => {
-    tmpDir = nextTmpDir;
-    storePath = nextStorePath;
-  });
-
-  function withArchiveHome<T>(fn: () => T): T {
-    return withEnv({ OPENCLAW_HOME: tmpDir }, fn);
-  }
-
-  test.each([
-    {
-      sessionId: "sess-archive-1",
-      transcriptFileName: "sess-archive-1.jsonl",
-      buildArgs: () => ({ sessionId: "sess-archive-1", storePath, reason: "reset" as const }),
-    },
-    {
-      sessionId: "sess-archive-2",
-      transcriptFileName: "custom-transcript.jsonl",
-      buildArgs: () => ({
-        sessionId: "sess-archive-2",
-        storePath: undefined,
-        sessionFile: path.join(tmpDir, "custom-transcript.jsonl"),
-        reason: "reset" as const,
-      }),
-    },
-  ] as const)(
-    "archives transcript from default and explicit sessionFile path for $sessionId",
-    ({ transcriptFileName, buildArgs }) => {
-      withArchiveHome(() => {
-        const transcriptPath = path.join(tmpDir, transcriptFileName);
-        const args = buildArgs();
-        fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
-        const archived = archiveSessionTranscripts(args);
-        expect(archived).toHaveLength(1);
-        expect(archived[0]).toContain(".reset.");
-        expect(fs.existsSync(transcriptPath)).toBe(false);
-        expect(fs.existsSync(expectDefined(archived[0], "archived[0] test invariant"))).toBe(true);
-      });
-    },
-  );
-
-  test("returns empty array when no transcript files exist", () => {
-    withArchiveHome(() => {
-      const archived = archiveSessionTranscripts({
-        sessionId: "nonexistent-session",
-        storePath,
-        reason: "reset",
-      });
-
-      expect(archived).toStrictEqual([]);
-    });
-  });
-
-  test("skips files that do not exist and archives only existing ones", () => {
-    withArchiveHome(() => {
-      const sessionId = "sess-archive-3";
-      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-      fs.writeFileSync(transcriptPath, '{"type":"session"}\n', "utf-8");
-
-      const archived = archiveSessionTranscripts({
-        sessionId,
-        storePath,
-        sessionFile: "/nonexistent/path/file.jsonl",
-        reason: "deleted",
-      });
-
-      expect(archived).toHaveLength(1);
-      expect(archived[0]).toContain(".deleted.");
-      expect(fs.existsSync(transcriptPath)).toBe(false);
-    });
-  });
-});
-
 describe("oversized transcript line guards", () => {
   let tmpDir: string;
   let storePath: string;
@@ -2645,7 +2028,7 @@ describe("oversized transcript line guards", () => {
     expect(serialized).toContain("[chat.history omitted: message too large]");
   });
 
-  test("recent readers stay bounded when a leaf target is outside the tail window", async () => {
+  test("recent reads stay bounded when a leaf target is outside the tail window", async () => {
     const sessionId = "test-leaf-target-before-tail-window";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
@@ -2670,27 +2053,23 @@ describe("oversized transcript line guards", () => {
       }),
     ];
     fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
-    const options = { maxMessages: 10, maxBytes: 1024, maxLines: 10 };
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
     try {
-      const syncMessages = readRecentSessionMessages(sessionId, storePath, undefined, options);
-      const asyncMessages = await readRecentSessionMessagesAsync(
-        sessionId,
-        storePath,
-        undefined,
-        options,
-      );
-
-      expect(syncMessages).toEqual([]);
-      expect(asyncMessages).toEqual(syncMessages);
+      await expect(
+        readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+          maxMessages: 10,
+          maxBytes: 1024,
+          maxLines: 10,
+        }),
+      ).resolves.toEqual([]);
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       readFileSpy.mockRestore();
     }
   });
 
-  test("bounded recent readers do not expose a compact inactive side message", async () => {
+  test("bounded recent reads do not expose a compact inactive side message", async () => {
     const sessionId = "test-compact-side-before-bounded-leaf-target";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
@@ -2721,56 +2100,14 @@ describe("oversized transcript line guards", () => {
       }),
     ];
     fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
-    const options = { maxMessages: 10, maxBytes: 1024, maxLines: 10 };
 
-    const syncMessages = readRecentSessionMessages(sessionId, storePath, undefined, options);
-    const asyncMessages = await readRecentSessionMessagesAsync(
-      sessionId,
-      storePath,
-      undefined,
-      options,
-    );
-
-    expect(syncMessages).toEqual([]);
-    expect(asyncMessages).toEqual([]);
-  });
-
-  test("readRecentSessionUsageFromTranscriptAsync skips oversized lines", async () => {
-    const sessionId = "test-oversized-usage";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const oversizedContent = "y".repeat(300 * 1024);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          content: oversizedContent,
-          usage: { input: 9999, output: 9999 },
-          provider: "oversized-provider",
-          model: "oversized-model",
-        },
+    await expect(
+      readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 10,
+        maxBytes: 1024,
+        maxLines: 10,
       }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          content: "normal",
-          usage: { input: 100, output: 50 },
-          provider: "test-provider",
-          model: "test-model",
-        },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
-
-    const usage = await readRecentSessionUsageFromTranscriptAsync(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      512 * 1024,
-    );
-
-    expectUsageFields(usage, { modelProvider: "test-provider" });
+    ).resolves.toEqual([]);
   });
 
   test("oversized line metadata extraction preserves id and parentId", async () => {
@@ -2863,3 +2200,167 @@ describe("oversized transcript line guards", () => {
     expect(asyncResult.lastMessagePreview).toBe("Bot says hello");
   });
 });
+
+describe("short read resilience", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-short-read-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  function buildLargeTitleTranscript(sessionId: string) {
+    return [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "head title" } },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        message: { role: "assistant", content: `filler ${index} ${"x".repeat(512)}` },
+      })),
+      { message: { role: "assistant", content: "tail preview" } },
+    ];
+  }
+
+  test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () => {
+    const sessionId = "test-short-read-recent";
+    const lines = [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 30 }, (_, i) => ({
+        message: {
+          role: i % 2 ? "assistant" : "user",
+          content: `message ${i}: ${"data ".repeat(80)}`,
+        },
+      })),
+    ];
+    writeTranscript(tmpDir, sessionId, lines);
+
+    const expected = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 20,
+      maxBytes: 8192,
+    });
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(16);
+    try {
+      const actual = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 20,
+        maxBytes: 8192,
+      });
+      expect(actual).toEqual(expected);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("readRecentSessionMessagesAsync honors maxBytes under short reads", async () => {
+    const sessionId = "test-short-read-byte-cap";
+    const lines = [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 20 }, (_, i) => ({
+        message: {
+          role: i % 2 ? "assistant" : "user",
+          content: `line ${String(i).padStart(2, "0")}: ${"payload ".repeat(30)}`,
+        },
+      })),
+    ];
+    writeTranscript(tmpDir, sessionId, lines);
+
+    const normal = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 20,
+      maxBytes: 4096,
+    });
+
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(64);
+    try {
+      const short = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 20,
+        maxBytes: 4096,
+      });
+      expect(short).toEqual(normal);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("reads async title fields across short positional reads", async () => {
+    const sessionId = "test-short-read-title-async";
+    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
+
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(16);
+    try {
+      await expect(
+        readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
+      ).resolves.toEqual({
+        firstUserMessage: "head title",
+        lastMessagePreview: "tail preview",
+      });
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("reads sync title fields across short positional reads", () => {
+    const sessionId = "test-short-read-title-sync";
+    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
+
+    const { readSpy, getShortReadCalls } = installSyncPositionalShortReadProxy(16);
+    try {
+      expect(readSessionTitleFieldsFromTranscript(sessionId, storePath)).toEqual({
+        firstUserMessage: "head title",
+        lastMessagePreview: "tail preview",
+      });
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  test("reads sync usage and preview windows across short positional reads", () => {
+    const sessionId = "test-short-read-sync-windows";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 120 }, (_, index) => ({
+        message: { role: "user", content: `filler ${index} ${"x".repeat(1024)}` },
+      })),
+      {
+        message: {
+          role: "assistant",
+          content: "tail preview",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 900, output: 100, cost: { total: 0.003 } },
+        },
+      },
+    ]);
+
+    const expectedUsage = readRecentSessionUsageFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      64 * 1024,
+    );
+    const expectedPreview = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      1,
+      120,
+    );
+    const { readSpy, getShortReadCalls } = installSyncPositionalShortReadProxy(4096);
+    try {
+      expect(
+        readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
+      ).toEqual(expectedUsage);
+      expect(
+        readSessionPreviewItemsFromTranscript(sessionId, storePath, undefined, undefined, 1, 120),
+      ).toEqual(expectedPreview);
+      expect(getShortReadCalls()).toBeGreaterThan(2);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

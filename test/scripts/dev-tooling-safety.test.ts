@@ -1,8 +1,9 @@
 // Dev Tooling Safety tests cover dev tooling safety script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -36,7 +37,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error("timed out waiting for condition");
@@ -103,10 +104,71 @@ async function waitForChildExit(
       child.once("exit", (status, signal) => resolve({ status, signal }));
     }),
     new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("timed out waiting for child exit")), timeoutMs);
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for child exit")),
+        timeoutMs,
+      );
+      timer.unref();
     }),
   ]);
 }
+
+type CliResult = {
+  status: number | null;
+  stderr: string;
+  stdout: string;
+};
+
+function runCli(scriptPath: string, args: string[]): Promise<CliResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once("error", reject);
+    child.once("close", (status) => resolve({ status, stderr, stdout }));
+  });
+}
+
+function createCliPair(
+  scriptPath: string,
+  firstArgs: string[],
+  secondArgs: string[],
+): () => Promise<[CliResult, CliResult]> {
+  let result: Promise<[CliResult, CliResult]> | undefined;
+  return () => {
+    // Pair only sibling entrypoint probes: process proof stays real while peak
+    // child concurrency stays capped at two.
+    result ??= Promise.all([runCli(scriptPath, firstArgs), runCli(scriptPath, secondArgs)]);
+    return result;
+  };
+}
+
+const getDiscordCliResults = createCliPair(
+  "scripts/dev/discord-acp-plain-language-smoke.ts",
+  ["--wat"],
+  ["--help"],
+);
+const getTuiPtyCliResults = createCliPair(
+  "scripts/dev/tui-pty-test-watch.ts",
+  ["--help"],
+  ["--wat"],
+);
+const getClaudeUsageCliResults = createCliPair(
+  "scripts/debug-claude-usage.ts",
+  ["--help"],
+  ["--agent"],
+);
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -157,6 +219,10 @@ describe("dev tooling safety helpers", () => {
     );
     expect(maskIdentifier("session-key-abcdef123456")).toBe("sessio...3456");
   });
+
+  it("does not split boundary emoji in script log previews", () => {
+    expect(previewForDevToolLog("123456😀tail", 10)).toBe("123456...");
+  });
 });
 
 describe("script-specific dev tooling hardening", () => {
@@ -165,32 +231,17 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => discordSmokeTesting.parseDriverMode("curl")).toThrow(/Invalid --driver/u);
   });
 
-  it("rejects unknown Discord smoke args before live Discord/OpenClaw work", () => {
+  it("rejects unknown Discord smoke args before live Discord/OpenClaw work", async () => {
     expect(() => discordSmokeTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/discord-acp-plain-language-smoke.ts", "--wat"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const [result] = await getDiscordCliResults();
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
   });
 
-  it("prints Discord smoke usage without starting live validation", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/discord-acp-plain-language-smoke.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("prints Discord smoke usage without starting live validation", async () => {
+    const [, result] = await getDiscordCliResults();
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: bun scripts/dev/discord-acp-plain-language-smoke.ts");
@@ -339,32 +390,17 @@ describe("script-specific dev tooling hardening", () => {
     expect(calls).toBe(1);
   });
 
-  it("prints TUI PTY watch usage without launching the watcher", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/tui-pty-test-watch.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("prints TUI PTY watch usage without launching the watcher", async () => {
+    const [result] = await getTuiPtyCliResults();
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: node --import tsx scripts/dev/tui-pty-test-watch.ts");
     expect(result.stderr).toBe("");
   });
 
-  it("rejects unknown TUI PTY watch args before launching the watcher", () => {
+  it("rejects unknown TUI PTY watch args before launching the watcher", async () => {
     expect(() => tuiPtyWatchTesting.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/tui-pty-test-watch.ts", "--wat"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const [, result] = await getTuiPtyCliResults();
 
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
@@ -1079,30 +1115,16 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
-  it("prints Claude usage help without opening auth stores", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/debug-claude-usage.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("prints Claude usage help without opening auth stores", async () => {
+    const [result] = await getClaudeUsageCliResults();
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: node --import tsx scripts/debug-claude-usage.ts");
     expect(result.stderr).toBe("");
   });
 
-  it("fails missing Claude usage option values before defaulting to main auth", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/debug-claude-usage.ts", "--agent"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("fails missing Claude usage option values before defaulting to main auth", async () => {
+    const [, result] = await getClaudeUsageCliResults();
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -1182,5 +1204,68 @@ describe("script-specific dev tooling hardening", () => {
         maxBytes,
       ),
     ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it.each([
+    { name: "before response headers", sendsHeaders: false },
+    { name: "during the response body", sendsHeaders: true },
+  ])("bounds an Anthropic upstream stall $name", async ({ sendsHeaders }) => {
+    const nativeFetch = globalThis.fetch;
+    const upstream = http.createServer((_request, response) => {
+      if (sendsHeaders) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.flushHeaders();
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => {
+        upstream.off("error", reject);
+        resolve();
+      });
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("upstream did not bind to a TCP port");
+    }
+    const upstreamUrl = `http://127.0.0.1:${upstreamAddress.port}/v1/messages`;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_input, init) => nativeFetch(upstreamUrl, init));
+    let proxy: Awaited<ReturnType<typeof promptProbeTesting.startAnthropicProxy>> | undefined;
+
+    try {
+      proxy = await promptProbeTesting.startAnthropicProxy({
+        port: 0,
+        upstreamBaseUrl: "https://api.anthropic.com",
+        timeoutMs: 100,
+      });
+      const startedAt = Date.now();
+      const request = nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+        method: "POST",
+        body: "{}",
+      }).then(async (response) => ({ status: response.status, body: await response.text() }));
+
+      if (sendsHeaders) {
+        await expect(request).rejects.toThrow();
+      } else {
+        await expect(request).resolves.toMatchObject({
+          status: 502,
+          body: expect.stringMatching(/TimeoutError/u),
+        });
+      }
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.anthropic.com/v1/messages",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+      await proxy?.stop();
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

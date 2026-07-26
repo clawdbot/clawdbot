@@ -3,6 +3,7 @@ import { html } from "lit";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 
@@ -30,7 +31,7 @@ function chatViewMenuRows(props: ChatControlsProps): ChatViewMenuRow[] {
   // Onboarding pins the display: no thinking noise, tool calls visible.
   const showThinking = onboarding ? false : settings.chatShowThinking;
   const showToolCalls = onboarding ? true : settings.chatShowToolCalls;
-  const persistCommentary = settings.chatPersistCommentary === true;
+  const persistCommentary = settings.chatPersistCommentary !== false;
   return [
     {
       label: t("chat.view.reasoning"),
@@ -57,52 +58,58 @@ export function renderChatControls(props: ChatControlsProps) {
   const open = props.viewMenuOpen;
   const menuTitle = props.onboarding ? t("chat.onboardingDisabled") : t("chat.view.menu");
   const menuId = `chat-view-menu-${encodeURIComponent(props.paneId)}`;
+  const rows = chatViewMenuRows(props);
   return html`
     <div class="chat-view-menu-wrapper">
       <openclaw-tooltip .content=${menuTitle}>
-        <button
-          class="chat-view-menu-trigger ${open ? "chat-view-menu-trigger--open" : ""}"
-          type="button"
+        <wa-dropdown
+          id=${menuId}
+          class="chat-view-menu"
+          placement="top-start"
           aria-label=${menuTitle}
-          aria-haspopup="menu"
-          aria-expanded=${open}
-          aria-controls=${menuId}
-          @click=${(event: Event) => {
-            event.stopPropagation();
-            props.onViewMenuOpenChange(!open, { trigger: event.currentTarget as HTMLElement });
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            event.preventDefault();
+            const value = event.detail.item.value;
+            const index = value?.startsWith("view-") ? Number(value.slice(5)) : -1;
+            if (!props.onboarding && Number.isInteger(index)) {
+              rows[index]?.onToggle();
+            }
+          }}
+          .open=${open}
+          @wa-show=${() => {
+            if (!open) {
+              props.onViewMenuOpenChange(true);
+            }
+          }}
+          @wa-hide=${() => {
+            if (open) {
+              props.onViewMenuOpenChange(false, { restoreFocus: true });
+            }
           }}
         >
-          ${icons.eye}
-        </button>
+          <button
+            slot="trigger"
+            class="chat-view-menu-trigger ${open ? "chat-view-menu-trigger--open" : ""}"
+            type="button"
+            aria-label=${menuTitle}
+          >
+            ${icons.eye}
+          </button>
+          ${rows.map(
+            (row, index) => html`
+              <wa-dropdown-item
+                class="chat-view-menu__item"
+                type="checkbox"
+                value=${`view-${index}`}
+                .checked=${row.checked}
+                ?disabled=${props.onboarding}
+              >
+                <span class="chat-view-menu__text">${row.label}</span>
+              </wa-dropdown-item>
+            `,
+          )}
+        </wa-dropdown>
       </openclaw-tooltip>
-      <div
-        id=${menuId}
-        class="chat-view-menu ${open ? "chat-view-menu--open" : ""}"
-        role="menu"
-        aria-label=${t("chat.view.menu")}
-      >
-        ${chatViewMenuRows(props).map(
-          (row) => html`
-            <button
-              type="button"
-              class="chat-view-menu__item"
-              role="menuitemcheckbox"
-              aria-checked=${row.checked}
-              ?disabled=${props.onboarding}
-              @click=${() => {
-                if (!props.onboarding) {
-                  row.onToggle();
-                }
-              }}
-            >
-              <span class="chat-view-menu__check" aria-hidden="true">
-                ${row.checked ? icons.check : ""}
-              </span>
-              <span class="chat-view-menu__text">${row.label}</span>
-            </button>
-          `,
-        )}
-      </div>
     </div>
     <div
       class="chat-composer-model-control"

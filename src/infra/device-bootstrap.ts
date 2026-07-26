@@ -24,9 +24,7 @@ import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 /** Bootstrap pairing tokens are short-lived bearer credentials for first device auth. */
-export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
-
-export type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
+const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
 
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 

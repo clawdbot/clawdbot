@@ -7,9 +7,12 @@ import {
   createMockJsonlReplayCellRunner,
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
-  type JsonlReplayCellRunner,
 } from "./jsonl-replay.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+
+type JsonlReplayCellRunner = NonNullable<
+  NonNullable<Parameters<typeof runJsonlReplay>[1]>["runCell"]
+>;
 
 const tempRoots: string[] = [];
 

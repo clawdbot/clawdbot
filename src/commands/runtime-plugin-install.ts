@@ -23,7 +23,7 @@ type RuntimePluginInstallDescriptor = {
 };
 
 /** Result returned after ensuring a runtime plugin for a selected model. */
-export type RuntimePluginInstallResult = {
+type RuntimePluginInstallResult = {
   cfg: OpenClawConfig;
   required: boolean;
   installed: boolean;
@@ -139,7 +139,6 @@ async function ensureRuntimePluginForModelSelection(params: {
         defaultChoice: "npm",
       },
       trustedSourceLinkedOfficialInstall: true,
-      preferRemoteInstall: true,
     },
     prompter: params.prompter,
     runtime: params.runtime,

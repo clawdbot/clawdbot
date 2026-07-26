@@ -106,6 +106,7 @@ export type RuntimeConfigSnapshotMetadata = {
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
+let runtimeConfigAppliedHash: string | null = null;
 let runtimeConfigSnapshotRevision = 0;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 type ManagedRuntimeConfigWritePreflight = (
@@ -169,6 +170,14 @@ export function setRuntimeConfigSnapshot(
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
 }
 
+export function setAppliedRuntimeConfigSnapshot(
+  config: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+): void {
+  setRuntimeConfigSnapshot(config, sourceConfig);
+  runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
+}
+
 /** Publish a newer canonical source without changing the active runtime object. */
 export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   expectedRevision: number;
@@ -189,6 +198,7 @@ export function resetConfigRuntimeState(): void {
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
+  runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
   resetPublishedConfigRuntimeEnv();
 }
@@ -207,6 +217,15 @@ export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
 
 export function getRuntimeConfigSnapshotMetadata(): RuntimeConfigSnapshotMetadata | null {
   return runtimeConfigSnapshotMetadata;
+}
+
+/** Resolved source-config revision accepted by the active Gateway runtime. */
+export function getRuntimeConfigAppliedHash(): string | null {
+  return runtimeConfigAppliedHash;
+}
+
+export function setRuntimeConfigAppliedHash(hash: string | null): void {
+  runtimeConfigAppliedHash = hash;
 }
 
 export function resolveRuntimeConfigCacheKey(config: OpenClawConfig): string {

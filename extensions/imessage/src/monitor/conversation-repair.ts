@@ -64,7 +64,7 @@ function hasUsableConversationAnchor(projection: {
   );
 }
 
-export function isIMessageAnchorless(message: IMessagePayload): boolean {
+function isIMessageAnchorless(message: IMessagePayload): boolean {
   const hasUsableAnchor =
     hasPositiveChatId(message.chat_id) ||
     isNonEmptyString(message.chat_guid) ||

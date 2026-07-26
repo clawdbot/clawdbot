@@ -49,8 +49,43 @@ export function isSlackInvalidBlocksError(error: unknown): boolean {
   return typeof code === "string" && code.trim().toLowerCase() === "invalid_blocks";
 }
 
+type SlackResponseLike = {
+  status: number;
+  clone: () => { text: () => Promise<string> };
+};
+
+function isSlackResponseLike(value: unknown): value is SlackResponseLike {
+  const record = asRecord(value);
+  return typeof record?.status === "number" && typeof record.clone === "function";
+}
+
+/** Inspect Bolt 5's native response_url Response without consuming the caller's body. */
+export async function isSlackInvalidBlocksResponse(response: unknown): Promise<boolean> {
+  if (!isSlackResponseLike(response)) {
+    return isSlackInvalidBlocksError(response);
+  }
+  try {
+    const body = await response.clone().text();
+    if (body.trim().toLowerCase() === "invalid_blocks") {
+      return true;
+    }
+    return isSlackInvalidBlocksError(JSON.parse(body));
+  } catch {
+    return false;
+  }
+}
+
+/** Bolt 5 omits the response body from RespondError; 400 is contextual here. */
+export function isSlackNativeResponseUrlRejection(error: unknown): boolean {
+  if (isSlackInvalidBlocksError(error)) {
+    return true;
+  }
+  const record = asRecord(error);
+  return record?.code === "slack_bolt_respond_error" && record.statusCode === 400;
+}
+
 /** Extract a complete accessible summary from a supported native data block. */
-export function renderSlackNativeDataFallbackText(value: unknown): string | undefined {
+function renderSlackNativeDataFallbackText(value: unknown): string | undefined {
   const type = asRecord(value)?.type;
   if (type === "data_visualization") {
     return renderSlackDataVisualizationMrkdwnFallbackText(value);

@@ -21,13 +21,17 @@ admits as the dedicated `worker` role.
 
 The command reads exactly one bounded JSON launch envelope from standard input.
 The envelope carries the local socket location, minted worker credential, bundle
-and protocol identity, owner epoch, and the single assigned session and turn.
+and protocol identity, owner epoch, the single assigned session and turn, and the
+exact worker-local tool names authorized for that turn. The Gateway resolves this
+final tool set from current policy before handoff; raw config and scheduled-owner
+identity never enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
 intentionally provides no credential or hand-authored envelope example.
 
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
-no longer current. Operators should start workers through the cloud worker
+no longer current. Missing, duplicate, or unknown tool names also invalidate the
+envelope. Operators should start workers through the cloud worker
 orchestrator rather than invoke this entry point directly.
 
 ## Runtime boundary
@@ -35,7 +39,8 @@ orchestrator rather than invoke this entry point directly.
 The process runs the normal embedded agent loop with a restricted backend:
 
 - The `read`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
-  run locally in the worker workspace.
+  run locally in the worker workspace when present in the Gateway-issued turn
+  authority. An empty authority runs the model with no tools.
 - Model calls use the gateway inference proxy. No local model auth profile is
   loaded.
 - Transcript writes use the gateway transcript-commit RPC.
@@ -46,8 +51,10 @@ Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
 no standing provider or forge credentials.
 
-Worker-to-worker session dispatch is not exposed in this mode. Agent dispatch
-and placement remain gateway-owned milestone-3 surfaces.
+Worker-to-worker session dispatch is not exposed in this mode. Placement and
+dispatch remain gateway-owned: an operator can dispatch an existing local,
+managed-worktree session through the Gateway, while a worker process cannot
+dispatch itself or another worker.
 
 The prepared assignment carries the transcript context, accepted base leaf,
 commit sequence, and live-event cursor. On a tunnel reconnect, the process

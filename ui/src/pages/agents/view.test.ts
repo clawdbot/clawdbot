@@ -21,12 +21,14 @@ function createSkill() {
     blockedByAllowlist: false,
     eligible: true,
     requirements: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
       os: [],
     },
     missing: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
@@ -125,6 +127,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     pinnedAgentIds: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
+    onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
     onLoadFiles: () => undefined,
     onSelectFile: () => undefined,
@@ -193,14 +196,14 @@ describe("renderAgents", () => {
       render(renderAgents(createProps()), container);
       const select = container.querySelector("openclaw-agent-select") as
         | (HTMLElement & {
-            agents: Array<{ id: string }>;
+            options: Array<{ value: string }>;
             updateComplete: Promise<boolean>;
           })
         | null;
       expect(select).not.toBeNull();
       await select?.updateComplete;
 
-      expect(select?.agents).toHaveLength(2);
+      expect(select?.options.map((option) => option.value)).toEqual(["alpha", "beta"]);
       expect(select?.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Beta");
     } finally {
       container.remove();
@@ -238,7 +241,7 @@ describe("renderAgents", () => {
     );
 
     const defaultSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(select?.value).toBe("openai/gpt-5.4");
       return select;
     });
@@ -260,12 +263,47 @@ describe("renderAgents", () => {
     );
 
     const inheritedSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(select?.value).toBe("");
       return select;
     });
     expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-5.4)",
+    );
+  });
+
+  it.each([
+    { name: "a string primary", model: "openai/gpt-5.4" },
+    { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
+  ])("does not display inherited fallback chips for $name", ({ model }) => {
+    const container = document.createElement("div");
+    const fallback = "anthropic/claude-sonnet-4-6";
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
+                },
+                list: [{ id: "alpha" }, { id: "beta", model }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelectorAll(".agent-chip-input .chip")).toHaveLength(0);
+    expect(container.querySelector<HTMLInputElement>(".agent-chip-input input")?.placeholder).toBe(
+      "provider/model",
     );
   });
 
@@ -302,7 +340,7 @@ describe("renderAgents", () => {
     );
 
     const betaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(
         Array.from(select?.options ?? []).some((option) => option.value === "openai/gpt-5.4"),
       ).toBe(true);
@@ -325,7 +363,7 @@ describe("renderAgents", () => {
     );
 
     const alphaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
       expect(
         Array.from(select?.options ?? []).some(
           (option) => option.value === "anthropic/claude-sonnet-4-6",
@@ -359,11 +397,10 @@ describe("renderAgents", () => {
 
     await Promise.resolve();
 
-    const thinkingKv = Array.from(container.querySelectorAll(".agent-kv")).find(
-      (entry) =>
-        entry.querySelector(".label")?.textContent?.trim() === t("agents.context.thinkingDefault"),
+    const thinkingKv = Array.from(container.querySelectorAll(".settings-kv dt")).find(
+      (entry) => entry.textContent?.trim() === t("agents.context.thinkingDefault"),
     );
-    expect(thinkingKv?.textContent).toContain("xhigh");
+    expect(thinkingKv?.nextElementSibling?.textContent).toContain("xhigh");
   });
 
   it("shows the skills count only for the selected agent's report", async () => {
@@ -453,8 +490,8 @@ describe("renderAgents", () => {
         t("agents.tabs.cronJobs"),
         "记忆",
       ]);
-      const cards = container.querySelectorAll("section.card");
-      expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
+      const sectionDescs = Array.from(container.querySelectorAll(".settings-section__desc"));
+      expect(sectionDescs.some((desc) => desc.textContent?.includes("上次刷新：从未"))).toBe(true);
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();
@@ -480,8 +517,8 @@ describe("renderAgentFiles", () => {
               missing: false,
             },
             {
-              name: "HEARTBEAT.md",
-              path: "/tmp/workspace/HEARTBEAT.md",
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
               missing: false,
             },
           ],
@@ -501,9 +538,9 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const heartbeatTab = expectAgentTab(container, "HEARTBEAT");
-    expect(heartbeatTab.disabled).toBe(true);
-    heartbeatTab.click();
+    const soulTab = expectAgentTab(container, "SOUL");
+    expect(soulTab.disabled).toBe(true);
+    soulTab.click();
     expect(onSelectFile).not.toHaveBeenCalled();
   });
 
@@ -648,11 +685,11 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    const dialog = container.querySelector<HTMLDialogElement>(".md-preview-dialog");
+    const dialog = container.querySelector("openclaw-modal-dialog");
     const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
     const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
 
-    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+    expect(dialog).not.toBeNull();
     expect(panel).toBeInstanceOf(HTMLElement);
     expect(expandButton).toBeInstanceOf(HTMLButtonElement);
     const previewPanel = panel!;
@@ -670,7 +707,7 @@ describe("renderAgentFiles", () => {
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
 
-    dialog!.dispatchEvent(new Event("close"));
+    container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
 
     expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
     expect([...previewExpandButton.classList]).toEqual([

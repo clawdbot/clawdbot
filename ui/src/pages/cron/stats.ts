@@ -29,13 +29,13 @@ export function renderCronStats(props: {
   const failing = props.failingCount;
   return html`
     <div class="cron-stats">
-      <div class="cron-stat card">
+      <div class="cron-stat">
         <span class="cron-stat__label">${t("cron.stats.tasks")}</span>
         <span class="cron-stat__value">${total}</span>
       </div>
       <button
         type="button"
-        class="cron-stat cron-stat--action card"
+        class="cron-stat cron-stat--action"
         data-test-id="cron-stat-failing"
         title=${t("cron.list.activityTab")}
         @click=${() => {
@@ -54,7 +54,7 @@ export function renderCronStats(props: {
         </span>
         <span class="cron-stat__go" aria-hidden="true">${icon("chevronRight")}</span>
       </button>
-      <div class="cron-stat card">
+      <div class="cron-stat">
         <span class="cron-stat__label">${t("cron.stats.nextWake")}</span>
         <span class="cron-stat__value cron-stat__value--time">
           ${formatNextRun(nextWakeAtMs)}

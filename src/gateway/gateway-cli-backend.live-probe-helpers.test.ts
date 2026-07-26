@@ -68,6 +68,7 @@ describe("gateway CLI backend live probe helpers", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
   });
 
@@ -147,5 +148,62 @@ describe("gateway CLI backend live probe helpers", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("preserves the byte-limit diagnostic when body cancellation rejects", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("loopback body cancellation failed");
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(65));
+      },
+      cancel,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body)),
+    );
+    activateLoopbackRuntime(12345);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(
+        verifyCliCronMcpLoopbackPreflight(
+          preflightParams({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" }),
+        ),
+      ).rejects.toThrow("mcp loopback response body exceeded 64 bytes");
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
+  });
+
+  it("still propagates loopback response read errors and releases the reader lock", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("loopback response read failed"));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body)),
+    );
+    activateLoopbackRuntime(12345);
+
+    await expect(verifyCliCronMcpLoopbackPreflight(preflightParams())).rejects.toThrow(
+      "loopback response read failed",
+    );
+    expect(body.locked).toBe(false);
   });
 });

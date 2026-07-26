@@ -5,8 +5,10 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
+import { resolveDiffsPluginDefaults } from "./config.js";
 import { createDiffStoreHarness } from "./test-helpers.js";
+
+const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
 const { renderDiffDocumentMock } = vi.hoisted(() => ({
   renderDiffDocumentMock: vi.fn(),

@@ -61,6 +61,7 @@ const MEMORY_HOST_SDK_EXPORTS = [
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
 ] as const;
 const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
@@ -279,13 +280,6 @@ describe("opt-in extension package boundaries", () => {
     );
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
-    );
-    expect(packageJson.exports?.["./channel-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./compat"]?.types).toBe("./dist/src/plugin-sdk/compat.d.ts");
-    expect(packageJson.exports?.["./config-types"]?.types).toBe(
-      "./dist/src/plugin-sdk/config-types.d.ts",
     );
     expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/infra-runtime.d.ts",

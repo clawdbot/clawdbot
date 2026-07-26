@@ -39,7 +39,17 @@ export async function readCodexMirroredSessionHistoryMessages(
       return [];
     }
     const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
-    if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
+    if (firstEntry?.type !== "session") {
+      // A well-formed transcript that does not open with a `session` marker is
+      // simply not a Codex-mirrored session (e.g. a non-Codex model run reusing
+      // this hook) — an empty mirror, not a read failure, so callers must not
+      // warn. `undefined` stays reserved for genuine failures: read/parse errors
+      // (caught below) and malformed `session` headers (next check).
+      return [];
+    }
+    if (typeof firstEntry.id !== "string") {
+      // A `session` header without a string id is a corrupted Codex transcript,
+      // not a foreign one — keep it on the warn path.
       return undefined;
     }
     migrateSessionEntries(entries);
@@ -99,6 +109,7 @@ function resolveSqliteMarkerSessionKey(
   }
   const entries = listSessionEntries({
     agentId: marker.agentId,
+    readOnly: true,
     storePath: marker.storePath,
   });
   const exactEntry = entries.find(({ entry }) => {

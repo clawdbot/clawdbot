@@ -3,13 +3,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   disableCronJobsBoundToSession,
   resolveCronJobBoundSessionKeys,
-  type CronJobSessionBinding,
 } from "./job-session-bindings.js";
 import type { CronJob } from "./types.js";
 
 const cfg = {} as OpenClawConfig;
 
-function bindingKeys(job: CronJobSessionBinding, defaultAgentId?: string) {
+function bindingKeys(
+  job: Parameters<typeof resolveCronJobBoundSessionKeys>[0],
+  defaultAgentId?: string,
+) {
   return resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId });
 }
 

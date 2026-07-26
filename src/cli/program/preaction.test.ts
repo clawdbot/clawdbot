@@ -11,9 +11,12 @@ const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 type EnsureConfigReadyOptions = {
+  allowInvalid?: boolean;
   beforeStateMigrations?: () => Promise<boolean>;
   commandPath?: string[];
   requireConfig?: boolean;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 };
 const ensureConfigReadyMock = vi.fn<(_opts: EnsureConfigReadyOptions) => Promise<void>>(
   async () => {},
@@ -23,6 +26,8 @@ const routeLogsToStderrMock = vi.fn();
 const prepareGatewayRunBootstrapMock = vi.fn(async () => true);
 const recheckGatewayRunBootstrapMock = vi.fn(async () => true);
 const reloadTrustedGatewayRunEnvironmentMock = vi.fn(async () => true);
+const wasPreparedGatewayRunCoreStatePristineMock = vi.fn(() => true);
+const wasPreparedGatewayRunStatePristineMock = vi.fn(() => true);
 
 const runtimeMock = {
   log: vi.fn(),
@@ -64,6 +69,8 @@ vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   prepareGatewayRunBootstrap: prepareGatewayRunBootstrapMock,
   recheckGatewayRunBootstrap: recheckGatewayRunBootstrapMock,
   reloadTrustedGatewayRunEnvironment: reloadTrustedGatewayRunEnvironmentMock,
+  wasPreparedGatewayRunCoreStatePristine: wasPreparedGatewayRunCoreStatePristineMock,
+  wasPreparedGatewayRunStatePristine: wasPreparedGatewayRunStatePristineMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -136,10 +143,15 @@ describe("registerPreActionHooks", () => {
 
   function buildProgram() {
     const programLocal = new Command().name("openclaw");
-    programLocal
+    const agent = programLocal
       .command("agent")
       .requiredOption("-m, --message <text>")
       .option("--local")
+      .option("--json")
+      .action(() => {});
+    agent
+      .command("exec")
+      .argument("[message]")
       .option("--json")
       .action(() => {});
     programLocal
@@ -161,11 +173,13 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     const gateway = programLocal
       .command("gateway")
+      .option("--allow-unconfigured")
       .option("--force")
       .option("--reset")
       .action(() => {});
     gateway
       .command("run")
+      .option("--allow-unconfigured")
       .option("--force")
       .option("--reset")
       .action(() => {});
@@ -180,6 +194,10 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
+    programLocal
+      .command("qa")
+      .command("suite")
+      .action(() => {});
     programLocal
       .command("agents")
       .command("list")
@@ -319,6 +337,8 @@ describe("registerPreActionHooks", () => {
       expect.objectContaining({
         beforeStateMigrations: expect.any(Function),
         commandPath: ["gateway", "run"],
+        skipPristineCoreStateMigrations: true,
+        skipPristineStartupStateMigrations: true,
       }),
     );
     const beforeStateMigrations = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStateMigrations;
@@ -332,6 +352,52 @@ describe("registerPreActionHooks", () => {
     });
   });
 
+  it("passes --allow-unconfigured through as an invalid-config override", async () => {
+    const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
+    gatewayRunCommand.setOptionValueWithSource("allowUnconfigured", true, "cli");
+    try {
+      await runPreAction({
+        parseArgv: ["gateway", "run"],
+        processArgv: ["node", "openclaw", "gateway", "run", "--allow-unconfigured"],
+      });
+    } finally {
+      gatewayRunCommand.setOptionValueWithSource("allowUnconfigured", false, "default");
+    }
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowInvalid: true,
+        commandPath: ["gateway", "run"],
+      }),
+    );
+  });
+
+  it("allows invalid config for update migration commands", async () => {
+    await runPreAction({
+      parseArgv: ["update"],
+      processArgv: ["node", "openclaw", "update", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["update"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["update", "status"],
+      processArgv: ["node", "openclaw", "update", "status", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["update", "status"],
+      allowInvalid: true,
+      suppressDoctorStdout: true,
+    });
+  });
+
   it("loads plugins for text local agent runs", async () => {
     await runPreAction({
       parseArgv: ["agent"],
@@ -340,7 +406,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["agent", "hi"],
+      commandPath: ["agent"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
@@ -355,12 +421,24 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["agent", "hi"],
+      commandPath: ["agent"],
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
     });
+  });
+
+  it("bypasses operator config and plugin startup for agent exec", async () => {
+    await runPreAction({
+      parseArgv: ["agent", "exec", "fix it"],
+      processArgv: ["node", "openclaw", "agent", "exec", "fix it"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(routeLogsToStderrMock).toHaveBeenCalled();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
@@ -404,6 +482,16 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["configure"],
       processArgv: ["node", "openclaw", "configure"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps private QA commands isolated from operator config bootstrap", async () => {
+    await runPreAction({
+      parseArgv: ["qa", "suite"],
+      processArgv: ["node", "openclaw", "qa", "suite"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
@@ -575,6 +663,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update", "status"],
+      allowInvalid: true,
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();

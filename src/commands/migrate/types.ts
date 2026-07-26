@@ -27,6 +27,12 @@ export type MigrateCommonOptions = {
   // Internal embedded mode for config patch items. Default CLI behavior persists
   // patches when this is omitted; onboarding can request returned patch details.
   configPatchMode?: MigrationConfigPatchMode;
+  // Internal embedded target. Standalone CLI migrations use the configured default agent.
+  targetAgentId?: string;
+  // Internal embedded scope. Providers may skip unrelated discovery when this is set.
+  itemKinds?: string[];
+  // Internal exact item selection used by reviewed UI migration plans.
+  itemIds?: string[];
 };
 
 /** Options for migrate apply, including backup and preflight-plan controls. */
@@ -36,6 +42,8 @@ export type MigrateApplyOptions = MigrateCommonOptions & {
   force?: boolean;
   backupOutput?: string;
   preflightPlan?: MigrationPlan;
+  // Internal RPC mode: return item-level failures with recovery metadata.
+  allowPartialResult?: boolean;
 };
 
 /** Options for the default migrate command that can plan, dry-run, or apply. */

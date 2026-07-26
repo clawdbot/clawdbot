@@ -15,7 +15,12 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.js"
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { getBashShellConfig, getShellEnv, killProcessTree } from "../../shell-utils.js";
+import {
+  buildShellCommandInvocation,
+  getBashShellConfig,
+  getBashShellEnv,
+  killProcessTree,
+} from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -28,19 +33,24 @@ const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command." }),
   timeout: Type.Optional(Type.Number({ description: "Optional timeout seconds; default none." })),
 });
-export type { BashToolDetails, BashToolInput } from "./tool-contracts.js";
-
-export type { BashOperations } from "./bash-operations.js";
-
-export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
+function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
   if (
     typeof timeoutSeconds !== "number" ||
     !Number.isFinite(timeoutSeconds) ||
     timeoutSeconds <= 0
   ) {
-    return undefined;
+    throw new Error("Invalid timeout: must be a positive finite number of seconds");
   }
   return resolveTimerTimeoutMs(timeoutSeconds * 1000, 1);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashToolTestApi")] = {
+    resolveBashTimeoutMs,
+  };
 }
 
 /**
@@ -53,23 +63,25 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
   return {
     exec: (command, cwd, { onData, signal, timeout, env }) => {
       return new Promise((resolve, reject) => {
-        const { shell, args } = getBashShellConfig(options?.shellPath);
+        const shellConfig = getBashShellConfig(options?.shellPath);
+        const invocation = buildShellCommandInvocation(command, shellConfig);
         if (!existsSync(cwd)) {
           reject(
             new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`),
           );
           return;
         }
-        const child = spawnCommand([shell, ...args, command], {
+        const child = spawnCommand(invocation.argv, {
           baseEnv: {},
           buffer: false,
           cwd,
           detached: process.platform !== "win32",
-          env: env ?? getShellEnv(),
+          env: env ?? getBashShellEnv(shellConfig.shell),
+          ...(invocation.input === undefined ? {} : { input: invocation.input }),
           reject: false,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [invocation.stdin, "pipe", "pipe"],
         });
-        const releaseOutput = releaseChildProcessOutputAfterExit(child);
+        const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);
@@ -77,17 +89,18 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           timeoutHandle = setTimeout(() => {
             timedOut = true;
             if (child.pid) {
-              killProcessTree(child.pid);
+              killProcessTree(child.pid, { detached: true });
             }
           }, timeoutMs);
         }
-        // Stream stdout and stderr.
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
+        // Stream stdout and stderr. Tag each pipe so downstream decode state
+        // stays per-stream; a pending sequence on one must not eat the other.
+        child.stdout?.on("data", (data: Buffer) => onData(data, "stdout"));
+        child.stderr?.on("data", (data: Buffer) => onData(data, "stderr"));
         // Handle abort signal by killing the entire process tree.
         const onAbort = () => {
           if (child.pid) {
-            killProcessTree(child.pid);
+            killProcessTree(child.pid, { detached: true });
           }
         };
         if (signal) {
@@ -103,7 +116,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
               if (result instanceof Error) {
                 throw result;
               }
-              throw new Error(`Failed to launch shell: ${shell}`, { cause: result });
+              throw new Error(`Failed to launch shell: ${shellConfig.shell}`, { cause: result });
             }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
@@ -148,8 +161,9 @@ function resolveSpawnContext(
   command: string,
   cwd: string,
   spawnHook?: BashSpawnHook,
+  shellPath?: string,
 ): BashSpawnContext {
-  const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
+  const baseContext: BashSpawnContext = { command, cwd, env: getBashShellEnv(shellPath) };
   return spawnHook ? spawnHook(baseContext) : baseContext;
 }
 
@@ -308,8 +322,9 @@ export function createBashToolDefinition(
     ) {
       void toolCallId;
       void ctx;
+      resolveBashTimeoutMs(timeout);
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
       const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
@@ -360,11 +375,11 @@ export function createBashToolDefinition(
         onUpdate({ content: [], details: undefined });
       }
 
-      const handleData = (data: Buffer) => {
+      const handleData = (data: Buffer, stream?: "stdout" | "stderr") => {
         if (!acceptingOutput) {
           return;
         }
-        output.append(data);
+        output.append(data, stream);
         scheduleOutputUpdate();
       };
 

@@ -656,7 +656,7 @@ async function installHookFromDir(
 }
 
 /** Install hooks from an archive after extracting and validating the archive root. */
-export async function installHooksFromArchive(
+async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
@@ -773,3 +773,4 @@ export async function installHooksFromPath(
     ...forwardParams,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

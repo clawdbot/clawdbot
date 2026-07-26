@@ -92,25 +92,79 @@ public struct SkillStatus: Codable, Identifiable, Sendable {
 
 public struct SkillRequirements: Codable, Sendable {
     public let bins: [String]
+    public let anyBins: [String]
     public let env: [String]
     public let config: [String]
+    public let os: [String]
 
-    public init(bins: [String], env: [String], config: [String]) {
+    public init(
+        bins: [String],
+        anyBins: [String] = [],
+        env: [String],
+        config: [String],
+        os: [String] = [])
+    {
         self.bins = bins
+        self.anyBins = anyBins
         self.env = env
         self.config = config
+        self.os = os
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bins
+        case anyBins
+        case env
+        case config
+        case os
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.bins = try container.decode([String].self, forKey: .bins)
+        self.anyBins = try container.decodeIfPresent([String].self, forKey: .anyBins) ?? []
+        self.env = try container.decode([String].self, forKey: .env)
+        self.config = try container.decode([String].self, forKey: .config)
+        self.os = try container.decodeIfPresent([String].self, forKey: .os) ?? []
     }
 }
 
 public struct SkillMissing: Codable, Sendable {
     public let bins: [String]
+    public let anyBins: [String]
     public let env: [String]
     public let config: [String]
+    public let os: [String]
 
-    public init(bins: [String], env: [String], config: [String]) {
+    public init(
+        bins: [String],
+        anyBins: [String] = [],
+        env: [String],
+        config: [String],
+        os: [String] = [])
+    {
         self.bins = bins
+        self.anyBins = anyBins
         self.env = env
         self.config = config
+        self.os = os
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bins
+        case anyBins
+        case env
+        case config
+        case os
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.bins = try container.decode([String].self, forKey: .bins)
+        self.anyBins = try container.decodeIfPresent([String].self, forKey: .anyBins) ?? []
+        self.env = try container.decode([String].self, forKey: .env)
+        self.config = try container.decode([String].self, forKey: .config)
+        self.os = try container.decodeIfPresent([String].self, forKey: .os) ?? []
     }
 }
 
@@ -261,6 +315,14 @@ public enum SkillManagementContract {
     public static func installed(_ skills: [SkillStatus], slug: String) -> Bool {
         guard let reference = clawHubReference(slug) else { return false }
         return skills.contains { self.matches($0.clawhub, reference: reference) }
+    }
+
+    public static func sameClawHubSkill(_ lhs: String, _ rhs: String) -> Bool {
+        guard let lhs = clawHubReference(lhs), let rhs = clawHubReference(rhs),
+              lhs.slug.caseInsensitiveCompare(rhs.slug) == .orderedSame
+        else { return false }
+        guard let lhsOwner = lhs.ownerHandle, let rhsOwner = rhs.ownerHandle else { return true }
+        return lhsOwner.caseInsensitiveCompare(rhsOwner) == .orderedSame
     }
 
     public static func ready(_ skill: SkillStatus) -> Bool {

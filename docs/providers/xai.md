@@ -121,26 +121,34 @@ Grok 4.3 remains the regional-safe setup default; `grok-build-0.1` and both
 dated Grok 4.20 variants remain selectable.
 </Tip>
 
+Catalog context and token-cost metadata follows xAI's live
+[model pages](https://docs.x.ai/developers/models) and
+[pricing page](https://docs.x.ai/developers/pricing). xAI applies higher rates
+when a request crosses its documented long-context threshold; OpenClaw's flat
+catalog cost fields record the short-context rates. Grok Build, xAI's separate
+coding-agent CLI, is available at [x.ai/cli](https://x.ai/cli) and currently
+uses Grok 4.5.
+
 ## Feature coverage
 
 The bundled plugin maps supported xAI APIs onto OpenClaw's shared provider and
 tool contracts. Capabilities that do not fit the shared contract are listed
 below or under known limits.
 
-| xAI capability             | OpenClaw surface                        | Status                                                              |
-| -------------------------- | --------------------------------------- | ------------------------------------------------------------------- |
-| Chat / Responses           | `xai/<model>` model provider            | Yes                                                                 |
-| Server-side web search     | `web_search` provider `grok`            | Yes                                                                 |
-| Server-side X search       | `x_search` tool                         | Yes                                                                 |
-| Server-side code execution | `code_execution` tool                   | Yes                                                                 |
-| Images                     | `image_generate`                        | Yes                                                                 |
-| Videos                     | `video_generate`                        | Yes                                                                 |
-| Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`  | Yes                                                                 |
-| Streaming TTS              | -                                       | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
-| Batch speech-to-text       | `tools.media.audio` media understanding | Yes                                                                 |
-| Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`  | Yes                                                                 |
-| Realtime voice             | Talk `talk.realtime.provider: "xai"`    | Yes; gateway-relay for native Talk nodes                            |
-| Files / batches            | Generic model API compatibility only    | Not a first-class OpenClaw tool                                     |
+| xAI capability             | OpenClaw surface                        | Status                                               |
+| -------------------------- | --------------------------------------- | ---------------------------------------------------- |
+| Chat / Responses           | `xai/<model>` model provider            | Yes                                                  |
+| Server-side web search     | `web_search` provider `grok`            | Yes                                                  |
+| Server-side X search       | `x_search` tool                         | Yes                                                  |
+| Server-side code execution | `code_execution` tool                   | Yes                                                  |
+| Images                     | `image_generate`                        | Yes                                                  |
+| Videos                     | `video_generate`                        | Yes                                                  |
+| Batch text-to-speech       | `tts.provider: "xai"` / `tts`           | Yes                                                  |
+| Streaming TTS              | `textToSpeechStream`                    | Yes via `wss://api.x.ai/v1/tts` (not realtime voice) |
+| Batch speech-to-text       | `tools.media.audio` media understanding | Yes                                                  |
+| Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`  | Yes                                                  |
+| Realtime voice             | Talk `talk.realtime.provider: "xai"`    | Yes; gateway-relay for native Talk nodes             |
+| Files / batches            | Generic model API compatibility only    | Not a first-class OpenClaw tool                      |
 
 <Note>
 OpenClaw uses xAI's REST image/video/TTS/STT APIs for media generation and
@@ -236,7 +244,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - Video edit/extend inherit the input video's aspect ratio and resolution;
       those operations do not accept geometry overrides
     - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
-      or `agents.defaults.videoGenerationModel.timeoutMs` is set
+      or `agents.defaults.mediaModels.video.timeoutMs` is set
 
     <Warning>
     Local video buffers are not accepted. Use remote `http(s)` URLs for video
@@ -282,7 +290,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - Resolutions: `1K`, `2K`
     - Count: up to 4 images
     - Default operation timeout: 600 seconds unless `image_generate.timeoutMs`
-      or `agents.defaults.imageGenerationModel.timeoutMs` is set
+      or `agents.defaults.mediaModels.image.timeoutMs` is set
 
     OpenClaw asks xAI for `b64_json` image responses so generated media can be
     stored and delivered through the normal channel attachment path. Local
@@ -330,13 +338,11 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     ```json5
     {
-      messages: {
-        tts: {
-          provider: "xai",
-          providers: {
-            xai: {
-              voiceId: "eve",
-            },
+      tts: {
+        provider: "xai",
+        providers: {
+          xai: {
+            voiceId: "eve",
           },
         },
       },
@@ -344,9 +350,18 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     ```
 
     <Note>
-    OpenClaw uses xAI's batch `/v1/tts` endpoint and authenticated
-    `/v1/tts/voices` catalog. xAI also offers streaming TTS over WebSocket, but
-    the bundled xAI provider does not implement that streaming hook yet.
+    OpenClaw uses xAI's batch `/v1/tts` endpoint for buffered synthesis,
+    authenticated `/v1/tts/voices` catalog discovery, and native
+    `wss://api.x.ai/v1/tts` for streaming synthesis. Streaming is restricted to
+    the native `api.x.ai` host, so custom `baseUrl` values are rejected on this
+    path. It uses the existing language, voice, codec, and speed controls; xAI
+    defaults apply to sample rate and bit rate. Audio-file synthesis honors all
+    configured codecs. Voice-note targets use MP3 for streaming and buffered
+    fallback because xAI's raw codecs do not carry codec/rate metadata. The
+    stream sends `text.delta` then
+    `text.done`, receives `audio.delta`, `audio.done`, or `error`, and applies an
+    idle `timeoutMs` that refreshes for every audio chunk. It is separate from
+    realtime voice sessions. See xAI's [Streaming TTS API](https://docs.x.ai/developers/rest-api-reference/inference/voice) contract.
     </Note>
 
   </Accordion>

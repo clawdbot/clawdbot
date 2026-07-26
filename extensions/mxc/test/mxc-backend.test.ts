@@ -18,11 +18,10 @@ import { resolveConfig, type MxcConfig } from "../src/config.js";
 import { createMxcSandboxBackendFactory } from "../src/mxc-backend-factory.js";
 import { createMxcSandboxBackendHandle, mxcSandboxBackendManager } from "../src/mxc-backend.js";
 
-const { execFileMock, execFileSyncMock, mockedHomeDir, stdinEndMock } = vi.hoisted(() => ({
-  execFileMock: vi.fn(),
+const { spawnCommandMock, execFileSyncMock, mockedHomeDir } = vi.hoisted(() => ({
+  spawnCommandMock: vi.fn(),
   execFileSyncMock: vi.fn(),
   mockedHomeDir: { value: undefined as string | undefined },
-  stdinEndMock: vi.fn(),
 }));
 
 vi.mock("node:os", async (importOriginal) => {
@@ -34,8 +33,11 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 vi.mock("node:child_process", () => ({
-  execFile: execFileMock,
   execFileSync: execFileSyncMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  runCommandBuffered: spawnCommandMock,
 }));
 
 vi.mock("../src/binary-resolver.js", () => ({
@@ -150,7 +152,7 @@ function createSandboxBackendTestConfig(
       binds: [],
       cdpPort: 0,
       cdpSourceRange: undefined,
-      enableNoVnc: false,
+      noVncEnabled: false,
       headless: true,
       image: "",
       network: "",
@@ -204,19 +206,15 @@ async function withProcessEnv(
 
 describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests)", () => {
   beforeEach(() => {
-    execFileMock.mockReset();
-    stdinEndMock.mockReset();
-    execFileMock.mockImplementation(
-      (
-        _binaryPath: string,
-        _args: readonly string[],
-        _options: unknown,
-        callback: (error: Error | null, stdout: Buffer, stderr: Buffer) => void,
-      ) => {
-        callback(null, Buffer.from(""), Buffer.alloc(0));
-        return { stdin: { end: stdinEndMock } };
-      },
-    );
+    spawnCommandMock.mockReset();
+    spawnCommandMock.mockResolvedValue({
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    });
     mockedHomeDir.value = mkdtempSync(path.join(tmpdir(), "mxc-test-home-"));
     testDirs.push(mockedHomeDir.value);
     baseParams.workdir = mkdtempSync(path.join(tmpdir(), "mxc-test-workspace-"));
@@ -1202,18 +1200,17 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
 
   test("runShellCommand uses the inline Windows command line when no args are passed", async () => {
     let processConfig: Record<string, unknown> | undefined;
-    execFileMock.mockImplementationOnce(
-      (
-        _binaryPath: string,
-        args: readonly string[],
-        _options: unknown,
-        callback: (error: Error | null, stdout: Buffer, stderr: Buffer) => void,
-      ) => {
-        processConfig = objectField(decodeContainerConfig(args), "process");
-        callback(null, Buffer.from(""), Buffer.alloc(0));
-        return { stdin: { end: stdinEndMock } };
-      },
-    );
+    spawnCommandMock.mockImplementationOnce(async (argv: string[]) => {
+      processConfig = objectField(decodeContainerConfig(argv), "process");
+      return {
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+      };
+    });
     const handle = createMxcSandboxBackendHandle(baseParams);
     await handle.runShellCommand({
       script: "echo hello",
@@ -1228,18 +1225,17 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
 
   test("runShellCommand timeout is capped by sandbox policy", async () => {
     let processConfig: Record<string, unknown> | undefined;
-    execFileMock.mockImplementationOnce(
-      (
-        _binaryPath: string,
-        args: readonly string[],
-        _options: unknown,
-        callback: (error: Error | null, stdout: Buffer, stderr: Buffer) => void,
-      ) => {
-        processConfig = objectField(decodeContainerConfig(args), "process");
-        callback(null, Buffer.from(""), Buffer.alloc(0));
-        return { stdin: { end: stdinEndMock } };
-      },
-    );
+    spawnCommandMock.mockImplementationOnce(async (argv: string[]) => {
+      processConfig = objectField(decodeContainerConfig(argv), "process");
+      return {
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+      };
+    });
     const handle = createMxcSandboxBackendHandle({
       ...baseParams,
       config: sandboxPolicyConfig(
@@ -1271,24 +1267,29 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
         let bridgeScript: string | undefined;
         let commandFile: string | undefined;
         let launcherEnv: NodeJS.ProcessEnv | undefined;
+        let launcherInput: Uint8Array | string | undefined;
         let processConfig: Record<string, unknown> | undefined;
-        execFileMock.mockImplementationOnce(
-          (
-            _binaryPath: string,
-            args: readonly string[],
-            options: unknown,
-            callback: (error: Error | null, stdout: Buffer, stderr: Buffer) => void,
-          ) => {
-            launcherEnv = (options as { env?: NodeJS.ProcessEnv }).env;
-            processConfig = objectField(decodeContainerConfig(args), "process");
-            const commandLine = String(processConfig.commandLine);
-            commandFile = /""([^"]+\.cmd)"/u.exec(commandLine)?.[1];
-            expect(commandFile).toEqual(expect.any(String));
-            bridgeScript = readFileSync(commandFile ?? "", "utf-8");
-            callback(null, Buffer.from(""), Buffer.alloc(0));
-            return { stdin: { end: stdinEndMock } };
-          },
-        );
+        spawnCommandMock.mockImplementationOnce(async (argv: string[], options: unknown) => {
+          const spawnOptions = options as {
+            baseEnv?: NodeJS.ProcessEnv;
+            input?: Uint8Array | string;
+          };
+          launcherEnv = spawnOptions.baseEnv;
+          launcherInput = spawnOptions.input;
+          processConfig = objectField(decodeContainerConfig(argv), "process");
+          const commandLine = String(processConfig.commandLine);
+          commandFile = /""([^"]+\.cmd)"/u.exec(commandLine)?.[1];
+          expect(commandFile).toEqual(expect.any(String));
+          bridgeScript = readFileSync(commandFile ?? "", "utf-8");
+          return {
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+          };
+        });
         const handle = createMxcSandboxBackendHandle({
           ...baseParams,
           workdir: baseParams.workdir,
@@ -1316,7 +1317,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
         expect(env.some((entry) => entry.startsWith("OPENCLAW_MXC_SECRET_TEST="))).toBe(false);
         expect(launcherEnv?.SystemRoot).toBe("C:\\Windows");
         expect(launcherEnv?.OPENCLAW_MXC_SECRET_TEST).toBeUndefined();
-        expect(stdinEndMock).toHaveBeenCalledWith(Buffer.from("shell-input", "utf-8"));
+        expect(launcherInput).toEqual(Buffer.from("shell-input", "utf-8"));
         expect(commandFile ? existsSync(path.dirname(commandFile)) : true).toBe(false);
       },
     );
@@ -1333,21 +1334,20 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
         let commandFile: string | undefined;
         let filesystemConfig: Record<string, unknown> | undefined;
         let processConfig: Record<string, unknown> | undefined;
-        execFileMock.mockImplementationOnce(
-          (
-            _binaryPath: string,
-            args: readonly string[],
-            _options: unknown,
-            callback: (error: Error | null, stdout: Buffer, stderr: Buffer) => void,
-          ) => {
-            const config = decodeContainerConfig(args);
-            filesystemConfig = objectField(config, "filesystem");
-            processConfig = objectField(config, "process");
-            commandFile = /""([^"]+\.cmd)"/u.exec(String(processConfig.commandLine))?.[1];
-            callback(null, Buffer.from(""), Buffer.alloc(0));
-            return { stdin: { end: stdinEndMock } };
-          },
-        );
+        spawnCommandMock.mockImplementationOnce(async (argv: string[]) => {
+          const config = decodeContainerConfig(argv);
+          filesystemConfig = objectField(config, "filesystem");
+          processConfig = objectField(config, "process");
+          commandFile = /""([^"]+\.cmd)"/u.exec(String(processConfig.commandLine))?.[1];
+          return {
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+          };
+        });
         try {
           const handle = createMxcSandboxBackendHandle({
             ...baseParams,
@@ -1395,40 +1395,66 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       signal: controller.signal,
     });
 
-    const call = execFileMock.mock.calls[0] as unknown as [
-      string,
-      string[],
-      { signal?: AbortSignal },
-    ];
-    const options = call[2];
-    expect(options.signal).toBe(controller.signal);
+    const options = spawnCommandMock.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined;
+    expect(options?.signal).toBe(controller.signal);
   });
 
   test("runShellCommand reports executor failures when allowed", async () => {
-    execFileMock.mockImplementationOnce(
-      (
-        _binaryPath: string,
-        _args: string[],
-        _options: unknown,
-        callback: (error: Error | null, stdout: Buffer, stderr: Buffer) => void,
-      ) => {
-        const error = new Error("failed") as Error & {
-          stdout: Buffer;
-          stderr: Buffer;
-          status: number;
-        };
-        error.stdout = Buffer.from("out");
-        error.stderr = Buffer.from("err");
-        error.status = 7;
-        callback(error, error.stdout, error.stderr);
-        return { stdin: { end: stdinEndMock } };
-      },
-    );
+    spawnCommandMock.mockResolvedValueOnce({
+      code: 7,
+      signal: null,
+      killed: false,
+      termination: "exit",
+      stdout: Buffer.from("out"),
+      stderr: Buffer.from("err"),
+    });
     const handle = createMxcSandboxBackendHandle(baseParams);
 
     await expect(
       handle.runShellCommand({ script: "exit 7", stdin: "", allowFailure: true }),
     ).resolves.toEqual({ stdout: Buffer.from("out"), stderr: Buffer.from("err"), code: 7 });
+  });
+
+  test("runShellCommand rejects abnormal executor results even with a zero code", async () => {
+    spawnCommandMock.mockResolvedValueOnce({
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "error",
+      stdout: Buffer.from("partial-out"),
+      stderr: Buffer.from("partial-err"),
+      error: new Error("stdout stream failed"),
+    });
+    const handle = createMxcSandboxBackendHandle(baseParams);
+
+    await expect(
+      handle.runShellCommand({ script: "echo partial", stdin: "", allowFailure: false }),
+    ).rejects.toMatchObject({
+      message: "stdout stream failed",
+      status: 1,
+      stdout: Buffer.from("partial-out"),
+      stderr: Buffer.from("partial-err"),
+    });
+  });
+
+  test("runShellCommand preserves timeout output when failures are allowed", async () => {
+    spawnCommandMock.mockResolvedValueOnce({
+      code: null,
+      signal: "SIGTERM",
+      killed: true,
+      termination: "timeout",
+      stdout: Buffer.from("partial-out"),
+      stderr: Buffer.from("partial-err"),
+    });
+    const handle = createMxcSandboxBackendHandle(baseParams);
+
+    await expect(
+      handle.runShellCommand({ script: "sleep", stdin: "", allowFailure: true }),
+    ).resolves.toEqual({
+      stdout: Buffer.from("partial-out"),
+      stderr: Buffer.from("partial-err"),
+      code: 1,
+    });
   });
 
   test("factory carries protected skill workspace context into the exec guard", async () => {
@@ -1500,3 +1526,4 @@ describeOnWindows("mxcSandboxBackendManager (Windows-only MXC backend tests)", (
     ).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

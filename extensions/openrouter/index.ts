@@ -8,8 +8,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
+  buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getOpenRouterModelCapabilities,
@@ -23,6 +23,7 @@ import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provi
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
+  buildOpenrouterLiveProvider,
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -31,10 +32,7 @@ import {
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
-import {
-  resolveOpenRouterThinkingProfile,
-  supportsOpenRouterXHighThinking,
-} from "./thinking-policy.js";
+import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
 import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
@@ -263,7 +261,10 @@ export default definePluginEntry({
       return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
     }
 
-    const passthroughReplayHook = PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy;
+    const passthroughGeminiReplayHooks = buildProviderReplayFamilyHooks({
+      family: "passthrough-gemini",
+    });
+    const passthroughReplayHook = passthroughGeminiReplayHooks.buildReplayPolicy;
     function buildOpenRouterReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
       const base = passthroughReplayHook?.(ctx) ?? {};
       // OpenRouter proxies Mistral, which uses non-base62 tool_call_ids and
@@ -312,15 +313,16 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const apiKey = auth.apiKey;
           if (!apiKey) {
             return null;
           }
           return {
-            provider: {
-              ...buildOpenrouterProvider(),
+            provider: await buildOpenrouterLiveProvider({
               apiKey,
-            },
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           };
         },
       },
@@ -352,10 +354,9 @@ export default definePluginEntry({
             }
           : undefined;
       },
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
-      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
       resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
       resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,

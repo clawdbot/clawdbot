@@ -22,6 +22,7 @@ internal class GatewayStoreMigration(
       json.encodeToString(
         PersistedGatewayRegistry(
           activeStableId = activeEntry?.stableId,
+          connectedStableIds = listOfNotNull(activeEntry?.stableId),
           entries = listOfNotNull(activeEntry),
         ),
       ),

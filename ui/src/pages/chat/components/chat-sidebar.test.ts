@@ -1,13 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { editorOpenUrl } from "../../../lib/editor-links.ts";
-import {
-  computeFileSearchMatches,
-  hasUniformLineEndings,
-  renderMarkdownSidebar,
-} from "./chat-sidebar.ts";
+import { openEditor } from "../../../lib/editor-links.ts";
+import { hasUniformLineEndings } from "./chat-sidebar.ts";
 
 describe("hasUniformLineEndings", () => {
   it("accepts uniform and no line endings", () => {
@@ -24,78 +19,46 @@ describe("hasUniformLineEndings", () => {
   });
 });
 
-describe("computeFileSearchMatches", () => {
-  it("finds matching line numbers", () => {
-    expect(computeFileSearchMatches("alpha\nbeta\ngamma", "beta")).toEqual([2]);
-  });
-
-  it("matches case-insensitively", () => {
-    expect(computeFileSearchMatches("Alpha\nBETA", "alpha")).toEqual([1]);
-  });
-
-  it("returns no matches for an empty query", () => {
-    expect(computeFileSearchMatches("alpha\nbeta", "")).toEqual([]);
-  });
-
-  it("returns every matching line once", () => {
-    expect(computeFileSearchMatches("match match\nnope\nMATCH", "match")).toEqual([1, 3]);
-  });
-});
-
-describe("editorOpenUrl", () => {
-  it("creates a custom editor URL for a plain path", () => {
-    expect(editorOpenUrl("cursor", "/workspace/src/foo.ts")).toBe(
+describe("openEditor", () => {
+  it.each([
+    [
+      "plain path",
+      "cursor",
+      "/workspace/src/foo.ts",
+      undefined,
       "cursor://file/workspace/src/foo.ts",
-    );
-  });
-
-  it("encodes spaces in paths", () => {
-    expect(editorOpenUrl("vscode", "/workspace/My File.ts")).toBe(
+    ],
+    [
+      "spaces",
+      "vscode",
+      "/workspace/My File.ts",
+      undefined,
       "vscode://file/workspace/My%20File.ts",
-    );
-  });
-
-  it("appends a target line", () => {
-    expect(editorOpenUrl("zed", "/workspace/src/foo.ts", 42)).toBe(
-      "zed://file/workspace/src/foo.ts:42",
-    );
-  });
-
-  it("normalizes Windows paths", () => {
-    expect(editorOpenUrl("vscode", "C:\\workspace\\src\\foo.ts", 42)).toBe(
+    ],
+    ["target line", "zed", "/workspace/src/foo.ts", 42, "zed://file/workspace/src/foo.ts:42"],
+    [
+      "Windows path",
+      "vscode",
+      "C:\\workspace\\src\\foo.ts",
+      42,
       "vscode://file/C:/workspace/src/foo.ts:42",
-    );
-  });
-
-  it("encodes URL-significant path characters", () => {
-    expect(editorOpenUrl("windsurf", "/workspace/#notes?.md")).toBe(
+    ],
+    [
+      "URL-significant characters",
+      "windsurf",
+      "/workspace/#notes?.md",
+      undefined,
       "windsurf://file/workspace/%23notes%3F.md",
-    );
+    ],
+  ] as const)("opens the encoded custom URL for %s", (_name, editor, path, line, expected) => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    openEditor(editor, path, line);
+    expect(open).toHaveBeenCalledWith(expected);
+    open.mockRestore();
   });
 });
 
 describe("markdown sidebar", () => {
-  it("renders workspace file links in markdown previews", () => {
-    const container = document.createElement("div");
-    render(
-      renderMarkdownSidebar({
-        content: {
-          kind: "markdown",
-          content: "See ui/src/components/markdown.ts:1146",
-        },
-        error: null,
-        onClose: () => undefined,
-        onViewRawText: () => undefined,
-      }),
-      container,
-    );
-
-    const link = container.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-    expect(link?.dataset.filePath).toBe("ui/src/components/markdown.ts");
-    expect(link?.dataset.fileLine).toBe("1146");
-    expect(link?.hasAttribute("href")).toBe(false);
-  });
-
   it("opens workspace files from markdown preview clicks", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
@@ -117,6 +80,113 @@ describe("markdown sidebar", () => {
       path: "ui/src/pages/chat/chat-view.ts",
       line: 362,
     });
+    panel.remove();
+  });
+
+  it("activates Markdown images only when a chat owner opts in", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      onOpenImage?: (item: { src: string; title: string }) => void;
+      updateComplete?: Promise<unknown>;
+    };
+    const onOpenImage = vi.fn();
+    panel.content = { kind: "markdown", content: "![Preview](data:image/png;base64,cG5n)" };
+    panel.onOpenImage = onOpenImage;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();
+    expect(onOpenImage).toHaveBeenCalledWith({
+      src: "data:image/png;base64,cG5n",
+      title: "Preview",
+    });
+    panel.remove();
+
+    const fallbackPanel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    fallbackPanel.content = {
+      kind: "markdown",
+      content: "![Preview](data:image/png;base64,cG5n)",
+    };
+    document.body.append(fallbackPanel);
+    await fallbackPanel.updateComplete;
+    expect(fallbackPanel.querySelector(".markdown-inline-image-button")).toBeNull();
+    fallbackPanel.remove();
+  });
+
+  it("opens image artifacts through the shared lightbox callback", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      onOpenImage?: (item: { src: string; title: string }) => void;
+      updateComplete?: Promise<unknown>;
+    };
+    const onOpenImage = vi.fn();
+    panel.content = {
+      kind: "image",
+      title: "Artifact preview",
+      src: "data:image/png;base64,cG5n",
+    };
+    panel.onOpenImage = onOpenImage;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.querySelector<HTMLButtonElement>(".chat-tool-card__preview-image-button")?.click();
+
+    expect(onOpenImage).toHaveBeenCalledWith({
+      src: "data:image/png;base64,cG5n",
+      title: "Artifact preview",
+    });
+    panel.remove();
+
+    const fallbackPanel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    fallbackPanel.content = {
+      kind: "image",
+      title: "Artifact preview",
+      src: "data:image/png;base64,cG5n",
+    };
+    document.body.append(fallbackPanel);
+    await fallbackPanel.updateComplete;
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    fallbackPanel
+      .querySelector<HTMLButtonElement>(".chat-tool-card__preview-image-button")
+      ?.click();
+    expect(openSpy).toHaveBeenCalledWith(
+      "data:image/png;base64,cG5n",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    openSpy.mockRestore();
+    fallbackPanel.remove();
+  });
+
+  it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      embedSandboxMode: "trusted";
+      canvasPluginSurfaceUrl: string;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.embedSandboxMode = "trusted";
+    panel.canvasPluginSurfaceUrl = "https://canvas.example";
+    panel.content = {
+      kind: "canvas",
+      docId: "preview-1",
+      title: "Preview",
+      entryUrl: "https://canvas.example/previews/preview-1",
+      sandbox: "scripts",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(panel.querySelector("iframe")?.getAttribute("sandbox")).not.toContain(
+      "allow-same-origin",
+    );
     panel.remove();
   });
 });

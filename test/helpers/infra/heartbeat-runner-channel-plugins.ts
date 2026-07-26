@@ -4,7 +4,7 @@ import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../../../src/channels/plugins/types.js";
+} from "../../../src/channels/plugins/types.public.js";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -22,13 +22,17 @@ type HeartbeatSendFn = (
 
 /** Create an outbound adapter that routes through heartbeat send deps. */
 function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): ChannelOutboundAdapter {
+  const resolveSend = (deps: unknown) => {
+    const send = resolveOutboundSendDep<HeartbeatSendFn>(deps as OutboundSendDeps, channelId);
+    if (!send) {
+      throw new Error(`Missing ${channelId} outbound send dependency`);
+    }
+    return send;
+  };
   return {
     deliveryMode: "direct",
     sendText: async ({ to, text, deps, cfg, accountId, replyToId, threadId, ...opts }) => {
-      const send = resolveOutboundSendDep<HeartbeatSendFn>(deps as OutboundSendDeps, channelId);
-      if (!send) {
-        throw new Error(`Missing ${channelId} outbound send dependency`);
-      }
+      const send = resolveSend(deps);
       const baseOptions = {
         verbose: false,
         cfg,
@@ -49,6 +53,16 @@ function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): Chan
               ...(threadId !== undefined ? { threadId } : {}),
             };
       return (await send(to, text, sendOptions)) as never;
+    },
+    sendMedia: async ({ to, text, mediaUrl, deps, cfg, accountId, ...opts }) => {
+      const send = resolveSend(deps);
+      return (await send(to, text, {
+        verbose: false,
+        cfg,
+        accountId,
+        ...opts,
+        mediaUrl,
+      })) as never;
     },
   };
 }
@@ -97,7 +111,7 @@ export const heartbeatRunnerWhatsAppPlugin = createHeartbeatChannelPlugin({
   docsPath: "/channels/whatsapp",
   heartbeat: {
     checkReady: async ({ cfg, deps }) => {
-      if (cfg.web?.enabled === false) {
+      if (cfg.channels?.whatsapp?.enabled === false) {
         return { ok: false, reason: "whatsapp-disabled" };
       }
       const authExists = await (deps?.webAuthExists ?? (async () => true))();

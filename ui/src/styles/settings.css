@@ -1,0 +1,819 @@
+:root {
+  --settings-control-height: 32px;
+}
+
+/* ── Settings design language ──────────────────────────────────────────────
+ *
+ * One structural pattern for every settings surface:
+ *   .settings-page > .settings-section > .settings-group > .settings-row
+ *
+ * Rules (see ui/docs/settings-design.md):
+ * - Sections are typography (heading outside any surface), not chrome.
+ * - Exactly one level of elevation: the group. Never nest a card in a group.
+ * - Status is a dot + plain text, never a colored pill.
+ * - Spacing uses --space-* tokens only.
+ *
+ * Templates should be built through the helpers in
+ * ui/src/components/settings-ui.ts rather than hand-rolled markup.
+ */
+
+/* ── Workspace shell (shared by every settings takeover page) ── */
+
+.settings-workspace {
+  width: 100%;
+}
+
+.settings-workspace__body {
+  width: 100%;
+}
+
+.content-header + .settings-workspace {
+  margin-top: var(--space-5);
+}
+
+.settings-workspace__body > * + * {
+  margin-top: var(--space-5);
+}
+
+.settings-workspace--fill-height {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height > .settings-workspace__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The page headline adopts the column of the page below it; without this the
+   shell caps headers at 1120px while narrow pages use a 760px column, leaving
+   the title floating left of the content. */
+.shell--settings .content:has(.settings-page) .content-header {
+  max-width: 760px;
+  padding-inline: var(--space-4);
+}
+
+.shell--settings .content:has(.settings-page--wide) .content-header {
+  max-width: 1120px;
+}
+
+/* ── Page ── */
+
+/* Section separation stays generous (--space-8) so group surfaces read as
+   distinct blocks; headings bind to their own group via the tighter
+   .settings-section gap. */
+.settings-page {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+/* An intro belongs to the first section rather than forming a separate block.
+   Keep later sections at the normal --space-8 separation. */
+.settings-page:has(> .settings-page__intro) {
+  gap: var(--space-5);
+}
+
+.settings-page:has(> .settings-page__intro) > .settings-section + .settings-section {
+  margin-top: calc(var(--space-8) - var(--space-5));
+}
+
+/* Table/list-heavy pages (sessions, automations, plugins) need more width. */
+.settings-page--wide {
+  max-width: 1120px;
+}
+
+.settings-page__intro {
+  margin: 0;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ── Section ── */
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Header and description indent to var(--space-4) so the eyebrow label lines
+   up with the row content inside the group surface below it. */
+.settings-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+}
+
+.settings-section__heading {
+  margin: 0;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted-strong);
+  text-transform: uppercase;
+}
+
+.settings-section__desc {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  padding: 0 var(--space-4);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.settings-section__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+/* ── Group (the only surface) ── */
+
+.settings-group {
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.settings-group--danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
+}
+
+/* ── Row ── */
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  min-height: 48px;
+}
+
+.settings-row + .settings-row,
+.settings-row + .settings-subrows,
+.settings-subrows + .settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.settings-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.settings-row__title {
+  font-size: var(--control-ui-text-md);
+  font-weight: 500;
+  color: var(--text-strong);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__desc {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__control {
+  display: flex;
+  /* No wrap here: Chromium sizes a wrappable shrink-to-fit flex container to
+     its widest item, collapsing multi-control clusters. The <=640px block
+     gives the cluster a definite width and enables wrapping there. */
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 60%;
+}
+
+/* Rows that carry only a control (action/button rows) hug the right edge. */
+.settings-row > .settings-row__control:only-child {
+  margin-left: auto;
+}
+
+/* Plain right-aligned value text ("Default", "v2026.7.1", …). */
+.settings-row__value {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__value--mono {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* Stacked variant: title/description above a full-width control
+   (textareas, wide inputs, segmented controls that would wrap). */
+.settings-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.settings-row--stacked .settings-row__control {
+  max-width: none;
+  justify-content: flex-start;
+}
+
+/* Label-wrapped toggle row: whole row toggles the switch. */
+.settings-row--toggle {
+  cursor: pointer;
+}
+
+.settings-row--toggle:has(wa-switch[disabled]) {
+  cursor: not-allowed;
+}
+
+/* Clickable drill-in row. */
+.settings-row--nav {
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.settings-row--nav:hover {
+  background: var(--bg-hover);
+}
+
+/* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */
+.settings-row--nav:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 80%, transparent);
+}
+
+.settings-row__chevron {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.5;
+  flex: 0 0 auto;
+}
+
+.settings-row__chevron svg {
+  width: 14px;
+  height: 14px;
+  /* Icons rely on currentColor; without this the SVG falls back to black fill
+     and disappears in dark mode. */
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Indented child rows (e.g. per-item options under a parent toggle). */
+.settings-subrows .settings-row {
+  padding-left: var(--space-7);
+}
+
+.settings-subrows .settings-row + .settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+/* ── Controls ── */
+
+/* One control height inside settings clusters. Buttons, inputs, selects, and
+   segmented controls share 32px so mixed rows never show ragged heights.
+   Multi-select list boxes and textareas keep their natural height. */
+.settings-row__control .btn,
+.settings-section__actions .btn,
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
+  height: var(--settings-control-height);
+  padding-block: 0;
+  box-sizing: border-box;
+}
+
+/* Segmented keeps its 2px track inset; the buttons fill the inner height.
+   min-height (not height) so many-option enums can still wrap to two lines. */
+.settings-segmented {
+  min-height: var(--settings-control-height);
+  box-sizing: border-box;
+  align-items: stretch;
+}
+
+.settings-segmented > .settings-segmented__btn {
+  display: inline-flex;
+  align-items: center;
+  padding-block: 0;
+}
+
+.settings-row__control .btn--icon,
+.settings-section__actions .btn--icon {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  padding-inline: 0;
+}
+
+.settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.settings-control__sr-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+wa-switch.settings-toggle {
+  /* Web Awesome defaults to brand blue; settings controls follow the active scene. */
+  --wa-form-control-activated-color: var(--accent);
+  --wa-color-focus: var(--ring);
+  flex: none;
+}
+
+.settings-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+wa-radio-group.settings-segmented::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+wa-radio-group.settings-segmented::part(radios) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.settings-segmented__btn {
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  padding: 4px 12px;
+  border: none;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--duration-normal) var(--ease-out),
+    background var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.settings-segmented__btn:hover {
+  color: var(--text);
+}
+
+.settings-segmented__btn:focus-visible {
+  outline: none;
+  color: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.settings-segmented__btn--active {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.settings-segmented__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-input,
+.settings-select {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--control-ui-input-text-size);
+}
+
+/* Native controls own their box. wa-select draws the same box on its shadow
+   combobox part below; host chrome would double-border the web component. */
+.settings-input,
+select.settings-select {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  /* background-color, not the background shorthand: the shorthand resets the
+     .field select chevron longhands (image/repeat/position) and tiles the
+     arrow across Model Providers selects. */
+  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  padding: 7px 10px;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+/* Inside generic .field wrappers (Model Providers) the select is
+   appearance: none with a background chevron; the padding shorthand above
+   collapses its 36px gutter to 10px and long model names run under the arrow. */
+.field select.settings-select {
+  padding-right: 36px;
+}
+
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
+  width: auto;
+  min-width: min(220px, 100%);
+}
+
+/* Permission can replace System default with long hardware labels; keep the
+   paired media pickers aligned instead of letting native intrinsic width win. */
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
+  width: 340px;
+}
+
+/* Lone value inputs share one width so stacked rows in a group read as a
+   grid instead of ragged right-aligned fields. A percentage guard cannot work
+   here (the shrink-to-fit control resolves 100% circularly); the fixed width
+   shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation {
+  width: 340px;
+}
+
+.settings-phone-presentation {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-phone-presentation > .settings-input,
+.settings-phone-presentation > .settings-secret {
+  width: 100%;
+}
+
+.settings-phone-presentation__value {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+/* Number inputs hold short values (ports, counts, limits); the shared 340px
+   text width turns −/+ stepper rows into a stretched bar. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > input[type="number"].settings-input {
+  width: 110px;
+  text-align: center;
+}
+
+/* ── Secret input (inset reveal toggle; no trailing button) ── */
+
+.settings-secret {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Class-agnostic child selectors: the login gate and config form reuse this
+   wrapper around their own input/textarea styling. */
+.settings-secret > input,
+.settings-secret > textarea {
+  width: 100%;
+  min-width: 0;
+  padding-right: 36px;
+}
+
+/* Stacked rows (config form arrays/maps) give the control full width; the
+   wrapper must grow or the inner 100% resolves against fit-content. */
+.settings-row--stacked .settings-row__control > .settings-secret {
+  flex: 1 1 auto;
+}
+
+/* Multiline secrets (JSON textareas) anchor the eye to the first line. */
+.settings-secret:has(> textarea) {
+  align-items: flex-start;
+}
+
+.settings-secret:has(> textarea) .settings-secret__toggle {
+  top: 6px;
+}
+
+.settings-secret__toggle {
+  position: absolute;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.settings-secret__toggle:hover {
+  color: var(--text);
+}
+
+.settings-secret__toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-secret__toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.settings-secret__toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-input::placeholder {
+  color: var(--muted);
+}
+
+.settings-input:focus-visible,
+select.settings-select:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* ── Web Awesome select ── */
+
+wa-select.settings-select {
+  --wa-form-control-activated-color: var(--primary);
+}
+
+wa-select.settings-select::part(combobox) {
+  min-height: var(--settings-control-height);
+  padding-inline: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  cursor: default;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+/* [open] is required alongside :focus-within: Chromium does not propagate
+   :focus-within to the host while a slotted option holds focus, so the open
+   state must key off the reflected attribute or the stock ring leaks through. */
+wa-select.settings-select[open]::part(combobox),
+wa-select.settings-select:focus-within::part(combobox) {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+wa-select.settings-select::part(expand-icon) {
+  margin-inline-start: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+}
+
+wa-select.settings-select::part(listbox) {
+  /* Keep Web Awesome's collision-aware bound in the cap; replacing it outright
+     would let the listbox overflow when the popup has little room to open. */
+  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+}
+
+wa-select.settings-select wa-option {
+  padding: 6px 8px;
+  border-radius: calc(var(--radius-md) - 4px);
+  font-size: var(--control-ui-text-md);
+  color: var(--text);
+  cursor: default;
+}
+
+/* The roving "current" option already carries the accent fill; the global
+   :focus-visible accent outline on top of it is pure noise. */
+wa-select.settings-select wa-option:focus-visible {
+  outline: none;
+}
+
+wa-select.settings-select wa-option:state(current) {
+  color: var(--primary-foreground);
+}
+
+/* Forced colors suppresses the box-shadow ring and accent fill that stand in
+   for the outlines removed above, so restore system-color outlines there. */
+@media (forced-colors: active) {
+  wa-select.settings-select[open]::part(combobox),
+  wa-select.settings-select:focus-within::part(combobox) {
+    outline: 2px solid SelectedItem;
+    outline-offset: 2px;
+  }
+
+  wa-select.settings-select wa-option:focus-visible {
+    outline: 2px solid SelectedItem;
+    outline-offset: 2px;
+  }
+}
+
+textarea.settings-input {
+  min-height: 88px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* Keep >=16px on touch so focusing an editor does not trigger mobile zoom. */
+@media (hover: none) and (pointer: coarse) {
+  textarea.settings-input {
+    font-size: 16px;
+  }
+}
+
+/* ── Status (dot + text — replaces status pills) ── */
+
+.settings-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.settings-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.settings-status--ok {
+  color: var(--text);
+}
+
+.settings-status--ok .settings-status__dot {
+  background: var(--ok);
+}
+
+.settings-status--warn .settings-status__dot {
+  background: var(--warn);
+}
+
+.settings-status--danger .settings-status__dot {
+  background: var(--danger);
+}
+
+.settings-status--accent .settings-status__dot {
+  background: var(--accent);
+}
+
+/* ── Count badge (quiet; genuine counts/alerts only, not status) ── */
+
+.settings-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, var(--border) 20%);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Empty state ── */
+
+.settings-empty {
+  padding: var(--space-5) var(--space-4);
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ── Key/value facts (About build info, agent facts) ── */
+
+.settings-kv {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-kv dt {
+  color: var(--muted);
+}
+
+.settings-kv dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.settings-kv code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* Identity composes existing row controls; these wrappers only keep the
+   avatar/file action and name/save action aligned as one control cluster. */
+.identity-avatar-control,
+.identity-name-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identity-name-control .settings-input {
+  width: min(260px, 38vw);
+}
+
+.identity-error .settings-row__desc {
+  color: var(--danger);
+}
+
+/* ── Mobile ── */
+
+@media (max-width: 640px) {
+  .settings-page {
+    padding-inline: var(--space-3);
+  }
+
+  .settings-row {
+    flex-wrap: wrap;
+  }
+
+  .settings-row__control {
+    /* Definite width makes flex-wrap size lines correctly (see desktop note). */
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .settings-row__control:has(> .settings-select--media-device) {
+    flex-wrap: nowrap;
+  }
+
+  .settings-select--media-device {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+}

@@ -281,6 +281,35 @@ private enum InstallTarget: String, CaseIterable {
     case local
 }
 
+enum SkillRequirementPresentation {
+    static func requirementsMet(_ missing: SkillMissing) -> Bool {
+        missing.bins.isEmpty &&
+            missing.anyBins.isEmpty &&
+            missing.env.isEmpty &&
+            missing.config.isEmpty &&
+            missing.os.isEmpty
+    }
+
+    static func shouldShowSummary(_ missing: SkillMissing, showMissingBins: Bool) -> Bool {
+        showMissingBins ||
+            !missing.anyBins.isEmpty ||
+            !missing.env.isEmpty ||
+            !missing.config.isEmpty ||
+            !missing.os.isEmpty
+    }
+
+    static func installOptions(
+        missing: SkillMissing,
+        options: [SkillInstallOption]) -> [SkillInstallOption]
+    {
+        let missingBins = Set(missing.bins + missing.anyBins)
+        guard !missingBins.isEmpty else { return [] }
+        return options.filter { option in
+            option.bins.isEmpty || !missingBins.isDisjoint(with: option.bins)
+        }
+    }
+}
+
 private struct SkillRow: View {
     let skill: SkillStatus
     let isBusy: Bool
@@ -293,6 +322,14 @@ private struct SkillRow: View {
 
     private var missingBins: [String] {
         self.skill.missing.bins
+    }
+
+    private var missingAnyBins: [String] {
+        self.skill.missing.anyBins
+    }
+
+    private var missingOS: [String] {
+        self.skill.missing.os
     }
 
     private var missingEnv: [String] {
@@ -428,11 +465,17 @@ private struct SkillRow: View {
         if !self.missingBins.isEmpty {
             return "Missing \(self.missingBins.prefix(2).joined(separator: ", "))"
         }
+        if !self.missingAnyBins.isEmpty {
+            return "Needs \(self.missingAnyBins.prefix(2).joined(separator: " or "))"
+        }
         if !self.missingEnv.isEmpty {
             return "Needs \(self.missingEnv.prefix(2).joined(separator: ", "))"
         }
         if !self.missingConfig.isEmpty {
             return "Needs config"
+        }
+        if !self.missingOS.isEmpty {
+            return "Requires OS: \(self.missingOS.prefix(2).joined(separator: ", "))"
         }
         return "Needs setup"
     }
@@ -465,6 +508,11 @@ private struct SkillRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if !self.missingAnyBins.isEmpty {
+                Text("Needs any binary: \(self.missingAnyBins.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if !self.missingEnv.isEmpty {
                 Text("Missing env: \(self.missingEnv.joined(separator: ", "))")
                     .font(.caption)
@@ -472,6 +520,11 @@ private struct SkillRow: View {
             }
             if !self.missingConfig.isEmpty {
                 Text("Requires config: \(self.missingConfig.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !self.missingOS.isEmpty {
+                Text("Requires OS: \(self.missingOS.joined(separator: ", "))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -552,16 +605,13 @@ private struct SkillRow: View {
     }
 
     private var installOptions: [SkillInstallOption] {
-        guard !self.missingBins.isEmpty else { return [] }
-        let missing = Set(self.missingBins)
-        return self.skill.install.filter { option in
-            if option.bins.isEmpty { return true }
-            return !missing.isDisjoint(with: option.bins)
-        }
+        SkillRequirementPresentation.installOptions(
+            missing: self.skill.missing,
+            options: self.skill.install)
     }
 
     private var requirementsMet: Bool {
-        self.missingBins.isEmpty && self.missingEnv.isEmpty && self.missingConfig.isEmpty
+        SkillRequirementPresentation.requirementsMet(self.skill.missing)
     }
 
     private var shouldShowMissingBins: Bool {
@@ -569,9 +619,9 @@ private struct SkillRow: View {
     }
 
     private var shouldShowMissingSummary: Bool {
-        self.shouldShowMissingBins ||
-            !self.missingEnv.isEmpty ||
-            !self.missingConfig.isEmpty
+        SkillRequirementPresentation.shouldShowSummary(
+            self.skill.missing,
+            showMissingBins: self.shouldShowMissingBins)
     }
 
     private var showGatewayInstall: Bool {

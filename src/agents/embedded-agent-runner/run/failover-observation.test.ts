@@ -2,17 +2,13 @@
 // runs decide whether to retry, rotate profiles, fall back, or surface errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
-import {
-  createFailoverDecisionLogger,
-  normalizeFailoverDecisionObservationBase,
-} from "./failover-observation.js";
+import { createFailoverDecisionLogger } from "./failover-observation.js";
 
-function normalizeObservation(
-  overrides: Partial<Parameters<typeof normalizeFailoverDecisionObservationBase>[0]>,
-) {
+function observeDecision(overrides: Partial<Parameters<typeof createFailoverDecisionLogger>[0]>) {
   // Keep the base case boring so each test only states the failure dimension
   // whose log metadata should change.
-  return normalizeFailoverDecisionObservationBase({
+  const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+  const logDecision = createFailoverDecisionLogger({
     stage: "assistant",
     runId: "run:base",
     rawError: "",
@@ -26,6 +22,8 @@ function normalizeObservation(
     aborted: false,
     ...overrides,
   });
+  logDecision("surface_error");
+  return firstWarnDetails(warnSpy);
 }
 
 function firstWarnCall(warnSpy: { mock: { calls: unknown[][] } }): unknown[] {
@@ -38,29 +36,39 @@ function firstWarnCall(warnSpy: { mock: { calls: unknown[][] } }): unknown[] {
 
 function firstWarnDetails(warnSpy: { mock: { calls: unknown[][] } }): {
   consoleMessage?: string;
+  failoverReason?: string | null;
   model?: string;
+  profileFailureReason?: string | null;
   provider?: string;
   providerRuntimeFailureKind?: string;
   rawErrorPreview?: string;
   sourceModel?: string;
   sourceProvider?: string;
+  timedOut?: boolean;
 } {
   // The logger intentionally records structured details separate from the
   // console message, so assertions can cover both machine and human evidence.
   return firstWarnCall(warnSpy)[1] as {
     consoleMessage?: string;
+    failoverReason?: string | null;
     model?: string;
+    profileFailureReason?: string | null;
     provider?: string;
     providerRuntimeFailureKind?: string;
     rawErrorPreview?: string;
     sourceModel?: string;
     sourceProvider?: string;
+    timedOut?: boolean;
   };
 }
 
-describe("normalizeFailoverDecisionObservationBase", () => {
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("createFailoverDecisionLogger timeout normalization", () => {
   it("fills timeout observation reasons for deadline timeouts without provider error text", () => {
-    const observation = normalizeObservation({
+    const observation = observeDecision({
       runId: "run:timeout",
       timedOut: true,
     });
@@ -70,7 +78,7 @@ describe("normalizeFailoverDecisionObservationBase", () => {
   });
 
   it("preserves explicit failover reasons", () => {
-    const observation = normalizeObservation({
+    const observation = observeDecision({
       runId: "run:overloaded",
       rawError: '{"error":{"type":"overloaded_error"}}',
       failoverReason: "overloaded",
@@ -85,10 +93,6 @@ describe("normalizeFailoverDecisionObservationBase", () => {
 });
 
 describe("createFailoverDecisionLogger", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("includes from and to model refs when the source differs from the selected target", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
     const logDecision = createFailoverDecisionLogger({

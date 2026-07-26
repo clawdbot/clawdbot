@@ -20,7 +20,6 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute, type OutboundSessionRoute } from "./outbound-session.js";
-import { isReservedTargetLiteralError } from "./target-errors.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import type { OutboundTargetResolution } from "./targets.js";
 import {
@@ -61,7 +60,7 @@ function rebaseOutboundSessionRoute(
   };
 }
 
-export function resolveAgentDeliveryPlan(params: {
+function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
   requestedChannel?: string;
   explicitTo?: string;
@@ -174,8 +173,8 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   },
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
-  const { resolvedChannel, resolvedTo } = plan;
-  if (!params.wantsDelivery || !resolvedTo || !isDeliverableMessageChannel(resolvedChannel)) {
+  const { resolvedChannel } = plan;
+  if (!params.wantsDelivery || !isDeliverableMessageChannel(resolvedChannel)) {
     return plan;
   }
   const plugin = resolveOutboundChannelPlugin({
@@ -183,45 +182,66 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     cfg: params.cfg,
     allowBootstrap: true,
   });
+  if (!plugin) {
+    return plan;
+  }
   const hasPluginSessionRoute = Boolean(plugin?.messaging?.resolveOutboundSessionRoute);
-  if (!hasPluginSessionRoute && params.sessionRouteMode !== "allow-fallback") {
+  const hasPluginTargetResolver = Boolean(plugin?.messaging?.targetResolver);
+  // Only concrete plugin resolution makes a directory miss authoritative.
+  // Heuristic-only resolvers preserve the shipped normalized fallback.
+  const hasPluginConcreteTargetResolver = Boolean(plugin?.messaging?.targetResolver?.resolveTarget);
+  if (
+    !hasPluginSessionRoute &&
+    !hasPluginTargetResolver &&
+    params.sessionRouteMode !== "allow-fallback"
+  ) {
     return plan;
   }
   const resolvedAccountId =
     plan.resolvedAccountId ??
-    (plugin && params.sessionRouteMode === "allow-fallback"
+    (params.sessionRouteMode === "allow-fallback"
       ? resolveChannelDefaultAccountId({ plugin, cfg: params.cfg })
       : undefined);
   const routedPlan =
     resolvedAccountId === plan.resolvedAccountId ? plan : { ...plan, resolvedAccountId };
   const normalizedTarget = resolveOutboundTarget({
     channel: resolvedChannel,
-    to: resolvedTo,
+    to: routedPlan.resolvedTo,
     cfg: params.cfg,
     accountId: routedPlan.resolvedAccountId,
     mode: routedPlan.deliveryTargetMode ?? "explicit",
   });
-  let sessionRouteTarget: string;
-  let resolvedSessionRouteTarget: ResolvedMessagingTarget | undefined;
-  if (normalizedTarget.ok) {
-    sessionRouteTarget = normalizedTarget.to;
-  } else {
-    if (!isReservedTargetLiteralError(normalizedTarget.error)) {
-      return { ...routedPlan, targetResolutionError: normalizedTarget.error };
-    }
-    const resolvedTarget = await resolveChannelTarget({
-      cfg: params.cfg,
-      channel: resolvedChannel as ChannelId,
-      input: resolvedTo,
-      accountId: routedPlan.resolvedAccountId,
-      unknownTargetMode: "normalized",
-      plugin,
-    });
-    if (!resolvedTarget.ok) {
-      return { ...routedPlan, targetResolutionError: resolvedTarget.error };
-    }
-    sessionRouteTarget = resolvedTarget.target.to;
-    resolvedSessionRouteTarget = resolvedTarget.target;
+  const targetInput = normalizedTarget.ok ? normalizedTarget.to : routedPlan.resolvedTo;
+  if (!targetInput) {
+    return normalizedTarget.ok
+      ? routedPlan
+      : { ...routedPlan, targetResolutionError: normalizedTarget.error };
+  }
+  const resolvedTarget = await resolveChannelTarget({
+    cfg: params.cfg,
+    channel: resolvedChannel as ChannelId,
+    input: targetInput,
+    accountId: routedPlan.resolvedAccountId,
+    unknownTargetMode: hasPluginConcreteTargetResolver ? "error" : "normalized",
+    plugin,
+  });
+  if (!resolvedTarget.ok) {
+    return { ...routedPlan, targetResolutionError: resolvedTarget.error };
+  }
+  // An async normalized fallback cannot erase an earlier synchronous validation error.
+  if (!normalizedTarget.ok && resolvedTarget.target.resolutionSource === "normalized") {
+    return { ...routedPlan, targetResolutionError: normalizedTarget.error };
+  }
+  const sessionRouteTarget = resolvedTarget.target.to;
+  const resolvedSessionRouteTarget: ResolvedMessagingTarget | undefined =
+    !normalizedTarget.ok ||
+    normalizedTarget.to !== resolvedTarget.target.to ||
+    resolvedTarget.target.resolutionSource === "directory"
+      ? resolvedTarget.target
+      : undefined;
+  const resolvedPlan = { ...routedPlan, resolvedTo: sessionRouteTarget };
+  if (!hasPluginSessionRoute && params.sessionRouteMode !== "allow-fallback") {
+    return resolvedPlan;
   }
   const explicitThreadId =
     params.explicitThreadId != null && params.explicitThreadId !== ""
@@ -241,7 +261,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         threadId:
           routedPlan.deliveryTargetMode === "explicit"
             ? explicitThreadId
-            : routedPlan.resolvedThreadId,
+            : resolvedPlan.resolvedThreadId,
       });
     } catch {
       return null;
@@ -310,18 +330,18 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   if (!selectedRoute) {
     if (resolvedSessionRouteTarget) {
       return {
-        ...routedPlan,
+        ...resolvedPlan,
         resolvedTo: resolvedSessionRouteTarget.to,
         resolvedThreadId:
-          routedPlan.deliveryTargetMode === "explicit"
+          resolvedPlan.deliveryTargetMode === "explicit"
             ? explicitThreadId
-            : routedPlan.resolvedThreadId,
+            : resolvedPlan.resolvedThreadId,
       };
     }
-    return routedPlan;
+    return resolvedPlan;
   }
   return {
-    ...routedPlan,
+    ...resolvedPlan,
     resolvedSessionKey: selectedRoute.sessionKey,
     // Generic routes use portable user/channel prefixes. Delivery still needs the
     // plugin-normalized target; only provider-owned route hooks may replace it.
@@ -330,9 +350,9 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       : (resolvedSessionRouteTarget?.to ?? sessionRouteTarget),
     resolvedThreadId:
       selectedRoute.threadId ??
-      (routedPlan.deliveryTargetMode === "explicit"
+      (resolvedPlan.deliveryTargetMode === "explicit"
         ? explicitThreadId
-        : routedPlan.resolvedThreadId),
+        : resolvedPlan.resolvedThreadId),
   };
 }
 

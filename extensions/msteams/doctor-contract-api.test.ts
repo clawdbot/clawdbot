@@ -24,6 +24,12 @@ import {
 } from "./src/conversation-store-state.js";
 import type { StoredConversationReference } from "./src/conversation-store.js";
 import {
+  MSTEAMS_DELEGATED_TOKEN_KEY,
+  MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+  MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+} from "./src/delegated-state.js";
+import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
+import {
   buildMSTeamsPollStateKey,
   buildMSTeamsPollVoteBucketKey,
   MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
@@ -252,6 +258,47 @@ describe("msteams doctor state migration", () => {
     ).resolves.toEqual(token);
     expect(result.changes.join("\n")).not.toContain(token.token);
     expect(result.warnings.join("\n")).not.toContain(token.token);
+    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("imports delegated OAuth tokens into plugin state before archiving the file", async () => {
+    const filePath = path.join(stateDir, "msteams-delegated.json");
+    const token: MSTeamsDelegatedTokens = {
+      accessToken: "delegated-access",
+      refreshToken: "delegated-refresh",
+      expiresAt: 1_800_000_000_000,
+      scopes: ["User.Read", "offline_access"],
+      userPrincipalName: "user@example.com",
+    };
+    await fs.writeFile(filePath, JSON.stringify(token));
+    const migration = migrationById("msteams-delegated-token-json-to-plugin-state");
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [
+        `- Microsoft Teams delegated OAuth token -> plugin state (${MSTEAMS_DELEGATED_TOKEN_NAMESPACE})`,
+      ],
+    });
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Microsoft Teams delegated OAuth token -> plugin state",
+      expect.stringContaining("Archived Microsoft Teams delegated OAuth token legacy source"),
+    ]);
+    const store = context.openPluginStateKeyedStore<MSTeamsDelegatedTokens>({
+      namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+      maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
     await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
   });
 

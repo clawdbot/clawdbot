@@ -10,6 +10,8 @@ import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
   readStringParam,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemorySearchConfig,
   type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -18,10 +20,11 @@ import type {
   MemorySearchRuntimeDebug,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
-  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import {
@@ -65,6 +68,26 @@ type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
+
+/**
+ * Validate the model-authored corpus argument against the tool's closed enum.
+ * Provider tool schemas do not guarantee enum enforcement; an unknown corpus
+ * must fail closed instead of falling through to an unrestricted search that
+ * could surface recall-only indexed transcripts.
+ */
+function readCorpusParam<T extends string>(
+  rawParams: Record<string, unknown>,
+  allowed: readonly T[],
+): T | undefined {
+  const raw = readStringParam(rawParams, "corpus");
+  if (raw === undefined) {
+    return undefined;
+  }
+  if ((allowed as readonly string[]).includes(raw)) {
+    return raw as T;
+  }
+  throw new Error(`corpus must be one of: ${allowed.join(", ")}`);
+}
 
 function mergeQmdRuntimeDebug(
   entries: readonly MemorySearchRuntimeDebug[],
@@ -432,7 +455,9 @@ export function createMemorySearchTool(options: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
+  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
 }) {
   return createMemoryTool({
     options,
@@ -451,12 +476,15 @@ export function createMemorySearchTool(options: {
         const query = readStringParam(rawParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(rawParams, "maxResults");
         const minScore = readFiniteNumberParam(rawParams, "minScore");
-        const requestedCorpus = readStringParam(rawParams, "corpus") as
-          | "memory"
-          | "wiki"
-          | "all"
-          | "sessions"
-          | undefined;
+        const modelRequestedCorpus = readCorpusParam(rawParams, [
+          "memory",
+          "wiki",
+          "all",
+          "sessions",
+        ]);
+        // The trusted runtime chooses the recall corpus; model-authored arguments cannot broaden it.
+        const requestedCorpus =
+          options.conversationRecall?.corpus === "sessions" ? "sessions" : modelRequestedCorpus;
         const cooldownKey = resolveMemorySearchToolCooldownKey({
           agentId,
           agentSessionKey: options.agentSessionKey,
@@ -528,6 +556,7 @@ export function createMemorySearchTool(options: {
                           agentId,
                           purpose: memoryManagerPurpose,
                           acquireLocalService: options.acquireLocalService,
+                          withLease: options.withLease,
                         }),
                       );
                       return { context, resolvedMemoryBackend };
@@ -548,7 +577,7 @@ export function createMemorySearchTool(options: {
               mode: citationsMode,
               sessionKey: options.agentSessionKey,
             });
-            const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+            const pluginConfig = resolveMemoryDreamingPluginConfig(cfg);
             const dreamingEnabled = resolveMemoryDreamingConfig({
               pluginConfig,
               cfg,
@@ -590,12 +619,26 @@ export function createMemorySearchTool(options: {
                   cfg,
                   options.agentSessionKey,
                 );
+                const memorySearchConfig = resolveMemorySearchConfig(cfg, agentId);
+                const defaultSearchSources = memorySearchConfig?.searchSources;
+                const trustedConfiguredRecall = options.conversationRecall?.corpus === "configured";
+                const effectiveSearchSources = trustedConfiguredRecall
+                  ? memorySearchConfig?.sources
+                  : defaultSearchSources;
+                const trustedTranscriptRecall = options.conversationRecall !== undefined;
+                const configuredSessionSearch = defaultSearchSources?.includes("sessions") === true;
+                // Product recall may index transcripts without adding them to ordinary model search.
+                // Only trusted recall or explicit configuration may search those indexed transcripts.
                 const searchSources: MemorySource[] | undefined =
                   requestedCorpus === "sessions"
-                    ? (["sessions"] as MemorySource[])
+                    ? trustedTranscriptRecall || configuredSessionSearch
+                      ? (["sessions"] as MemorySource[])
+                      : defaultSearchSources
                     : requestedCorpus === "memory"
                       ? (["memory"] as MemorySource[])
-                      : undefined;
+                      : requestedCorpus == null || requestedCorpus === "all"
+                        ? effectiveSearchSources
+                        : undefined;
                 const createSearchOptions = (
                   signal: AbortSignal,
                   controlDeadline: (action: MemorySearchDeadlineAction) => void,
@@ -635,6 +678,7 @@ export function createMemorySearchTool(options: {
                         agentId,
                         purpose: memoryManagerPurpose,
                         acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
                       }),
                     ),
                   );
@@ -680,8 +724,13 @@ export function createMemorySearchTool(options: {
                       requesterSessionKey: options.agentSessionKey,
                       sandboxed: options.sandboxed === true,
                       hits: rawResults,
+                      conversationRecall: options.conversationRecall,
                     }),
                 );
+                if (searchSources) {
+                  const allowedSources = new Set<MemorySource>(searchSources);
+                  rawResults = rawResults.filter((hit) => allowedSources.has(hit.source));
+                }
                 if (requestedCorpus === "sessions") {
                   rawResults = rawResults.filter((hit) => hit.source === "sessions");
                 } else if (requestedCorpus === "memory") {
@@ -816,6 +865,7 @@ export function createMemoryGetTool(options: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
 }) {
   return createMemoryTool({
     options,
@@ -831,11 +881,7 @@ export function createMemoryGetTool(options: {
         const relPath = readStringParam(rawParams, "path", { required: true });
         const from = readPositiveIntegerParam(rawParams, "from");
         const lines = readPositiveIntegerParam(rawParams, "lines");
-        const requestedCorpus = readStringParam(rawParams, "corpus") as
-          | "memory"
-          | "wiki"
-          | "all"
-          | undefined;
+        const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
         const { readAgentMemoryFile, resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         if (requestedCorpus === "wiki") {
           const supplement = await getSupplementMemoryReadResult({
@@ -881,6 +927,7 @@ export function createMemoryGetTool(options: {
           agentId,
           purpose: "status",
           acquireLocalService: options.acquireLocalService,
+          withLease: options.withLease,
         });
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
@@ -903,3 +950,4 @@ export function createMemoryGetTool(options: {
       },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

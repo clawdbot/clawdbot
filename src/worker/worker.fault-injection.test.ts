@@ -34,7 +34,6 @@ import {
 import {
   createWorkerEnvironmentService,
   type WorkerEnvironmentService,
-  type WorkerEnvironmentServiceOptions,
 } from "../gateway/worker-environments/service.js";
 import {
   createWorkerEnvironmentStore,
@@ -42,7 +41,13 @@ import {
 } from "../gateway/worker-environments/store.js";
 import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
-import { onAgentRuntimeEvent } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  onAgentRuntimeEvent,
+} from "../infra/agent-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
@@ -84,6 +89,7 @@ const HANDSHAKE = {
   openclawVersion: "fault-test",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
+type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
 const BUNDLE_ARTIFACT = {
   install: "bundle" as const,
   bundleHash: BUNDLE_HASH,
@@ -320,12 +326,13 @@ class ComposedGatewayHarness {
       baseLeafId?: string | null;
       initialSeq?: number;
       initialAckedSeq?: number;
+      runId?: string;
     } = {},
   ): WorkerClients {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
     const descriptor: WorkerLaunchDescriptor = {
-      version: 1,
+      version: 2,
       socketPath: this.socketPath,
       admission: {
         environmentId: ENVIRONMENT_ID,
@@ -336,17 +343,21 @@ class ComposedGatewayHarness {
         handshake: HANDSHAKE,
       },
       assignment: {
-        runId: RUN_ID,
+        runId: params.runId ?? RUN_ID,
         turnId: "fault-turn",
         prompt: "fault injection",
         workspaceDir: this.root,
         modelRef: MODEL_REF,
         inferenceOptions: {},
+        suppressPromptTranscript: false,
         initialMessages: [],
         transcript: { baseLeafId: params.baseLeafId ?? null, nextSeq: params.initialSeq ?? 1 },
         liveEvents: {
           ackedSeq: params.initialAckedSeq ?? 0,
           nextSeq: (params.initialAckedSeq ?? 0) + 1,
+        },
+        toolAuthority: {
+          allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
         },
       },
     };
@@ -857,10 +868,13 @@ describe("cloud worker milestone 2 fault injection", () => {
     await oldInferenceRejected;
 
     harness.providerPlan = { kind: "immediate", text: "new owner reply" };
+    // Milestone-3 admission binds the worker to a single run; the fresh owner
+    // must be admitted for the run it executes.
     const fresh = harness.createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: newEpoch,
       baseLeafId: oldCommit.newLeafId,
+      runId: "fresh-run",
     });
     clients.push(fresh);
     await fresh.connection.start();
@@ -913,6 +927,43 @@ describe("cloud worker milestone 2 fault injection", () => {
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
     expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
+  });
+
+  it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
+    const current = harness.createClients();
+    clients.push(current);
+    // A visible turn's run context is claimed by the gateway dispatch before the
+    // turn hands off to the worker. The worker's first live event must adopt that
+    // dispatch-owned context (seq advances from 1) and keep the run visible.
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(RUN_ID, {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      isControlUiVisible: true,
+      lifecycleGeneration,
+    });
+    try {
+      await current.connection.start();
+
+      await expect(
+        Promise.all(
+          ["one", "two"].map((delta) =>
+            current.live.emit(RUN_ID, { kind: "assistant", payload: { text: delta, delta } }),
+          ),
+        ),
+      ).resolves.toHaveLength(2);
+
+      expect(harness.liveDeltas).toEqual(["one", "two"]);
+      expect(
+        harness
+          .requestParams("worker.live-event")
+          .map((request) => (request as WorkerLiveEventParams).seq),
+      ).toEqual([1, 2]);
+      expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
+    } finally {
+      clearAgentRunContext(RUN_ID);
+    }
   });
 
   it("settles stop during an in-flight commit without retrying or spinning", async () => {

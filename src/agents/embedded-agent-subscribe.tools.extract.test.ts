@@ -13,6 +13,22 @@ function normalizeTelegramMessagingTargetForTest(raw: string): string | undefine
 }
 
 describe("extractMessagingToolSend", () => {
+  it.each(["conversations_send", "conversations_turn"])(
+    "records opaque targets for %s",
+    (toolName) => {
+      expect(
+        extractMessagingToolSend(toolName, {
+          conversationRef: "conv_0123456789abcdef0123456789abcdef",
+          message: "hello",
+        }),
+      ).toEqual({
+        tool: toolName,
+        provider: "conversation",
+        to: "conv_0123456789abcdef0123456789abcdef",
+      });
+    },
+  );
+
   beforeEach(() => {
     // Active registry state drives provider-specific extraction; reset it for
     // each case so channel plugin behavior is deterministic.

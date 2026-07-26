@@ -24,7 +24,6 @@ import { dismissSystemProfileImportPrompt } from "../system-profile-import-state
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import {
-  asyncBrowserRoute,
   jsonBrowserError,
   jsonError,
   runProfileRouteOperation,
@@ -108,17 +107,14 @@ function registerBasicProfilePost(
     profileCtx: ProfileContext;
   }) => Promise<void>,
 ) {
-  app.post(
-    path,
-    asyncBrowserRoute(async (req, res) => {
-      await withBasicProfileRoute({
-        req,
-        res,
-        ctx,
-        run: async (profileCtx) => await run({ req, res, profileCtx }),
-      });
-    }),
-  );
+  app.post(path, async (req, res) => {
+    await withBasicProfileRoute({
+      req,
+      res,
+      ctx,
+      run: async (profileCtx) => await run({ req, res, profileCtx }),
+    });
+  });
 }
 
 async function withProfilesServiceMutation(params: {
@@ -347,108 +343,90 @@ function parseHeadlessStartOverride(params: {
 
 /** Register basic browser lifecycle, status, doctor, and profile endpoints. */
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
-  app.get(
-    "/system-profiles",
-    asyncBrowserRoute(async (req, res) => {
-      await sendBasicJsonResponse({
-        res,
-        run: async () => {
-          const service = createBrowserProfilesService(ctx);
-          return {
-            systemProfiles: await service.listSystemProfiles(
-              toStringOrEmpty(req.query.browser) || undefined,
-            ),
-          };
-        },
-      });
-    }),
-  );
+  app.get("/system-profiles", async (req, res) => {
+    await sendBasicJsonResponse({
+      res,
+      run: async () => {
+        const service = createBrowserProfilesService(ctx);
+        return {
+          systemProfiles: await service.listSystemProfiles(
+            toStringOrEmpty(req.query.browser) || undefined,
+          ),
+        };
+      },
+    });
+  });
 
-  app.get(
-    "/system-profile-import/status",
-    asyncBrowserRoute(async (_req, res) => {
-      await sendBasicJsonResponse({
-        res,
-        run: async () => await createBrowserProfilesService(ctx).getSystemProfileImportStatus(),
-      });
-    }),
-  );
+  app.get("/system-profile-import/status", async (_req, res) => {
+    await sendBasicJsonResponse({
+      res,
+      run: async () => await createBrowserProfilesService(ctx).getSystemProfileImportStatus(),
+    });
+  });
 
-  app.post(
-    "/system-profile-import/dismiss",
-    asyncBrowserRoute(async (_req, res) => {
-      await sendBasicJsonResponse({
-        res,
-        run: async () => {
-          await dismissSystemProfileImportPrompt();
-          return { ok: true };
-        },
-      });
-    }),
-  );
+  app.post("/system-profile-import/dismiss", async (_req, res) => {
+    await sendBasicJsonResponse({
+      res,
+      run: async () => {
+        await dismissSystemProfileImportPrompt();
+        return { ok: true };
+      },
+    });
+  });
 
   // List all profiles with their status
-  app.get(
-    "/profiles",
-    asyncBrowserRoute(async (_req, res) => {
-      try {
-        const service = createBrowserProfilesService(ctx);
-        const profiles = await service.listProfiles();
-        res.json({ profiles });
-      } catch (err) {
-        return handleBrowserRouteError(res, err);
-      }
-    }),
-  );
+  app.get("/profiles", async (_req, res) => {
+    try {
+      const service = createBrowserProfilesService(ctx);
+      const profiles = await service.listProfiles();
+      res.json({ profiles });
+    } catch (err) {
+      return handleBrowserRouteError(res, err);
+    }
+  });
 
   // Get status (profile-aware)
-  app.get(
-    "/",
-    asyncBrowserRoute(async (req, res) => {
-      const profileCtx = resolveProfileContext(req, res, ctx);
-      if (!profileCtx) {
-        return;
-      }
-      try {
-        const status = await runProfileRouteOperation({
-          profileCtx,
-          signal: req.signal,
-          run: async (signal) => await buildBrowserStatus(ctx, profileCtx, signal),
-        });
-        res.json(status);
-      } catch (err) {
-        return handleBrowserRouteError(res, err);
-      }
-    }),
-  );
+  app.get("/", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    try {
+      const status = await runProfileRouteOperation({
+        profileCtx,
+        signal: req.signal,
+        run: async (signal) => await buildBrowserStatus(ctx, profileCtx, signal),
+      });
+      res.json(status);
+    } catch (err) {
+      return handleBrowserRouteError(res, err);
+    }
+  });
 
-  app.get(
-    "/doctor",
-    asyncBrowserRoute(async (req, res) => {
-      const profileCtx = resolveProfileContext(req, res, ctx);
-      if (!profileCtx) {
-        return;
-      }
-      try {
-        const report = await runProfileRouteOperation({
-          profileCtx,
-          signal: req.signal,
-          run: async (signal) => {
-            const status = await buildBrowserStatus(ctx, profileCtx, signal);
-            const doctorReport = buildBrowserDoctorReport({ status });
-            if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-              doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
-              doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
-            }
-            return doctorReport;
-          },
-        });
-        res.json(report);
-      } catch (err) {
-        return handleBrowserRouteError(res, err);
-      }
-    }),
-  );
+  app.get("/doctor", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    try {
+      const report = await runProfileRouteOperation({
+        profileCtx,
+        signal: req.signal,
+        run: async (signal) => {
+          const status = await buildBrowserStatus(ctx, profileCtx, signal);
+          const doctorReport = buildBrowserDoctorReport({ status });
+          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
+            doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
+            doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
+          }
+          return doctorReport;
+        },
+      });
+      res.json(report);
+    } catch (err) {
+      return handleBrowserRouteError(res, err);
+    }
+  });
 
   // Start browser (profile-aware)
   registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
@@ -480,91 +458,82 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
   });
 
   // Create a new profile
-  app.post(
-    "/profiles/create",
-    asyncBrowserRoute(async (req, res) => {
-      const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
-      const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
-      const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
-      const userDataDir = toStringOrEmpty((req.body as { userDataDir?: unknown })?.userDataDir);
-      const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver);
+  app.post("/profiles/create", async (req, res) => {
+    const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
+    const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
+    const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
+    const userDataDir = toStringOrEmpty((req.body as { userDataDir?: unknown })?.userDataDir);
+    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver);
 
-      if (!name) {
-        return jsonError(res, 400, "name is required");
-      }
-      if (driver && driver !== "openclaw" && driver !== "clawd" && driver !== "existing-session") {
-        return jsonError(
-          res,
-          400,
-          `unsupported profile driver "${driver}"; use "openclaw", "clawd", or "existing-session"`,
-        );
-      }
-
-      await withProfilesServiceMutation({
+    if (!name) {
+      return jsonError(res, 400, "name is required");
+    }
+    if (driver && driver !== "openclaw" && driver !== "clawd" && driver !== "existing-session") {
+      return jsonError(
         res,
-        ctx,
-        run: async (service) =>
-          await service.createProfile({
-            name,
-            color: color || undefined,
-            cdpUrl: cdpUrl || undefined,
-            userDataDir: userDataDir || undefined,
-            driver:
-              driver === "existing-session"
-                ? "existing-session"
-                : driver === "openclaw" || driver === "clawd"
-                  ? "openclaw"
-                  : undefined,
-          }),
-      });
-    }),
-  );
+        400,
+        `unsupported profile driver "${driver}"; use "openclaw", "clawd", or "existing-session"`,
+      );
+    }
 
-  app.post(
-    "/profiles/import",
-    asyncBrowserRoute(async (req, res) => {
-      const body = (req.body ?? {}) as Record<string, unknown>;
-      // Fail closed on a malformed domain filter: a caller that meant to scope
-      // the import must never silently import every cookie instead.
-      let domains: string[] | undefined;
-      try {
-        domains = parseSystemProfileDomains(body.domains);
-      } catch (err) {
-        return jsonError(res, 400, err instanceof Error ? err.message : "invalid domains");
-      }
-      try {
-        const service = createBrowserProfilesService(ctx);
-        const result = await service.importSystemProfile(
-          {
-            browser: toStringOrEmpty(body.browser) || undefined,
-            systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
-            into: toStringOrEmpty(body.into) || undefined,
-            domains,
-            makeDefault: toBoolean(body.makeDefault) ?? false,
-          },
-          { signal: req.signal },
-        );
-        res.json(result);
-      } catch (err) {
-        return handleBrowserRouteError(res, err);
-      }
-    }),
-  );
+    await withProfilesServiceMutation({
+      res,
+      ctx,
+      run: async (service) =>
+        await service.createProfile({
+          name,
+          color: color || undefined,
+          cdpUrl: cdpUrl || undefined,
+          userDataDir: userDataDir || undefined,
+          driver:
+            driver === "existing-session"
+              ? "existing-session"
+              : driver === "openclaw" || driver === "clawd"
+                ? "openclaw"
+                : undefined,
+        }),
+    });
+  });
+
+  app.post("/profiles/import", async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    // Fail closed on a malformed domain filter: a caller that meant to scope
+    // the import must never silently import every cookie instead.
+    let domains: string[] | undefined;
+    try {
+      domains = parseSystemProfileDomains(body.domains);
+    } catch (err) {
+      return jsonError(res, 400, err instanceof Error ? err.message : "invalid domains");
+    }
+    try {
+      const service = createBrowserProfilesService(ctx);
+      const result = await service.importSystemProfile(
+        {
+          browser: toStringOrEmpty(body.browser) || undefined,
+          systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
+          into: toStringOrEmpty(body.into) || undefined,
+          domains,
+          makeDefault: toBoolean(body.makeDefault) ?? false,
+        },
+        { signal: req.signal },
+      );
+      res.json(result);
+    } catch (err) {
+      return handleBrowserRouteError(res, err);
+    }
+  });
 
   // Delete a profile
-  app.delete(
-    "/profiles/:name",
-    asyncBrowserRoute(async (req, res) => {
-      const name = toStringOrEmpty(req.params.name);
-      if (!name) {
-        return jsonError(res, 400, "profile name is required");
-      }
+  app.delete("/profiles/:name", async (req, res) => {
+    const name = toStringOrEmpty(req.params.name);
+    if (!name) {
+      return jsonError(res, 400, "profile name is required");
+    }
 
-      await withProfilesServiceMutation({
-        res,
-        ctx,
-        run: async (service) => await service.deleteProfile(name),
-      });
-    }),
-  );
+    await withProfilesServiceMutation({
+      res,
+      ctx,
+      run: async (service) => await service.deleteProfile(name),
+    });
+  });
 }

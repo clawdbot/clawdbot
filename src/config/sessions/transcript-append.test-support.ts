@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
   acquireSessionWriteLock,
@@ -12,27 +11,55 @@ import {
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import {
-  appendJsonlEntry,
-  appendSerializedJsonlEntry,
-  serializeJsonlEntry,
-  serializeJsonlLine,
-  writeJsonlEntry,
-  writeJsonlLines,
-} from "./transcript-jsonl.js";
+import { serializeJsonlEntry, serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
-import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
 const transcriptAppendQueue = new KeyedAsyncQueue();
+
+async function writeJsonlEntry(
+  filePath: string,
+  entry: unknown,
+  options?: { encoding?: BufferEncoding; flag?: string; mode?: number },
+): Promise<void> {
+  await fs.writeFile(filePath, serializeJsonlEntry(entry), {
+    encoding: options?.encoding ?? "utf-8",
+    ...(options?.flag ? { flag: options.flag } : {}),
+    ...(options?.mode !== undefined ? { mode: options.mode } : {}),
+  });
+}
+
+async function appendSerializedJsonlEntry(
+  filePath: string,
+  serializedEntry: string,
+): Promise<void> {
+  const handle = await fs.open(filePath, "a+", 0o600);
+  try {
+    const stat = await handle.stat();
+    let prefixNewline = false;
+    if (stat.size > 0) {
+      const lastByte = Buffer.allocUnsafe(1);
+      const { bytesRead } = await handle.read(lastByte, 0, 1, stat.size - 1);
+      prefixNewline = bytesRead === 1 && lastByte[0] !== 0x0a;
+    }
+    await handle.appendFile(`${prefixNewline ? "\n" : ""}${serializedEntry}`, "utf-8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function appendJsonlEntry(filePath: string, entry: unknown): Promise<void> {
+  await appendSerializedJsonlEntry(filePath, serializeJsonlEntry(entry));
+}
 
 type TranscriptLeafInfo = {
   leafId?: string;
@@ -390,7 +417,7 @@ async function resolveTranscriptAppendQueueKey(transcriptPath: string): Promise<
   }
 }
 
-export async function withSessionTranscriptAppendQueue<T>(
+async function withSessionTranscriptAppendQueue<T>(
   transcriptPath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -400,7 +427,7 @@ export async function withSessionTranscriptAppendQueue<T>(
   return await transcriptAppendQueue.enqueue(queueKey, fn);
 }
 
-export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
+type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
   message: TMessage;
   now?: number;
@@ -416,7 +443,7 @@ export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   onHeaderCreated?: (serializedHeader: string) => void;
 };
 
-export type AppendSessionTranscriptMessageResult<TMessage> = {
+type AppendSessionTranscriptMessageResult<TMessage> = {
   messageId: string;
   message: TMessage;
   appended: boolean;
@@ -442,63 +469,9 @@ export async function appendSessionTranscriptMessage<TMessage>(
 export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
 ): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
-  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
-    sessionFile: params.transcriptPath,
-  });
-  if (activeLockRunner) {
-    // Active prompt-stream writes must acquire the session lock before joining
-    // the append FIFO; otherwise a hook that already owns the lock can deadlock
-    // behind the prompt append it is blocking.
-    let publishedHeader: string | undefined;
-    return await activeLockRunner(
-      () =>
-        withSessionTranscriptAppendQueue(params.transcriptPath, () =>
-          appendSessionTranscriptMessageLocked({
-            ...params,
-            onHeaderCreated: (header) => {
-              publishedHeader = header;
-            },
-          }),
-        ),
-      {
-        publishOwnedWrite: true,
-        resolvePublishedEntries: (result) => [
-          ...(publishedHeader ? [{ kind: "header" as const, serialized: publishedHeader }] : []),
-          ...(result?.appended === true ? [{ kind: "id" as const, id: result.messageId }] : []),
-        ],
-        resolvePublishedEntriesAfterFailure: () =>
-          publishedHeader ? [{ kind: "header", serialized: publishedHeader }] : [],
-      },
-    );
-  }
   return await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
     withSessionTranscriptWriteLock(params, () => appendSessionTranscriptMessageLocked(params)),
   );
-}
-
-/**
- * Appends a message while the caller already owns the transcript write lock and
- * append FIFO. Batch writers use this to keep queue-before-lock ordering while
- * reusing the same file lock for multiple transcript rows.
- */
-export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage> & {
-    prepareMessageAfterIdempotencyCheck: (message: TMessage) => TMessage | undefined;
-  },
-): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
-export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<AppendSessionTranscriptMessageResult<TMessage>>;
-export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
-  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
-    sessionFile: params.transcriptPath,
-  });
-  if (!activeLockRunner) {
-    throw new Error("Owned transcript write lock is required for batch transcript append");
-  }
-  return await activeLockRunner(() => appendSessionTranscriptMessageLocked(params));
 }
 
 type AppendSessionTranscriptEventParams = {
@@ -511,24 +484,6 @@ type AppendSessionTranscriptEventParams = {
 export async function appendSessionTranscriptEvent(
   params: AppendSessionTranscriptEventParams,
 ): Promise<void> {
-  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
-    sessionFile: params.transcriptPath,
-  });
-  if (activeLockRunner) {
-    await activeLockRunner(
-      () =>
-        withSessionTranscriptAppendQueue(params.transcriptPath, () =>
-          appendSessionTranscriptEventLocked(params),
-        ),
-      {
-        publishOwnedWrite: true,
-        resolvePublishedEntries: (result) => [
-          { kind: "serialized", serialized: result.serializedEntry },
-        ],
-      },
-    );
-    return;
-  }
   await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
     withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
   );

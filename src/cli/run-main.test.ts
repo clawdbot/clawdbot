@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveGatewayRunPreBootstrapOptions } from "./gateway-run-argv.js";
-import { resolvePrecomputedSubcommandHelpCommand } from "./precomputed-help.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
@@ -48,6 +47,15 @@ const browserCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
       id: "browser",
       enabledByDefault: true,
       commandAliases: [{ name: "browser" }],
+    },
+  ],
+};
+
+const workboardCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
+  plugins: [
+    {
+      id: "workboard",
+      commandAliases: [{ name: "workboard" }],
     },
   ],
 };
@@ -223,6 +231,7 @@ describe("shouldStartProxyForCli", () => {
   });
 
   it("skips managed proxy routing for bare parent default help", () => {
+    expect(shouldStartProxyForCli(["node", "openclaw", "qa", "suite"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "plugins"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "channels"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "cron"])).toBe(false);
@@ -283,70 +292,6 @@ describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
     expect(
       shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "status", "--help"]),
     ).toBe(false);
-  });
-});
-
-describe("resolvePrecomputedSubcommandHelpCommand", () => {
-  it("matches only strict allowlisted parent command help", () => {
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help"])).toBe(
-      "doctor",
-    );
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "-h"])).toBe(
-      "gateway",
-    );
-    expect(
-      resolvePrecomputedSubcommandHelpCommand([
-        "node",
-        "openclaw",
-        "--profile",
-        "work",
-        "--no-color",
-        "models",
-        "-h",
-      ]),
-    ).toBe("models");
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "plugins", "--help"])).toBe(
-      "plugins",
-    );
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "sessions", "--help"]),
-    ).toBe("sessions");
-    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "tasks", "-h"])).toBe(
-      "tasks",
-    );
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--version"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "-V"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand([
-        "node",
-        "openclaw",
-        "doctor",
-        "--help",
-        "--version",
-      ]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--version", "-h"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "--bogus", "doctor", "--help"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help", "--bogus"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help", "extra"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "status", "--help"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "status", "--help"]),
-    ).toBeNull();
   });
 });
 
@@ -466,6 +411,19 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain('"voice-call" plugin');
     expect(message).toContain("disabled by default");
     expect(message).toContain("openclaw plugins enable voice-call");
+  });
+
+  it("prefers CLI ownership for plugins that also register a slash command", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "workboard",
+      {},
+      { registry: workboardCommandAliasRegistry },
+    );
+
+    expect(message).toContain('"workboard" plugin');
+    expect(message).toContain("disabled by default");
+    expect(message).toContain("openclaw plugins enable workboard");
+    expect(message).not.toContain("runtime slash command");
   });
 
   it("returns null for CLI command aliases when disabled-by-default parent plugins are enabled", () => {

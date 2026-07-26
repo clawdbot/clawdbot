@@ -24,6 +24,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
   hasEnvironmentFileSource,
+  readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "../daemon/service-managed-env.js";
 import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
@@ -463,7 +464,7 @@ const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
 ]);
 
 /** Preserve safe operator-owned env vars from an existing service definition. */
-export function collectPreservedExistingServiceEnvVars(
+function collectPreservedExistingServiceEnvVars(
   existingEnvironment: Record<string, string | undefined> | undefined,
   managedServiceEnvKeys: Set<string>,
 ): Record<string, string | undefined> {
@@ -500,22 +501,6 @@ export function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
-function readExistingEnvironmentValueSource(params: {
-  existingEnvironmentValueSources?: Record<
-    string,
-    GatewayServiceEnvironmentValueSource | undefined
-  >;
-  normalizedKey: string;
-}): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(params.existingEnvironmentValueSources ?? {})) {
-    const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
-    if (key === params.normalizedKey) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
 function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
   existingEnvironment: Record<string, string | undefined> | undefined;
   existingEnvironmentValueSources?: Record<
@@ -540,10 +525,10 @@ function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
       continue;
     }
-    const source = readExistingEnvironmentValueSource({
-      existingEnvironmentValueSources: params.existingEnvironmentValueSources,
+    const source = readEnvironmentValueSource(
+      params.existingEnvironmentValueSources,
       normalizedKey,
-    });
+    );
     if (!hasEnvironmentFileSource(source)) {
       continue;
     }
@@ -651,10 +636,7 @@ async function buildGatewayInstallEnvironment(params: {
   const plan = createMutableServiceEnvPlan();
   addServiceEnvPlanEntries(plan, preservedExistingEnvironment, {
     valueSource: ({ normalizedKey }) =>
-      readExistingEnvironmentValueSource({
-        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-        normalizedKey,
-      }) ?? "inline",
+      readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
   addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(plan, configEnvironment, {});
@@ -775,6 +757,7 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
     port: params.port,
+    existingNodeOptions: params.existingEnvironment?.NODE_OPTIONS,
     launchdLabel:
       platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)
@@ -847,3 +830,4 @@ export function gatewayInstallErrorHint(platform = process.platform): string {
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
     : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,112 @@ import Foundation
 import OpenClawIPC
 import OpenClawKit
 
+actor MacNodeClaudeSessionCatalogWorker {
+    typealias Operation = @Sendable (String?) throws -> String
+
+    private struct PendingOperation {
+        var id: UUID
+        var paramsJSON: String?
+        var operation: Operation
+        var continuation: CheckedContinuation<String, Error>
+    }
+
+    private struct ActiveOperation {
+        var id: UUID
+        var task: Task<String, Error>
+        var continuation: CheckedContinuation<String, Error>?
+    }
+
+    static let shared = MacNodeClaudeSessionCatalogWorker(
+        listOperation: { try MacNodeClaudeSessionCatalog.list(paramsJSON: $0) },
+        readOperation: { try MacNodeClaudeSessionCatalog.read(paramsJSON: $0) })
+
+    private let listOperation: Operation
+    private let readOperation: Operation
+    private var pending: [PendingOperation] = []
+    private var active: ActiveOperation?
+
+    init(
+        listOperation: @escaping Operation,
+        readOperation: @escaping Operation)
+    {
+        self.listOperation = listOperation
+        self.readOperation = readOperation
+    }
+
+    func list(paramsJSON: String?) async throws -> String {
+        try await self.enqueue(paramsJSON: paramsJSON, operation: self.listOperation)
+    }
+
+    func read(paramsJSON: String?) async throws -> String {
+        try await self.enqueue(paramsJSON: paramsJSON, operation: self.readOperation)
+    }
+
+    private func enqueue(
+        paramsJSON: String?,
+        operation: @escaping Operation) async throws -> String
+    {
+        let id = UUID()
+        let result: String = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                self.pending.append(PendingOperation(
+                    id: id,
+                    paramsJSON: paramsJSON,
+                    operation: operation,
+                    continuation: continuation))
+                self.startNextIfNeeded()
+            }
+        } onCancel: {
+            Task { await self.cancel(id: id) }
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    private func startNextIfNeeded() {
+        guard self.active == nil, !self.pending.isEmpty else { return }
+        let pending = self.pending.removeFirst()
+        let task = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            return try pending.operation(pending.paramsJSON)
+        }
+        self.active = ActiveOperation(
+            id: pending.id,
+            task: task,
+            continuation: pending.continuation)
+        // One Claude filesystem operation at a time. Codex and other node commands
+        // remain free to run while this dedicated lane waits or scans.
+        Task {
+            let result = await task.result
+            self.finish(id: pending.id, result: result)
+        }
+    }
+
+    private func cancel(id: UUID) {
+        if let index = self.pending.firstIndex(where: { $0.id == id }) {
+            let pending = self.pending.remove(at: index)
+            pending.continuation.resume(throwing: CancellationError())
+            return
+        }
+        guard self.active?.id == id else { return }
+        self.active?.continuation?.resume(throwing: CancellationError())
+        self.active?.continuation = nil
+        self.active?.task.cancel()
+    }
+
+    private func finish(id: UUID, result: Result<String, Error>) {
+        guard self.active?.id == id else { return }
+        let continuation = self.active?.continuation
+        self.active = nil
+        continuation?.resume(with: result)
+        self.startNextIfNeeded()
+    }
+}
+
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
@@ -38,7 +144,7 @@ actor MacNodeRuntime {
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
         },
-        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil },
+        refreshCanvasSurfaceUrl: @escaping @Sendable (String?) async -> String? = { _ in nil },
         codexThreadCatalogEnabled: @escaping @Sendable () -> Bool = {
             MacNodeCodexThreadCatalog.shouldAdvertise()
         },
@@ -52,10 +158,10 @@ actor MacNodeRuntime {
             MacNodeClaudeSessionCatalog.shouldAdvertise()
         },
         claudeSessionListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try MacNodeClaudeSessionCatalog.list(paramsJSON: paramsJSON)
+            try await MacNodeClaudeSessionCatalogWorker.shared.list(paramsJSON: paramsJSON)
         },
         claudeSessionReadRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try MacNodeClaudeSessionCatalog.read(paramsJSON: paramsJSON)
+            try await MacNodeClaudeSessionCatalogWorker.shared.read(paramsJSON: paramsJSON)
         })
     {
         self.nodeHostWorker = nodeHostWorker
@@ -676,9 +782,9 @@ extension MacNodeRuntime {
         }
         let sessionKey = self.mainSessionKey
         _ = try await MainActor.run {
-            try CanvasManager.shared.show(
+            try CanvasManager.shared.prepare(
                 sessionKey: sessionKey,
-                path: a2uiUrl,
+                target: a2uiUrl,
                 trustedA2UIActions: true)
         }
         if await self.isA2UIReady(poll: true) {
@@ -686,9 +792,9 @@ extension MacNodeRuntime {
         }
         if let refreshedUrl = await self.canvasHostedSurfaceResolver.resolveA2UIURL(forceRefresh: true) {
             _ = try await MainActor.run {
-                try CanvasManager.shared.show(
+                try CanvasManager.shared.prepare(
                     sessionKey: sessionKey,
-                    path: refreshedUrl,
+                    target: refreshedUrl,
                     trustedA2UIActions: true)
             }
             if await self.isA2UIReady(poll: true) {

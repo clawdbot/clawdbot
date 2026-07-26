@@ -3,88 +3,32 @@ title: Codex plugin cold install
 scenario:
   id: codex-plugin-cold-install
   surface: runtime
-  runtimeParityTier: standard
+  runtimePairLane: core
   runtimeParityUsage:
     expectation: not-applicable
-    reason: Local plugin-lifecycle fixture only; no assistant turn runs.
+    reason: Packaged CLI/plugin-lifecycle proof only; no assistant turn runs.
   coverage:
     primary:
-      - runtime.codex-plugin.lifecycle
-    secondary:
-      - runtime.doctor-repair
-  objective: Verify a clean home that needs the Codex runtime reports a clear missing-plugin remediation, installs through doctor repair, and retries through Codex OAuth instead of OpenAI API-key auth.
+      - plugins.lifecycle-hot-install
+  objective: Verify a package-installed OpenClaw in a clean Docker home downloads the official Codex runtime on demand during OpenAI onboarding and records a loadable managed install.
   successCriteria:
-    - Missing Codex plugin emits the exact remediation string asserted by the fixture test.
-    - Doctor repair seeds the Codex plugin before retrying the agent turn.
-    - The retry uses the openai OAuth profile and never routes through the openai API-key profile.
+    - The prepared OpenClaw tarball and clean home contain neither @openclaw/codex nor @openai/codex before onboarding.
+    - Non-interactive OpenAI onboarding emits exactly one successful JSON terminal document and downloads @openclaw/codex into the managed npm root.
+    - The canonical SQLite plugin index records the npm install while openclaw.json contains no legacy plugins.installs record.
+    - The installed @openai/codex entrypoint executes its native Codex binary, reports a Codex CLI version, and the Codex plugin loads with the codex agent harness.
   docsRefs:
-    - docs/cli/doctor.md
     - docs/cli/plugins.md
     - docs/plugins/install-overrides.md
   codeRefs:
-    - extensions/qa-lab/src/codex-plugin.fixture.ts
-    - extensions/qa-lab/src/auth-profile.fixture.ts
-    - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
+    - src/commands/codex-runtime-plugin-install.ts
+    - src/plugins/installed-plugin-index-records.ts
+    - scripts/e2e/codex-on-demand-docker.sh
+    - scripts/e2e/lib/codex-on-demand/assertions.mjs
   execution:
-    kind: flow
-    summary: Exercise the Codex lifecycle fixture for missing plugin repair and retry auth routing.
-    config:
-      remediation: Codex plugin is required for Codex runtime. Run "openclaw doctor --fix" to install @openclaw/codex, then retry.
-
-flow:
-  steps:
-    - name: validates cold-install repair routing
-      actions:
-        - set: auth
-          value:
-            expr: await qaImport("./auth-profile.fixture.js")
-        - set: plugin
-          value:
-            expr: await qaImport("./codex-plugin.fixture.js")
-        - set: tmpRoot
-          value:
-            expr: await fs.mkdtemp(path.join(env.gateway?.workspaceDir ?? "/tmp", "qa-codex-cold-"))
-        - set: agentDir
-          value:
-            expr: path.join(tmpRoot, "agents", "qa", "agent")
-        - try:
-            actions:
-              - call: plugin.seedCodexPluginAt
-                args:
-                  - missing
-                  - ref: agentDir
-              - call: auth.seedAuthProfiles
-                args:
-                  - mixed
-                  - ref: agentDir
-              - set: missing
-                value:
-                  expr: "plugin.evaluateCodexPluginLifecycle({ plugin: await plugin.snapshotCodexPluginState(agentDir), auth: await auth.snapshotAuthProfiles(agentDir), hostVersion: plugin.CODEX_PLUGIN_CURRENT_VERSION })"
-              - assert:
-                  expr: "missing.status === 'repair-required'"
-                  message:
-                    expr: "`expected repair-required, got ${JSON.stringify(missing)}`"
-              - assert:
-                  expr: "missing.remediation === config.remediation"
-                  message: missing Codex plugin remediation drifted
-              - assert:
-                  expr: "missing.selectedAuthProfileId === auth.QA_CODEX_OAUTH_PROFILE_ID"
-                  message: missing-plugin repair must keep Codex OAuth selected
-              - call: plugin.seedCodexPluginAt
-                args:
-                  - current
-                  - ref: agentDir
-              - set: repaired
-                value:
-                  expr: "plugin.evaluateCodexPluginLifecycle({ plugin: await plugin.snapshotCodexPluginState(agentDir), auth: await auth.snapshotAuthProfiles(agentDir), hostVersion: plugin.CODEX_PLUGIN_CURRENT_VERSION })"
-              - assert:
-                  expr: "repaired.status === 'ready' && repaired.tokenRoute === 'codex-oauth'"
-                  message:
-                    expr: "`expected repaired Codex OAuth route, got ${JSON.stringify(repaired)}`"
-            finally:
-              - call: fs.rm
-                args:
-                  - ref: tmpRoot
-                  - recursive: true
-                    force: true
-      detailsExpr: "`missing=${missing.status} repaired=${repaired.status} route=${repaired.tokenRoute}`"
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the package-backed codex-on-demand Docker lane and verifies canonical install records, managed dependencies, plugin loading, and the terminal onboarding result.
+    timeoutMs: 1800000
+    args:
+      - --lane
+      - codex-on-demand

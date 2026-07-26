@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
@@ -36,22 +36,42 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
 >;
 
+describe("Codex incognito thread persistence", () => {
+  it("marks only incognito-shaped harness sessions ephemeral", () => {
+    const appServer = createAppServerOptions() as never;
+    const persistent = createAttemptParams({ provider: "openai" });
+    persistent.sessionKey = "agent:main:dashboard:persistent-thread";
+    const incognito = createAttemptParams({ provider: "openai" });
+    incognito.sessionKey = "agent:main:internal-session-effects:incognito-private-thread";
+
+    const build = (params: EmbeddedRunAttemptParams) =>
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      });
+
+    expect(build(persistent)).not.toHaveProperty("ephemeral");
+    expect(build(incognito)).toMatchObject({ ephemeral: true });
+  });
+});
+
 describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     const appServer = createAppServerOptions() as never;
     const start = buildThreadStartParams(params, {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
-      hostCrestodianActive: true,
+      hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
     });
     const resume = buildThreadResumeParams(params, {
       appServer,
       dynamicTools: [],
-      hostCrestodianActive: true,
+      hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
     });
@@ -78,9 +98,42 @@ describe("Codex ring-zero thread config", () => {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
-      hostCrestodianActive: false,
+      hostSystemAgentActive: false,
+      config: { "features.goals": true },
     });
     expect(normal.baseInstructions).toBeUndefined();
+    expect(normal.config?.["features.goals"]).toBe(false);
+  });
+});
+
+describe("Codex delegation capability", () => {
+  it("disables native delegation and goal continuation on start and resume", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.delegationCapability = "report_only";
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+      "features.goals": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.multi_agent"]).toBe(false);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(false);
+      expect(request.config?.["features.goals"]).toBe(false);
+    }
   });
 });
 
@@ -222,6 +275,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
       headers: {},
     },
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
@@ -606,6 +660,7 @@ describe("Codex app-server native code mode config", () => {
       },
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -750,6 +805,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
@@ -861,6 +917,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -882,6 +939,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -939,6 +997,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -963,6 +1022,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -982,6 +1042,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1011,6 +1072,7 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1034,6 +1096,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1166,6 +1229,7 @@ describe("Codex app-server turn params", () => {
         headers: {},
       },
       codeModeOnly: false,
+      loopDetectionPreToolUseRelay: true,
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "on-request" as const,
@@ -1179,12 +1243,19 @@ describe("Codex app-server turn params", () => {
     const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
     expect(resumeParams).toEqual({
       threadId: "thread-1",
+      excludeTurns: true,
+      initialTurnsPage: {
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      },
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       config: {
         "features.code_mode": true,
         "features.code_mode_only": false,
+        "features.goals": false,
         "features.apply_patch_streaming_events": true,
         "features.standalone_web_search": false,
         web_search: "cached",
@@ -1223,10 +1294,7 @@ describe("Codex app-server turn params", () => {
     params.thinkLevel = "medium";
     params.trigger = "heartbeat";
 
-    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {
-      heartbeatCollaborationInstructions:
-        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
-    });
+    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {});
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -1239,15 +1307,10 @@ describe("Codex app-server turn params", () => {
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
-    );
 
     params.bootstrapContextRunKind = "commitment-only";
     const commitmentCollaborationMode = buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-      heartbeatCollaborationInstructions:
-        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
     });
     expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
       "# Collaboration Mode: Default",
@@ -1258,16 +1321,11 @@ describe("Codex app-server turn params", () => {
     expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
       "This is an OpenClaw heartbeat turn",
     );
-    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
-      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
-    );
 
     params.trigger = "user";
     expect(
       buildTurnCollaborationMode(params, {
         turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-        heartbeatCollaborationInstructions:
-          "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
       }).settings.developer_instructions,
     ).toContain("Turn-only workspace instructions.");
     expect(
@@ -1466,6 +1524,153 @@ describe("Codex app-server model provider selection", () => {
     const collaborationMode = request.collaborationMode as { settings?: Record<string, unknown> };
     expect(request.model).toBe("local-model");
     expect(collaborationMode.settings?.model).toBe("local-model");
+  });
+});
+
+describe("Codex plugin binding recovery", () => {
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-plugin-recovery-"));
+    resetCodexTestBindingStore();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("does not rebuild a binding whose configured plugin is a settled negative", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-settled");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const build = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      },
+      fingerprint: "plugin-config-settled",
+      inputFingerprint: "plugin-input-settled",
+      policyContext: { fingerprint: "plugin-policy-settled", apps: {}, pluginAppIds: {} },
+      diagnostics: [],
+    }));
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThread({
+      ...common,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-input-settled",
+        enabledPluginConfigKeys: ["calendar"],
+        recoverablePluginConfigKeys: ["calendar"],
+        build,
+      },
+    });
+    await startOrResumeThread({
+      ...common,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-input-settled",
+        enabledPluginConfigKeys: ["calendar"],
+        recoverablePluginConfigKeys: [],
+        build,
+      },
+    });
+
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("rebuilds once when a settled negative binding still enables the plugin", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-settled-transition");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce({
+        enabled: true,
+        configPatch: { apps: { calendar: { enabled: true } } },
+        fingerprint: "plugin-config-active",
+        inputFingerprint: "plugin-input-settled",
+        policyContext: {
+          fingerprint: "plugin-policy-active",
+          apps: {
+            calendar: {
+              configKey: "calendar",
+              marketplaceName: "openai-curated" as const,
+              pluginName: "calendar",
+              allowDestructiveActions: false,
+              mcpServerNames: [],
+            },
+          },
+          pluginAppIds: { calendar: ["calendar"] },
+        },
+        diagnostics: [],
+      })
+      .mockResolvedValue({
+        enabled: true,
+        configPatch: { apps: { _default: { enabled: false } } },
+        fingerprint: "plugin-config-settled",
+        inputFingerprint: "plugin-input-settled",
+        policyContext: { fingerprint: "plugin-policy-settled", apps: {}, pluginAppIds: {} },
+        diagnostics: [],
+      });
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThread({
+      ...common,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-input-settled",
+        enabledPluginConfigKeys: ["calendar"],
+        recoverablePluginConfigKeys: ["calendar"],
+        build,
+      },
+    });
+    const settledProvider = {
+      enabled: true,
+      inputFingerprint: "plugin-input-settled",
+      enabledPluginConfigKeys: ["calendar"],
+      recoverablePluginConfigKeys: [],
+      build,
+    };
+    await startOrResumeThread({ ...common, pluginThreadConfig: settledProvider });
+    await startOrResumeThread({ ...common, pluginThreadConfig: settledProvider });
+
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/start",
+      "thread/resume",
+    ]);
   });
 });
 
@@ -2940,8 +3145,8 @@ describe("resolveReasoningEffort (#71946)", () => {
 
 describe("native Codex Ultra turn mapping", () => {
   it.each([
-    { modelId: "gpt-5.6-sol", expected: "ultra" },
-    { modelId: "gpt-5.6-terra", expected: "ultra" },
+    { modelId: "gpt-5.6-sol", expected: "max" },
+    { modelId: "gpt-5.6-terra", expected: "max" },
     { modelId: "gpt-5.6-luna", expected: "max" },
   ] as const)(
     "maps Ultra to $expected for $modelId with direct OpenAI API metadata",
@@ -2995,3 +3200,4 @@ describe("native Codex Ultra turn mapping", () => {
     expect(request).not.toHaveProperty("multiAgentMode");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,8 +12,12 @@ import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
-  testing as beforeToolCallTesting,
 } from "./agent-tools.before-tool-call.js";
+import {
+  adjustedParamsByToolCallId,
+  buildAdjustedParamsKey,
+  recordToolExecutionTracked,
+} from "./agent-tools.before-tool-call.state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
@@ -25,10 +29,64 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import {
+  createAskUserTool,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+} from "./tools/ask-user-tool.js";
+import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
 type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
+
+const pendingAskUserFinishes = new Set<() => Promise<void>>();
+
+async function activateAskUserPrompt(toolCallId: string, args: unknown) {
+  let questionId: string | undefined;
+  let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
+  const tool = createAskUserTool({
+    sessionKey: "agent:unit-session",
+    runId: "run-test",
+    gatewayCall: async (method, _opts, params) => {
+      if (method === "question.request") {
+        if (!params || typeof params !== "object" || !("id" in params)) {
+          throw new Error("question.request params missing id");
+        }
+        questionId = String(params.id);
+        return { id: questionId };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          resolveAnswer = resolve;
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    },
+  });
+  const pending = tool.execute(toolCallId, args);
+  let finished = false;
+  const finish = async () => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    await vi.waitFor(() => expect(resolveAnswer).toBeTypeOf("function"));
+    resolveAnswer?.({ status: "cancelled" });
+    await pending;
+    pendingAskUserFinishes.delete(finish);
+  };
+  pendingAskUserFinishes.add(finish);
+  await vi.waitFor(() => expect(questionId).toBeTypeOf("string"));
+  return { questionId: questionId!, finish };
+}
+
+afterEach(async () => {
+  await Promise.all([...pendingAskUserFinishes].map((finish) => finish()));
+  resetPendingAskUserQuestionsForTest();
+});
+
+const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
@@ -146,6 +204,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+describe("update_plan progress events", () => {
+  it("emits the typed full plan snapshot after a successful result", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const emitted: CapturedAgentEvent[] = [];
+    const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
+    try {
+      await handleToolExecutionEnd(ctx, {
+        type: "tool_execution_end",
+        toolName: "update_plan",
+        toolCallId: "plan-1",
+        isError: false,
+        result: {
+          content: [],
+          details: {
+            status: "updated",
+            explanation: "Implementation underway",
+            plan: [
+              { step: "Inspect", status: "completed" },
+              { step: "Patch", status: "in_progress" },
+            ],
+          },
+        },
+      });
+      await Promise.resolve();
+
+      const expected = {
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "openclaw",
+          explanation: "Implementation underway",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        },
+      };
+      expect(onAgentEvent).toHaveBeenCalledWith(expected);
+      expect(emitted).toContainEqual(expect.objectContaining(expected));
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`expected ${label} to be an object`);
@@ -195,6 +299,314 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  it("delivers a numbered ask_user prompt with question id association", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "deploy_target",
+          header: "Target",
+          question: "Where should this deploy?",
+          options: [
+            { label: "Staging (Recommended)", description: "Safer default" },
+            { label: "Production" },
+          ],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-call-1",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-call-1", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    const { questionId } = activation;
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: [
+        "Question for you:",
+        "",
+        "Target",
+        "Where should this deploy?",
+        "1. Staging (Recommended) - Safer default",
+        "2. Production",
+        "Other: reply with your own answer.",
+        "",
+        "Reply with the number, the option text, or your own answer.",
+      ].join("\n"),
+      channelData: {
+        askUser: {
+          questionId,
+        },
+      },
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          { type: "text", text: "Where should this deploy?" },
+          {
+            type: "text",
+            text: [
+              "- Staging (Recommended): Safer default",
+              "- Production",
+              "",
+              "Tap an option, or reply with the option text or your own answer.",
+            ].join("\n"),
+          },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging (Recommended)",
+                action: {
+                  type: "question",
+                  questionId,
+                  optionValue: "Staging (Recommended)",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId,
+                  optionValue: "Production",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await activation.finish();
+  });
+
+  it.each([
+    {
+      name: "multi-question",
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+        {
+          id: "region",
+          header: "Region",
+          question: "Which region?",
+          options: [{ label: "EU" }, { label: "US" }],
+        },
+      ],
+    },
+    {
+      name: "multi-select",
+      questions: [
+        {
+          id: "targets",
+          header: "Targets",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+          multiSelect: true,
+        },
+      ],
+    },
+  ])("keeps $name ask_user prompts text-only", async ({ questions }) => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const toolCallId = `ask-${questions[0]?.id ?? "unknown"}`;
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId,
+      args: { questions },
+    });
+    const activation = await activateAskUserPrompt(toolCallId, { questions });
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    const payload = onToolResult.mock.calls[0]?.[0];
+    expect(payload?.text).toContain(
+      questions.length > 1
+        ? "Reply by number or question id. Use a declared option where choices are fixed."
+        : "Reply with the number, the option text, or your own answer.",
+    );
+    expect(payload).not.toHaveProperty("presentation");
+    expect(payload).not.toHaveProperty("presentationTextMode");
+    await activation.finish();
+  });
+
+  it("reserves ask_user before awaiting block-reply flush", async () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    let releaseFlush: (() => void) | undefined;
+    onBlockReplyFlush.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    const pending = handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-flush",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-flush", args);
+    await Promise.resolve();
+    expect(onToolResult).not.toHaveBeenCalled();
+
+    releaseFlush?.();
+    await pending;
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await activation.finish();
+  });
+
+  it.each(["buffer", "callback"] as const)(
+    "releases ask_user reservation when the %s flush throws synchronously",
+    (flushKind) => {
+      const { ctx, onBlockReplyFlush } = createTestContext();
+      ctx.params.onToolResult = vi.fn();
+      const failure = new Error("flush failed");
+      if (flushKind === "buffer") {
+        vi.mocked(ctx.flushBlockReplyBuffer).mockImplementation(() => {
+          throw failure;
+        });
+      } else {
+        onBlockReplyFlush.mockImplementation(() => {
+          throw failure;
+        });
+      }
+      const args = {
+        questions: [
+          {
+            id: "target",
+            header: "Target",
+            question: "Where next?",
+            options: [{ label: "Staging" }, { label: "Production" }],
+          },
+        ],
+      };
+
+      expect(() =>
+        handleToolExecutionStart(ctx, {
+          type: "tool_execution_start",
+          toolName: "ask_user",
+          toolCallId: `ask-${flushKind}-failure`,
+          args,
+        }),
+      ).toThrow(failure);
+      expect(
+        reserveAskUserPromptDelivery({
+          toolCallId: `ask-${flushKind}-retry`,
+          sessionKey: "agent:unit-session",
+          questions: normalizeAskUserParams(args).questions,
+        }),
+      ).toBeDefined();
+    },
+  );
+
+  it("delivers only the ask_user prompt that reserved the session slot", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-first",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-first", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-second",
+      args,
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelData: {
+          askUser: {
+            questionId: activation.questionId,
+          },
+        },
+      }),
+    );
+    await activation.finish();
+  });
+
+  it("releases an undelivered ask_user reservation when execution is rejected", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-denied",
+      args,
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "ask_user",
+      toolCallId: "ask-denied",
+      isError: true,
+      result: { content: [{ type: "text", text: "denied" }] },
+    });
+    await Promise.resolve();
+    expect(onToolResult).not.toHaveBeenCalled();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-after-denial",
+      args,
+    });
+    const activation = await activateAskUserPrompt("ask-after-denial", args);
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await activation.finish();
+  });
+
   it("emits trace-only tool start diagnostics when trace logging is enabled", async () => {
     const { ctx, trace, isEnabled, warn } = createTestContext();
     isEnabled.mockImplementation((level: string) => level === "trace");
@@ -320,7 +732,86 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+  });
+
+  it("keeps read warning args previews on UTF-16 boundaries", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(200)}${emoji}tail`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("marks astral-only read warning args previews as truncated", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-astral-args",
+      args: emoji.repeat(101),
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${emoji.repeat(100)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("does not scan visible preview content beyond the raw warning bound", async () => {
+    const { ctx, warn } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-bounded-args",
+      args: `${" ".repeat(200)}hidden`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta).not.toHaveProperty("argsPreview");
+  });
+
+  it("does not split surrogate pairs when bounding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    // Whitespace collapsing must not let a surrogate half from the raw cap survive sanitization.
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(198)}  🎉`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(198)}…`);
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
@@ -692,6 +1183,71 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
   });
 
+  it("uses wrapped execution-boundary evidence when terminal events omit it", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-aborted-before-execution";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        result: { details: { status: "error", error: "tool timed out" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("prefers wrapped execution-boundary evidence over a terminal event default", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-cancelled-before-body";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        executionStarted: true,
+        result: { details: { status: "error", error: "cancelled before tool body" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
   it("keeps a policy-blocked cron mutation replay-safe", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-blocked";
@@ -863,6 +1419,66 @@ describe("handleToolExecutionEnd private result observer", () => {
   });
 });
 
+describe("handleToolExecutionEnd MCP App channel view tracking", () => {
+  const result = (viewId: string, title: string) => ({
+    details: {
+      mcpAppPreview: {
+        view: { id: viewId, title },
+        mcpApp: { viewId },
+      },
+    },
+  });
+
+  it("retains only the latest successful bounded view identity", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_first",
+      toolCallId: "mcp-first",
+      isError: false,
+      result: result("view-first", "First app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_failed",
+      toolCallId: "mcp-failed",
+      isError: true,
+      result: result("view-failed", "Failed app"),
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_latest",
+      toolCallId: "mcp-latest",
+      isError: false,
+      result: result("view-latest", "Latest app"),
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toEqual({ viewId: "view-latest" });
+  });
+
+  it("ignores mismatched or unbounded preview data", async () => {
+    const { ctx } = createTestContext();
+    const leaked = {
+      ...result("view-safe", "Safe app"),
+      html: "private html",
+      sessionKey: "agent:secret",
+      bearerToken: "secret",
+    };
+    leaked.details.mcpAppPreview.view.id = "different-view";
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "mcp_invalid",
+      toolCallId: "mcp-invalid",
+      isError: false,
+      result: leaked,
+    } as never);
+
+    expect(ctx.state.latestMcpAppChannelView).toBeUndefined();
+  });
+});
+
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
   it("records accepted sessions_spawn identifiers", async () => {
     const { ctx } = createTestContext();
@@ -975,6 +1591,56 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toMatchObject({
       toolName: "exec",
       middlewareError: true,
+    });
+  });
+
+  it("preserves an unresolved mutation across a later read failure", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        args: { path: "/tmp/demo.txt", content: "updated" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        isError: true,
+        result: { error: "permission denied" },
+      } as never,
+    );
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        args: { path: "/tmp/missing.txt" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        isError: true,
+        result: { error: "file not found" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "write",
+      error: "permission denied",
+      mutatingAction: true,
     });
   });
 
@@ -3451,3 +4117,4 @@ describe("control UI credential redaction (issue #72283)", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

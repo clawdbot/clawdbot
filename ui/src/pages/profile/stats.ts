@@ -5,14 +5,14 @@ import { formatDurationCompact } from "../../lib/format.ts";
 
 type DailyTokensEntry = { date: string; totalTokens: number };
 
-export type ProfileHeatmapDay = {
+type ProfileHeatmapDay = {
   date: string;
   tokens: number;
   /** 0 = no activity, 1-4 = nonzero-quartile intensity buckets. */
   level: 0 | 1 | 2 | 3 | 4;
 };
 
-export type ProfileHeatmapWeek = {
+type ProfileHeatmapWeek = {
   /** Sunday-first column; null pads days outside the covered range. */
   days: Array<ProfileHeatmapDay | null>;
 };
@@ -23,13 +23,13 @@ export type ProfileHeatmap = {
   monthLabels: string[];
 };
 
-export type ProfileStreaks = {
+type ProfileStreaks = {
   current: number;
   longest: number;
 };
 
-export type ProfileTopTool = { name: string; count: number };
-export type ProfileTopChannel = { channel: string; tokens: number };
+type ProfileTopTool = { name: string; count: number };
+type ProfileTopChannel = { channel: string; tokens: number };
 
 export type ProfileInsights = {
   topModel: string | null;

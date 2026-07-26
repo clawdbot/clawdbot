@@ -86,7 +86,7 @@ function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
 
 const accountStates = getSlashAccountStates();
 
-export function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
+function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
     handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -121,7 +121,7 @@ export function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   };
 }
 
-export function resolveSlashHandlerForCommand(params: {
+function resolveSlashHandlerForCommand(params: {
   teamId: string;
   command: string;
 }): SlashHandlerMatch {

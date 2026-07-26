@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -164,14 +165,40 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it("rejects a current agent database with an unexpected trigger", () => {
+  it("accepts only canonical memory path FTS triggers", () => {
     const database = createAgentDatabase();
     try {
+      ensureMemoryIndexSchema({
+        db: database,
+        cacheEnabled: true,
+        ftsEnabled: true,
+      });
+
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).not.toThrow();
+
+      database.exec("DROP TRIGGER memory_index_paths_fts_after_delete;");
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).toThrow("missing or drifted trigger memory_index_paths_fts_after_delete");
+      ensureMemoryIndexSchema({
+        db: database,
+        cacheEnabled: true,
+        ftsEnabled: true,
+      });
+
       database.exec(`
-        CREATE TRIGGER sessions_unexpected_delete_after_insert
-        AFTER INSERT ON sessions
+        CREATE TRIGGER memory_index_sources_unexpected_after_insert
+        AFTER INSERT ON memory_index_sources
         BEGIN
-          DELETE FROM sessions WHERE session_key = NEW.session_key;
+          UPDATE memory_index_state SET revision = revision + 100 WHERE id = 1;
         END;
       `);
 
@@ -180,7 +207,36 @@ describe("OpenClaw database maintenance schema validation", () => {
           agentId: "worker-1",
           pathname: "agent.sqlite",
         }),
-      ).toThrow("unexpected trigger sessions_unexpected_delete_after_insert");
+      ).toThrow("unexpected trigger memory_index_sources_unexpected_after_insert");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a drifted canonical memory path FTS trigger", () => {
+    const database = createAgentDatabase();
+    try {
+      ensureMemoryIndexSchema({
+        db: database,
+        cacheEnabled: true,
+        ftsEnabled: true,
+      });
+      database.exec(`
+        DROP TRIGGER memory_index_paths_fts_after_insert;
+        CREATE TRIGGER memory_index_paths_fts_after_insert
+        AFTER INSERT ON memory_index_sources
+        BEGIN
+          INSERT INTO memory_index_paths_fts (rowid, path, source)
+          VALUES (NEW.id, NEW.path || '-drifted', NEW.source);
+        END;
+      `);
+
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).toThrow("missing or drifted trigger memory_index_paths_fts_after_insert");
     } finally {
       database.close();
     }

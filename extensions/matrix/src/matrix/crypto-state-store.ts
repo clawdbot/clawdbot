@@ -93,7 +93,7 @@ export function openMatrixIdbSnapshotStoreOptions(storageRootDir: string) {
   };
 }
 
-export function readMatrixRecoveryKeyState(storageRootDir: string): MatrixStoredRecoveryKey | null {
+function readMatrixRecoveryKeyState(storageRootDir: string): MatrixStoredRecoveryKey | null {
   return readMatrixRecoveryKeyStateWithKey({
     storageRootDir,
     stateKey: STATE_KEY,
@@ -162,7 +162,7 @@ export async function writeMatrixRecoveryKeyStateToStore(params: {
   await params.store.register(STATE_KEY, payload);
 }
 
-export function readMatrixLegacyCryptoMigrationState(
+function readMatrixLegacyCryptoMigrationState(
   storageRootDir: string,
 ): MatrixLegacyCryptoMigrationState | null {
   return normalizeMatrixLegacyCryptoMigrationState(
@@ -230,10 +230,10 @@ export function writeMatrixIdbSnapshotJson(params: {
   });
 }
 
-export async function hasMatrixIdbSnapshotStateInStore(params: {
+export async function readMatrixIdbSnapshotJsonFromStore(params: {
   store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup">;
-}): Promise<boolean> {
-  return (await readIdbSnapshotJsonFromAsyncStore(params.store)) !== null;
+}): Promise<string | null> {
+  return await readIdbSnapshotJsonFromAsyncStore(params.store);
 }
 
 export async function writeMatrixIdbSnapshotJsonToStore(params: {

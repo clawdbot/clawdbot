@@ -258,7 +258,7 @@ export async function runSessionsSendA2AFlow(params: {
   }
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     sessionsSendA2ADeps = overrides
       ? {
@@ -268,3 +268,9 @@ export const testing = {
       : defaultSessionsSendA2ADeps;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsSendA2ATestApi")] = {
+    testing,
+  };
+}

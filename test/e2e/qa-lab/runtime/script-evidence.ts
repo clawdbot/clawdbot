@@ -10,11 +10,11 @@ import {
   type QaProviderMode,
 } from "../../../../extensions/qa-lab/api.js";
 import { readLoggingConfig } from "../../../../src/logging/config.js";
-import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact-internal.js";
 import { redactToolPayloadTextWithConfig } from "../../../../src/logging/redact.js";
+import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact.test-support.js";
 import { DEFAULT_CHILD_OUTPUT_TAIL_BYTES } from "../../../helpers/bounded-child-output.js";
 
-export const DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES = 32 * 1024;
+const DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES = 32 * 1024;
 const QA_SCRIPT_STATUS_MATCH_CARRY_CHARS = 1024;
 const QA_SCRIPT_LOG_OVERFLOW_MESSAGE = "QA evidence log omitted: safe redaction buffer exceeded.\n";
 const QA_SCRIPT_DETAILS_OVERFLOW_MESSAGE =
@@ -29,8 +29,6 @@ type QaScriptEvidenceTarget = {
   codeRefs?: readonly string[];
   docsRefs?: readonly string[];
   id: string;
-  primaryCoverageIds?: readonly string[];
-  secondaryCoverageIds?: readonly string[];
   sourcePath: string;
   title: string;
 };

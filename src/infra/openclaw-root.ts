@@ -214,13 +214,3 @@ function dedupeCandidates(candidates: readonly string[]): string[] {
 function createPackageRootCacheKey(candidates: readonly string[]): string {
   return candidates.join("\0");
 }
-
-export const testing = {
-  clearOpenClawPackageRootCaches(): void {
-    packageNameCache.clear();
-    packageRootCache.clear();
-    packageRootsCache.clear();
-    argv1CandidateCache.clear();
-  },
-};
-export { testing as __testing };

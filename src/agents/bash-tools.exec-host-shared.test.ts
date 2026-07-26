@@ -8,7 +8,6 @@ import {
   consumeExecApprovalFollowupRuntimeHandoff,
   isExecApprovalFollowupSessionRebound,
   registerExecApprovalFollowupRuntimeHandoff,
-  resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
@@ -17,6 +16,7 @@ import {
   enforceStrictInlineEvalApprovalBoundary,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
+  shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 
 const mocks = vi.hoisted(() => ({
@@ -72,7 +72,6 @@ describe("sendExecApprovalFollowupResult", () => {
       file: { version: 1, agents: {} },
       hash: "approvals-hash",
     });
-    resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
 
   function firstExecApprovalFollowupCall():
@@ -531,6 +530,42 @@ describe("buildExecApprovalPendingToolResult", () => {
     });
     expect(state.sentApproverDms).toBe(false);
     expect(state.unavailableReason).toBe("no-approval-route");
+  });
+
+  it("resolves terminal no-route approvals inline", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps waiting when a route exists or a decision arrived", () => {
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: null,
+        preResolvedDecision: null,
+      }),
+    ).toBe(false);
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: "allow-once",
+      }),
+    ).toBe(false);
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "no-approval-route",
+        preResolvedDecision: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      shouldResolveExecApprovalUnavailableInline({
+        unavailableReason: "initiating-platform-disabled",
+        preResolvedDecision: null,
+      }),
+    ).toBe(false);
   });
 
   it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {

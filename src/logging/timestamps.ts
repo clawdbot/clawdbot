@@ -3,7 +3,7 @@ const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;
 
-export function isValidTimeZone(tz: string): boolean {
+function isValidTimeZone(tz: string): boolean {
   const cached = validTimeZoneCache.get(tz);
   if (cached !== undefined) {
     return cached;

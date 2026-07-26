@@ -23,7 +23,7 @@ type JsonlReplayTurn = {
   transcriptPrefix: string;
 };
 
-export type JsonlReplayCellRunner = (params: {
+type JsonlReplayCellRunner = (params: {
   runtime: RuntimeId;
   transcriptPath: string;
   turn: JsonlReplayTurn;

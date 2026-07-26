@@ -1,0 +1,35 @@
+title: Matrix E2EE device verification completes SAS emoji compare
+scenario:
+  id: matrix-e2ee-device-sas-verification
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 78, "matrix:e2ee-deep": 12 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-device-sas-verification
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Device SAS Verification Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js
+  call: runMatrixQaE2eeDeviceSasVerificationScenario
+  args:
+    - expr: "scenarioContext"

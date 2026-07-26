@@ -174,16 +174,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "openclaw/extension-api",
-        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
-      },
-      {
         find: "@openclaw/qa-channel/api.js",
         replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
       },
       {
         find: "@openclaw/discord/api.js",
         replacement: path.join(repoRoot, "extensions", "discord", "api.ts"),
+      },
+      {
+        find: "@openclaw/matrix/test-api.js",
+        replacement: path.join(repoRoot, "extensions", "matrix", "test-api.ts"),
       },
       {
         find: "@openclaw/slack/api.js",
@@ -226,6 +226,16 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/gateway-protocol/frame-guards",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "frame-guards.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/gateway-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "gateway-error-details.ts",
+        ),
       },
       {
         find: "@openclaw/gateway-protocol/schema",
@@ -430,6 +440,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/phone-presentation",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "phone-presentation.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/record-coerce",
         replacement: path.join(
           repoRoot,
@@ -484,6 +504,9 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
+      sourcePackageAlias("session-url-contract", "parse"),
+      sourcePackageAlias("session-url-contract"),
+      sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
@@ -493,10 +516,6 @@ export const sharedVitestConfig = {
         find: `@openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "packages", "plugin-sdk", "src", `${subpath}.ts`),
       })),
-      {
-        find: "openclaw/plugin-sdk",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
-      },
     ],
   },
   test: {

@@ -6,10 +6,8 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-import {
-  setFalFetchGuardForTesting,
-  buildFalImageGenerationProvider,
-} from "./image-generation-provider.js";
+import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
+import { setFalFetchGuardForTesting } from "./test-support.js";
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
@@ -1618,3 +1616,4 @@ describe("fal image-generation provider", () => {
     expectFalDownload({ call: 2, url: "http://media.relay.internal/files/generated.png" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

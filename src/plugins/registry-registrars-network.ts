@@ -17,6 +17,7 @@ import type {
   OpenClawPluginChannelRegistration,
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
+  OpenClawPluginMcpServerConnectionResolver,
   PluginRegistrationMode,
 } from "./types.js";
 
@@ -228,6 +229,53 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     });
   };
 
+  const registerMcpServerConnectionResolver = (
+    record: PluginRecord,
+    resolver: OpenClawPluginMcpServerConnectionResolver,
+  ) => {
+    const serverName = normalizeOptionalString(resolver?.serverName);
+    if (!serverName || typeof resolver.resolve !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "MCP server connection resolver registration missing serverName or resolve",
+      });
+      return;
+    }
+    const existingIndex = registry.mcpServerConnectionResolvers.findIndex(
+      (entry) => entry.resolver.serverName === serverName,
+    );
+    const registration = {
+      pluginId: record.id,
+      pluginName: record.name,
+      resolver: {
+        serverName,
+        resolve: resolver.resolve,
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    };
+    if (existingIndex >= 0) {
+      const existing = registry.mcpServerConnectionResolvers[existingIndex];
+      // Resolver ownership is an authorization boundary: connection identity
+      // must not depend on plugin load order. First registration wins; a
+      // duplicate from another plugin is rejected, not silently replaced.
+      if (existing && existing.pluginId !== record.id) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `MCP server connection resolver for "${serverName}" rejected: already registered by plugin "${existing.pluginId}"`,
+        });
+        return;
+      }
+      registry.mcpServerConnectionResolvers[existingIndex] = registration;
+      return;
+    }
+    registry.mcpServerConnectionResolvers.push(registration);
+  };
+
   const registerChannel = (
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
@@ -335,6 +383,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registerSessionCatalog,
     registerHttpRoute,
     registerHostedMediaResolver,
+    registerMcpServerConnectionResolver,
     registerChannel,
   };
 }

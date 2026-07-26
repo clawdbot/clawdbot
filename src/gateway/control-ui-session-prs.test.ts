@@ -1,66 +1,20 @@
-import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadControlUiSessionPullRequests,
   parseControlUiSessionPullRequestsParams,
-  parseGitHubRemoteUrl,
-  resetControlUiSessionPullRequestCacheForTests,
-  type SessionPullRequestGitContext,
 } from "./control-ui-session-prs.js";
-
-function githubJson(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function requestUrl(input: RequestInfo | URL | undefined): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.href;
-  }
-  return input?.url ?? "";
-}
-
-function routedFetch(routes: Array<{ match: string; response: () => Response }>) {
-  return vi.fn(async (input: RequestInfo | URL) => {
-    const url = requestUrl(input);
-    const route = routes.find((candidate) => url.includes(candidate.match));
-    if (!route) {
-      throw new Error(`unexpected GitHub request: ${url}`);
-    }
-    return route.response();
-  }) as unknown as typeof fetch & { mock: { calls: unknown[][] } };
-}
-
-function pullListItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    number: 103469,
-    title: "fix(macos): tighten the link-browser tab header",
-    html_url: "https://github.com/openclaw/openclaw/pull/103469",
-    state: "open",
-    draft: false,
-    merged_at: null,
-    head: { sha: "a".repeat(40) },
-    base: { repo: { name: "openclaw", owner: { login: "openclaw" } } },
-    ...overrides,
-  };
-}
-
-const context: SessionPullRequestGitContext = {
-  owner: "openclaw",
-  repo: "openclaw",
-  branch: "claude/browser-tabs-tighter-header",
-};
+import {
+  evictPullRequestCache,
+  githubJson,
+  pullListItem,
+  requestUrl,
+  routedFetch,
+  testGitContext as context,
+} from "./control-ui-session-prs.test-support.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 const resolveGitContext = async () => context;
+let cacheEpochMs = Date.now();
 
 describe("parseGitHubRemoteUrl", () => {
   it("parses https, scp-like, and ssh remotes", () => {
@@ -97,15 +51,32 @@ describe("parseControlUiSessionPullRequestsParams", () => {
       { sessionKey: "global" },
     );
   });
+
+  it("accepts only an explicit refresh request", () => {
+    expect(
+      parseControlUiSessionPullRequestsParams({
+        sessionKey: "agent:main:main",
+        refresh: true,
+      }),
+    ).toEqual({ sessionKey: "agent:main:main", refresh: true });
+    expect(
+      parseControlUiSessionPullRequestsParams({
+        sessionKey: "agent:main:main",
+        refresh: false,
+      }),
+    ).toEqual({ sessionKey: "agent:main:main" });
+  });
 });
 
 describe("loadControlUiSessionPullRequests", () => {
   beforeEach(() => {
-    resetControlUiSessionPullRequestCacheForTests();
     vi.useFakeTimers();
+    cacheEpochMs += 10 * 60_000;
+    vi.setSystemTime(cacheEpochMs);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await evictPullRequestCache();
     vi.useRealTimers();
   });
 
@@ -210,7 +181,7 @@ describe("loadControlUiSessionPullRequests", () => {
       running: 1,
     });
 
-    resetControlUiSessionPullRequestCacheForTests();
+    vi.advanceTimersByTime(10 * 60_000);
     checkRuns[0] = { status: "completed", conclusion: "timed_out" };
     const failing = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
@@ -226,7 +197,7 @@ describe("loadControlUiSessionPullRequests", () => {
 
     // A stale conclusion means GitHub invalidated the run; it must not be
     // rolled up as green.
-    resetControlUiSessionPullRequestCacheForTests();
+    vi.advanceTimersByTime(10 * 60_000);
     checkRuns[0] = { status: "completed", conclusion: "stale" };
     const stale = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
@@ -310,6 +281,22 @@ describe("loadControlUiSessionPullRequests", () => {
     );
     expect(stale.rateLimited).toBe(true);
     expect(stale.pullRequests).toEqual(fresh.pullRequests);
+
+    const callsDuringBackoff = fetchImpl.mock.calls.length;
+    const explicitRefresh = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(explicitRefresh).toEqual(stale);
+    expect(fetchImpl.mock.calls).toHaveLength(callsDuringBackoff);
+
+    vi.advanceTimersByTime(61_000);
+    const stillBackedOff = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(stillBackedOff).toEqual(stale);
+    expect(fetchImpl.mock.calls).toHaveLength(callsDuringBackoff);
   });
 
   it("degrades permission 403s on optional fetches to chips without checks", async () => {
@@ -342,6 +329,105 @@ describe("loadControlUiSessionPullRequests", () => {
     );
     expect(result).toEqual({ pullRequests: [], rateLimited: false });
     expect(fetchImpl.mock.calls).toHaveLength(0);
+  });
+
+  it("refreshes a cached empty result after the assistant creates a PR", async () => {
+    let pulls: Record<string, unknown>[] = [];
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson(pulls) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+
+    const initial = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(initial.pullRequests).toEqual([]);
+
+    pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
+    const cached = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(cached.pullRequests).toEqual([]);
+
+    const forcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    const ordinaryFollower = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    const duplicateForcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    const refreshed = await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh]);
+    expect(refreshed.map((result) => result.pullRequests.map((item) => item.number))).toEqual([
+      [103469],
+      [103469],
+      [103469],
+    ]);
+    expect(
+      fetchImpl.mock.calls.filter((call) =>
+        requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("queues one forced refresh behind an ordinary in-flight lookup", async () => {
+    let resolveInitialPulls!: (response: Response) => void;
+    let signalInitialPullStarted!: () => void;
+    const initialPulls = new Promise<Response>((resolve) => {
+      resolveInitialPulls = resolve;
+    });
+    const initialPullStarted = new Promise<void>((resolve) => {
+      signalInitialPullStarted = resolve;
+    });
+    let pullListCalls = 0;
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls?head=",
+        response: () => {
+          pullListCalls += 1;
+          if (pullListCalls === 1) {
+            signalInitialPullStarted();
+            return initialPulls;
+          }
+          return githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]);
+        },
+      },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+
+    const initial = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    await initialPullStarted;
+    const forcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+    await Promise.resolve();
+    const ordinaryFollower = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    const duplicateForcedRefresh = loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", refresh: true },
+      { fetchImpl, resolveGitContext },
+    );
+
+    resolveInitialPulls(githubJson([]));
+    expect((await initial).pullRequests).toEqual([]);
+    expect(
+      (await Promise.all([forcedRefresh, ordinaryFollower, duplicateForcedRefresh])).map((result) =>
+        result.pullRequests.map((item) => item.number),
+      ),
+    ).toEqual([[103469], [103469], [103469]]);
+    expect(pullListCalls).toBe(2);
   });
 
   it("keeps branch metadata when the very first GitHub fetch is rate limited", async () => {
@@ -439,195 +525,5 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(result.branch?.createUrl).toBe(
       "https://github.com/openclaw/openclaw/pull/new/claude/fix%20%231",
     );
-  });
-});
-
-describe("session branch diff stats", () => {
-  const execFileAsync = promisify(execFile);
-  let root: string;
-
-  const git = (...args: string[]) =>
-    execFileAsync("git", ["-c", "user.email=test@openclaw.ai", "-c", "user.name=Test", ...args], {
-      cwd: root,
-    });
-
-  beforeEach(async () => {
-    resetControlUiSessionPullRequestCacheForTests();
-    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-prs-")));
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("counts committed and uncommitted changes vs the origin default merge base", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\ntwo\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    // Stand in for the remote default branch without a real remote.
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.writeFile(path.join(root, "a.txt"), "one\nthree\n");
-    await fs.writeFile(path.join(root, "b.txt"), "committed\n");
-    await git("add", "a.txt", "b.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    // Uncommitted work counts too: the row sizes the PR the push would open.
-    await fs.appendFile(path.join(root, "b.txt"), "pending\n");
-    // Untracked files count toward additions as well.
-    await fs.writeFile(path.join(root, "c.txt"), "brand new\n");
-
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 4,
-      deletions: 1,
-      createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
-    });
-  });
-
-  it("skips non-regular and binary untracked files without blocking", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    await fs.writeFile(path.join(root, "text.txt"), "alpha\nbeta\n");
-    await fs.writeFile(path.join(root, "blob.bin"), Buffer.from([0x50, 0x00, 0x4b, 0x03]));
-    if (process.platform !== "win32") {
-      // A named pipe must not block the stats path until the git timeout.
-      await execFileAsync("mkfifo", [path.join(root, "pipe")]);
-    }
-
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // 1 committed line + 2 untracked text lines; binary and pipe count 0.
-    expect(result.branch).toMatchObject({ additions: 3, deletions: 0 });
-  });
-
-  it("omits the branch payload when the remote branch has nothing to compare", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // origin/feature == origin/main: GitHub would answer "nothing to compare".
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("omits the branch payload until the branch exists on origin", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "local only");
-
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // GitHub's pull/new page 404s for unpushed branches, so no Create PR row.
-    expect(result.branch).toBeUndefined();
-  });
-
-  it("omits the branch payload when the default branch is unknown", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("checkout", "-b", "feature");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        // No defaultBranch: origin/HEAD unresolvable in this checkout.
-        resolveGitContext: async () => ({ ...context, branch: "feature", root }),
-      },
-    );
-
-    // Fail closed: without a default branch there is nothing to compare against.
-    expect(result.branch).toBeUndefined();
   });
 });

@@ -1105,16 +1105,15 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   preserveReplaySafeThinkingToolCallIds?: boolean;
   repairToolUseResultPairing?: boolean;
 }): AgentMessage[] {
-  const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
+  const paired = params.repairToolUseResultPairing
+    ? sanitizeToolUseResultPairing(params.messages)
+    : params.messages;
+  return sanitizeToolCallIdsForCloudCodeAssist(paired, params.mode, {
     preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
     duplicateToolCallIdStyle: params.duplicateToolCallIdStyle,
     preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
     allowedToolNames: params.allowedToolNames,
   });
-  if (!params.repairToolUseResultPairing) {
-    return sanitized;
-  }
-  return sanitizeToolUseResultPairing(sanitized);
 }
 
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
@@ -1209,3 +1208,4 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     return baseFn(model, nextContext as typeof context, options);
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

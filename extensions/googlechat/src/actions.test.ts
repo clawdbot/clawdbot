@@ -49,7 +49,7 @@ describe("googlechat message actions", () => {
       ...overrides,
       config: {
         groupPolicy: "open",
-        dm: { policy: "open" },
+        dmPolicy: "open",
         ...overrideConfig,
       },
     };
@@ -75,7 +75,7 @@ describe("googlechat message actions", () => {
       {
         enabled: true,
         credentialSource: "service-account",
-        config: { actions: { reactions: true } },
+        config: {},
       },
     ]);
 
@@ -86,14 +86,27 @@ describe("googlechat message actions", () => {
     expect(googlechatMessageActions.supportsAction?.({ action: "upload-file" })).toBe(false);
   });
 
-  it("keeps the legacy reaction gate from changing account-scoped discovery", () => {
-    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
-      enabled: true,
-      credentialSource: "service-account",
-      config: {
-        actions: { reactions: accountId === "work" },
+  it("does not expose actions for configured-unavailable file credentials", () => {
+    listEnabledGoogleChatAccounts.mockReturnValueOnce([
+      {
+        enabled: true,
+        credentialSource: "file",
+        tokenStatus: "configured_unavailable",
+        config: {},
       },
-    }));
+    ]);
+
+    expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
+  });
+
+  it("keeps account-scoped discovery send-only", () => {
+    resolveGoogleChatAccount.mockImplementation(
+      ({ accountId: _accountId }: { accountId?: string | null }) => ({
+        enabled: true,
+        credentialSource: "service-account",
+        config: {},
+      }),
+    );
 
     for (const accountId of ["default", "work"]) {
       expect(

@@ -8,11 +8,11 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
-  buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
   resolveQaControlUiRoot,
   startQaGatewayChild,
 } from "./gateway-child.js";
+import { readQaAuthProfiles } from "./providers/shared/auth-store.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -84,8 +84,8 @@ type SsrFetchCall = {
   auditContext?: string;
 };
 
-function parseAuthProfileStore(raw: string): AuthProfileStore {
-  return JSON.parse(raw) as AuthProfileStore;
+function readAuthProfileStore(stateDir: string, agentId: string): AuthProfileStore {
+  return readQaAuthProfiles(path.join(stateDir, "agents", agentId, "agent"));
 }
 
 function requireAuthProfile(
@@ -98,34 +98,6 @@ function requireAuthProfile(
   }
   return profile;
 }
-
-describe("forced runtime environment", () => {
-  it("pins forced Codex mock runs to the managed provider endpoint", () => {
-    expect(
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-        providerBaseUrl: "http://127.0.0.1:44080/v1/",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
-      OPENAI_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
-      CODEX_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
-    });
-  });
-
-  it("fails closed when a forced Codex mock run lacks its managed endpoint", () => {
-    expect(() =>
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-      }),
-    ).toThrow("forced Codex mock QA requires the managed mock provider URL");
-  });
-});
 
 function requireSsrFetchCall(index = 0): SsrFetchCall {
   const call = fetchWithSsrFGuardMock.mock.calls[index];
@@ -234,6 +206,18 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
     expect(message).toContain("launcher stage=mount-proc");
     expect(message).not.toContain("s".repeat(100));
     expect(message).not.toContain(prefix);
+  });
+
+  it("preserves complete Unicode code points at the retained log-tail boundary", () => {
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `P😀${"z".repeat(8_191)}`,
+    );
+
+    expect(message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(Buffer.from(message, "utf8").toString("utf8")).not.toContain("�");
   });
 });
 
@@ -741,12 +725,8 @@ describe("buildQaRuntimeEnv", () => {
     const configProfile = requireAuthProfile(cfg.auth?.profiles, "anthropic:qa-setup-token");
     expect(configProfile.provider).toBe("anthropic");
     expect(configProfile.mode).toBe("token");
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "main").profiles,
       "anthropic:qa-setup-token",
     );
     expect(storeProfile.type).toBe("token");
@@ -775,12 +755,8 @@ describe("buildQaRuntimeEnv", () => {
     expect(configProfile.displayName).toBe("QA live openai env credential");
 
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
       const storeProfile = requireAuthProfile(
-        parseAuthProfileStore(storeRaw).profiles,
+        readAuthProfileStore(stateDir, agentId).profiles,
         "qa-live-openai-env",
       );
       expect(storeProfile.type).toBe("api_key");
@@ -814,11 +790,7 @@ describe("buildQaRuntimeEnv", () => {
     }
 
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
-      const storeProfiles = parseAuthProfileStore(storeRaw).profiles;
+      const storeProfiles = readAuthProfileStore(stateDir, agentId).profiles;
       for (const [profileId, provider] of [
         ["qa-live-openai-env", "openai"],
         ["qa-live-openai-env", "openai"],
@@ -846,12 +818,8 @@ describe("buildQaRuntimeEnv", () => {
       },
     });
 
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "qa").profiles,
       "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
@@ -972,12 +940,8 @@ describe("buildQaRuntimeEnv", () => {
     expect(configProfile.provider).toBe("openai");
     expect(configProfile.mode).toBe("api_key");
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
       const storeProfile = requireAuthProfile(
-        parseAuthProfileStore(storeRaw).profiles,
+        readAuthProfileStore(stateDir, agentId).profiles,
         "qa-live-openai-env",
       );
       expect(storeProfile.type).toBe("api_key");
@@ -1024,12 +988,8 @@ describe("buildQaRuntimeEnv", () => {
       env,
     });
 
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "qa").profiles,
       "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
@@ -1070,12 +1030,8 @@ describe("buildQaRuntimeEnv", () => {
       },
     });
 
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readAuthProfileStore(stateDir, "main").profiles,
       "qa-live-openai-env",
     );
     expect(storeProfile.type).toBe("api_key");
@@ -1141,16 +1097,9 @@ describe("buildQaRuntimeEnv", () => {
     expect(anthropicConfigProfile.mode).toBe("api_key");
     expect(anthropicConfigProfile.displayName).toBe("QA mock anthropic credential");
 
-    // Store side: each agent dir should have its own auth-profiles.json
-    // containing the placeholder credential for each staged provider. This
-    // is what the scenario runner actually reads when it resolves auth
-    // before calling the mock.
+    // Store side: each agent dir has its own canonical SQLite credential rows.
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
-      const parsed = parseAuthProfileStore(storeRaw);
+      const parsed = readAuthProfileStore(stateDir, agentId);
       const openaiStoreProfile = requireAuthProfile(parsed.profiles, "qa-mock-openai");
       expect(openaiStoreProfile.type).toBe("api_key");
       expect(openaiStoreProfile.provider).toBe("openai");
@@ -1181,17 +1130,15 @@ describe("buildQaRuntimeEnv", () => {
     // Anthropic should NOT be staged when the caller restricts providers.
     expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
 
-    const qaStore = JSON.parse(
-      await readFile(path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
+    const qaStore = readAuthProfileStore(stateDir, "qa");
     const openaiStoreProfile = requireAuthProfile(qaStore.profiles, "qa-mock-openai");
     expect(openaiStoreProfile.provider).toBe("openai");
     expect(openaiStoreProfile.type).toBe("api_key");
     expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
 
-    // main/agent should not exist because it wasn't in the agentIds list.
+    // The main agent's canonical database should not exist because it was not requested.
     await expect(
-      readFile(path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+      lstat(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
     ).rejects.toThrow(/ENOENT/);
   });
 
@@ -1258,6 +1205,22 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("lets the gateway finish its bounded shutdown before process-tree escalation", () => {
+    expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
+      gracefulTimeoutMs: 30_000,
+      forceTimeoutMs: 10_000,
+    });
+    expect(
+      testing.resolveQaGatewayChildStopTimeouts({
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 2,
+      }),
+    ).toEqual({
+      gracefulTimeoutMs: 1,
+      forceTimeoutMs: 2,
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "fails closed when forced gateway process-group shutdown times out",
     async () => {
@@ -1277,6 +1240,23 @@ describe("buildQaRuntimeEnv", () => {
       ).rejects.toThrow("qa gateway process tree remained alive after forced shutdown");
     },
   );
+
+  it("treats Linux process groups with only dead members as stopped", () => {
+    const stats = [
+      "123 (gateway child) Z 1 123 123 0 -1 0",
+      "124 (helper (worker)) X 1 123 123 0 -1 0",
+      "125 (unrelated) S 1 999 999 0 -1 0",
+    ];
+
+    expect(testing.classifyLinuxProcessGroupStats(123, stats)).toBe(false);
+    expect(
+      testing.classifyLinuxProcessGroupStats(123, [
+        ...stats,
+        "126 (live helper) D 1 123 123 0 -1 0",
+      ]),
+    ).toBe(true);
+    expect(testing.classifyLinuxProcessGroupStats(456, stats)).toBeNull();
+  });
 
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -1307,10 +1287,12 @@ describe("buildQaRuntimeEnv", () => {
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
@@ -2174,12 +2156,45 @@ describe("qa bundled plugin dir", () => {
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
     expect(Object.keys(overrides)).toEqual(["openai"]);
-    expect(overrides["openai"]?.baseUrl).toBe("");
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
     expect(overrides["openai"]?.models).toEqual([]);
     expect(overrides["openai"]?.apiKey).toEqual({
       source: "env",
       id: "OPENCLAW_LIVE_CODEX_API_KEY",
     });
+  });
+
+  it("omits empty base URLs without dropping provider configs that inherit auth", async () => {
+    const configPath = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
+      "openclaw.json",
+    );
+    cleanups.push(async () => {
+      await rm(path.dirname(configPath), { recursive: true, force: true });
+    });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
+      providerIds: ["openai"],
+      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
+    });
+    expect(Object.keys(overrides)).toEqual(["openai"]);
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
+    expect(overrides["openai"]?.api).toBe("openai-responses");
   });
 
   it("does not copy OpenAI provider configs for custom OpenAI-compatible runs", async () => {
@@ -2282,3 +2297,4 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBe("2026.4.9");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

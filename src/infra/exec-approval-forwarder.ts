@@ -227,7 +227,7 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
   return { inline: false, text: formatFencedCodeBlock(command) };
 }
 
-export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
@@ -835,3 +835,4 @@ export function createExecApprovalForwarder(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

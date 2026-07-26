@@ -16,8 +16,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setDiscordRuntime, type DiscordRuntime } from "../runtime.js";
+import { setDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
+
+type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
@@ -107,6 +109,12 @@ function expectFields(
     expect(record[key]).toEqual(expected);
   }
   return record;
+}
+
+function expectThreadCreateOptionsWithoutArchiveOverride(value: unknown): void {
+  const options = requireRecord(value, "thread options");
+  expect(options.name).toBeTypeOf("string");
+  expect(options).not.toHaveProperty("autoArchiveMinutes");
 }
 
 function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
@@ -220,7 +228,6 @@ describe("thread binding lifecycle", () => {
           params.channelId,
           {
             name: params.threadName,
-            autoArchiveMinutes: 60,
           },
           {
             accountId: params.accountId,
@@ -895,12 +902,8 @@ describe("thread binding lifecycle", () => {
     });
     expect(hoisted.createThreadDiscord).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -945,12 +948,8 @@ describe("thread binding lifecycle", () => {
     expectFields(childBinding, "child binding", { channelId: "parent-1" });
     expect(hoisted.restGet).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -1117,12 +1116,8 @@ describe("thread binding lifecycle", () => {
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
       "parent-runtime",
     );
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -1180,12 +1175,8 @@ describe("thread binding lifecycle", () => {
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
       "1491611525914558667",
     );
-    expectFields(
+    expectThreadCreateOptionsWithoutArchiveOverride(
       mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
     );
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
@@ -1258,6 +1249,9 @@ describe("thread binding lifecycle", () => {
   it("binds current Discord DMs as direct conversation bindings", async () => {
     createTestThreadBindingManager({
       accountId: "default",
+      cfg: {
+        agents: { list: [{ id: "codex", default: true }] },
+      },
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
@@ -1292,6 +1286,9 @@ describe("thread binding lifecycle", () => {
       accountId: "default",
       conversationId: "user:1177378744822943744",
       parentConversationId: "user:1177378744822943744",
+    });
+    expectFields(requireRecord(bound, "bound session").metadata, "bound metadata", {
+      agentId: "codex",
     });
     const resolved = requireRecord(
       getSessionBindingService().resolveByConversation({
@@ -1921,3 +1918,4 @@ describe("thread binding lifecycle", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

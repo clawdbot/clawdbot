@@ -116,15 +116,15 @@ Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
 
-Agent-initiated `apply`, `reject`, and `quarantine` show an approval prompt by
-default. Set `skills.workshop.approvalPolicy` to `"auto"` to skip it in
-trusted environments.
+Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
+approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
+to require operator approval before those actions.
 
-The prompt identifies the proposal id and target skill, and shows the proposal
-description, support-file count, and body size. Approval requests are bounded
-to finish before the agent tool watchdog. If no decision arrives before the
-prompt expires, the lifecycle action does not run: the proposal stays pending
-and unchanged. Decide later in the Skill Workshop UI or run
+When approval is required, the prompt identifies the proposal id and target
+skill, and shows the proposal description, support-file count, and body size.
+Approval requests are bounded to finish before the agent tool watchdog. If no
+decision arrives before the prompt expires, the lifecycle action does not run:
+the proposal stays pending and unchanged. Decide later in the Skill Workshop UI or run
 `openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
 not retry an expired lifecycle action in a loop.
 
@@ -239,6 +239,32 @@ proposal. This built-in suggestion does not create or change a skill by itself. 
 UI, the Workshop tab offers the same setting as a **Self-learning** toggle in the page header, and
 as an enable button on the empty proposal board.
 
+### Scan past sessions
+
+The Control UI can review older work without enabling autonomous self-learning.
+Open **Plugins → Workshop** and select **Find skill ideas**. The scan starts with
+the newest eligible sessions and reviews a bounded window of substantial work.
+It skips cron, heartbeat, hook, subagent, ACP, plugin-owned, and internal review
+sessions, plus conversations with fewer than six model turns.
+
+The reviewer uses the selected agent's configured model and receives a
+secret-redacted, size-bounded transcript bundle. It applies the same conservative
+bar as experience review: a concrete recovery pattern or a stable procedure that
+would remove at least two future model or tool calls. Routine work and one-off
+facts should produce no proposal.
+
+One scan can create or revise at most three pending proposals. It cannot apply,
+reject, quarantine, or edit a live skill. The Workshop shows cumulative coverage,
+for example **20 sessions reviewed · Jun 18–today · 2 ideas found**. Select
+**Scan earlier work** to continue from the persisted oldest-session cursor. After
+the available history is exhausted, the action becomes **Scan new work**.
+
+Historical review is manual even when
+`skills.workshop.autonomous.enabled` is `false`. Each click starts a model run,
+so provider pricing and data-handling terms apply. The cursor and coverage counts
+are stored in the shared OpenClaw state database; transcript content is not copied
+into scan state.
+
 With autonomous capture enabled, OpenClaw can also perform a conservative review after successful,
 substantial work and after the whole agent system becomes idle. That isolated review can create or
 revise at most one pending proposal. It cannot update a live skill or apply, reject, or quarantine a
@@ -257,7 +283,7 @@ the proposal threshold, and troubleshooting.
         enabled: false,
       },
       allowSymlinkTargetWrites: false,
-      approvalPolicy: "pending",
+      approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
     },
@@ -265,13 +291,13 @@ the proposal threshold, and troubleshooting.
 }
 ```
 
-| Setting                    | Default     | Effect                                                                                                                                                                 |
-| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.      |
-| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
-| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
-| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
-| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+| Setting                    | Default  | Effect                                                                                                                                                              |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.enabled`       | `false`  | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.   |
+| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
+| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
+| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
+| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
 
 Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
 corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
@@ -298,6 +324,8 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | ---------------------------------- | ---------------- |
 | `skills.proposals.list`            | `operator.read`  |
 | `skills.proposals.inspect`         | `operator.read`  |
+| `skills.proposals.historyStatus`   | `operator.read`  |
+| `skills.proposals.historyScan`     | `operator.admin` |
 | `skills.proposals.create`          | `operator.admin` |
 | `skills.proposals.update`          | `operator.admin` |
 | `skills.proposals.revise`          | `operator.admin` |
@@ -314,6 +342,10 @@ Proposal descriptions are always capped at 160 bytes, independent of
 forwards free-text revision instructions to the owning agent's chat session
 instead of replacing `PROPOSAL.md` directly, for UIs that ask the agent to
 revise rather than submit literal new content.
+
+`historyStatus` and `historyScan` are Control UI support methods. `historyScan`
+accepts `direction: "older" | "newer"`; it always leaves results as pending
+proposals.
 
 ## Storage
 

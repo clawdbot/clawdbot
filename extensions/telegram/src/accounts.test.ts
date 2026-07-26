@@ -1,6 +1,6 @@
 // Telegram tests cover accounts plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +18,8 @@ import {
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 function warningLines(): string[] {
   return warnMock.mock.calls.map(([line]) => String(line));
@@ -37,12 +39,12 @@ function resolveAccountWithEnv(
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(runtimeEnvModule, "createSubsystemLogger").mockImplementation(() => {
+  vi.mocked(createSubsystemLogger).mockImplementation(() => {
     const logger = {
       warn: warnMock,
       child: () => logger,
     };
-    return logger as unknown as ReturnType<typeof runtimeEnvModule.createSubsystemLogger>;
+    return logger as unknown as ReturnType<typeof createSubsystemLogger>;
   });
 });
 

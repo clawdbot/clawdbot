@@ -2,12 +2,10 @@
 // remote, CLI override, env override, and config-secret connection flows.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveGatewayConnectionAuth,
-  type GatewayConnectionAuthOptions,
-} from "./connection-auth.js";
+import { resolveGatewayConnectionAuth } from "./connection-auth.js";
 
 type ResolvedAuth = { token?: string; password?: string };
+type GatewayConnectionAuthOptions = Parameters<typeof resolveGatewayConnectionAuth>[0];
 
 type ConnectionAuthCase = {
   name: string;

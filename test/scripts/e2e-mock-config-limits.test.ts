@@ -91,7 +91,7 @@ async function stopServer(child: ChildProcess) {
   child.kill("SIGTERM");
   await Promise.race([
     exited,
-    delay(1_000).then(() => {
+    delay(1_000, undefined, { ref: false }).then(() => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
@@ -156,6 +156,40 @@ describe("mock OpenAI response markers", () => {
         expect(response.status).toBe(200);
         expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
       }
+    });
+  });
+
+  it("drives the MCP App fixture tool before returning the visible marker", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const first = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [{ content: "mcp app conformance qa check", role: "user" }],
+          stream: false,
+          tools: [{ name: "fixture__show", parameters: { type: "object" }, type: "function" }],
+        }),
+      });
+      const firstBody = await first.json();
+      expect(firstBody.output?.[0]).toMatchObject({
+        arguments: "{}",
+        name: "fixture__show",
+        type: "function_call",
+      });
+
+      const second = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "mcp app conformance qa check", role: "user" },
+            { output: "initial-result", type: "function_call_output" },
+          ],
+          stream: false,
+        }),
+      });
+      const secondBody = await second.json();
+      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("MCP_APP_CONFORMANCE_READY");
     });
   });
 });

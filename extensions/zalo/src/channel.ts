@@ -38,7 +38,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -51,7 +54,7 @@ import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
-import { createZaloSetupWizardProxy, zaloSetupAdapter } from "./setup-core.js";
+import { createZaloSetupWizardProxy, zaloSetupAdapter, zaloSetupContract } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -113,7 +116,7 @@ const zaloSendResultAdapter = createAttachedChannelResultAdapter({
   sendMedia: sendZaloDelivery,
 });
 
-export const zaloMessageAdapter = defineChannelMessageAdapter({
+const zaloMessageAdapter = defineChannelMessageAdapter({
   id: "zalo",
   durableFinal: {
     capabilities: {
@@ -188,6 +191,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       id: "zalo",
       meta,
       setup: zaloSetupAdapter,
+      setupContract: zaloSetupContract,
       setupWizard: zaloSetupWizard,
       capabilities: {
         chatTypes: ["direct", "group"],
@@ -289,6 +293,9 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       chunker: chunkTextForOutbound,
       chunkerMode: "text",
       textChunkLimit: zaloTextChunkLimit,
+      // Core strips only conservative runtime markers. This delivery profile also
+      // removes model/tool XML and failed-tool traces before Zalo chunking.
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({
           ctx,

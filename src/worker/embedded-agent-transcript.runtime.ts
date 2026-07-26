@@ -4,126 +4,14 @@ import type { WorkerInferenceContext } from "../../packages/gateway-protocol/src
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionWriteLockRunner } from "../agents/sessions/agent-session.js";
-import type { AssistantMessage, Context, Message } from "../llm/types.js";
-import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
-
-function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
-  return {
-    type: "text" as const,
-    text: part.text,
-    ...(part.textSignature ? { textSignature: part.textSignature } : {}),
-  };
-}
-
-function cloneImageContent(part: { type: "image"; data: string; mimeType: string }) {
-  return { type: "image" as const, data: part.data, mimeType: part.mimeType };
-}
-
-function cloneUsage(message: AssistantMessage): WorkerTranscriptMessage & { role: "assistant" } {
-  return {
-    role: "assistant",
-    content: message.content.map((part) => {
-      if (part.type === "text") {
-        return cloneTextContent(part);
-      }
-      if (part.type === "thinking") {
-        return {
-          type: "thinking" as const,
-          thinking: part.thinking,
-          ...(part.thinkingSignature ? { thinkingSignature: part.thinkingSignature } : {}),
-          ...(part.redacted === undefined ? {} : { redacted: part.redacted }),
-        };
-      }
-      return {
-        type: "toolCall" as const,
-        id: part.id,
-        name: part.name,
-        arguments: structuredClone(part.arguments),
-        ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-        ...(part.executionMode ? { executionMode: part.executionMode } : {}),
-      };
-    }),
-    api: message.api,
-    provider: message.provider,
-    model: message.model,
-    ...(message.responseModel ? { responseModel: message.responseModel } : {}),
-    ...(message.responseId ? { responseId: message.responseId } : {}),
-    ...(message.diagnostics
-      ? {
-          diagnostics: message.diagnostics.map((diagnostic) => ({
-            type: diagnostic.type,
-            timestamp: diagnostic.timestamp,
-            ...(diagnostic.error
-              ? {
-                  error: {
-                    ...(diagnostic.error.name ? { name: diagnostic.error.name } : {}),
-                    message: diagnostic.error.message,
-                    ...(diagnostic.error.stack ? { stack: diagnostic.error.stack } : {}),
-                    ...(diagnostic.error.code === undefined ? {} : { code: diagnostic.error.code }),
-                  },
-                }
-              : {}),
-            ...(diagnostic.details ? { details: structuredClone(diagnostic.details) } : {}),
-          })),
-        }
-      : {}),
-    usage: {
-      input: message.usage.input,
-      output: message.usage.output,
-      cacheRead: message.usage.cacheRead,
-      cacheWrite: message.usage.cacheWrite,
-      ...(message.usage.contextUsage
-        ? { contextUsage: structuredClone(message.usage.contextUsage) }
-        : {}),
-      totalTokens: message.usage.totalTokens,
-      cost: {
-        input: message.usage.cost.input,
-        output: message.usage.cost.output,
-        cacheRead: message.usage.cost.cacheRead,
-        cacheWrite: message.usage.cost.cacheWrite,
-        total: message.usage.cost.total,
-        ...(message.usage.cost.totalOrigin ? { totalOrigin: message.usage.cost.totalOrigin } : {}),
-      },
-    },
-    stopReason: message.stopReason,
-    ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
-    ...(message.errorCode ? { errorCode: message.errorCode } : {}),
-    ...(message.errorType ? { errorType: message.errorType } : {}),
-    ...(message.errorBody ? { errorBody: message.errorBody } : {}),
-    timestamp: message.timestamp,
-  };
-}
-
-export function toWorkerTranscriptMessage(
-  message: AgentMessage,
-): WorkerTranscriptMessage | undefined {
-  if (message.role === "user") {
-    const content =
-      typeof message.content === "string"
-        ? [{ type: "text" as const, text: message.content }]
-        : message.content.map((part) =>
-            part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-          );
-    return { role: "user", content, timestamp: message.timestamp };
-  }
-  if (message.role === "assistant") {
-    return cloneUsage(message);
-  }
-  if (message.role === "toolResult") {
-    return {
-      role: "toolResult",
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-      ),
-      ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
-      isError: message.isError,
-      timestamp: message.timestamp,
-    };
-  }
-  return undefined;
-}
+import type { Context, Message } from "../llm/types.js";
+import {
+  cloneImageContent,
+  cloneTextContent,
+  cloneUsage,
+  isWorkerTranscriptMessageFrameSafe,
+  toWorkerTranscriptMessage,
+} from "./transcript-message.js";
 
 export function toAgentMessage(message: WorkerTranscriptMessage): Message {
   if (message.role === "user") {

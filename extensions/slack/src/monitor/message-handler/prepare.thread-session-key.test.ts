@@ -24,7 +24,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackEventScope } from "../event-scope.js";
-import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prepare-routing.js";
+import { resolveSlackRoutingContext } from "./prepare-routing.js";
 
 function buildCtx(overrides?: {
   replyToMode?: "all" | "first" | "off" | "batched";
@@ -41,13 +41,14 @@ function buildCtx(overrides?: {
     teamId: "T1",
     threadInheritParent: false,
     threadHistoryScope: "thread",
-  } satisfies SlackRoutingContextDeps;
+  } satisfies Parameters<typeof resolveSlackRoutingContext>[0]["ctx"];
 }
 
 function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): ResolvedSlackAccount {
   return {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",

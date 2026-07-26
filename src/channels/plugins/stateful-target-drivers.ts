@@ -47,7 +47,9 @@ function listStatefulBindingTargetDrivers(): StatefulBindingTargetDriver[] {
   return [...registeredStatefulBindingTargetDrivers.values()];
 }
 
-export function registerStatefulBindingTargetDriver(driver: StatefulBindingTargetDriver): void {
+export function registerStatefulBindingTargetDriver(
+  driver: StatefulBindingTargetDriver,
+): () => void {
   const id = driver.id.trim();
   if (!id) {
     throw new Error("Stateful binding target driver id is required");
@@ -57,13 +59,15 @@ export function registerStatefulBindingTargetDriver(driver: StatefulBindingTarge
   if (existing) {
     // Builtins and tests may register through multiple load paths. First writer
     // wins so process-local sessions keep using the same driver instance.
-    return;
+    return () => {};
   }
   registeredStatefulBindingTargetDrivers.set(id, normalized);
-}
-
-export function unregisterStatefulBindingTargetDriver(id: string): void {
-  registeredStatefulBindingTargetDrivers.delete(id.trim());
+  return () => {
+    // Cleanup owns only this registration; a later replacement must survive stale disposal.
+    if (registeredStatefulBindingTargetDrivers.get(id) === normalized) {
+      registeredStatefulBindingTargetDrivers.delete(id);
+    }
+  };
 }
 
 export function getStatefulBindingTargetDriver(id: string): StatefulBindingTargetDriver | null {

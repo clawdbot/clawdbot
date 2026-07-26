@@ -14,6 +14,7 @@ import {
 } from "../provider-auth-aliases.js";
 import {
   evaluateStoredCredentialEligibility,
+  resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
@@ -103,16 +104,21 @@ export function isStoredCredentialCompatibleWithAuthProvider(params: {
 
 function isConfiguredProfileCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   providerAuthKey: string;
   provider: string;
   mode?: string;
   credential?: AuthProfileCredential;
 }): boolean {
-  const configProviderKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const configProviderKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
   return (
     configProviderKey === params.providerAuthKey ||
     isOpenAIApiKeyCompatibleWithCodexAuth({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       providerAuthKey: params.providerAuthKey,
       credential: params.credential,
       profileProvider: params.provider,
@@ -162,6 +168,7 @@ function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: str
 /** Returns true when config declares an aws-sdk auth profile for a provider. */
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   profileId: string;
 }): boolean {
@@ -169,9 +176,15 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   if (!profileConfig || profileConfig.mode !== "aws-sdk") {
     return false;
   }
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
   if (
-    resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+    resolveProviderIdForAuth(profileConfig.provider, {
+      config: params.cfg,
+      ...params.authAliasLookupParams,
+    }) !== providerAuthKey
   ) {
     return false;
   }
@@ -181,17 +194,22 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
 /** Resolves whether a profile can be used for a provider right now. */
 export function resolveAuthProfileEligibility(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store: AuthProfileStore;
   provider: string;
   profileId: string;
   now?: number;
 }): AuthProfileEligibility {
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
   const cred = params.store.profiles[params.profileId];
   if (!cred) {
     if (
       isConfiguredAwsSdkAuthProfileForProvider({
         cfg: params.cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
         provider: params.provider,
         profileId: params.profileId,
       })
@@ -203,6 +221,7 @@ export function resolveAuthProfileEligibility(params: {
   if (
     !isCredentialProviderCompatibleWithAuthProvider({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       providerAuthKey,
       credential: cred,
     })
@@ -214,6 +233,7 @@ export function resolveAuthProfileEligibility(params: {
     if (
       !isConfiguredProfileCompatibleWithAuthProvider({
         cfg: params.cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
         providerAuthKey,
         provider: profileConfig.provider,
         mode: profileConfig.mode,
@@ -374,7 +394,7 @@ export function resolveAuthProfileOrderWithMetadata(
     for (const profileId of deduped) {
       if (isProfileInCooldown(store, profileId, now, forModel)) {
         const cooldownUntil =
-          resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now;
+          resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, forModel) ?? now;
         inCooldown.push({ profileId, cooldownUntil });
       } else {
         available.push(profileId);
@@ -468,21 +488,30 @@ function orderProfilesByMode(
     }
   }
 
-  // Sort available profiles by type preference, then by lastUsed (oldest first = round-robin within type)
+  // Sort by type, OAuth expiry state, then lastUsed for round-robin within each tier.
   const scored = available.map((profileId) => {
-    const type = store.profiles[profileId]?.type;
+    const profile = store.profiles[profileId];
+    const type = profile?.type;
     const typeScore = type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
+    // A refreshable expired OAuth profile remains eligible, but refreshing an
+    // obsolete profile can rotate a one-time refresh token while a live peer exists.
+    const expiryScore =
+      profile?.type === "oauth" && resolveTokenExpiryState(profile.expires, now) === "expired"
+        ? 1
+        : 0;
     const lastUsed = store.usageStats?.[profileId]?.lastUsed ?? 0;
-    return { profileId, typeScore, lastUsed };
+    return { profileId, typeScore, expiryScore, lastUsed };
   });
 
   // Primary sort: type preference (oauth > token > api_key).
-  // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
     .toSorted((a, b) => {
       // First by type (oauth > token > api_key)
       if (a.typeScore !== b.typeScore) {
         return a.typeScore - b.typeScore;
+      }
+      if (a.expiryScore !== b.expiryScore) {
+        return a.expiryScore - b.expiryScore;
       }
       // Then by lastUsed (oldest first)
       return a.lastUsed - b.lastUsed;
@@ -493,7 +522,8 @@ function orderProfilesByMode(
   const cooldownSorted = inCooldown
     .map((profileId) => ({
       profileId,
-      cooldownUntil: resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now,
+      cooldownUntil:
+        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, forModel) ?? now,
     }))
     .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
     .map((entry) => entry.profileId);

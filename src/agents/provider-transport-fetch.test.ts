@@ -356,7 +356,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -386,7 +386,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -426,7 +426,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -455,7 +455,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -1321,6 +1321,58 @@ describe("buildGuardedModelFetch", () => {
 
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(items).toEqual([{ ok: true }]);
+  });
+
+  it.each([
+    {
+      name: "JSON-to-SSE synthesis",
+      contentType: "application/json",
+      body: '{"ok": true}',
+    },
+    {
+      name: "SSE sanitization",
+      contentType: "text/event-stream",
+      body: 'data: {"ok": true}\n\n',
+    },
+  ])("ignores source cancellation failures during $name", async ({ contentType, body }) => {
+    const cancel = vi.fn(async () => {
+      throw new Error("upstream cancellation failed");
+    });
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(body));
+          },
+          cancel,
+        }),
+        { headers: { "content-type": contentType } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release,
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.4", stream: true }),
+      },
+    );
+
+    expect(response.body).not.toBeNull();
+    await expect(response.body!.cancel("consumer stopped")).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("does not re-prefix SSE bodies mislabeled as JSON by streaming gateways", async () => {
@@ -2234,3 +2286,4 @@ describe("buildGuardedModelFetch", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -16,7 +16,7 @@ Adds NVIDIA model provider support to OpenClaw.
 
 ## Surface
 
-providers: nvidia
+providers: `nvidia`
 
 ## Related docs
 

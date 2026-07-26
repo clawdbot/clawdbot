@@ -4,7 +4,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
-  testing as googleAuthRuntimeTesting,
   getGoogleAuthTransport,
   loadGoogleAuthRuntime,
   resolveValidatedGoogleChatCredentials,
@@ -30,18 +29,8 @@ async function readGoogleChatCertsResponse(response: Response): Promise<Record<s
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
-type GoogleAuthModule = typeof import("google-auth-library");
-type GoogleAuthRuntime = {
-  GoogleAuth: GoogleAuthModule["GoogleAuth"];
-  OAuth2Client: GoogleAuthModule["OAuth2Client"];
-};
+type GoogleAuthRuntime = Awaited<ReturnType<typeof loadGoogleAuthRuntime>>;
 type GoogleAuthInstance = InstanceType<GoogleAuthRuntime["GoogleAuth"]>;
-type GoogleAuthOptions = ConstructorParameters<GoogleAuthRuntime["GoogleAuth"]>[0];
-type GoogleAuthTransport = NonNullable<GoogleAuthOptions>["clientOptions"] extends {
-  transporter?: infer T;
-}
-  ? T
-  : never;
 type OAuth2ClientInstance = InstanceType<GoogleAuthRuntime["OAuth2Client"]>;
 
 const authCache = new Map<string, { key: string; auth: GoogleAuthInstance }>();
@@ -54,9 +43,7 @@ async function getVerifyClient(): Promise<OAuth2ClientInstance> {
     verifyClientPromise = (async () => {
       try {
         const { OAuth2Client } = await loadGoogleAuthRuntime();
-        // google-auth-library types its transporter through gaxios' CJS surface,
-        // while the plugin imports the ESM entrypoint directly.
-        const transporter = (await getGoogleAuthTransport()) as unknown as GoogleAuthTransport;
+        const transporter = await getGoogleAuthTransport();
         return new OAuth2Client({ transporter });
       } catch (error) {
         verifyClientPromise = null;
@@ -83,12 +70,11 @@ async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<Goog
   if (cached && cached.key === key) {
     return cached.auth;
   }
-  const [{ GoogleAuth }, rawTransporter, credentials] = await Promise.all([
+  const [{ GoogleAuth }, transporter, credentials] = await Promise.all([
     loadGoogleAuthRuntime(),
     getGoogleAuthTransport(),
     resolveValidatedGoogleChatCredentials(account),
   ]);
-  const transporter = rawTransporter as unknown as GoogleAuthTransport;
 
   const evictOldest = () => {
     if (authCache.size > MAX_AUTH_CACHE_SIZE) {
@@ -134,6 +120,7 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   });
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`Failed to fetch Chat certs (${response.status})`);
     }
     const certs = await readGoogleChatCertsResponse(response);
@@ -212,13 +199,3 @@ export async function verifyGoogleChatRequest(params: {
 
   return { ok: false, reason: "unsupported audience type" };
 }
-
-export const testing = {
-  resetGoogleChatAuthForTests(): void {
-    authCache.clear();
-    cachedCerts = null;
-    verifyClientPromise = null;
-    googleAuthRuntimeTesting.resetGoogleAuthRuntimeForTests();
-  },
-};
-export { testing as __testing };

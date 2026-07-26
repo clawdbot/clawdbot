@@ -166,6 +166,7 @@ type WorkerLiveRuntime = {
   handleSessionEvent: (event: AgentSessionEvent) => void;
   enqueueRunFailure: (failure: { aborted: boolean; error: Error }) => void;
   flush: () => Promise<void>;
+  emitTerminal: () => Promise<void>;
 };
 
 export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
@@ -219,6 +220,9 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   };
   const startedAt = Date.now();
   let lifecycleFinished = false;
+  // Terminal lifecycle events are deferred past the final transcript flush so the
+  // gateway never sees an end/error before the authoritative transcript commit.
+  let terminalLiveEvent: WorkerLiveEvent | undefined;
   let streamedText = "";
   let streamedThinking = "";
   const handleSessionEvent = (event: AgentSessionEvent) => {
@@ -310,17 +314,18 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         .toReversed()
         .find((message): message is AssistantMessage => message.role === "assistant");
       if (lastAssistant?.stopReason === "error") {
-        enqueueLive({
+        terminalLiveEvent = {
           kind: "lifecycle",
           payload: {
             phase: "error",
             startedAt,
             endedAt: Date.now(),
             error: lastAssistant.errorMessage ?? "Worker inference failed.",
+            fallbackExhaustedFailure: true,
           },
-        });
+        };
       } else if (lastAssistant?.stopReason === "aborted") {
-        enqueueLive({
+        terminalLiveEvent = {
           kind: "lifecycle",
           payload: {
             phase: "end",
@@ -329,12 +334,12 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
             stopReason: "aborted",
             aborted: true,
           },
-        });
+        };
       } else {
-        enqueueLive({
+        terminalLiveEvent = {
           kind: "lifecycle",
           payload: { phase: "end", startedAt, endedAt: Date.now() },
-        });
+        };
       }
     }
   };
@@ -343,7 +348,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (failure.aborted) {
-      enqueueLive({
+      terminalLiveEvent = {
         kind: "lifecycle",
         payload: {
           phase: "end",
@@ -352,18 +357,27 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           stopReason: "aborted",
           aborted: true,
         },
-      });
+      };
     } else {
-      enqueueLive({
+      terminalLiveEvent = {
         kind: "lifecycle",
         payload: {
           phase: "error",
           startedAt,
           endedAt: Date.now(),
           error: failure.error.message,
+          fallbackExhaustedFailure: true,
         },
-      });
+      };
     }
   };
-  return { handleSessionEvent, enqueueRunFailure, flush };
+  // Emits directly (not via the degradable preview queue): the terminal event drives
+  // gateway turn settlement and must survive a degraded live stream.
+  const emitTerminal = async () => {
+    if (!terminalLiveEvent) {
+      return;
+    }
+    await client.emit(boundLiveEvent(terminalLiveEvent));
+  };
+  return { handleSessionEvent, enqueueRunFailure, flush, emitTerminal };
 }

@@ -984,6 +984,7 @@ describe("installPluginFromClawHub", () => {
     expectSuccessfulClawHubInstall(result, { clawhubChannel: "community" });
     const success = expectInstallSuccess(result);
     expect(success.clawhub?.clawhubTrustDisposition).toBe("review-required");
+    expect(success.warning).toContain("WARNING - ClawHub found security risks");
     expect(success.clawhub?.clawhubTrustScanStatus).toBe("suspicious");
     expect(success.clawhub?.clawhubTrustReasons).toEqual(["payload_strings"]);
     expect(success.clawhub?.clawhubTrustCheckedAt).toMatch(
@@ -3257,3 +3258,4 @@ describe("installPluginFromClawHub", () => {
     await expectClawHubInstallError({ setup, spec, expected });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

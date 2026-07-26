@@ -4,15 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
 import {
   createRichMenu,
   createDefaultMenuConfig,
   createGridLayout,
-  datetimePickerAction,
-  messageAction,
-  postbackAction,
   uploadRichMenuImage,
-  uriAction,
 } from "./rich-menu.js";
 
 const {

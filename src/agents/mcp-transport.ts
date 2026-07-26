@@ -19,7 +19,7 @@ import {
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
-import { createMcpOAuthClientProvider } from "./mcp-oauth.js";
+import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
@@ -116,14 +116,6 @@ export function resolveMcpTransport(
     };
   }
   const authProfileId = resolveMcpAuthProfileId(rawServer);
-  const authProvider =
-    resolved.auth === "oauth" && !authProfileId
-      ? createMcpOAuthClientProvider({
-          serverName,
-          serverUrl: resolved.url,
-          config: resolved.oauth,
-        })
-      : undefined;
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.
   const baseFetch = buildMcpHttpFetch({
@@ -136,6 +128,11 @@ export function resolveMcpTransport(
     resolved.auth === "oauth" || authProfileId
       ? withoutMcpAuthorizationHeader(resolved.headers)
       : resolved.headers;
+  const resourceFetch = withSameOriginMcpHttpHeaders({
+    fetchFn: baseFetch,
+    headers,
+    resourceUrl: resolved.url,
+  });
   const httpFetch = authProfileId
     ? withMcpAuthProfileBearer({
         fetchFn: baseFetch,
@@ -147,10 +144,14 @@ export function resolveMcpTransport(
         agentDir: options?.agentDir,
       })
     : resolved.auth === "oauth"
-      ? withSameOriginMcpHttpHeaders({
-          fetchFn: baseFetch,
-          headers,
+      ? withMcpOAuthBearer({
+          fetchFn: resourceFetch,
+          // Protected-resource discovery lives at the resource origin and may
+          // require the same routing headers. Cross-origin auth calls stay scrubbed.
+          authFetchFn: resourceFetch,
+          serverName,
           resourceUrl: resolved.url,
+          config: resolved.oauth,
         })
       : baseFetch;
   if (resolved.transportType === "streamable-http") {
@@ -158,7 +159,6 @@ export function resolveMcpTransport(
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
         fetch: httpFetch,
-        authProvider,
       }),
       description: resolved.description,
       transportType: "streamable-http",
@@ -176,7 +176,6 @@ export function resolveMcpTransport(
       eventSourceInit: {
         fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
       },
-      authProvider,
     }),
     description: resolved.description,
     transportType: "sse",

@@ -85,6 +85,11 @@ describe("npm extended-stable publication boundary", () => {
     expect(() => validateNpmPublishBoundary("2026.6.11", "extended-stable")).toThrow(
       /patch 33 or above/u,
     );
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11-1", "extended-stable", {
+        bypassExtendedStableGuard: true,
+      }),
+    ).toThrow(/does not allow correction suffixes/u);
   });
 
   it.each(["alpha", "beta", "latest"])(

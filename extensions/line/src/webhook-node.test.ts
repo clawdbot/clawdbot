@@ -4,9 +4,26 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { NextFunction, Request, Response } from "express";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+const runDetachedWebhookWorkSpy = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-request-guards")>(
+    "openclaw/plugin-sdk/webhook-request-guards",
+  );
+  runDetachedWebhookWorkSpy.mockImplementation(actual.runDetachedWebhookWork);
+  return {
+    ...actual,
+    runDetachedWebhookWork: runDetachedWebhookWorkSpy,
+  };
+});
+
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { createLineWebhookMiddleware } from "./webhook.js";
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
+});
 
 const sign = (body: string, secret: string) =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
@@ -312,21 +329,29 @@ describe("LINE webhook shared POST contract", () => {
     },
   );
 
+  it.each(sharedWebhookPostContractCases)("$name dispatches signed events", async ({ invoke }) => {
+    const result = await invoke({
+      rawBody: JSON.stringify({ events: [{ type: "message" }] }),
+      signed: true,
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ status: "ok" });
+    expect(result.dispatched).toHaveBeenCalledTimes(1);
+  });
+
   it.each(sharedWebhookPostContractCases)(
-    "$name acknowledges signed events before failed background processing is logged",
+    "$name returns 500 when durable admission fails",
     async ({ invoke }) => {
       const result = await invoke({
-        failWith: new Error("transient failure"),
+        failWith: new Error("persist failed"),
         rawBody: JSON.stringify({ events: [{ type: "message" }] }),
         signed: true,
       });
 
-      expect(result.status).toBe(200);
-      expect(result.body).toEqual({ status: "ok" });
-      expect(result.dispatched).toHaveBeenCalledTimes(1);
-      await vi.waitFor(() => {
-        expect(result.runtimeError).toHaveBeenCalledTimes(1);
-      });
+      expect(result.status).toBe(500);
+      expect(result.body).toEqual({ error: "Internal server error" });
+      expect(result.runtimeError).toHaveBeenCalledTimes(1);
     },
   );
 });
@@ -396,6 +421,19 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
+  it("durably admits signed POST events before acknowledging", async () => {
+    runDetachedWebhookWorkSpy.mockClear();
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret, res });
+
+    expect(res.statusCode).toBe(200);
+    expect(runDetachedWebhookWorkSpy).not.toHaveBeenCalled();
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+  });
+
   it("uses strict pre-auth limits for signed POST requests", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const bot = { handleWebhook: vi.fn(async () => {}) };
@@ -448,7 +486,7 @@ describe("createLineNodeWebhookHandler", () => {
     expect(payload.events).toEqual([{ type: "message" }]);
   });
 
-  it("acknowledges signed event requests before event processing completes", async () => {
+  it("waits for durable admission before acknowledging signed event requests", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     let releaseAuthenticated: (() => void) | undefined;
     const bot = {
@@ -477,14 +515,14 @@ describe("createLineNodeWebhookHandler", () => {
       expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     });
 
-    await request;
-
-    expect(res.statusCode).toBe(200);
-    expect(res.headersSent).toBe(true);
+    expect(res.headersSent).toBe(false);
     if (!releaseAuthenticated) {
       throw new Error("Expected LINE authenticated request release callback to be initialized");
     }
     releaseAuthenticated();
+    await request;
+    expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
@@ -526,6 +564,16 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).toHaveBeenCalledTimes(1);
     const payload = firstParsedPayload(onEvents, "LINE middleware payload");
     expect(payload.events).toEqual(expectedEvents);
+  });
+
+  it("waits for middleware event admission before acknowledging", async () => {
+    runDetachedWebhookWorkSpy.mockClear();
+    const { res, onEvents } = await invokeWebhook({
+      body: JSON.stringify({ events: [{ type: "message" }] }),
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(runDetachedWebhookWorkSpy).not.toHaveBeenCalled();
+    expect(onEvents).toHaveBeenCalledTimes(1);
   });
 
   it("rejects invalid JSON payloads", async () => {

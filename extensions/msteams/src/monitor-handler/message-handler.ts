@@ -2,15 +2,19 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilder,
+  formatMediaPlaceholderText,
   logInboundDrop,
   resolveInboundMentionDecision,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSupplementalSenderAllowed,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  dispatchReplyFromConfigWithSettledDispatcher,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
@@ -23,8 +27,7 @@ import {
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
-  buildMSTeamsMediaPayload,
-  resolveMSTeamsInboundAttachmentPresentation,
+  resolveMSTeamsAdvertisedMedia,
   summarizeMSTeamsHtmlAttachments,
   type MSTeamsAttachmentLike,
 } from "../attachments.js";
@@ -80,6 +83,7 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
 }
 
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
+import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
@@ -94,6 +98,7 @@ import { resolveMSTeamsSenderAccess } from "./access.js";
 import {
   resolveMSTeamsInboundMedia,
   resolveMSTeamsInboundMediaBody,
+  mergeMSTeamsMediaFacts,
   shouldAttemptMSTeamsGraphMediaFallback,
 } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
@@ -216,6 +221,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     attachments: MSTeamsAttachmentLike[];
     wasMentioned: boolean;
     implicitMentionKinds: Array<"reply_to_bot">;
+    turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
   };
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
@@ -224,12 +230,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const rawText = params.rawText;
     const text = params.text;
     const attachments = params.attachments;
-    const attachmentPresentation = resolveMSTeamsInboundAttachmentPresentation(attachments, {
+    const advertisedMedia = resolveMSTeamsAdvertisedMedia(attachments, {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
-    const attachmentPlaceholder = attachmentPresentation.placeholder;
-    const rawBody = text || attachmentPlaceholder;
+    const rawBody = text;
+    const historyBody = [text, formatMediaPlaceholderText(advertisedMedia)]
+      .filter(Boolean)
+      .join("\n");
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
@@ -472,7 +480,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         htmlSummary: htmlSummary ?? undefined,
         graphMediaFallback: msteamsCfg?.graphMediaFallback,
       });
-    if (!rawBody && !mayRecoverGraphMedia) {
+    if (!rawBody && advertisedMedia.length === 0 && !mayRecoverGraphMedia) {
       log.debug?.("skipping empty message after stripping mentions");
       return;
     }
@@ -550,14 +558,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
-        if (rawBody) {
+        if (historyBody) {
           enqueuePrimaryMessageSystemEvent();
           createChannelHistoryWindow({ historyMap: conversationHistories }).record({
             historyKey: conversationId,
             limit: historyLimit,
             entry: {
               sender: senderName,
-              body: rawBody,
+              body: historyBody,
               timestamp: timestamp?.getTime(),
               messageId: activity.id ?? undefined,
             },
@@ -616,8 +624,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
             log,
             deadline: preprocessingDeadline,
-            preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
-              ?.preserveFilenames,
+            preserveFilenames: false,
           }),
       });
     } catch (err) {
@@ -626,18 +633,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
     }
 
-    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
-    const materializedMediaPlaceholder = resolveMSTeamsInboundAttachmentPresentation(
-      mediaList.map((media) => ({ contentType: media.contentType, name: media.path })),
-    ).placeholder;
+    const inboundMedia = mergeMSTeamsMediaFacts(advertisedMedia, mediaList);
+    const nativeMediaForComparison = [
+      ...advertisedMedia,
+      ...mediaList.slice(advertisedMedia.length).map((media) => ({
+        contentType: media.contentType,
+        kind: media.kind,
+      })),
+    ];
     const agentBody = resolveMSTeamsInboundMediaBody({
-      body: rawBody || materializedMediaPlaceholder,
-      mediaPlaceholder: attachmentPlaceholder,
-      materializedMediaPlaceholder,
-      expectedMediaCount: attachmentPresentation.expectedMediaCount,
-      mediaCount: mediaList.length,
+      body: rawBody,
+      nativeMedia: nativeMediaForComparison,
+      materializedMedia: inboundMedia,
     });
-    if (!agentBody) {
+    if (!agentBody && inboundMedia.length === 0) {
       log.debug?.("skipping empty message after Graph media recovery");
       return;
     }
@@ -731,14 +740,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           });
         }
         const isThreadSenderAllowed = (msg: GraphThreadMessage) =>
-          groupPolicy === "allowlist"
-            ? resolveMSTeamsAllowlistMatch({
-                allowFrom: effectiveGroupAllowFrom,
+          resolveInboundSupplementalSenderAllowed({
+            isGroup: isChannel,
+            groupPolicy,
+            allowFrom: effectiveGroupAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveMSTeamsAllowlistMatch({
+                allowFrom,
                 senderId: msg.from?.user?.id ?? "",
                 senderName: msg.from?.user?.displayName,
                 allowNameMatching,
-              }).allowed
-            : true;
+              }).allowed,
+          });
         const parentSummary = summarizeParentMessage(parentMsg);
         const visibleParentMessages = parentMsg
           ? filterSupplementalContextItems({
@@ -783,17 +796,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     quoteSenderName ??= quoteInfo?.sender;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
-    const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-      cfg,
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-    });
-    const body = core.channel.reply.formatAgentEnvelope({
+    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route });
+    const body = buildEnvelope({
       channel: "Teams",
       from: envelopeFrom,
       timestamp,
-      previousTimestamp,
-      envelope: envelopeOptions,
       body: agentBody,
     });
     let combinedBody = body;
@@ -806,12 +813,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         limit: historyLimit,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
-          core.channel.reply.formatAgentEnvelope({
+          buildEnvelope({
             channel: "Teams",
             from: conversationType,
             timestamp: entry.timestamp,
+            previousTimestamp: null,
             body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-            envelope: envelopeOptions,
           }),
       });
     }
@@ -826,14 +833,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const commandBody = text.trim();
     const quoteSenderAllowed =
       quoteInfo && quoteInfo.sender
-        ? !isChannel || groupPolicy !== "allowlist"
-          ? true
-          : resolveMSTeamsAllowlistMatch({
-              allowFrom: effectiveGroupAllowFrom,
-              senderId: quoteSenderId ?? "",
-              senderName: quoteSenderName,
-              allowNameMatching,
-            }).allowed
+        ? resolveInboundSupplementalSenderAllowed({
+            isGroup: !isDirectMessage,
+            groupPolicy,
+            allowFrom: effectiveGroupAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveMSTeamsAllowlistMatch({
+                allowFrom,
+                senderId: quoteSenderId ?? "",
+                senderName: quoteSenderName,
+                allowNameMatching,
+              }).allowed,
+          })
         : true;
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -849,7 +860,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
     const ctxPayload = buildChannelInboundEventContext({
       channel: "msteams",
-      finalize: core.channel.reply.finalizeInboundContext,
       contextVisibility: contextVisibilityMode,
       supplemental: {
         quote: quoteInfo
@@ -862,6 +872,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }
           : undefined,
       },
+      media: toInboundMediaFacts(inboundMedia),
       messageId: activity.id,
       timestamp: timestamp?.getTime() ?? Date.now(),
       from: teamsFrom,
@@ -878,6 +889,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
       route: {
         agentId: route.agentId,
+        dmScope: route.dmScope,
         accountId: route.accountId,
         routeSessionKey: route.sessionKey,
       },
@@ -893,26 +905,26 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         rawBody,
         commandBody,
       },
+      sessionTranscript: { historyLimit: isRoomish ? historyLimit : 0 },
       access: {
         mentions: {
           canDetectMention: !isDirectMessage,
           wasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
         },
         commands: {
-          authorized: commandAuthorized,
+          authorized: commandAuthorized === true,
         },
       },
       extra: {
         GroupSubject: !isDirectMessage ? conversationType : undefined,
         ReplyToIsQuote: quoteInfo ? true : undefined,
-        ...mediaPayload,
       },
     });
 
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
     const sharePointSiteId = msteamsCfg?.sharePointSiteId;
-    const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
+    const { dispatcherOptions, delivery, replyOptions } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
       sessionKey: route.sessionKey,
@@ -941,15 +953,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       | { timezone?: string }
       | undefined;
     const senderTimezone = activityClientInfo?.timezone || conversationRef.timezone;
-    const configOverride =
+    const turnConfig =
       senderTimezone && !cfg.agents?.defaults?.userTimezone
         ? {
+            ...cfg,
             agents: {
+              ...cfg.agents,
               defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
             },
           }
-        : undefined;
-
+        : cfg;
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const turnResult = await core.channel.inbound.run({
@@ -966,12 +979,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
+            cfg: turnConfig,
             channel: "msteams",
             accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
+            route: { agentId: route.agentId, sessionKey: route.sessionKey },
             ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
             record: {
               onRecordError: (err) => {
                 logVerboseMessage(
@@ -985,20 +997,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               historyMap: conversationHistories,
               limit: historyLimit,
             },
-            onPreDispatchFailure: () =>
-              core.channel.reply.settleReplyDispatcher({
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-              }),
-            runDispatch: () =>
-              dispatchReplyFromConfigWithSettledDispatcher({
-                cfg,
-                ctxPayload,
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-                replyOptions,
-                configOverride,
-              }),
+            dispatcherOptions,
+            delivery,
+            replyOptions: {
+              ...replyOptions,
+              ...(params.turnAdoptionLifecycle
+                ? bindIngressLifecycleToReplyOptions(params.turnAdoptionLifecycle)
+                : {}),
+            },
           }),
         },
       });
@@ -1019,6 +1025,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     } catch (err) {
       log.error("dispatch failed", { error: formatUnknownError(err) });
       runtime.error(`msteams dispatch failed: ${formatUnknownError(err)}`);
+      if (params.turnAdoptionLifecycle) {
+        throw err;
+      }
       try {
         await context.sendActivity("⚠️ Something went wrong. Please try again.");
       } catch {
@@ -1054,38 +1063,52 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       if (!last) {
         return;
       }
-      if (entries.length === 1) {
-        await handleTeamsMessageNow(last);
-        return;
+      const { lifecycle, settle } = fanInChannelIngressLifecycles(
+        entries.map((entry) => entry.turnAdoptionLifecycle),
+      );
+      try {
+        if (entries.length === 1) {
+          await handleTeamsMessageNow(
+            lifecycle ? { ...last, turnAdoptionLifecycle: lifecycle } : last,
+          );
+        } else {
+          const combinedText = entries
+            .map((entry) => entry.text)
+            .filter(Boolean)
+            .join("\n");
+          if (combinedText.trim()) {
+            const combinedRawText = entries
+              .map((entry) => entry.rawText)
+              .filter(Boolean)
+              .join("\n");
+            const wasMentioned = entries.some((entry) => entry.wasMentioned);
+            const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
+            await handleTeamsMessageNow({
+              context: last.context,
+              rawText: combinedRawText,
+              text: combinedText,
+              attachments: [],
+              wasMentioned,
+              implicitMentionKinds,
+              ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
+            });
+          }
+        }
+        await settle();
+      } catch (err) {
+        await lifecycle?.onAbandoned();
+        throw err;
       }
-      const combinedText = entries
-        .map((entry) => entry.text)
-        .filter(Boolean)
-        .join("\n");
-      if (!combinedText.trim()) {
-        return;
-      }
-      const combinedRawText = entries
-        .map((entry) => entry.rawText)
-        .filter(Boolean)
-        .join("\n");
-      const wasMentioned = entries.some((entry) => entry.wasMentioned);
-      const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
-      await handleTeamsMessageNow({
-        context: last.context,
-        rawText: combinedRawText,
-        text: combinedText,
-        attachments: [],
-        wasMentioned,
-        implicitMentionKinds,
-      });
     },
     onError: (err) => {
       runtime.error(`msteams debounce flush failed: ${formatUnknownError(err)}`);
     },
   });
 
-  return async function handleTeamsMessage(context: MSTeamsTurnContext) {
+  return async function handleTeamsMessage(
+    context: MSTeamsTurnContext,
+    turnAdoptionLifecycle?: MSTeamsIngressLifecycle,
+  ) {
     const activity = context.activity;
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
@@ -1112,6 +1135,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       attachments,
       wasMentioned,
       implicitMentionKinds,
+      turnAdoptionLifecycle,
     });
+    if (turnAdoptionLifecycle) {
+      // Keep the durable claim held across the debounce window. The merged
+      // flush completes it only when the reply lane adopts (or terminally skips).
+      return { kind: "deferred" } as const;
+    }
+    return undefined;
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

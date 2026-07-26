@@ -16,7 +16,7 @@ Synology Chat channel plugin for OpenClaw channels and direct messages.
 
 ## Surface
 
-channels: synology-chat
+channels: `synology-chat`
 
 ## Related docs
 

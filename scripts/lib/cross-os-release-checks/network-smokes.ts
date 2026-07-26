@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import type { GatewayHandle, LaneState } from "./config.ts";
 import {
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
@@ -157,7 +158,7 @@ export async function readBoundedCrossOsResponseText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }

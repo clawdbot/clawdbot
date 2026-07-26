@@ -33,7 +33,7 @@ function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   };
 }
 
-export async function createWorkboardCard(params: {
+async function createWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;

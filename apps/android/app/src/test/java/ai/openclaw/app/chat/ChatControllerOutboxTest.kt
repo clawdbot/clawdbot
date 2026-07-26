@@ -9,6 +9,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -46,6 +47,7 @@ class ChatControllerOutboxTest {
     private val capacity: Int = OUTBOX_MAX_QUEUED,
   ) : ChatCommandOutbox {
     val rows = LinkedHashMap<String, ChatOutboxItem>()
+    val admittedIds = linkedSetOf<String>()
     val attachmentBytes = mutableMapOf<String, List<ByteArray>>()
     val gatewayIds = mutableMapOf<String, String>()
     val deletedSessions = mutableListOf<String>()
@@ -56,8 +58,10 @@ class ChatControllerOutboxTest {
     var queuedStatusUpdateFailure: Throwable? = null
     var sendingStatusUpdateFailure: Throwable? = null
     var pinSessionKeyFailure: Throwable? = null
+    var enqueueGate: CompletableDeferred<Unit>? = null
     var claimGate: CompletableDeferred<Unit>? = null
     var deleteFailure: Throwable? = null
+    var beforeDeleteIfQueued: (() -> Unit)? = null
     var deleteOnFailedStatus = false
     var loadGate: LoadGate? = null
     var onStatusUpdated: ((ChatOutboxStatus) -> Unit)? = null
@@ -87,6 +91,8 @@ class ChatControllerOutboxTest {
         .sortedWith(compareBy({ it.createdAtMs }, { it.id }))
     }
 
+    override suspend fun wasAdmitted(id: String): Boolean = id in rows || id in admittedIds
+
     override suspend fun enqueue(
       gatewayId: String,
       sessionKey: String,
@@ -95,7 +101,10 @@ class ChatControllerOutboxTest {
       nowMs: Long,
       attachments: List<OutboxAttachmentPayload>,
       gatedEpoch: Long?,
+      ownerAgentId: String,
+      idempotencyKey: String?,
     ): ChatOutboxEnqueueResult {
+      enqueueGate?.await()
       if (gatewayIds.values.count { it == gatewayId } >= capacity) return ChatOutboxEnqueueResult.QueueFull
       val commandBytes = attachments.sumOf { it.bytes.size.toLong() }
       if (commandBytes > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) return ChatOutboxEnqueueResult.AttachmentsTooLarge
@@ -105,7 +114,8 @@ class ChatControllerOutboxTest {
       }
       val createdAt = maxOf(nowMs, nextCreatedAt)
       nextCreatedAt = createdAt + 1
-      val id = UUID.randomUUID().toString()
+      val id = idempotencyKey ?: UUID.randomUUID().toString()
+      if (idempotencyKey != null) admittedIds += id
       val item =
         ChatOutboxItem(
           id = id,
@@ -117,6 +127,7 @@ class ChatControllerOutboxTest {
           retryCount = 0,
           lastError = null,
           gatedEpoch = gatedEpoch,
+          ownerAgentId = ownerAgentId,
           attachments =
             attachments.mapIndexed { index, payload ->
               ChatOutboxAttachment(
@@ -204,6 +215,7 @@ class ChatControllerOutboxTest {
       id: String,
       nowMs: Long,
       gatedEpoch: Long?,
+      ownerAgentId: String?,
     ): Int {
       val current = rows[id] ?: return 0
       if (gatewayIds[id] != gatewayId || current.status != ChatOutboxStatus.Failed) return 0
@@ -215,6 +227,7 @@ class ChatControllerOutboxTest {
           lastError = null,
           createdAtMs = createdAt,
           gatedEpoch = gatedEpoch,
+          ownerAgentId = current.ownerAgentId ?: ownerAgentId,
         )
       // Mirror the Room store: queued same-session successors follow the retried row.
       val successors =
@@ -241,12 +254,28 @@ class ChatControllerOutboxTest {
       gatewayIds.remove(id)
     }
 
+    override suspend fun deleteIfQueued(id: String): Boolean {
+      deleteFailure?.let { throw it }
+      beforeDeleteIfQueued?.invoke()
+      val current = rows[id] ?: return false
+      if (current.status != ChatOutboxStatus.Queued) return false
+      rows.remove(id)
+      attachmentBytes.remove(id)
+      gatewayIds.remove(id)
+      admittedIds.remove(id)
+      return true
+    }
+
     override suspend fun deleteForSession(
       gatewayId: String,
       sessionKey: String,
+      ownerAgentId: String,
     ) {
       deletedSessions += sessionKey
-      val ids = rows.values.filter { gatewayIds[it.id] == gatewayId && it.sessionKey == sessionKey }.map { it.id }
+      val ids =
+        rows.values
+          .filter { gatewayIds[it.id] == gatewayId && it.sessionKey == sessionKey && it.ownerAgentId == ownerAgentId }
+          .map { it.id }
       ids.forEach {
         rows.remove(it)
         attachmentBytes.remove(it)
@@ -299,15 +328,21 @@ class ChatControllerOutboxTest {
     var sendFailureBeforeDispatch: Throwable? = null
     var sendFailureAfterDispatch: Throwable? = null
     var sendGate: CompletableDeferred<Unit>? = null
+    var settingsPatchStarted: CompletableDeferred<Unit>? = null
+    var settingsPatchGate: CompletableDeferred<Unit>? = null
+    val settingsPatchFailures = mutableListOf<Throwable?>()
     var sendResponse: (idempotencyKey: String) -> String = { key -> """{"runId":"$key","status":"started"}""" }
     val sentIdempotencyKeys = mutableListOf<String>()
     val sentMessages = mutableListOf<String>()
     val sentSessionKeys = mutableListOf<String>()
+    val sentAgentIds = mutableListOf<String>()
     val sentThinkingLevels = mutableListOf<String>()
     val sentAttachmentFileNames = mutableListOf<List<String>>()
+    val historyAgentIds = mutableListOf<String?>()
     var echoDeliveredSendsInHistory = true
     private val deliveredSends = mutableListOf<DeliveredSend>()
     var historyMessagesJson = "[]"
+    val historyMessagesByAgent = mutableMapOf<String, String>()
     var metadataModelsJson = "[]"
 
     suspend fun request(
@@ -322,9 +357,11 @@ class ChatControllerOutboxTest {
           val key = (params["idempotencyKey"] as JsonPrimitive).content
           val message = (params["message"] as JsonPrimitive).content
           val sessionKey = (params["sessionKey"] as JsonPrimitive).content
+          val agentId = (params["agentId"] as JsonPrimitive).content
           sentIdempotencyKeys += key
           sentMessages += message
           sentSessionKeys += sessionKey
+          sentAgentIds += agentId
           sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
           sentAttachmentFileNames +=
             (params["attachments"] as? JsonArray)
@@ -345,10 +382,13 @@ class ChatControllerOutboxTest {
           response
         }
         "chat.history" -> {
-          val requestedKey =
+          val params =
             runCatching {
-              ((json.parseToJsonElement(paramsJson.orEmpty()) as? JsonObject)?.get("sessionKey") as? JsonPrimitive)?.content
+              json.parseToJsonElement(paramsJson.orEmpty()) as? JsonObject
             }.getOrNull()
+          val requestedKey = (params?.get("sessionKey") as? JsonPrimitive)?.content
+          val requestedAgentId = (params?.get("agentId") as? JsonPrimitive)?.content
+          historyAgentIds += requestedAgentId
           val echoed =
             if (echoDeliveredSendsInHistory) {
               deliveredSends
@@ -362,11 +402,19 @@ class ChatControllerOutboxTest {
             } else {
               emptyList()
             }
-          val explicit =
-            (json.parseToJsonElement(historyMessagesJson) as JsonArray).map { it.toString() }
+          val explicitJson = requestedAgentId?.let(historyMessagesByAgent::get) ?: historyMessagesJson
+          val explicit = (json.parseToJsonElement(explicitJson) as JsonArray).map { it.toString() }
           """{"sessionId":"session-1","messages":[${(explicit + echoed).joinToString(",")}]}"""
         }
         "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
+        "sessions.patch" -> {
+          settingsPatchStarted?.complete(Unit)
+          settingsPatchGate?.await()
+          if (settingsPatchFailures.isNotEmpty()) {
+            settingsPatchFailures.removeAt(0)?.let { throw it }
+          }
+          "{}"
+        }
         else -> "{}"
       }
     }
@@ -382,6 +430,7 @@ class ChatControllerOutboxTest {
       json = json,
       requestGateway = gateway::request,
       cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+      currentDefaultAgentId = { "main" },
       commandOutbox = outbox,
     )
 
@@ -414,7 +463,7 @@ class ChatControllerOutboxTest {
       val gateway = FakeGateway()
       val outbox = FakeCommandOutbox()
       val chat = controller(this, gateway, outbox)
-      chat.load("main")
+      chat.load("agent:main:main")
       advanceUntilIdle()
 
       chat.sendMessageAwaitAcceptance(message = "one", thinkingLevel = "high", attachments = emptyList())
@@ -431,8 +480,103 @@ class ChatControllerOutboxTest {
 
       assertEquals(listOf("one", "two", "three"), gateway.sentMessages)
       assertEquals(queuedIds, gateway.sentIdempotencyKeys)
-      assertEquals(listOf("main", "main", "main"), gateway.sentSessionKeys)
+      assertEquals(listOf("agent:main:main", "agent:main:main", "agent:main:main"), gateway.sentSessionKeys)
       assertEquals(listOf("high", "off", "off"), gateway.sentThinkingLevels)
+      assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
+  fun reconnectFlushWaitsForPendingSessionSettings() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "queued", thinkingLevel = "high", attachments = emptyList()))
+
+      gateway.online = true
+      gateway.settingsPatchStarted = CompletableDeferred()
+      gateway.settingsPatchGate = CompletableDeferred()
+      chat.setSessionModel("main", "openai/gpt-5.6-sol")
+      gateway.settingsPatchStarted?.await()
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        chat.outboxItems.value
+          .single()
+          .status,
+      )
+
+      gateway.settingsPatchGate?.complete(Unit)
+      advanceUntilIdle()
+      assertEquals(listOf("queued"), gateway.sentMessages)
+    }
+
+  @Test
+  fun reconnectFlushWaitsForQueuedRowsOwnerAfterVisibleOwnerChanges() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("custom", ownerAgentId = "agent-a")
+      advanceUntilIdle()
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "owned by agent a", thinkingLevel = "off", attachments = emptyList()))
+
+      gateway.online = true
+      gateway.settingsPatchStarted = CompletableDeferred()
+      gateway.settingsPatchGate = CompletableDeferred()
+      chat.setSessionModel("custom", "openai/gpt-5.6-sol")
+      gateway.settingsPatchStarted?.await()
+
+      chat.switchSession("custom", ownerAgentId = "agent-b")
+      runCurrent()
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        chat.outboxItems.value
+          .single()
+          .status,
+      )
+
+      gateway.settingsPatchGate?.complete(Unit)
+      advanceUntilIdle()
+      assertEquals(listOf("owned by agent a"), gateway.sentMessages)
+      assertEquals(listOf("agent-a"), gateway.sentAgentIds)
+    }
+
+  @Test
+  fun reconnectFlushResumesAfterNewerPendingSessionSettingSucceeds() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "queued", thinkingLevel = "high", attachments = emptyList()))
+
+      gateway.online = true
+      gateway.settingsPatchStarted = CompletableDeferred()
+      gateway.settingsPatchGate = CompletableDeferred()
+      gateway.settingsPatchFailures += IllegalStateException("first patch rejected")
+      gateway.settingsPatchFailures += null
+      chat.setSessionModel("main", "anthropic/claude-fable-5")
+      gateway.settingsPatchStarted?.await()
+      chat.setSessionModel("main", "openai/gpt-5.6-sol")
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      gateway.settingsPatchGate?.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(listOf("queued"), gateway.sentMessages)
       assertTrue(chat.outboxItems.value.isEmpty())
     }
 
@@ -550,6 +694,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Failed,
           retryCount = 0,
           lastError = "retry manually",
+          ownerAgentId = "main",
         ),
       )
       outbox.seed(
@@ -562,6 +707,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       assertTrue(chat.setSessionModelAwait("main", "openai/plain"))
@@ -574,13 +720,15 @@ class ChatControllerOutboxTest {
 
       gateway.sendFailureBeforeDispatch = null
       chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
+      advanceTimeBy(1_000)
+      runCurrent()
 
       // retryOutboxCommand refreshes the active row's createdAt, so the untouched
       // unknown-session row flushes first in createdAt order.
       assertEquals(listOf("unknown session", "active session"), gateway.sentMessages)
       assertEquals(listOf("medium", "off"), gateway.sentThinkingLevels)
-      assertTrue(chat.outboxItems.value.isEmpty())
+      assertFalse(outbox.rows.containsKey("active"))
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("other").status)
     }
 
   @Test
@@ -597,12 +745,12 @@ class ChatControllerOutboxTest {
 
       // Gateway hello announces the canonical main session key, then health recovers.
       gateway.online = true
-      chat.applyMainSessionKey("agent:work:main")
+      chat.applyMainSessionKey("agent:main:main")
       advanceUntilIdle()
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
-      assertEquals(listOf("agent:work:main"), gateway.sentSessionKeys)
+      assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
       assertTrue(chat.outboxItems.value.isEmpty())
     }
 
@@ -618,6 +766,7 @@ class ChatControllerOutboxTest {
           json = json,
           requestGateway = gateway::request,
           cacheScope = { activeScope },
+          currentDefaultAgentId = { "main" },
           commandOutbox = outbox,
         )
       chat.load("main")
@@ -923,7 +1072,7 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun migratedAmbiguousRowNeverSendsUntilExplicitRetry() =
+  fun failedKnownOwnerRowNeverSendsUntilExplicitRetry() =
     runTest {
       val gateway = FakeGateway()
       val outbox = FakeCommandOutbox()
@@ -937,6 +1086,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Failed,
           retryCount = 0,
           lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+          ownerAgentId = "main",
         ),
       )
       val chat = controller(this, gateway, outbox)
@@ -1233,6 +1383,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Failed,
           retryCount = 2,
           lastError = "boom",
+          ownerAgentId = "main",
         ),
       )
       val chat = controller(this, gateway, outbox)
@@ -1270,6 +1421,32 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun flushBuildsTheRequestIdentityFromTheCurrentReplacementRowId() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      outbox.seed(
+        ChatOutboxItem(
+          id = "replacement-client-id",
+          sessionKey = "main",
+          text = "retry on the selected branch",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+          ownerAgentId = "main",
+        ),
+      )
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("replacement-client-id"), gateway.sentIdempotencyKeys)
+    }
+
+  @Test
   fun queueFullRefusalSurfacesErrorWithoutQueueing() =
     runTest {
       val gateway = FakeGateway()
@@ -1303,6 +1480,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Sending,
           retryCount = 1,
           lastError = "socket closed",
+          ownerAgentId = "main",
         ),
       )
 
@@ -1333,6 +1511,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Sending,
           retryCount = 1,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       outbox.seed(
@@ -1345,6 +1524,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
 
@@ -1385,6 +1565,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Sending,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       outbox.seed(
@@ -1397,6 +1578,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       outbox.recoveryFailure = IllegalStateException("database unavailable")
@@ -1474,6 +1656,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       val chat = controller(this, gateway, outbox)
@@ -1509,6 +1692,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "old",
         ),
       )
       val chat = controller(this, gateway, outbox)
@@ -1797,12 +1981,12 @@ class ChatControllerOutboxTest {
       gateway.echoDeliveredSendsInHistory = false
       gateway.sendFailureAfterDispatch = GatewayRequestOutcomeUnknown("ack lost")
       gateway.online = true
-      chat.applyMainSessionKey("agent:work:main")
+      chat.applyMainSessionKey("agent:main:main")
       advanceUntilIdle()
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
       val parked = outbox.rows.values.single()
-      assertEquals("agent:work:main", parked.sessionKey)
+      assertEquals("agent:main:main", parked.sessionKey)
       assertEquals(ChatOutboxStatus.Failed, parked.status)
 
       // A later default-agent change must not redirect the captured input on retry.
@@ -1811,7 +1995,30 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
       chat.retryOutboxCommand(parked.id)
       advanceUntilIdle()
-      assertEquals(listOf("agent:work:main", "agent:work:main"), gateway.sentSessionKeys)
+      assertEquals(listOf("agent:main:main", "agent:main:main"), gateway.sentSessionKeys)
+      assertEquals(listOf("main", "main"), gateway.sentAgentIds)
+    }
+
+  @Test
+  fun preHelloAliasParksWhenCanonicalSessionBelongsToAnotherAgent() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "do not retarget", thinkingLevel = "off", attachments = emptyList()))
+
+      gateway.online = true
+      chat.applyMainSessionKey("agent:work:main")
+      advanceUntilIdle()
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      val parked = outbox.rows.values.single()
+      assertEquals(ChatOutboxStatus.Failed, parked.status)
+      assertEquals(OUTBOX_OWNER_CHANGED_ERROR, parked.lastError)
     }
 
   @Test
@@ -1826,6 +2033,7 @@ class ChatControllerOutboxTest {
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = generation) },
+          currentDefaultAgentId = { "main" },
           commandOutbox = outbox,
         )
       chat.load("main")
@@ -1865,6 +2073,7 @@ class ChatControllerOutboxTest {
           json = json,
           requestGateway = gateway::request,
           cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = generation) },
+          currentDefaultAgentId = { "main" },
           commandOutbox = outbox,
         )
       gateway.online = true
@@ -1890,6 +2099,696 @@ class ChatControllerOutboxTest {
       val parked = outbox.rows.values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_CONNECTION_CHANGED_ERROR, parked.lastError)
+    }
+
+  @Test
+  fun sendClaimedAcrossSessionRoundTripRestoresRunIntoRevisitedChat() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      gateway.echoDeliveredSendsInHistory = false
+      chat.load("agent:main:main")
+      advanceUntilIdle()
+
+      outbox.claimGate = CompletableDeferred()
+      var accepted: Boolean? = null
+      val send =
+        launch {
+          accepted =
+            chat.sendMessageForOwnerAwaitAcceptance(
+              message = "captured main turn",
+              thinkingLevel = "off",
+              attachments = emptyList(),
+              expectedOwner =
+                ChatComposerOwner(
+                  gatewayStableId = "gateway-test",
+                  agentId = "main",
+                  sessionKey = "agent:main:main",
+                ),
+            )
+        }
+      runCurrent()
+
+      // The final owner values match the captured values, but this is a new UI generation.
+      chat.switchSession("agent:other:main")
+      chat.switchSession("agent:main:main")
+      outbox.claimGate?.complete(Unit)
+      send.join()
+      runCurrent()
+
+      assertEquals(true, accepted)
+      assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
+      assertTrue(chat.messages.value.any { message -> message.content.any { it.text == "captured main turn" } })
+      assertEquals(1, chat.pendingRunCount.value)
+      assertNull(chat.errorText.value)
+    }
+
+  @Test
+  fun projectedSendAcrossSessionRoundTripIsReprojectedAfterAck() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      gateway.echoDeliveredSendsInHistory = false
+      gateway.sendGate = CompletableDeferred()
+      chat.load("agent:main:main")
+      advanceUntilIdle()
+
+      val send =
+        async {
+          chat.sendMessageForOwnerAwaitAcceptance(
+            message = "already projected turn",
+            thinkingLevel = "off",
+            attachments = emptyList(),
+            expectedOwner =
+              ChatComposerOwner(
+                gatewayStableId = "gateway-test",
+                agentId = "main",
+                sessionKey = "agent:main:main",
+              ),
+          )
+        }
+      runCurrent()
+      assertEquals(1, chat.pendingRunCount.value)
+
+      chat.switchSession("agent:other:main")
+      chat.switchSession("agent:main:main")
+      assertEquals(1, chat.pendingRunCount.value)
+      gateway.sendGate?.complete(Unit)
+      assertTrue(send.await())
+
+      assertTrue(chat.messages.value.any { message -> message.content.any { it.text == "already projected turn" } })
+      assertEquals(1, chat.pendingRunCount.value)
+    }
+
+  @Test
+  fun ackReceivedInAnotherChatRestoresPendingRunWhenOwnerReturns() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      gateway.sendGate = CompletableDeferred()
+      chat.load("agent:main:main")
+      advanceUntilIdle()
+
+      val send =
+        async {
+          chat.sendMessageForOwnerAwaitAcceptance(
+            message = "return after ack",
+            thinkingLevel = "off",
+            attachments = emptyList(),
+            expectedOwner =
+              ChatComposerOwner(
+                gatewayStableId = "gateway-test",
+                agentId = "main",
+                sessionKey = "agent:main:main",
+              ),
+          )
+        }
+      runCurrent()
+      chat.switchSession("agent:other:main")
+      gateway.sendGate?.complete(Unit)
+      assertTrue(send.await())
+      assertEquals(0, chat.pendingRunCount.value)
+
+      chat.switchSession("agent:main:main")
+
+      assertEquals(1, chat.pendingRunCount.value)
+      assertTrue(chat.messages.value.any { message -> message.content.any { it.text == "return after ack" } })
+    }
+
+  @Test
+  fun hiddenAcceptedRunParksAfterItsReconciliationDeadline() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      gateway.sendGate = CompletableDeferred()
+      chat.load("agent:main:main")
+      advanceUntilIdle()
+
+      val send =
+        async {
+          chat.sendMessageForOwnerAwaitAcceptance(
+            message = "hidden accepted turn",
+            thinkingLevel = "off",
+            attachments = emptyList(),
+            expectedOwner = ChatComposerOwner("gateway-test", "main", "agent:main:main"),
+          )
+        }
+      runCurrent()
+      chat.switchSession("agent:other:main")
+      gateway.sendGate?.complete(Unit)
+      assertTrue(send.await())
+      assertEquals(
+        ChatOutboxStatus.Accepted,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+
+      advanceTimeBy(120_001)
+      runCurrent()
+
+      assertEquals(
+        ChatOutboxStatus.Failed,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+      chat.switchSession("agent:main:main")
+      assertEquals(0, chat.pendingRunCount.value)
+      assertTrue(chat.messages.value.none { message -> message.content.any { it.text == "hidden accepted turn" } })
+    }
+
+  @Test
+  fun visibleAcceptedRunGetsADeadlineWhenItsOwnerIsHidden() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      gateway.echoDeliveredSendsInHistory = false
+      chat.load("agent:main:main")
+      advanceUntilIdle()
+
+      assertTrue(
+        chat.sendMessageForOwnerAwaitAcceptance(
+          message = "visible then hidden turn",
+          thinkingLevel = "off",
+          attachments = emptyList(),
+          expectedOwner = ChatComposerOwner("gateway-test", "main", "agent:main:main"),
+        ),
+      )
+      assertEquals(1, chat.pendingRunCount.value)
+
+      chat.switchSession("agent:other:main")
+      advanceTimeBy(120_001)
+      runCurrent()
+
+      assertEquals(
+        ChatOutboxStatus.Failed,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+      chat.switchSession("agent:main:main")
+      assertEquals(0, chat.pendingRunCount.value)
+    }
+
+  @Test
+  fun restartReplayKeepsCapturedDefaultAgentForUnscopedSession() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId = "main"
+      val first =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { defaultAgentId },
+          commandOutbox = outbox,
+        )
+      first.load("custom")
+      advanceUntilIdle()
+
+      assertTrue(first.sendMessageAwaitAcceptance(message = "owned offline", thinkingLevel = "off", attachments = emptyList()))
+      assertEquals(
+        "main",
+        outbox.rows.values
+          .single()
+          .ownerAgentId,
+      )
+
+      defaultAgentId = "other"
+      val restarted =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 2L) },
+          currentDefaultAgentId = { defaultAgentId },
+          commandOutbox = outbox,
+        )
+      gateway.online = true
+      restarted.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("custom"), gateway.sentSessionKeys)
+      assertEquals(listOf("main"), gateway.sentAgentIds)
+    }
+
+  @Test
+  fun unscopedSendWaitsForVerifiedDefaultAgent() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId: String? = null
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { defaultAgentId },
+          commandOutbox = outbox,
+        )
+      chat.load("custom")
+      advanceUntilIdle()
+
+      assertFalse(chat.sendMessageAwaitAcceptance(message = "unknown owner", thinkingLevel = "off", attachments = emptyList()))
+      assertTrue(outbox.rows.isEmpty())
+
+      defaultAgentId = "work"
+      assertTrue(chat.sendMessageAwaitAcceptance(message = "verified owner", thinkingLevel = "off", attachments = emptyList()))
+      assertEquals(
+        "work",
+        outbox.rows.values
+          .single()
+          .ownerAgentId,
+      )
+    }
+
+  @Test
+  fun unscopedOfflineSendKeepsTheLastVerifiedOwnerOnTheSameGateway() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId: String? = "work"
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 2L) },
+          currentDefaultAgentId = { defaultAgentId },
+          commandOutbox = outbox,
+        )
+      chat.load("custom")
+      advanceUntilIdle()
+
+      defaultAgentId = null
+      chat.onDefaultAgentChanged(null)
+      chat.onDisconnected("offline")
+      assertTrue(chat.sendMessageAwaitAcceptance("offline work", "off", emptyList()))
+
+      assertEquals(
+        "work",
+        outbox.rows.values
+          .single()
+          .ownerAgentId,
+      )
+    }
+
+  @Test
+  fun flushedRunProjectionAndEventsStayWithCapturedOwner() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId: String? = "other"
+      var defaultAgentRevision = 0L
+      outbox.seed(
+        ChatOutboxItem(
+          id = "owner-a-row",
+          sessionKey = "custom",
+          text = "owner A turn",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+          ownerAgentId = "owner-a",
+        ),
+      )
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+          commandOutbox = outbox,
+        )
+      gateway.online = true
+      gateway.echoDeliveredSendsInHistory = false
+      chat.load("custom")
+      advanceTimeBy(1_000)
+      runCurrent()
+
+      chat.handleGatewayEvent("health", null)
+      runCurrent()
+
+      assertEquals(listOf("owner-a"), gateway.sentAgentIds)
+      assertEquals(0, chat.pendingRunCount.value)
+      assertTrue(chat.messages.value.none { message -> message.content.any { it.text == "owner A turn" } })
+      chat.handleGatewayEvent(
+        "chat",
+        """{"sessionKey":"custom","runId":"owner-a-row","state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"private A stream"}]}}""",
+      )
+      assertNull(chat.streamingAssistantText.value)
+
+      chat.switchSession("agent:other:main")
+      defaultAgentId = "owner-a"
+      defaultAgentRevision += 1
+      chat.switchSession("custom")
+
+      assertEquals(1, chat.pendingRunCount.value)
+      assertTrue(chat.messages.value.any { message -> message.content.any { it.text == "owner A turn" } })
+    }
+
+  @Test
+  fun currentHistoryCannotConfirmAnotherOwnersUnscopedRow() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      outbox.seed(
+        ChatOutboxItem(
+          id = "owner-a-accepted",
+          sessionKey = "custom",
+          text = "owner A turn",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Accepted,
+          retryCount = 0,
+          lastError = null,
+          ownerAgentId = "owner-a",
+        ),
+      )
+      gateway.historyMessagesByAgent["owner-b"] =
+        """[{"role":"user","content":"wrong owner proof","timestamp":1,"idempotencyKey":"owner-a-accepted:user"}]"""
+      gateway.historyMessagesByAgent["owner-a"] = "[]"
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { "owner-b" },
+          commandOutbox = outbox,
+        )
+      gateway.online = true
+
+      chat.load("custom")
+      advanceUntilIdle()
+
+      assertTrue("owner-b" in gateway.historyAgentIds)
+      assertTrue("owner-a" in gateway.historyAgentIds)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("owner-a-accepted").status)
+    }
+
+  @Test
+  fun retryDoesNotInferOwnerForMigratedUnscopedRow() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId = "original"
+      val row =
+        ChatOutboxItem(
+          id = "migrated-row",
+          sessionKey = "custom",
+          text = "migrated input",
+          thinkingLevel = "off",
+          createdAtMs = 1,
+          status = ChatOutboxStatus.Failed,
+          retryCount = 0,
+          lastError = OUTBOX_OWNER_CHANGED_ERROR,
+          ownerAgentId = null,
+        )
+      outbox.seed(row)
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { defaultAgentId },
+          commandOutbox = outbox,
+        )
+      chat.load("custom")
+      advanceUntilIdle()
+      defaultAgentId = "replacement"
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      chat.retryOutboxCommand(row.id)
+      advanceUntilIdle()
+
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue(row.id).status)
+      assertNull(outbox.rows.getValue(row.id).ownerAgentId)
+    }
+
+  @Test
+  fun sameOwnerHistoryReloadKeepsSuspendedSendProjection() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.load("agent:main:main")
+      advanceUntilIdle()
+
+      outbox.claimGate = CompletableDeferred()
+      var accepted: Boolean? = null
+      val send =
+        launch {
+          accepted =
+            chat.sendMessageForOwnerAwaitAcceptance(
+              message = "same owner turn",
+              thinkingLevel = "off",
+              attachments = emptyList(),
+              expectedOwner =
+                ChatComposerOwner(
+                  gatewayStableId = "gateway-test",
+                  agentId = "main",
+                  sessionKey = "agent:main:main",
+                ),
+            )
+        }
+      runCurrent()
+
+      // A missing sessions.create key reloads the current parent. It is a history generation,
+      // not a composer-owner change, so the suspended send still owns this UI.
+      assertTrue(chat.startNewChatAwait())
+      outbox.claimGate?.complete(Unit)
+      send.join()
+
+      assertEquals(true, accepted)
+      assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
+      assertTrue(chat.messages.value.any { message -> message.content.any { it.text == "same owner turn" } })
+      assertEquals(1, chat.pendingRunCount.value)
+    }
+
+  @Test
+  fun defaultAgentRoundTripDuringAdmissionRejectsBeforeDispatch() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId: String? = "main"
+      var defaultAgentRevision = 0L
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+          commandOutbox = outbox,
+        )
+      gateway.online = true
+      outbox.enqueueGate = CompletableDeferred()
+      chat.load("custom")
+      advanceUntilIdle()
+
+      var accepted: Boolean? = null
+      val send =
+        launch {
+          accepted =
+            chat.sendMessageForOwnerAwaitAcceptance(
+              message = "old agent turn",
+              thinkingLevel = "off",
+              attachments = emptyList(),
+              expectedOwner = ChatComposerOwner(gatewayStableId = "gateway-test", agentId = "main", sessionKey = "custom"),
+            )
+        }
+      runCurrent()
+
+      defaultAgentId = "other"
+      defaultAgentRevision += 1
+      defaultAgentId = "main"
+      defaultAgentRevision += 1
+      outbox.enqueueGate?.complete(Unit)
+      send.join()
+
+      assertEquals(false, accepted)
+      assertTrue(gateway.sentSessionKeys.isEmpty())
+      assertTrue(outbox.rows.isEmpty())
+      assertTrue(chat.messages.value.none { message -> message.content.any { it.text == "old agent turn" } })
+      assertEquals(0, chat.pendingRunCount.value)
+    }
+
+  @Test
+  fun claimedRowStillOwnsInputWhenComposerOwnerChangesDuringAdmission() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId: String? = "main"
+      var defaultAgentRevision = 0L
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+          commandOutbox = outbox,
+        )
+      gateway.online = true
+      outbox.enqueueGate = CompletableDeferred()
+      chat.load("custom")
+      advanceUntilIdle()
+
+      var accepted: Boolean? = null
+      val send =
+        launch {
+          accepted =
+            chat.sendMessageForOwnerAwaitAcceptance(
+              message = "flush-owned turn",
+              thinkingLevel = "off",
+              attachments = emptyList(),
+              expectedOwner = ChatComposerOwner("gateway-test", "main", "custom"),
+            )
+        }
+      runCurrent()
+      defaultAgentId = "other"
+      defaultAgentRevision += 1
+      outbox.beforeDeleteIfQueued = {
+        val row = outbox.rows.values.single()
+        outbox.rows[row.id] = row.copy(status = ChatOutboxStatus.Sending)
+      }
+      outbox.enqueueGate?.complete(Unit)
+      send.join()
+
+      assertEquals(true, accepted)
+      assertEquals(
+        ChatOutboxStatus.Sending,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+      assertTrue(gateway.sentMessages.isEmpty())
+    }
+
+  @Test
+  fun defaultAgentChangeAfterAdmissionStillDispatchesToCapturedOwner() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var defaultAgentId: String? = "main"
+      var defaultAgentRevision = 0L
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+          commandOutbox = outbox,
+        )
+      gateway.online = true
+      outbox.claimGate = CompletableDeferred()
+      chat.load("custom")
+      advanceUntilIdle()
+
+      val send =
+        async {
+          chat.sendMessageForOwnerAwaitAcceptance(
+            message = "captured owner",
+            thinkingLevel = "off",
+            attachments = emptyList(),
+            expectedOwner = ChatComposerOwner(gatewayStableId = "gateway-test", agentId = "main", sessionKey = "custom"),
+          )
+        }
+      runCurrent()
+
+      defaultAgentId = "other"
+      defaultAgentRevision += 1
+      outbox.claimGate?.complete(Unit)
+      assertTrue(send.await())
+
+      assertEquals(listOf("custom"), gateway.sentSessionKeys)
+      assertEquals(listOf("main"), gateway.sentAgentIds)
+      assertEquals(0, chat.pendingRunCount.value)
+    }
+
+  @Test
+  fun oldNotEnqueuedRequestDoesNotPoisonNewConnectionHealth() =
+    runTest {
+      val outbox = FakeCommandOutbox()
+      val sendStarted = CompletableDeferred<Unit>()
+      val sendGate = CompletableDeferred<Unit>()
+      var generation = 1L
+      var sendRequestCount = 0
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            if (method == "chat.send") {
+              sendRequestCount += 1
+              if (sendRequestCount == 1) {
+                sendStarted.complete(Unit)
+                sendGate.await()
+                throw GatewayRequestNotEnqueued("old connection closed")
+              }
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              val runId = (params["idempotencyKey"] as JsonPrimitive).content
+              """{"runId":"$runId","status":"started"}"""
+            } else {
+              "{}"
+            }
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = generation) },
+          currentDefaultAgentId = { "main" },
+          commandOutbox = outbox,
+        )
+      chat.handleGatewayEvent("health", null)
+
+      val accepted =
+        async {
+          chat.sendMessageAwaitAcceptance(
+            message = "survive reconnect",
+            thinkingLevel = "off",
+            attachments = emptyList(),
+          )
+        }
+      sendStarted.await()
+      generation = 2L
+      chat.handleGatewayEvent("health", null)
+      sendGate.complete(Unit)
+
+      assertTrue(accepted.await())
+      assertTrue(chat.healthOk.value)
+      assertEquals(
+        ChatOutboxStatus.Accepted,
+        outbox.rows.values
+          .single()
+          .status,
+      )
+      assertEquals(2, sendRequestCount)
+      assertEquals(1, chat.pendingRunCount.value)
     }
 
   @Test
@@ -1977,10 +2876,11 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       chat.load("main")
-      chat.applyMainSessionKey("agent:work:main")
+      chat.applyMainSessionKey("agent:main:main")
       advanceUntilIdle()
 
       // The durable pin is the only record of the alias resolution; if it cannot persist,
@@ -1997,7 +2897,7 @@ class ChatControllerOutboxTest {
       outbox.pinSessionKeyFailure = null
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      assertEquals(listOf("agent:work:main"), gateway.sentSessionKeys)
+      assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
       assertTrue(outbox.rows.values.none { it.sessionKey == "main" })
     }
 
@@ -2018,6 +2918,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Accepted,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       chat.load("main")
@@ -2058,6 +2959,7 @@ class ChatControllerOutboxTest {
           retryCount = 0,
           lastError = null,
           gatedEpoch = 5L,
+          ownerAgentId = "main",
         ),
       )
       chat.load("main")
@@ -2099,6 +3001,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Accepted,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "a",
         ),
       )
       outbox.seed(
@@ -2111,6 +3014,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "a",
         ),
       )
       outbox.seed(
@@ -2123,6 +3027,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "b",
         ),
       )
       val chat = controller(this, gateway, outbox)
@@ -2131,12 +3036,15 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       // The unproven accepted head held its session while the unrelated session flowed first;
-      // once reconciliation parked it for review, the released successor followed.
+      // once reconciliation parked it for review, the released successor followed. Full virtual
+      // idle also reaches both hidden runs' proof deadlines, so their accepted rows park too.
       assertEquals(listOf("independent session", "blocked successor"), gateway.sentMessages)
       assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("ambiguous-a").status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("ambiguous-a").lastError)
-      assertFalse(outbox.rows.containsKey("queued-a"))
-      assertFalse(outbox.rows.containsKey("queued-b"))
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("queued-a").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("queued-a").lastError)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("queued-b").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("queued-b").lastError)
     }
 
   @Test
@@ -2364,6 +3272,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Accepted,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       outbox.seed(
@@ -2376,6 +3285,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       // Canonical history already carries the head's turn from the previous process.
@@ -2409,6 +3319,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Failed,
           retryCount = 0,
           lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+          ownerAgentId = "main",
         ),
       )
       outbox.seed(
@@ -2421,6 +3332,7 @@ class ChatControllerOutboxTest {
           status = ChatOutboxStatus.Queued,
           retryCount = 0,
           lastError = null,
+          ownerAgentId = "main",
         ),
       )
       val chat = controller(this, gateway, outbox)

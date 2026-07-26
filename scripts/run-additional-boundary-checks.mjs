@@ -15,8 +15,10 @@ const POST_FORCE_KILL_WAIT_MS = 250;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 /** Ordered list of supplemental boundary checks used by CI sharding. */
+// prompt:snapshots:check is intentionally absent: it regenerates snapshots by
+// running real embedded-agent turns (~2min) and owns a dedicated CI lane
+// (check-prompt-snapshots) so no boundary shard carries that wall clock.
 export const BOUNDARY_CHECKS = [
-  ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
   ["lint:docker-e2e", "pnpm", ["run", "lint:docker-e2e"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
@@ -74,6 +76,7 @@ export const BOUNDARY_CHECKS = [
     ["run", "lint:extensions:telegram-grammy-types"],
   ],
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
+  ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
 /**
@@ -181,6 +184,15 @@ export function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
+function decodeUtf8Tail(buffer) {
+  let start = 0;
+  while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
+    start += 1;
+  }
+  // Appends are complete JS strings; only a byte slice's leading boundary can be partial.
+  return buffer.subarray(start).toString("utf8");
+}
+
 /**
  * Keeps only the tail of noisy check output so failure logs stay bounded.
  */
@@ -195,7 +207,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
     const textBytes = Buffer.byteLength(text);
     if (textBytes >= limit) {
       const buffer = Buffer.from(text);
-      const tail = buffer.subarray(buffer.length - limit).toString("utf8");
+      const tail = decodeUtf8Tail(buffer.subarray(buffer.length - limit));
       chunks.splice(0, chunks.length, tail);
       bytes = Buffer.byteLength(tail);
       truncated = true;
@@ -216,7 +228,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
       }
 
       const buffer = Buffer.from(first);
-      const tail = buffer.subarray(overflow).toString("utf8");
+      const tail = decodeUtf8Tail(buffer.subarray(overflow));
       chunks[0] = tail;
       bytes = chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk), 0);
       truncated = true;
@@ -449,8 +461,6 @@ function formatDuration(ms) {
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
   return prettyMilliseconds(Math.max(0, roundedMs), {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 1,
     unitCount: 1,
   });
 }

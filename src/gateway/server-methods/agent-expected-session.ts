@@ -5,7 +5,7 @@ import {
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 
-type ExpectedExistingSessionConstraint = {
+export type ExpectedExistingSessionConstraint = {
   handoffId?: string;
   sessionId: string;
 };

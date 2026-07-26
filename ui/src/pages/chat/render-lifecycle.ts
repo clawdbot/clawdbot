@@ -1,5 +1,5 @@
-export type CancelAfterCommit = () => void;
-export type CompleteAfterCommit = () => void;
+type CancelAfterCommit = () => void;
+type CompleteAfterCommit = () => void;
 export type AfterCommitEffect = (complete: CompleteAfterCommit) => CancelAfterCommit | void;
 
 /**

@@ -2,7 +2,7 @@
 import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createSlackWebClient } from "./client.js";
+import { createSlackLookupClient } from "./client.js";
 import { collectSlackCursorPages } from "./cursor-pages.js";
 
 export type SlackChannelLookup = {
@@ -102,7 +102,7 @@ export async function resolveSlackChannelAllowlist(params: {
       name: parsed.name,
     }));
   }
-  const client = params.client ?? createSlackWebClient(params.token);
+  const client = params.client ?? createSlackLookupClient(params.token);
   const channels = await listSlackChannels(client);
   return resolveDirectoryAllowlistEntries<
     { id?: string; name?: string },

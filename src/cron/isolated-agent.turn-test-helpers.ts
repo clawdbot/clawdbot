@@ -1,6 +1,6 @@
 /** Reusable turn-level fixtures for isolated cron agent regression tests. */
 import "./isolated-agent.mocks.js";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { CliDeps } from "../cli/deps.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -42,21 +42,6 @@ function mockEmbeddedTexts(texts: string[]) {
 
 export function mockEmbeddedOk() {
   mockEmbeddedTexts(["ok"]);
-}
-
-export function expectEmbeddedProviderModel(expected: { provider: string; model: string }) {
-  const call = vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0] as {
-    provider?: string;
-    model?: string;
-  };
-  return {
-    provider: call?.provider,
-    model: call?.model,
-    assert() {
-      expect(call?.provider).toBe(expected.provider);
-      expect(call?.model).toBe(expected.model);
-    },
-  };
 }
 
 export async function readSessionEntry(storePath: string, key: string) {
@@ -117,43 +102,4 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
   });
 
   return { deps, res, storePath };
-}
-
-export async function runGmailHookTurn(
-  home: string,
-  storeEntries?: Record<string, Record<string, unknown>>,
-) {
-  return runCronTurn(home, {
-    cfgOverrides: {
-      hooks: {
-        gmail: {
-          model: GMAIL_MODEL,
-        },
-      },
-    },
-    jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-    sessionKey: "hook:gmail:msg-1",
-    storeEntries,
-  });
-}
-
-export async function runTurnWithStoredModelOverride(
-  home: string,
-  jobPayload: CronJob["payload"],
-  modelOverride = "gpt-4.1-mini",
-  providerOverride = "openai",
-  cfgOverrides?: Parameters<typeof makeCfg>[2],
-) {
-  return runCronTurn(home, {
-    cfgOverrides,
-    jobPayload,
-    storeEntries: {
-      "agent:main:cron:job-1": {
-        sessionId: "existing-cron-session",
-        updatedAt: Date.now(),
-        providerOverride,
-        modelOverride,
-      },
-    },
-  });
 }

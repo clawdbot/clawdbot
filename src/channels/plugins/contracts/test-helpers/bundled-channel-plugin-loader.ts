@@ -10,9 +10,9 @@ import {
   loadBundledPluginPublicSurface,
   resolveBundledPluginPublicModulePath,
 } from "../../../../test-utils/bundled-plugin-public-surface.js";
-import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled-ids.js";
+import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled.js";
 import type { ChannelId } from "../../channel-id.types.js";
-import type { ChannelPlugin } from "../../types.js";
+import type { ChannelPlugin } from "../../types.public.js";
 
 type ChannelPluginApiModule = Record<string, unknown>;
 type ChannelDirectoryContractModule = Record<string, unknown>;

@@ -38,9 +38,11 @@ import {
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
@@ -50,6 +52,7 @@ type SessionResolution = {
   sessionStore?: Record<string, SessionEntry>;
   storePath: string;
   isNewSession: boolean;
+  previousSessionId?: string;
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
 };
@@ -71,13 +74,26 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     abortedLastRun: undefined,
     restartRecoveryForceSafeTools: undefined,
     restartRecoveryDeliveryContext: undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
+    restartRecoveryDisableMessageTool: undefined,
+    restartRecoverySuppressTextDelivery: undefined,
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryBeforeAgentReplyState: undefined,
+    restartRecoveryDeliveryReceiptState: undefined,
+    restartRecoveryDeliveryToolCallId: undefined,
+    restartRecoveryRequesterAccountId: undefined,
+    restartRecoveryRequesterSenderId: undefined,
+    restartRecoverySameChannelThreadRequired: undefined,
+    restartRecoverySourceIngress: undefined,
+    restartRecoverySourceReplyDeliveryMode: undefined,
+    restartRecoveryTerminalDeliveryEvidence: undefined,
     restartRecoveryTerminalRunIds: undefined,
     sessionStartedAt: undefined,
     lastInteractionAt: undefined,
   };
+  transitionMainSessionRecovery(next, { kind: "clear" });
   clearAllCliSessions(next);
   return next;
 }
@@ -240,13 +256,15 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   const sessionId = opts.sessionId.trim();
-  const storeAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
+  const storeAgentId = opts.agentId?.trim()
+    ? normalizeAgentId(opts.agentId)
+    : resolveDefaultAgentId(opts.cfg);
   const storePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadCommandSessionStore({
     storePath,
-    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+    agentId: storeAgentId,
   });
   if (!sessionId) {
     return { sessionKey: undefined, sessionStore, storePath };
@@ -295,7 +313,7 @@ export function resolveSessionKeyForRequest(opts: {
   const storeAgentId = explicitSessionKey
     ? isUnscopedSessionKeySentinel(explicitSessionKey)
       ? (requestedAgentId ?? defaultAgentId)
-      : resolveAgentIdFromSessionKey(explicitSessionKey)
+      : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
     : (requestedAgentId ?? defaultAgentId);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
@@ -391,12 +409,12 @@ export function resolveSession(opts: {
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
   const sessionAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
-    : resolveAgentIdFromSessionKey(sessionKey);
+    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(opts.cfg));
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
+    channel: sessionDeliveryChannel(sessionEntry),
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,
@@ -444,14 +462,14 @@ export function resolveSession(opts: {
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
-  const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
-      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-      : undefined;
-  const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
-      ? normalizeVerboseLevel(sessionEntry.verboseLevel)
-      : undefined;
+  // Behavior overrides belong to the logical session, not one transcript id.
+  // Carry them across every rollover; explicit `default` directives clear them.
+  const persistedThinking = sessionEntry?.thinkingLevel
+    ? normalizeThinkLevel(sessionEntry.thinkingLevel)
+    : undefined;
+  const persistedVerbose = sessionEntry?.verboseLevel
+    ? normalizeVerboseLevel(sessionEntry.verboseLevel)
+    : undefined;
 
   return {
     sessionId,
@@ -460,6 +478,7 @@ export function resolveSession(opts: {
     sessionStore,
     storePath,
     isNewSession,
+    previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
     persistedThinking,
     persistedVerbose,
   };

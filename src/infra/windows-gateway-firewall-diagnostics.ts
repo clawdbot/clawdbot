@@ -1026,3 +1026,4 @@ export function formatWindowsGatewayFirewallGuidance(params: {
     "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
   ];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

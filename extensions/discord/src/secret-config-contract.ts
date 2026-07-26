@@ -131,6 +131,8 @@ export function collectRuntimeConfigAssignments(params: {
       isBaseFieldActiveForChannelSurface(surface, "pluralkit") &&
       isRecord(discord.pluralkit) &&
       isEnabledFlag(discord.pluralkit),
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !Object.hasOwn(account, "pluralkit") && isEnabledFlag(discord.pluralkit),
     topInactiveReason:
       "no enabled Discord surface inherits this top-level PluralKit config or PluralKit is disabled.",
     accountActive: ({ account, enabled }) =>

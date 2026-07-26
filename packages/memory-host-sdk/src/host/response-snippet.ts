@@ -220,7 +220,7 @@ function parseContentLength(raw: string | null, errorPrefix: string): number | u
   if (!trimmed) {
     return undefined;
   }
-  if (!/^(0|[1-9]\d*)$/.test(trimmed)) {
+  if (!/^\d+$/.test(trimmed)) {
     throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
   }
   const value = Number(trimmed);

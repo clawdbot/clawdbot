@@ -47,7 +47,6 @@ vi.mock("./active-listener.js", () => ({
 }));
 
 vi.mock("./qr-image.js", () => ({
-  renderQrPngBase64: vi.fn(async () => "base64"),
   renderQrPngDataUrl: vi.fn(async (input: string) => `data:image/png;base64,encoded:${input}`),
 }));
 

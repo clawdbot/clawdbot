@@ -3,9 +3,13 @@
  * Protects OpenClaw web_search routing when provider/model compatibility also
  * advertises native search support.
  */
-import { describe, expect, it } from "vitest";
-import { testing } from "./agent-tools.js";
+import { describe, expect, it, vi } from "vitest";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+
+vi.mock("./openclaw-plugin-tools.js", () => ({
+  resolveOpenClawPluginToolsForOptions: () => [{ name: "browser" }],
+}));
 
 const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
 const XAI_TOOL_SCHEMA_PROFILE = "xai";
@@ -15,6 +19,31 @@ const baseTools = [
   { name: "web_search" },
   { name: "exec" },
 ] as unknown as AnyAgentTool[];
+
+const testing = {
+  applyModelProviderToolPolicy(
+    requestedTools: AnyAgentTool[],
+    options?: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>,
+  ): AnyAgentTool[] {
+    const actualTools = createOpenClawCodingTools({
+      ...options,
+      cwd: "/tmp/openclaw-agent-tools-policy-test",
+      workspaceDir: "/tmp/openclaw-agent-tools-policy-test",
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
+    });
+    const actualToolsByName = new Map(actualTools.map((tool) => [tool.name, tool]));
+    return requestedTools.flatMap((tool) => {
+      const actualTool = actualToolsByName.get(tool.name);
+      return actualTool ? [actualTool] : [];
+    });
+  },
+};
 
 function toolNames(tools: AnyAgentTool[]): string[] {
   return tools.map((tool) => tool.name);
@@ -33,7 +62,6 @@ describe("applyModelProviderToolPolicy", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-        nativeWebSearchTool: true,
         toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
       },
     });
@@ -45,7 +73,6 @@ describe("applyModelProviderToolPolicy", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-        nativeWebSearchTool: true,
       },
     });
 

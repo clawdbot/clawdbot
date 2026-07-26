@@ -627,7 +627,10 @@ describe("slackOutbound sendPayload", () => {
             buttons: [
               {
                 label: "Launch",
-                action: { type: "web-app", url: "https://example.com/app" },
+                action: {
+                  type: "web-app",
+                  url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+                },
               },
               { label: "View", action: { type: "url", url: "https://example.com/view" } },
             ],
@@ -652,7 +655,7 @@ describe("slackOutbound sendPayload", () => {
             expect.objectContaining({
               type: "button",
               action_id: "openclaw:reply_link:1:1",
-              url: "https://example.com/app",
+              url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
             }),
             expect.objectContaining({
               type: "button",
@@ -1215,3 +1218,4 @@ describe("Slack outbound payload contract", () => {
     createHarness: createSlackOutboundPayloadHarness,
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

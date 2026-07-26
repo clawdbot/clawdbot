@@ -4,6 +4,8 @@ import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-ru
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
+import type { QueueMode } from "./queue/types.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -19,13 +21,21 @@ type InternalReplySessionOptions = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
-  /** Marks queued follow-up admission waits on an older owner's delivery barrier. */
-  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Marks when this reply is waiting to own its session's reply lane. */
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Overrides persisted queue mode for this reply only. */
+  queueModeOverride?: QueueMode;
+  /** Dispatch-owned operation used to defer hooks until durable run admission. */
+  replyOperation?: ReplyOperation;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithHeartbeatRunScope;
+
+export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
+  return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
+}
 
 /** Reply resolver signature used by dispatchers and tests for dependency injection. */
 export type GetReplyFromConfig = (

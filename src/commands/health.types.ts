@@ -39,6 +39,15 @@ export type PluginHealthErrorSummary = {
 export type PluginHealthSummary = {
   loaded: string[];
   errors: PluginHealthErrorSummary[];
+  unavailable?: Array<{
+    id: string;
+    state: "configured-unavailable";
+    diagnostic: {
+      kind: "plugin-verification";
+      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      detail: string;
+    };
+  }>;
 };
 
 /** Context engine quarantine entry included in health output. */
@@ -62,11 +71,13 @@ export type DeliveryQueueHealthSummary = {
     count: number;
     oldestFailedAt?: number;
   }>;
+  ingressFailed?: Array<{
+    channelId: string;
+    accountId: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
 };
-
-/** Optional model pricing cache health reported by the gateway. */
-type ModelPricingHealthSummary =
-  import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
 
 /** Config hot-reload watcher status, present only when a reloader is running. */
 type ConfigReloadHealthSummary = {
@@ -82,7 +93,6 @@ export type HealthSummary = {
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
   deliveryQueues?: DeliveryQueueHealthSummary;
-  modelPricing?: ModelPricingHealthSummary;
   configReload?: ConfigReloadHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];

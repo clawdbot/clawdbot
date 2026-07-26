@@ -1,8 +1,10 @@
 // Plugin Clawhub Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
+import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
 import { readBoundedResponseText } from "./bounded-response.ts";
 import {
   assertPluginReleaseDependencyFreshness,
@@ -101,6 +103,9 @@ const CLAWHUB_REQUEST_TIMEOUT_MS = 30_000;
 const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 64 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
+// All-publishable releases query dozens of packages. Bound registry pressure while
+// allowing independent package state reads to leave the core publish critical path quickly.
+const CLAWHUB_RELEASE_PLAN_CONCURRENCY = 8;
 const OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY = "openclaw/openclaw";
 const OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME = "plugin-clawhub-release.yml";
 const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
@@ -112,6 +117,7 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "packages/plugin-package-contract/src/index.ts",
   "scripts/lib/bounded-response.ts",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/release-version.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",
@@ -229,7 +235,7 @@ async function buildClawHubQueryError(
     body = "";
   }
   if (body.length > CLAWHUB_ERROR_BODY_MAX_CHARS) {
-    body = `${body.slice(0, CLAWHUB_ERROR_BODY_MAX_CHARS)}...`;
+    body = `${truncateUtf16Safe(body, CLAWHUB_ERROR_BODY_MAX_CHARS)}...`;
   }
   const diagnosticHeaders = ["retry-after", "x-request-id", "x-vercel-id", "cf-ray"]
     .map((name) => {
@@ -651,32 +657,22 @@ export async function collectPluginClawHubReleasePlan(params?: {
     params?.resolveLatestVersion,
   );
 
-  const planned: PluginReleasePlanItemWithPackageState[] = [];
-  for (const plugin of selectedPublishable) {
-    const packageExists = await doesClawHubPackageExist(plugin.packageName, {
+  const planTasks = selectedPublishable.map((plugin) => async () => {
+    const queryOptions = {
       registryBaseUrl: params?.registryBaseUrl,
       fetchImpl: params?.fetchImpl,
       requestTimeoutMs: params?.requestTimeoutMs,
       sleep: params?.sleep,
-    });
+    };
+    const packageExists = await doesClawHubPackageExist(plugin.packageName, queryOptions);
     const hasTrustedPublisher = packageExists
-      ? await hasClawHubTrustedPublisher(plugin.packageName, {
-          registryBaseUrl: params?.registryBaseUrl,
-          fetchImpl: params?.fetchImpl,
-          requestTimeoutMs: params?.requestTimeoutMs,
-          sleep: params?.sleep,
-        })
+      ? await hasClawHubTrustedPublisher(plugin.packageName, queryOptions)
       : false;
     const alreadyPublished = packageExists
-      ? await isPluginVersionPublishedOnClawHub(plugin.packageName, plugin.version, {
-          registryBaseUrl: params?.registryBaseUrl,
-          fetchImpl: params?.fetchImpl,
-          requestTimeoutMs: params?.requestTimeoutMs,
-          sleep: params?.sleep,
-        })
+      ? await isPluginVersionPublishedOnClawHub(plugin.packageName, plugin.version, queryOptions)
       : false;
 
-    planned.push({
+    return {
       extensionId: plugin.extensionId,
       packageDir: plugin.packageDir,
       packageName: plugin.packageName,
@@ -687,8 +683,17 @@ export async function collectPluginClawHubReleasePlan(params?: {
       hasTrustedPublisher,
       alreadyPublished,
       artifactName: formatClawHubPackageArtifactName(plugin),
-    });
+    } satisfies PluginReleasePlanItemWithPackageState;
+  });
+  const planResult = await runTasksWithConcurrency({
+    tasks: planTasks,
+    limit: CLAWHUB_RELEASE_PLAN_CONCURRENCY,
+    errorMode: "stop",
+  });
+  if (planResult.hasError) {
+    throw planResult.firstError;
   }
+  const planned = planResult.results;
   const all = planned.map(stripPackageReleaseState);
 
   return {

@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 type MockChild = EventEmitter & {
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
+  ignoreSigterm: boolean;
   kill: ReturnType<typeof vi.fn>;
   stdout?: EventEmitter;
   stderr?: EventEmitter;
@@ -28,14 +29,23 @@ vi.mock("node:child_process", async (importOriginal) => {
       const child = Object.assign(new EventEmitter(), {
         exitCode: null,
         signalCode: null,
-        kill: vi.fn((signal?: NodeJS.Signals) => {
-          child.signalCode = signal ?? "SIGTERM";
-          return true;
-        }),
+        ignoreSigterm: false,
+        kill: vi.fn(),
         stdout: new EventEmitter(),
         stderr: new EventEmitter(),
         stdin: Object.assign(new EventEmitter(), { write: vi.fn() }),
       }) as MockChild;
+      child.kill.mockImplementation((signal?: NodeJS.Signals) => {
+        const resolvedSignal = signal ?? "SIGTERM";
+        if (resolvedSignal === "SIGTERM" && child.ignoreSigterm) {
+          return true;
+        }
+        queueMicrotask(() => {
+          child.signalCode = resolvedSignal;
+          child.emit("exit", null, resolvedSignal);
+        });
+        return true;
+      });
       children.push(child);
       return child;
     }),
@@ -153,6 +163,93 @@ describe("google-meet node host bridge sessions", () => {
     }
   });
 
+  it("rejects Chrome launch when the command exits by signal", async () => {
+    const originalPlatform = process.platform;
+    vi.mocked(spawnSync).mockImplementationOnce(() => ({
+      pid: 123,
+      output: [null, "", ""],
+      stdout: "",
+      stderr: "",
+      status: null,
+      signal: "SIGTERM",
+    }));
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+          }),
+        ),
+      ).rejects.toThrow("failed to launch Chrome for Meet: terminated by SIGTERM");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("preserves timeout diagnostics when Chrome launch stderr is empty", async () => {
+    const originalPlatform = process.platform;
+    const error = Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" });
+    vi.mocked(spawnSync).mockImplementationOnce(() => ({
+      pid: 123,
+      output: [null, "", ""],
+      stdout: "",
+      stderr: "",
+      status: null,
+      signal: "SIGTERM",
+      error,
+    }));
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+          }),
+        ),
+      ).rejects.toThrow("failed to launch Chrome for Meet: spawnSync open ETIMEDOUT");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("preserves timeout diagnostics when Chrome launch also writes stderr", async () => {
+    const originalPlatform = process.platform;
+    const error = Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" });
+    vi.mocked(spawnSync).mockImplementationOnce(() => ({
+      pid: 123,
+      output: [null, "", "child warning"],
+      stdout: "",
+      stderr: "child warning",
+      status: null,
+      signal: "SIGTERM",
+      error,
+    }));
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+          }),
+        ),
+      ).rejects.toThrow(
+        "failed to launch Chrome for Meet: spawnSync open ETIMEDOUT: child warning",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
   it("clears output playback without closing the active bridge when the old output exits", async () => {
     const originalPlatform = process.platform;
     children.length = 0;
@@ -217,12 +314,71 @@ describe("google-meet node host bridge sessions", () => {
       expect(children[2]?.stdin?.write).toHaveBeenCalledWith(audio);
       expect(firstOutput?.stdin?.write).not.toHaveBeenCalled();
 
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "pushAudio",
+            bridgeId: start.bridgeId,
+            base64: "not-base64!",
+          }),
+        ),
+      ).rejects.toThrow("pushAudio base64 must be a valid audio payload");
+      expect(children[2]?.stdin?.write).toHaveBeenCalledTimes(1);
+
       await handleGoogleMeetNodeHostCommand(
         JSON.stringify({
           action: "stop",
           bridgeId: start.bridgeId,
         }),
       );
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("waits for cleared SIGTERM-resistant output before acknowledging stop", async () => {
+    const originalPlatform = process.platform;
+    children.length = 0;
+    vi.useFakeTimers();
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "realtime",
+            launch: false,
+            audioInputCommand: ["mock-rec"],
+            audioOutputCommand: ["mock-play"],
+          }),
+        ),
+      );
+      const [retiredOutput] = children;
+      if (!retiredOutput) {
+        throw new Error("expected Google Meet node host output process");
+      }
+      retiredOutput.ignoreSigterm = true;
+
+      await handleGoogleMeetNodeHostCommand(
+        JSON.stringify({ action: "clearAudio", bridgeId: start.bridgeId }),
+      );
+      let settled = false;
+      const stopPromise = handleGoogleMeetNodeHostCommand(
+        JSON.stringify({ action: "stop", bridgeId: start.bridgeId }),
+      ).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).toBe(false);
+      expect(retiredOutput.kill.mock.calls).toEqual([["SIGTERM"]]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await stopPromise;
+      expect(retiredOutput.signalCode).toBe("SIGKILL");
+      expect(retiredOutput.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }
@@ -265,6 +421,106 @@ describe("google-meet node host bridge sessions", () => {
       expect(inputProcess.kill).toHaveBeenCalledTimes(1);
       expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
       expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("waits for SIGTERM-resistant command-pair processes before acknowledging stop", async () => {
+    const originalPlatform = process.platform;
+    children.length = 0;
+    vi.useFakeTimers();
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "realtime",
+            launch: false,
+            audioInputCommand: ["mock-rec"],
+            audioOutputCommand: ["mock-play"],
+          }),
+        ),
+      );
+      const [outputProcess, inputProcess] = children;
+      if (!outputProcess || !inputProcess) {
+        throw new Error("expected Google Meet node host command-pair processes");
+      }
+      outputProcess.ignoreSigterm = true;
+      inputProcess.ignoreSigterm = true;
+      let settled = false;
+      const stopPromise = handleGoogleMeetNodeHostCommand(
+        JSON.stringify({ action: "stop", bridgeId: start.bridgeId }),
+      ).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).toBe(false);
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+
+      await vi.advanceTimersByTimeAsync(1);
+      await stopPromise;
+      expect(outputProcess.signalCode).toBe("SIGKILL");
+      expect(inputProcess.signalCode).toBe("SIGKILL");
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(inputProcess.kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("shares SIGTERM-resistant cleanup across concurrent stopByUrl calls", async () => {
+    const originalPlatform = process.platform;
+    children.length = 0;
+    vi.useFakeTimers();
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      await handleGoogleMeetNodeHostCommand(
+        JSON.stringify({
+          action: "start",
+          url: "https://meet.google.com/xyz-abcd-uvw",
+          mode: "realtime",
+          launch: false,
+          audioInputCommand: ["mock-rec"],
+          audioOutputCommand: ["mock-play"],
+        }),
+      );
+      const [outputProcess, inputProcess] = children;
+      if (!outputProcess || !inputProcess) {
+        throw new Error("expected Google Meet node host command-pair processes");
+      }
+      outputProcess.ignoreSigterm = true;
+      inputProcess.ignoreSigterm = true;
+      let firstSettled = false;
+      let secondSettled = false;
+      const stopParams = JSON.stringify({
+        action: "stopByUrl",
+        url: "https://meet.google.com/xyz-abcd-uvw",
+        mode: "realtime",
+      });
+      const firstStop = handleGoogleMeetNodeHostCommand(stopParams).finally(() => {
+        firstSettled = true;
+      });
+      const secondStop = handleGoogleMeetNodeHostCommand(stopParams).finally(() => {
+        secondSettled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(firstSettled).toBe(false);
+      expect(secondSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const [firstResult, secondResult] = await Promise.all([firstStop, secondStop]);
+      expect(JSON.parse(firstResult)).toEqual({ ok: true, stopped: 1 });
+      expect(JSON.parse(secondResult)).toEqual({ ok: true, stopped: 0 });
+      expect(outputProcess.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+      expect(inputProcess.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }
@@ -314,7 +570,10 @@ describe("google-meet node host bridge sessions", () => {
       expect(activeList.bridges[0]?.url).toBe("https://meet.google.com/abc-defg-hij?authuser=1");
       expect(typeof activeList.bridges[0]?.createdAt).toBe("string");
 
-      children[1]?.emit("exit", 0, null);
+      if (children[1]) {
+        children[1].exitCode = 0;
+        children[1].emit("exit", 0, null);
+      }
 
       const afterExitList = JSON.parse(
         await handleGoogleMeetNodeHostCommand(

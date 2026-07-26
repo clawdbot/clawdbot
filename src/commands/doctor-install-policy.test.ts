@@ -2,9 +2,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectInstallPolicyHealthLines } from "./doctor-install-policy.js";
+import { noteInstallPolicyHealth } from "./doctor-install-policy.js";
+
+const noteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
+
+async function collectInstallPolicyHealthLines(
+  cfg: OpenClawConfig,
+  options: { deep?: boolean; env?: NodeJS.ProcessEnv } = {},
+): Promise<string[]> {
+  noteMock.mockClear();
+  await noteInstallPolicyHealth(cfg, options);
+  const body = noteMock.mock.calls.at(-1)?.[0];
+  return typeof body === "string" ? body.split("\n") : [];
+}
 
 const tempDirs: string[] = [];
 
@@ -16,7 +30,7 @@ async function makeTempDir(): Promise<string> {
 
 async function writePolicyScript(dir: string, response: string): Promise<string> {
   const scriptPath = path.join(dir, "policy.cjs");
-  await fs.writeFile(scriptPath, `process.stdout.write(${JSON.stringify(response)});\n`, "utf8");
+  await fs.writeFile(scriptPath, `#!/bin/sh\nprintf '%s' ${JSON.stringify(response)}\n`, "utf8");
   await fs.chmod(scriptPath, 0o700);
   return scriptPath;
 }
@@ -28,9 +42,8 @@ function configWithPolicy(scriptPath: string): OpenClawConfig {
         enabled: true,
         exec: {
           source: "exec",
-          command: process.execPath,
-          args: [scriptPath],
-          allowInsecurePath: true,
+          command: scriptPath,
+          trustedDirs: [path.dirname(scriptPath)],
         },
       },
     },

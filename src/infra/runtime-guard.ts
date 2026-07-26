@@ -28,7 +28,7 @@ const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
 /** Runtime facts included in startup/runtime-version diagnostics. */
-export type RuntimeDetails = {
+type RuntimeDetails = {
   kind: RuntimeKind;
   version: string | null;
   execPath: string | null;
@@ -69,7 +69,7 @@ export function isAtLeast(version: Semver | null, minimum: Semver): boolean {
 }
 
 /** Reads current process runtime metadata for startup support checks. */
-export function detectRuntime(): RuntimeDetails {
+function detectRuntime(): RuntimeDetails {
   const bunVersion = process.versions?.bun;
   const kind: RuntimeKind = bunVersion ? "bun" : process.versions?.node ? "node" : "unknown";
   const version = bunVersion ?? process.versions?.node ?? null;
@@ -83,7 +83,7 @@ export function detectRuntime(): RuntimeDetails {
 }
 
 /** Returns whether a detected runtime meets OpenClaw's minimum runtime contract. */
-export function runtimeSatisfies(details: RuntimeDetails): boolean {
+function runtimeSatisfies(details: RuntimeDetails): boolean {
   if (details.kind === "node") {
     return isSupportedNodeVersion(details.version);
   }
@@ -109,7 +109,7 @@ export function isSupportedNodeVersion(version: string | null): boolean {
 }
 
 /** Parses simple package `engines.node` ranges of the form `>=x.y.z`. */
-export function parseMinimumNodeEngine(engine: string | null): Semver | null {
+function parseMinimumNodeEngine(engine: string | null): Semver | null {
   if (!engine) {
     return null;
   }

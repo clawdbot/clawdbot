@@ -25,6 +25,7 @@ type WorkflowJob = {
     run?: string;
     uses?: string;
     with?: Record<string, unknown>;
+    "working-directory"?: string;
   }>;
   uses?: string;
   with?: Record<string, unknown>;
@@ -207,10 +208,36 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
+  it("retries transient GitHub API responses during both provenance checks", () => {
+    const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as {
+      env?: Record<string, unknown>;
+    };
+    expect(workflow.env?.GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN).toContain(
+      "invalid character .* looking for beginning of value",
+    );
+
+    for (const [jobName, stepName] of [
+      ["build_candidate", "Validate candidate release provenance"],
+      ["run_telegram", "Revalidate candidate release provenance"],
+    ] as const) {
+      const script = workflowStep(workflowJob(jobName), stepName).run;
+      expect(script).toContain("gh_with_retry()");
+      expect(script).toContain("for attempt in 1 2 3 4 5");
+      expect(script).toContain('stdout="$(gh "$@" 2>"$stderr_file")"');
+      expect(script).toContain('cat "$stderr_file" >&2');
+      expect(script).not.toContain('output="$(gh "$@" 2>&1)"');
+      expect(script).toContain("gh_with_retry api \\\n");
+      expect(script).toContain("gh_with_retry api graphql");
+    }
+  });
+
   it("attributes GitHub web-flow and unsigned release merges to their exact maintainer merger", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
 
-    expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
+    expect(source.match(/associatedPullRequests\(first:100\)/gu)).toHaveLength(2);
+    expect(source.match(/headRefOid == \$sha/gu)).toHaveLength(2);
+    expect(source.match(/\.headRepository\.nameWithOwner == \$repo/gu)).toHaveLength(2);
+    expect(source).not.toContain("commits/${candidate_sha}/pulls");
     expect(source.match(/if \.signature == null then "missing"/gu)).toHaveLength(2);
     expect(source.match(/\$signature_status" == "invalid"/gu)).toHaveLength(2);
     expect(
@@ -231,7 +258,7 @@ describe("release Telegram QA workflow", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
 
     expect(source.match(/branches-where-head/gu)).toHaveLength(2);
-    expect(source.match(/gh api --paginate/gu)).toHaveLength(2);
+    expect(source.match(/gh_with_retry api --paginate/gu)).toHaveLength(2);
     expect(
       source.match(/git(?: -C \.candidate)? ls-remote --exit-code --refs origin/gu),
     ).toHaveLength(2);
@@ -347,6 +374,18 @@ describe("release Telegram QA workflow", () => {
     );
   });
 
+  it("bounds the OIDC identity request below the job timeout", () => {
+    const identityJob = workflowJob("trusted_identity");
+    const identityStep = workflowStep(identityJob, "Verify dispatched-main identity");
+    const oidcRequest = identityStep.run?.match(
+      /curl --fail --silent --show-error[\s\S]*?audience=openclaw-release-telegram-qa/u,
+    )?.[0];
+
+    expect(identityJob["timeout-minutes"]).toBe(5);
+    expect(oidcRequest).toContain("--connect-timeout 10");
+    expect(oidcRequest).toContain("--max-time 30");
+  });
+
   it("binds dispatched and legacy reusable OIDC identity to the resolved main SHA", () => {
     expect(
       workflowStep(workflowJob("trusted_identity"), "Verify dispatched-main identity").env
@@ -397,8 +436,12 @@ describe("release Telegram QA workflow", () => {
     };
     const buildJob = workflow.jobs?.build_candidate;
     const runJob = workflow.jobs?.run_telegram;
+    const buildRuntimeStep = buildJob?.steps?.find(
+      (step) => step.name === "Build candidate runtime without runner credentials",
+    );
 
     expect(JSON.stringify(buildJob)).not.toContain("secrets.");
+    expect(buildRuntimeStep?.run).toContain("OPENCLAW_BUILD_PRIVATE_QA=1");
     expect(runJob?.environment).toBe("qa-live-shared");
     const secretSteps = runJob?.steps
       ?.filter((step) => JSON.stringify(step).includes("secrets."))
@@ -415,6 +458,22 @@ describe("release Telegram QA workflow", () => {
         }
       }
     }
+  });
+
+  it("resolves pnpm from the candidate package-manager pin", () => {
+    const buildJob = workflowJob("build_candidate");
+    const installStep = workflowStep(
+      buildJob,
+      "Install candidate dependencies without runner credentials",
+    );
+    const buildStep = workflowStep(buildJob, "Build candidate runtime without runner credentials");
+
+    expect(installStep["working-directory"]).toBe(".candidate");
+    expect(installStep.run).toContain("pnpm install");
+    expect(installStep.run).not.toContain("pnpm --dir .candidate");
+    expect(buildStep["working-directory"]).toBe(".candidate");
+    expect(buildStep.run).toContain("pnpm exec node scripts/build-all.mjs qaRuntime");
+    expect(buildStep.run).not.toContain("pnpm --dir .candidate");
   });
 
   it("allows the tracked-file index to exceed Node's default child-process buffer", () => {
@@ -528,6 +587,12 @@ describe("release Telegram QA workflow", () => {
     expect(validateStep?.run).toContain("JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS");
 
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
+    const createSutStep = job?.steps?.find(
+      (step) => step.name === "Create isolated Telegram SUT identity and launcher",
+    );
+    expect(createSutStep?.run).toMatch(
+      /transport_keys=\([\s\S]*OPENCLAW_BUILD_PRIVATE_QA[\s\S]*OPENCLAW_ENABLE_PRIVATE_QA_CLI[\s\S]*\)/u,
+    );
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("600000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
     expect(runStep?.env?.OPENCLAW_LOG_LEVEL).toBe("trace");
@@ -540,13 +605,21 @@ describe("release Telegram QA workflow", () => {
     expect(runStep?.run).toContain("! grep -Fq '\"openai/gpt-5.6-luna\": {'");
     expect(runStep?.run).toContain('qa_model="mock-openai/gpt-5.5"');
     expect(runStep?.run).toContain('--model "$qa_model"');
+    expect(runStep?.run).toContain("run_candidate_telegram_qa() (");
+    expect(runStep?.run).toContain("exec node ./dist/index.js qa telegram");
+    expect(runStep?.run).not.toContain('pnpm --dir "$CANDIDATE_ROOT" openclaw qa telegram');
     expect(runStep?.run).toContain(
       "Telegram channel canary failed; skipping the remaining scenarios.",
     );
     expect(runStep?.run).toContain("--list-scenarios");
-    expect(runStep?.run).toContain('"$scenario_id" != "channel-canary"');
+    expect(runStep?.run).toContain('if [[ "$scenario_id" == "channel-canary" ]]; then');
+    expect(runStep?.run).toContain("has_channel_canary=true");
+    expect(runStep?.run).toContain("Candidate Telegram QA catalog has no default scenarios.");
     expect(runStep?.run).toContain(
       'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
+    );
+    expect(runStep?.run?.indexOf("--list-scenarios")).toBeLessThan(
+      runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary") ?? -1,
     );
     expect(
       runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),
@@ -776,6 +849,19 @@ describe("release Telegram QA workflow", () => {
     expect(source).not.toMatch(/^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu);
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
     expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
+    expect(source).toContain('candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"');
+    expect(source).toContain(
+      'sudo install -d -o "$sut_uid" -g "$sut_gid" -m 0700 "$candidate_artifacts_dir"',
+    );
+    expect(source).toContain(
+      '[[ "$(stat -c \'%F:%a:%u:%g\' "$candidate_artifacts_dir")" == "directory:700:${sut_uid}:${sut_gid}" ]]',
+    );
+    expect(source).toContain("printf 'CANDIDATE_ARTIFACTS_DIR=%q\\n' \"$candidate_artifacts_dir\"");
+    expect(source).toContain("export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN");
+    expect(source).toContain(
+      '[[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -w "$CANDIDATE_ARTIFACTS_DIR" ]]',
+    );
+    expect(source).toContain("CANDIDATE_ARTIFACTS_DIR \\");
     expect(source).toContain(
       '-m 0711 \\\n            "${runtime_root}/tmp/openclaw-${runner_uid}"',
     );

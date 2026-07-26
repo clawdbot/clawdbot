@@ -80,6 +80,13 @@ export default defineToolPlugin({
       parameters: Type.Object({
         symbol: Type.String({ description: "Ticker symbol." }),
       }),
+      outputSchema: Type.Object(
+        {
+          symbol: Type.String(),
+          hasKey: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
       execute: async ({ symbol }, config) => ({ symbol, hasKey: Boolean(config.apiKey) }),
     }),
   ],
@@ -91,6 +98,9 @@ export default defineToolPlugin({
 - `execute` returns a plain string or JSON-serializable value; the helper
   wraps it as a text tool result with `details` set to the original
   (unstringified) return value.
+- `outputSchema` optionally describes that original `details` value for Code
+  Mode and Tool Search. Catalog calls reject an invalid schema before execution
+  and validate the final value before returning it.
 - For custom tool results, `openclaw/plugin-sdk/tool-results` exports
   `textResult` and `jsonResult`.
 - Tool names are static, so `openclaw plugins build` derives
@@ -137,7 +147,10 @@ export default definePluginEntry({
   `openclaw/plugin-sdk/session-catalog` and
   `api.registerSessionCatalog({ id, label, list, read, continueSession?, archive? })`.
   Core owns the `sessions.catalog.*` Gateway methods; providers return host,
-  session, and normalized transcript projections without registering RPCs.
+  session, and normalized transcript projections without registering RPCs. A
+  list provider should call the optional `onHost(host)` callback as each host
+  settles; the returned host array remains required as the final compatibility
+  snapshot.
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
   instead. Runtime-entry `kind` remains only as a compatibility fallback for
@@ -253,11 +266,12 @@ unconfigured, or when deferred loading is enabled. See
 
 Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 
-| Import                              | Use for                                                                                                                                                                            |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openclaw/plugin-sdk/setup-runtime` | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-| `openclaw/plugin-sdk/channel-setup` | Optional-install setup surfaces                                                                                                                                                    |
-| `openclaw/plugin-sdk/setup-tools`   | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
+| Import                                  | Use for                                                                                                                                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw/plugin-sdk/setup-runtime`     | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
+| `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
+| `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
+| `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.
@@ -339,6 +353,25 @@ register(api) {
   api.registerService(/* ... */);
 }
 ```
+
+Long-lived services may emit small invalidation or lifecycle events through
+their service context:
+
+```typescript
+api.registerService({
+  id: "index-events",
+  start(ctx) {
+    ctx.gatewayEvents?.emit("changed", { revision: 1 }, { scope: "operator.read" });
+  },
+});
+```
+
+OpenClaw namespaces this as `plugin.<plugin-id>.changed`. Event names are one
+lowercase segment, payloads must be bounded JSON, and the scope must be
+`operator.read`, `operator.write`, or `operator.admin`. The emitter exists only
+for the service lifetime and is revoked after stop or failed start. Prefer
+version or invalidation payloads over full records so authorized clients reread
+canonical state through the plugin's scoped Gateway methods.
 
 Discovery mode builds a non-activating registry snapshot. It may still
 evaluate the plugin entry and the channel plugin object so OpenClaw can

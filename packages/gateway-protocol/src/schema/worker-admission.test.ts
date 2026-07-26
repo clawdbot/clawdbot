@@ -11,6 +11,7 @@ import {
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
@@ -46,6 +47,7 @@ const connectParams = {
     environmentId: "worker-1",
     credential,
     sessionId: null,
+    runId: null,
     ownerEpoch: 1,
     rpcSetVersion: WORKER_RPC_SET_VERSION,
     handshake,
@@ -190,6 +192,29 @@ describe("worker protocol schemas", () => {
         params: connectParams,
       }),
     ).toBe(true);
+    const missingRunId = structuredClone(connectParams);
+    Reflect.deleteProperty(missingRunId.admission, "runId");
+    expect(
+      validateWorkerConnectRequestFrame({
+        type: "req",
+        id: "connect-missing-run",
+        method: "connect",
+        params: missingRunId,
+      }),
+    ).toBe(false);
+    for (const admission of [
+      { ...connectParams.admission, sessionId: null, runId: "run-1" },
+      { ...connectParams.admission, sessionId: "session-1", runId: null },
+    ]) {
+      expect(
+        validateWorkerConnectRequestFrame({
+          type: "req",
+          id: "connect-mismatched-session-run",
+          method: "connect",
+          params: { ...connectParams, admission },
+        }),
+      ).toBe(false);
+    }
     expect(
       Value.Check(WorkerAdmissionResponseFrameSchema, {
         type: "res",
@@ -272,6 +297,7 @@ describe("worker protocol schemas", () => {
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LAUNCH_V2_PROTOCOL_FEATURE);
     for (const validEvent of [
       assistant,
       event("thinking", { text: "x", delta: "x" }),
@@ -449,6 +475,7 @@ describe("worker protocol schemas", () => {
 
   it("keeps worker close reasons closed", () => {
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
+    expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);
   });
 });

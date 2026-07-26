@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { AgentsListResult } from "../api/types.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 
 type AgentSelectionGateway = {
@@ -7,6 +8,11 @@ type AgentSelectionGateway = {
     assistantAgentId: string | null;
   };
   subscribe: (listener: (snapshot: AgentSelectionGateway["snapshot"]) => void) => () => void;
+};
+
+type AgentSelectionRoster = {
+  readonly state: { agentsList: AgentsListResult | null };
+  subscribe: (listener: () => void) => () => void;
 };
 
 type AgentSelectionState = {
@@ -24,19 +30,49 @@ export type AgentSelectionCapability = {
 
 export function createAgentSelectionCapability(
   gateway: AgentSelectionGateway,
+  roster: AgentSelectionRoster,
 ): AgentSelectionCapability {
+  const reconcileSelectedId = (value: string | null): string | null => {
+    const selectedId = value?.trim() ? normalizeAgentId(value) : null;
+    const agentsList = roster.state.agentsList;
+    if (
+      !selectedId ||
+      !agentsList ||
+      agentsList.agents.length === 0 ||
+      agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selectedId)
+    ) {
+      return selectedId;
+    }
+    return normalizeAgentId(agentsList.defaultId);
+  };
+  const resolveScopeId = (value: string | null): string | null => {
+    const scopeId = value?.trim() ? normalizeAgentId(value) : null;
+    // System agents remain valid concrete chat targets, but never become shared page filters.
+    const isSystem = roster.state.agentsList?.agents.some(
+      (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === scopeId,
+    );
+    return isSystem ? null : scopeId;
+  };
   const initialId = gateway.snapshot.assistantAgentId
     ? normalizeAgentId(gateway.snapshot.assistantAgentId)
     : null;
-  let state: AgentSelectionState = { selectedId: initialId, scopeId: initialId };
+  let state: AgentSelectionState = {
+    selectedId: initialId,
+    scopeId: resolveScopeId(initialId),
+  };
   let client = gateway.snapshot.client;
   const listeners = new Set<(next: AgentSelectionState) => void>();
 
   const publish = (next: AgentSelectionState) => {
-    if (state.selectedId === next.selectedId && state.scopeId === next.scopeId) {
+    const selectedId = reconcileSelectedId(next.selectedId);
+    // Selection and page scope move together when a configured agent vanishes.
+    // Otherwise route-derived agent ids keep sending agent-scoped RPCs to a dead target.
+    const scopeId = selectedId === next.selectedId ? next.scopeId : selectedId;
+    const reconciled = { selectedId, scopeId: resolveScopeId(scopeId) };
+    if (state.selectedId === reconciled.selectedId && state.scopeId === reconciled.scopeId) {
       return;
     }
-    state = next;
+    state = reconciled;
     for (const listener of listeners) {
       listener(state);
     }
@@ -49,6 +85,7 @@ export function createAgentSelectionCapability(
       publish({ selectedId, scopeId: selectedId });
     }
   });
+  roster.subscribe(() => publish(state));
 
   return {
     get state() {

@@ -20,7 +20,7 @@ import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-
 
 const mocks = vi.hoisted(() => ({
   listenGatewayHttpServer: vi.fn(
-    async (_params: { bindHost: string; retryEaddrinuse?: boolean }) => {},
+    async (_params: { bindHost: string; port?: number; retryEaddrinuse?: boolean }) => {},
   ),
   resolveGatewayListenHosts: vi.fn(async (_bindHost: string) => ["127.0.0.1"]),
 }));
@@ -118,6 +118,7 @@ describe("createGatewayRuntimeState", () => {
     });
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
       log: { info: () => {}, warn },
+      port: 18789,
     });
 
     await expect(runtimeState.startListening()).resolves.toBeUndefined();
@@ -125,7 +126,7 @@ describe("createGatewayRuntimeState", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to bind loopback alias ::1"));
   });
 
-  it("starts MCP Apps on a dedicated adjacent-port origin", async () => {
+  it("starts the shared sandbox host on a dedicated adjacent-port origin", async () => {
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
       cfg: { mcp: { apps: { enabled: true } } },
       port: 18789,
@@ -148,5 +149,85 @@ describe("createGatewayRuntimeState", () => {
         retryEaddrinuse: false,
       }),
     );
+  });
+
+  it("starts the shared sandbox host lazily when MCP Apps are disabled", async () => {
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+    });
+
+    await runtimeState.startListening();
+
+    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
+    expect(runtimeState.httpServers).toHaveLength(1);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
+
+    await expect(runtimeState.ensureSandboxHostPort()).resolves.toBe(18790);
+    expect(runtimeState.getMcpAppSandboxPort()).toBe(18790);
+    expect(runtimeState.httpServers).toHaveLength(2);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 18790 }),
+    );
+  });
+
+  it("waits for every gateway bind host before freezing lazy sandbox listeners", async () => {
+    mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
+    let releaseSecondBind: () => void = () => {};
+    const secondBind = new Promise<void>((resolve) => {
+      releaseSecondBind = resolve;
+    });
+    mocks.listenGatewayHttpServer.mockImplementation(async ({ bindHost, port }) => {
+      if (bindHost === "::1" && port === 18789) {
+        await secondBind;
+      }
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+    });
+
+    const starting = runtimeState.startListening();
+    await vi.waitFor(() =>
+      expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+        expect.objectContaining({ bindHost: "::1", port: 18789 }),
+      ),
+    );
+    const ensuring = runtimeState.ensureSandboxHostPort();
+    await Promise.resolve();
+    expect(mocks.listenGatewayHttpServer).not.toHaveBeenCalledWith(
+      expect.objectContaining({ port: 18790 }),
+    );
+
+    releaseSecondBind();
+    await starting;
+    await expect(ensuring).resolves.toBe(18790);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 18790 }),
+    );
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ bindHost: "::1", port: 18790 }),
+    );
+  });
+
+  it("retries lazy sandbox startup after an occupied port clears", async () => {
+    let sandboxPortOccupied = true;
+    mocks.listenGatewayHttpServer.mockImplementation(async ({ port }) => {
+      if (port === 18790 && sandboxPortOccupied) {
+        sandboxPortOccupied = false;
+        throw new Error("sandbox port occupied");
+      }
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+    });
+
+    await expect(runtimeState.startListening()).resolves.toBeUndefined();
+    await expect(runtimeState.ensureSandboxHostPort()).rejects.toThrow("sandbox port occupied");
+    expect(runtimeState.httpServers).toHaveLength(1);
+
+    await expect(runtimeState.ensureSandboxHostPort()).resolves.toBe(18790);
+    expect(runtimeState.getMcpAppSandboxPort()).toBe(18790);
+    expect(runtimeState.httpServers).toHaveLength(2);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(3);
   });
 });

@@ -37,7 +37,7 @@ function resolveAccountGroups(
   return { groups: matchKey ? accounts[matchKey]?.groups : undefined };
 }
 
-export function migrateTelegramGroupsInPlace(
+function migrateTelegramGroupsInPlace(
   groups: TelegramGroups | undefined,
   oldChatId: string,
   newChatId: string,

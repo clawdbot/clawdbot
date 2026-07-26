@@ -29,6 +29,8 @@ type ProviderThinkingModelCompat = {
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
   /** Effective agent runtime selected for this model, when known. */
   agentRuntime?: string | null;
+  /** API adapter id from the selected catalog route, when known. */
+  api?: string | null;
   reasoning?: boolean;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;

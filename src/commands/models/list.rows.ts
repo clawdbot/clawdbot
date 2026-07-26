@@ -37,7 +37,7 @@ import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 import { modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
-type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
+type ModelCatalogModule = typeof import("../../agents/prepared-model-catalog.js");
 type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
 type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
 
@@ -49,6 +49,7 @@ type RowFilter = {
 /** Context shared by every model-list row source builder. */
 export type RowBuilderContext = {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir: string;
   authIndex: ModelListAuthIndex;
   availableKeys?: Set<string>;
@@ -61,7 +62,7 @@ export type RowBuilderContext = {
 };
 
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
-  () => import("../../agents/model-catalog.js"),
+  () => import("../../agents/prepared-model-catalog.js"),
 );
 const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
   () => import("../../agents/embedded-agent-runner/model.js"),
@@ -70,7 +71,7 @@ const providerCatalogModuleLoader = createLazyImportLoader<ProviderCatalogModule
   () => import("./list.provider-catalog.js"),
 );
 
-function loadModelCatalogModule(): Promise<ModelCatalogModule> {
+function loadPreparedModelCatalogModule(): Promise<ModelCatalogModule> {
   return modelCatalogModuleLoader.load();
 }
 
@@ -548,11 +549,18 @@ export async function appendAuthenticatedCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
-  const { loadModelCatalogSnapshot } = await loadModelCatalogModule();
-  const { entries: catalog, routeVariants } = await loadModelCatalogSnapshot({
+  const { loadPreparedModelCatalogSnapshot } = await loadPreparedModelCatalogModule();
+  const { entries: catalog, routeVariants } = await loadPreparedModelCatalogSnapshot({
     config: params.context.cfg,
+    ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
+    agentDir: params.context.agentDir,
+    ...((params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir)
+      ? {
+          workspaceDir:
+            params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir,
+        }
+      : {}),
     readOnly: true,
-    metadataSnapshot: params.context.metadataSnapshot,
   });
   const routeIndex = createModelCatalogLogicalRouteIndex(routeVariants);
   for (const entry of catalog) {
@@ -633,13 +641,20 @@ export async function appendCatalogSupplementRows(params: {
   seenKeys: Set<string>;
 }): Promise<void> {
   const [modelCatalog, { resolveModelWithRegistry }] = await Promise.all([
-    loadModelCatalogModule(),
+    loadPreparedModelCatalogModule(),
     loadModelResolverModule(),
   ]);
-  const { entries: catalog, routeVariants } = await modelCatalog.loadModelCatalogSnapshot({
+  const { entries: catalog, routeVariants } = await modelCatalog.loadPreparedModelCatalogSnapshot({
     config: params.context.cfg,
+    ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
+    agentDir: params.context.agentDir,
+    ...((params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir)
+      ? {
+          workspaceDir:
+            params.context.workspaceDir ?? params.context.metadataSnapshot?.workspaceDir,
+        }
+      : {}),
     readOnly: true,
-    metadataSnapshot: params.context.metadataSnapshot,
   });
   const routeIndex = createModelCatalogLogicalRouteIndex(routeVariants);
   for (const entry of catalog) {
@@ -695,6 +710,7 @@ export async function appendProviderCatalogRows(params: {
     const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
     catalogModels = await loadProviderCatalogModelsForList({
       cfg: params.context.cfg,
+      ...(params.context.agentId ? { agentId: params.context.agentId } : {}),
       agentDir: params.context.agentDir,
       providerFilter: params.context.filter.provider,
       staticOnly: params.staticOnly,
@@ -791,3 +807,4 @@ export async function appendConfiguredRows(params: {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

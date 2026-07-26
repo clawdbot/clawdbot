@@ -368,8 +368,3 @@ export async function resolveMatrixApprovalReactionTargetWithPersistence(params:
     reactionKey: params.reactionKey,
   });
 }
-
-export function clearMatrixApprovalReactionTargetsForTest(): void {
-  matrixApprovalReactionTargetIndex.clear();
-  matrixApprovalReactionTargets.clearForTest();
-}

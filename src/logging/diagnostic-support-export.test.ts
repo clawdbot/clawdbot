@@ -34,6 +34,38 @@ async function readZipTextEntries(file: string): Promise<Record<string, string>>
   return entries;
 }
 
+function fakeAwsSecretAccessKey(): string {
+  return fakeRepeatedToken(["A", "b", "9", "/"]);
+}
+
+function fakeAwsSecretAccessKeyWithPadding(): string {
+  return fakeRepeatedToken(["A", "b", "9", "="]);
+}
+
+function fakeJwtAwsSecretShapedSegment(): string {
+  return fakeRepeatedToken(["A", "b", "9", "C"]);
+}
+
+function fakeCommitHash(): string {
+  return `${"0123456789abcdef".repeat(2)}01234567`;
+}
+
+function fakeLowercaseBase36Identifier(): string {
+  return `${"z".repeat(39)}1`;
+}
+
+function fakeFlyTokenWithAwsShapedBody(): string {
+  return `FlyV1 fm123_${fakeAwsSecretAccessKeyWithPadding()}_${"tail".repeat(20)}`;
+}
+
+function fakeCommaDelimitedFlyTokenWithAwsShapedBody(): string {
+  return `FlyV1 fm123_headheadheadheadheadheadheadhead,${fakeAwsSecretAccessKeyWithPadding()},${"tail".repeat(20)}`;
+}
+
+function fakeRepeatedToken(chars: readonly string[], length = 40): string {
+  return Array.from({ length }, (_entry, index) => chars[index % chars.length] ?? "A").join("");
+}
+
 describe("diagnostic support export", () => {
   let tempDir: string;
 
@@ -692,11 +724,21 @@ describe("diagnostic support export", () => {
 
   it("redacts support text identifiers without hiding useful URL hosts", () => {
     const fakeAwsKey = ["ASIA", "IOSFODNN7EXAMPLE"].join("");
+    const fakeAwsSecretKey = fakeAwsSecretAccessKey();
     const fakeJwt = [
       "eyJhbGciOiJIUzI1NiIs",
       "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4i",
       "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
     ].join(".");
+    const jwtWithAwsSecretShapedSegment = [
+      "eyJheaderabcd",
+      fakeJwtAwsSecretShapedSegment(),
+      "signatureabcd123456",
+    ].join(".");
+    const awsShapedDataUrl = `data:application/octet-stream;base64,${Array.from(
+      { length: 40 },
+      (_entry, index) => (["A", "b", "9", "+"] as const)[index % 4] ?? "A",
+    ).join("")}`;
     const cases = [
       [
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
@@ -714,13 +756,46 @@ describe("diagnostic support export", () => {
       ["auth Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==", "auth Basic <redacted>"],
       ["Cookie: sid=secret; theme=light", "Cookie: <redacted>"],
       [`aws ${fakeAwsKey}`, "aws <redacted-aws-key>"],
+      [`aws secret ${fakeAwsSecretKey}`, "aws secret <redacted-aws-secret-key>"],
+      [
+        `aws padded secret ${fakeAwsSecretAccessKeyWithPadding()}`,
+        "aws padded secret <redacted-aws-secret-key>",
+      ],
+      [`data ${awsShapedDataUrl}`, `data ${awsShapedDataUrl}`],
       [`jwt ${fakeJwt}`, "jwt <redacted-jwt>"],
+      [`jwt ${jwtWithAwsSecretShapedSegment}`, "jwt <redacted-jwt>"],
+      [`provider ${fakeFlyTokenWithAwsShapedBody()}`, "provider FlyV1 …tail"],
+      [`provider ${fakeCommaDelimitedFlyTokenWithAwsShapedBody()}`, "provider FlyV1 …tail"],
+      [`commit ${fakeCommitHash()}`, `commit ${fakeCommitHash()}`],
+      [`id ${fakeLowercaseBase36Identifier()}`, `id ${fakeLowercaseBase36Identifier()}`],
       ["email alice@example.com", "email <redacted-email>"],
       ["matrix @support-user:matrix.example.com", "matrix <redacted-matrix-user>"],
       ["room !support-room:matrix.example.com", "room <redacted-matrix-room>"],
       ["event $F0Zlxky8bavuqH6MK75Av_c7UWFLp550WTQ1EA-F0KM", "event <redacted-matrix-event>"],
       ["notify @support_bot now", "notify <redacted-handle> now"],
       ["phone 15555551212", "phone <redacted-id>"],
+      [
+        `config password = ${["support", "password", "1234567890"].join("-")}`,
+        "config password = suppor…7890",
+      ],
+      [
+        ["config password", " = ", '"', ["support", "password", "1234567890"].join("-"), '"'].join(
+          "",
+        ),
+        'config password = "suppor…7890"',
+      ],
+      [
+        `config db_password = ${["support", "password", "1234567890"].join("-")}`,
+        "config db_password = suppor…7890",
+      ],
+      [
+        `config readonly_db_password = ${["support", "password", "1234567890"].join("-")}`,
+        "config readonly_db_password = suppor…7890",
+      ],
+      [
+        `config jdbc.password=${["support", "password", "1234567890"].join("-")}`,
+        "config jdbc.password=suppor…7890",
+      ],
     ] as const;
 
     for (const [input, expected] of cases) {
@@ -783,6 +858,9 @@ describe("diagnostic support export", () => {
               `${userProfile}\\openclaw\\dist\\index.js`,
               "--config",
               `${stateDir}\\openclaw.json`,
+              `--aws-secret-access-key=${fakeAwsSecretAccessKey()}`,
+              "--awsSecretAccessKey",
+              fakeAwsSecretAccessKey(),
             ],
             sourcePath: "c:\\users\\support-user\\AppData\\Local\\openclaw\\gateway-service.json",
           },
@@ -792,8 +870,11 @@ describe("diagnostic support export", () => {
     );
     const serialized = JSON.stringify(status);
     expect(serialized).not.toContain("support-user");
+    expect(serialized).not.toContain(fakeAwsSecretAccessKey());
     expect(serialized).toContain("~\\\\openclaw\\\\dist\\\\index.js");
     expect(serialized).toContain("$OPENCLAW_STATE_DIR\\\\openclaw.json");
+    expect(serialized).toContain("--aws-secret-access-key=<redacted>");
+    expect(serialized).toContain("--awsSecretAccessKey");
     expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
   });
 
@@ -910,6 +991,52 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(fakeToken);
     expect(combined).toContain('"parseOk": false');
     expect(combined).toContain("config stat failed with token");
+    expect(combined).toContain("Attach this zip to the bug report");
+  });
+
+  it("finishes the support export when the config exceeds its read limit", async () => {
+    const configPath = path.join(tempDir, "openclaw.json");
+    const outputPath = path.join(tempDir, "support-oversized-config.zip");
+    fs.writeFileSync(configPath, Buffer.alloc(8 * 1024 * 1024 + 1, "{"));
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      now: new Date("2026-07-18T12:00:01.000Z"),
+      readLogTail: async () => ({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [],
+      }),
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
+      parseOk?: boolean;
+      error?: string;
+    };
+    expect(configShape.parseOk).toBe(false);
+    expect(configShape.error).toContain("File exceeds 8388608 bytes");
+    expect(entries["config/sanitized.json"]).toBe("null\n");
+    expect(Object.keys(entries).toSorted()).toEqual([
+      "config/sanitized.json",
+      "config/shape.json",
+      "diagnostics.json",
+      "logs/openclaw-sanitized.jsonl",
+      "manifest.json",
+      "summary.md",
+    ]);
+
+    const combined = Object.values(entries).join("\n");
     expect(combined).toContain("Attach this zip to the bug report");
   });
 });

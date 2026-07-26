@@ -3,9 +3,9 @@
 // cannot drift apart unnoticed.
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
-  deliverOutboundPayloads,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -102,7 +102,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       },
     } as OpenClawConfig;
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "~sampel-palnet",
@@ -121,7 +121,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       skipQueue: true,
     });
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "chat/~host-ship/general",
@@ -133,7 +133,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
       skipQueue: true,
     });
 
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to: "~sampel-palnet",

@@ -21,24 +21,17 @@ function writeMigratedSessionState(stateDir: string): void {
   const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
   try {
     db.exec(`
-      CREATE TABLE sessions (
+      CREATE TABLE session_nodes (
+        session_key TEXT PRIMARY KEY,
+        current_session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_windows (
         session_id TEXT PRIMARY KEY,
         session_key TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_routes (
-        session_key TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
       );
       CREATE TABLE transcript_events (
         session_id TEXT NOT NULL,
@@ -46,19 +39,15 @@ function writeMigratedSessionState(stateDir: string): void {
         event_json TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (session_id, seq),
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
       );
     `);
     const insertSession = db.prepare(`
-      INSERT INTO sessions (session_id, session_key, created_at, updated_at)
+      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
       VALUES (?, ?, ?, ?)
     `);
-    const insertRoute = db.prepare(`
-      INSERT INTO session_routes (session_key, session_id, updated_at)
-      VALUES (?, ?, ?)
-    `);
     const insertEntry = db.prepare(`
-      INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
       VALUES (?, ?, ?, ?)
     `);
     const insertTranscript = db.prepare(`
@@ -88,7 +77,6 @@ function writeMigratedSessionState(stateDir: string): void {
     ];
     for (const { entry, sessionId, sessionKey } of migratedSessions) {
       insertSession.run(sessionId, sessionKey, 1710000000000, 1710000000000);
-      insertRoute.run(sessionKey, sessionId, 1710000000000);
       insertEntry.run(sessionKey, sessionId, JSON.stringify(entry), 1710000000000);
       insertTranscript.run(
         sessionId,
@@ -154,7 +142,112 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
   }
 }
 
+function createUpdateRunSelfUpgradeSummary() {
+  const sourceVersion = "2026.4.26";
+  const targetVersion = "2026.7.2";
+  const note = "QA-UPDATE-RUN-PACKAGE-SELF-UPGRADE";
+  return {
+    status: "passed",
+    source: { spec: `openclaw@${sourceVersion}`, version: sourceVersion },
+    target: { tag: "latest", resolvedVersion: targetVersion },
+    installedVersion: targetVersion,
+    expectedRestartNote: note,
+    updateRpcResult: {
+      ok: true,
+      result: {
+        status: "ok",
+        before: { version: sourceVersion },
+        after: { version: targetVersion },
+        steps: [{ name: "package manager install" }],
+      },
+      restart: { scheduled: true },
+      sentinel: { payload: { message: note } },
+    },
+    restartSentinel: {
+      kind: "update",
+      status: "ok",
+      message: note,
+      stats: {
+        before: { version: sourceVersion },
+        after: { version: targetVersion },
+      },
+    },
+    qaChannelInstallRecord: {
+      source: "path",
+      sourcePath: "/tmp/source/dist/extensions/qa-channel",
+      installPath: "/tmp/source/dist/extensions/qa-channel",
+      version: "2026.4.25",
+    },
+    sourcePluginInspect: {
+      plugin: { id: "qa-channel", status: "loaded" },
+    },
+    targetPluginIndex: {
+      installRecords: {
+        "qa-channel": {
+          source: "path",
+          sourcePath: "/tmp/source/dist/extensions/qa-channel",
+          installPath: "/tmp/source/dist/extensions/qa-channel",
+          version: "2026.4.25",
+        },
+      },
+    },
+    supervisorHandoff: {
+      servicePid: 4242,
+      systemctlInvocations: ["--user start openclaw-gateway.service"],
+      monitorEvents: [
+        "source Gateway exited through supervised update handoff",
+        "starting installed service without provider suppression",
+        "service Gateway started pid=4242",
+      ],
+    },
+    gateway: {
+      healthz: { body: { ok: true, status: "live" } },
+      readyz: { body: { ready: true } },
+      status: {
+        cli: { version: targetVersion },
+        gateway: { version: targetVersion },
+        rpc: { ok: true, version: targetVersion },
+      },
+    },
+    qaChannel: {
+      status: {
+        channelAccounts: {
+          "qa-channel": [{ accountId: "default", running: true, restartPending: false }],
+        },
+      },
+      busPollsAfterRestart: 2,
+    },
+  };
+}
+
+function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSelfUpgradeSummary>) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-update-run-self-upgrade-"));
+  try {
+    const summaryPath = join(root, "summary.json");
+    writeJson(summaryPath, summary);
+    execFileSync(
+      process.execPath,
+      [ASSERTIONS_PATH, "assert-update-run-self-upgrade", summaryPath],
+      { stdio: "pipe" },
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("upgrade survivor assertions", () => {
+  it("lists the dependency-free scenario contract", () => {
+    const scenarios = JSON.parse(
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "list-scenarios"], {
+        encoding: "utf8",
+      }),
+    ) as string[];
+
+    expect(scenarios).toContain("base");
+    expect(scenarios).toContain("acpx-openclaw-tools-bridge");
+    expect(new Set(scenarios).size).toBe(scenarios.length);
+  });
+
   it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
     try {
@@ -227,5 +320,61 @@ describe("upgrade survivor assertions", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it("accepts executed update.run package transition and post-restart health evidence", () => {
+    expect(() => assertUpdateRunSelfUpgrade(createUpdateRunSelfUpgradeSummary())).not.toThrow();
+  });
+
+  it("rejects no-op update.run package transitions", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.target.resolvedVersion = summary.source.version;
+    summary.installedVersion = summary.source.version;
+    summary.updateRpcResult.result.after.version = summary.source.version;
+    summary.restartSentinel.stats.after.version = summary.source.version;
+    summary.gateway.status.gateway.version = summary.source.version;
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not advance beyond source/);
+  });
+
+  it("rejects unsupported update.run paths that did not execute package steps", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.updateRpcResult.ok = false;
+    summary.updateRpcResult.result.status = "skipped";
+    summary.updateRpcResult.result.steps = [];
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/did not report ok/);
+  });
+
+  it("rejects QA channel payloads without a canonical path install record", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.qaChannelInstallRecord.source = "npm";
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/was not path-installed/);
+  });
+
+  it("rejects upgrades that lose the path install during SQLite migration", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    Reflect.deleteProperty(summary.targetPluginIndex.installRecords, "qa-channel");
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(
+      /target SQLite index did not preserve/,
+    );
+  });
+
+  it("rejects source fixtures that were never runtime-loaded", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.sourcePluginInspect.plugin.status = "error";
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/source package did not load/);
+  });
+
+  it("rejects duplicate target service starts during the supervised handoff", () => {
+    const summary = createUpdateRunSelfUpgradeSummary();
+    summary.supervisorHandoff.systemctlInvocations.push(
+      "--user --quiet start openclaw-gateway.service",
+    );
+
+    expect(() => assertUpdateRunSelfUpgrade(summary)).toThrow(/target exactly once/);
   });
 });

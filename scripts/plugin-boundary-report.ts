@@ -50,6 +50,21 @@ type CompatDebtRecord = {
   eligibleForRemoval: boolean;
 };
 
+type RemovalPendingDebtRecord = {
+  code: string;
+  owner: string;
+  status: "removal-pending";
+  removeAfter?: string;
+  blocker: string;
+  readerFiles: string[];
+  dueForReview: boolean;
+};
+
+type RemovalPendingDebtSummary = Omit<RemovalPendingDebtRecord, "readerFiles"> & {
+  readerCount: number;
+  readerSample: string[];
+};
+
 type WorkspaceTextFile = {
   file: string;
   relativeFile: string;
@@ -71,6 +86,9 @@ type BoundaryReport = {
     deprecatedCount: number;
     eligibleForRemovalCount: number;
     records: CompatDebtRecord[];
+    removalPendingCount: number;
+    removalPendingDueCount: number;
+    removalPending: RemovalPendingDebtRecord[];
   };
   pluginSdk: {
     entrypointCount: number;
@@ -97,6 +115,9 @@ type BoundaryReportSummary = {
     eligibleForRemovalCount: number;
     deprecatedByOwner: Record<string, number>;
     eligibleForRemoval: Array<Pick<CompatDebtRecord, "code" | "owner" | "removeAfter">>;
+    removalPendingCount: number;
+    removalPendingDueCount: number;
+    removalPending: RemovalPendingDebtSummary[];
   };
   pluginSdk: {
     entrypointCount: number;
@@ -317,9 +338,8 @@ function resolveConsumerOwner(file: string): string | undefined {
   return /^extensions\/([^/]+)\//u.exec(file)?.[1];
 }
 
-function extractCompatTokens(record: PluginCompatRecord): string[] {
+function extractCompatTokensFromValues(values: readonly (string | undefined)[]): string[] {
   const tokens = new Set<string>();
-  const values = [record.code, record.replacement, ...record.surfaces, ...record.diagnostics];
   for (const value of values) {
     if (value === undefined) {
       continue;
@@ -344,6 +364,19 @@ function extractCompatTokens(record: PluginCompatRecord): string[] {
     }
   }
   return [...tokens].toSorted();
+}
+
+function extractCompatTokens(record: PluginCompatRecord): string[] {
+  return extractCompatTokensFromValues([
+    record.code,
+    record.replacement,
+    ...record.surfaces,
+    ...record.diagnostics,
+  ]);
+}
+
+function extractCompatSurfaceTokens(record: PluginCompatRecord): string[] {
+  return extractCompatTokensFromValues(record.surfaces);
 }
 
 function collectReferenceFiles(files: readonly WorkspaceTextFile[], tokens: readonly string[]) {
@@ -396,6 +429,34 @@ function collectCompatDebt(
         codeReferenceFiles: references.codeReferenceFiles,
         docReferenceFiles: references.docReferenceFiles,
         eligibleForRemoval,
+      };
+    })
+    .toSorted(
+      (left, right) =>
+        (left.removeAfter ?? "").localeCompare(right.removeAfter ?? "") ||
+        left.owner.localeCompare(right.owner) ||
+        left.code.localeCompare(right.code),
+    );
+}
+
+function collectRemovalPendingDebt(
+  files: readonly WorkspaceTextFile[],
+  today = new Date(),
+): RemovalPendingDebtRecord[] {
+  return listPluginCompatRecords()
+    .filter((record) => record.status === "removal-pending")
+    .map((record) => {
+      const references = collectReferenceFiles(files, extractCompatSurfaceTokens(record));
+      return {
+        code: record.code,
+        owner: record.owner,
+        status: "removal-pending" as const,
+        removeAfter: record.removeAfter,
+        blocker: record.replacement ?? "no removal blocker documented",
+        readerFiles: references.codeReferenceFiles,
+        dueForReview: record.removeAfter
+          ? new Date(`${record.removeAfter}T00:00:00Z`) <= today
+          : false,
       };
     })
     .toSorted(
@@ -504,6 +565,13 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
       eligibleForRemovalCount: report.compat.eligibleForRemovalCount,
       deprecatedByOwner: countByOwner(report.compat.records),
       eligibleForRemoval,
+      removalPendingCount: report.compat.removalPendingCount,
+      removalPendingDueCount: report.compat.removalPendingDueCount,
+      removalPending: report.compat.removalPending.map(({ readerFiles, ...record }) => ({
+        ...record,
+        readerCount: readerFiles.length,
+        readerSample: readerFiles.slice(0, 5),
+      })),
     },
     pluginSdk: {
       entrypointCount: report.pluginSdk.entrypointCount,
@@ -534,12 +602,15 @@ function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {
   const compatRecords = collectCompatDebt(files, new Date(), {
     includeReferenceFiles: !options.summary,
   }).filter((record) => matchesOwner(options.owner, record.owner));
+  const removalPending = collectRemovalPendingDebt(files).filter((record) =>
+    matchesOwner(options.owner, record.owner),
+  );
   const reservedImports = collectReservedSdkImports(files).filter(
     (entry) =>
       matchesOwner(options.owner, entry.owner) || matchesOwner(options.owner, entry.consumerOwner),
   );
   const usedReserved = new Set(reservedImports.map((entry) => entry.subpath));
-  const unusedReservedSubpaths = reservedBundledPluginSdkEntrypoints
+  const unusedReservedSubpaths = (reservedBundledPluginSdkEntrypoints as readonly string[])
     .filter(
       (subpath) =>
         !usedReserved.has(subpath) &&
@@ -552,6 +623,9 @@ function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {
       deprecatedCount: compatRecords.length,
       eligibleForRemovalCount: compatRecords.filter((record) => record.eligibleForRemoval).length,
       records: compatRecords,
+      removalPendingCount: removalPending.length,
+      removalPendingDueCount: removalPending.filter((record) => record.dueForReview).length,
+      removalPending,
     },
     pluginSdk: {
       entrypointCount: pluginSdkEntrypoints.length,
@@ -573,8 +647,13 @@ function renderSummaryText(summary: BoundaryReportSummary): string {
   lines.push(`Plugin Boundary Report${summary.owner ? ` (${summary.owner})` : ""}`);
   lines.push("");
   lines.push(
-    `compat deprecated=${summary.compat.deprecatedCount} eligibleForRemoval=${summary.compat.eligibleForRemovalCount}`,
+    `compat deprecated=${summary.compat.deprecatedCount} eligibleForRemoval=${summary.compat.eligibleForRemovalCount} removalPending=${summary.compat.removalPendingCount} removalPendingDue=${summary.compat.removalPendingDueCount}`,
   );
+  for (const record of summary.compat.removalPending) {
+    lines.push(
+      `  removal-pending ${record.removeAfter ?? "no-date"} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerCount} readers=${record.readerSample.join(",") || "none"}`,
+    );
+  }
   lines.push(
     `plugin-sdk entrypoints=${summary.pluginSdk.entrypointCount} reserved=${summary.pluginSdk.reservedCount}`,
   );
@@ -598,12 +677,20 @@ function renderText(report: BoundaryReport, owner?: string): string {
   lines.push(`Plugin Boundary Report${owner ? ` (${owner})` : ""}`);
   lines.push("");
   lines.push(
-    `compat deprecated=${report.compat.deprecatedCount} eligibleForRemoval=${report.compat.eligibleForRemovalCount}`,
+    `compat deprecated=${report.compat.deprecatedCount} eligibleForRemoval=${report.compat.eligibleForRemovalCount} removalPending=${report.compat.removalPendingCount} removalPendingDue=${report.compat.removalPendingDueCount}`,
   );
   for (const record of report.compat.records) {
     lines.push(
       `  ${record.removeAfter ?? "no-date"} ${record.code} owner=${record.owner} codeRefs=${record.codeReferenceFiles.length} docRefs=${record.docReferenceFiles.length}`,
     );
+  }
+  for (const record of report.compat.removalPending) {
+    lines.push(
+      `  removal-pending ${record.removeAfter ?? "no-date"} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerFiles.length}`,
+    );
+    for (const reader of record.readerFiles) {
+      lines.push(`    reader ${reader}`);
+    }
   }
   lines.push("");
   lines.push(

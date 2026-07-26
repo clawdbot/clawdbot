@@ -54,6 +54,10 @@ function decodeCompactQr(output: string, size: number): boolean[] {
 }
 
 describe("renderQrTerminal (real qrcode runtime)", () => {
+  it("rejects empty input through qrcode", async () => {
+    await expect(renderQrTerminal("")).rejects.toThrow("No input text");
+  });
+
   it("keeps per-row ANSI sequence counts in line with typical rows", async () => {
     const sample = "https://wa.me/login/2@SAMPLE-TOKEN-1234567890ABCDEF";
     const rendered = await renderQrTerminal(sample);

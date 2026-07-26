@@ -228,6 +228,23 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("uses the loaded context as the effective runtime budget", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "small-loaded-context",
+      max_context_length: 262_144,
+      loaded_instances: [{ id: "loaded", config: { context_length: 8_192 } }],
+    });
+
+    expect(model).toMatchObject({
+      id: "small-loaded-context",
+      contextWindow: 262_144,
+      contextTokens: 8_192,
+      maxTokens: 8_192,
+      loaded: true,
+    });
+  });
+
   it("resolves reasoning capability for supported and unsupported options", () => {
     expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
     expect(
@@ -390,6 +407,38 @@ describe("lmstudio-models", () => {
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
+  });
+
+  it("cancels the response body after a non-ok model discovery response", async () => {
+    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+    const fetchMock = vi.fn(async () => tracked.response);
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result).toEqual({
+      reachable: true,
+      status: 503,
+      models: [],
+    });
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("cancels guarded non-ok discovery bodies before releasing the dispatcher", async () => {
+    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({ response: tracked.response, release });
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      ssrfPolicy: {},
+    });
+
+    expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("reports malformed model list JSON with an owned error", async () => {

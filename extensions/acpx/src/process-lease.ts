@@ -9,11 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./state.js";
 
-/** Environment variable carrying the ACPX process lease id. */
-export const OPENCLAW_ACPX_LEASE_ID_ENV = "OPENCLAW_ACPX_LEASE_ID";
-/** Environment variable carrying the owning gateway instance id. */
-export const OPENCLAW_GATEWAY_INSTANCE_ID_ENV = "OPENCLAW_GATEWAY_INSTANCE_ID";
-/** CLI argument carrying the ACPX process lease id for platforms without env wrapping. */
+/** CLI argument carrying the ACPX process lease id. */
 export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
 /** CLI argument carrying the owning gateway instance id. */
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
@@ -183,20 +179,11 @@ function appendAcpxLeaseArgs(params: {
   ].join(" ");
 }
 
-/** Add ACPX lease identity to a command through env vars and portable args. */
+/** Add ACPX lease identity to a command through portable wrapper arguments. */
 export function withAcpxLeaseEnvironment(params: {
   command: string;
   leaseId: string;
   gatewayInstanceId: string;
-  platform?: NodeJS.Platform;
 }): string {
-  if ((params.platform ?? process.platform) === "win32") {
-    return appendAcpxLeaseArgs(params);
-  }
-  return [
-    "env",
-    `${OPENCLAW_ACPX_LEASE_ID_ENV}=${quoteEnvValue(params.leaseId)}`,
-    `${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=${quoteEnvValue(params.gatewayInstanceId)}`,
-    appendAcpxLeaseArgs(params),
-  ].join(" ");
+  return appendAcpxLeaseArgs(params);
 }

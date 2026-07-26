@@ -43,14 +43,6 @@ export function writeJsonlEntriesSync(filePath: string, entries: readonly unknow
   return content;
 }
 
-export function appendJsonlEntrySync(
-  filePath: string,
-  entry: unknown,
-  options?: { prefixNewline?: boolean },
-): string {
-  return appendSerializedJsonlEntrySync(filePath, serializeJsonlEntry(entry), options);
-}
-
 export function appendSerializedJsonlEntrySync(
   filePath: string,
   serializedEntry: string,
@@ -60,19 +52,6 @@ export function appendSerializedJsonlEntrySync(
   appendFileSync(filePath, content, "utf-8");
   return content;
 }
-
-export async function writeJsonlEntry(
-  filePath: string,
-  entry: unknown,
-  options?: WriteJsonlFileOptions,
-): Promise<void> {
-  await fs.writeFile(filePath, serializeJsonlEntry(entry), {
-    encoding: options?.encoding ?? "utf-8",
-    ...(options?.flag ? { flag: options.flag } : {}),
-    ...(options?.mode !== undefined ? { mode: options.mode } : {}),
-  });
-}
-
 export async function writeJsonlLines(
   filePath: string,
   lines: readonly string[],
@@ -85,27 +64,4 @@ export async function writeJsonlLines(
     ...(options?.mode !== undefined ? { mode: options.mode } : {}),
   });
   return content;
-}
-
-export async function appendJsonlEntry(filePath: string, entry: unknown): Promise<void> {
-  await appendSerializedJsonlEntry(filePath, serializeJsonlEntry(entry));
-}
-
-export async function appendSerializedJsonlEntry(
-  filePath: string,
-  serializedEntry: string,
-): Promise<void> {
-  const handle = await fs.open(filePath, "a+", 0o600);
-  try {
-    const stat = await handle.stat();
-    let prefixNewline = false;
-    if (stat.size > 0) {
-      const lastByte = Buffer.allocUnsafe(1);
-      const { bytesRead } = await handle.read(lastByte, 0, 1, stat.size - 1);
-      prefixNewline = bytesRead === 1 && lastByte[0] !== 0x0a;
-    }
-    await handle.appendFile(`${prefixNewline ? "\n" : ""}${serializedEntry}`, "utf-8");
-  } finally {
-    await handle.close();
-  }
 }

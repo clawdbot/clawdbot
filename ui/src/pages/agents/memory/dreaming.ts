@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -340,7 +341,7 @@ function buildDreamDiaryActionSuccessMessage(
       const actions: string[] = [];
       const archiveDir = normalizeTrimmedString(payload?.archiveDir);
       if (payload?.archivedSessionCorpus === true) {
-        actions.push("archived session corpus");
+        actions.push("archived thread corpus");
       }
       if (payload?.archivedSessionIngestion === true) {
         actions.push("archived ingestion state");
@@ -363,13 +364,6 @@ function buildDreamDiaryActionSuccessMessage(
       return `Cleared ${typeof payload?.removedShortTermEntries === "number" ? payload.removedShortTermEntries : 0} replayed short-term entries.`;
   }
   return "Dream diary action complete.";
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {
@@ -1278,3 +1272,4 @@ export async function updateDreamingEnabled(
   }
   return ok;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

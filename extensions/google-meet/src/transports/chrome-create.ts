@@ -5,11 +5,11 @@ import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
-  forceMeetEnglishUi,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
+import { forceMeetEnglishUi } from "./google-meet-urls.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
 const GOOGLE_MEET_NEW_URL = "https://meet.google.com/new";
@@ -165,7 +165,7 @@ function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
   };
 }
 
-export const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
+const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   const meetUrlPattern = /^https:\\/\\/meet\\.google\\.com\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i;
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const current = () => location.href;

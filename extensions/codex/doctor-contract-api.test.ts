@@ -703,7 +703,8 @@ describe("codex doctor contract", () => {
 
       const result = await fixture.migration.migrateLegacyState({ ...fixture.params, context });
 
-      expect(result.warnings).toEqual([
+      expect(result.warnings).toEqual([]);
+      expect(result.notices).toEqual([
         expect.stringContaining("session owner changed before Codex ownership could be recorded"),
       ]);
       await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
@@ -761,7 +762,8 @@ describe("codex doctor contract", () => {
 
     const result = await fixture.migration.migrateLegacyState({ ...fixture.params, context });
 
-    expect(result.warnings).toEqual([
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([
       expect.stringContaining("session owner changed before Codex ownership could be recorded"),
     ]);
     await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
@@ -979,7 +981,8 @@ describe("codex doctor contract", () => {
     const result = await fixture.migration.migrateLegacyState(fixture.params);
 
     expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([expect.stringContaining("owned by agent harness pi")]);
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([expect.stringContaining("owned by agent harness pi")]);
     await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 
@@ -1172,3 +1175,4 @@ describe("codex doctor contract", () => {
     expect(original.plugins.entries.codex.config.appServer.approvalPolicy).toBe("on-failure");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

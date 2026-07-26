@@ -134,7 +134,7 @@ function extractJsonObject(text: string): string | null {
 }
 
 /** Parses and validates reviewer JSON into a conservative exec decision. */
-export function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
+function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   const objectText = extractJsonObject(text);
   if (!objectText) {
     return {
@@ -222,7 +222,7 @@ function resolveReviewerModelRef(config?: ExecReviewerConfig): string | undefine
 }
 
 /** Resolves the reviewer timeout with a low minimum to avoid hanging exec approval. */
-export function resolveExecReviewerTimeoutMs(config?: ExecReviewerConfig): number {
+function resolveExecReviewerTimeoutMs(config?: ExecReviewerConfig): number {
   return resolveTimerTimeoutMs(config?.timeoutMs, DEFAULT_EXEC_REVIEWER_TIMEOUT_MS, 1_000);
 }
 

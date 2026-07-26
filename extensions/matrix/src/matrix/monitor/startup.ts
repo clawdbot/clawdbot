@@ -18,7 +18,7 @@ type MatrixStartupClient = Pick<
   | "uploadContent"
 >;
 
-export type MatrixStartupMaintenanceDeps = {
+type MatrixStartupMaintenanceDeps = {
   updateMatrixAccountConfig: typeof import("../config-update.js").updateMatrixAccountConfig;
   summarizeMatrixDeviceHealth: typeof import("../device-health.js").summarizeMatrixDeviceHealth;
   syncMatrixOwnProfile: typeof import("../profile.js").syncMatrixOwnProfile;

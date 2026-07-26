@@ -1,11 +1,10 @@
 // Nodes page owns these pure view helpers.
-import { html, nothing, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type NodeTargetOption = {
@@ -78,10 +77,28 @@ type DeviceIconSource = {
   platform?: string;
 };
 
-const MOBILE_PLATFORM_PATTERN = /\b(ios|ipados|watchos|android|iphone|ipad)\b/;
-const MOBILE_CLIENT_IDS: ReadonlySet<string> = new Set([
+// Form-factor glyphs used only by the device inventory; kept local because the
+// shared icons registry is LOC-frozen for new entries.
+const tabletIcon = html`
+  <svg viewBox="0 0 24 24">
+    <rect width="16" height="20" x="4" y="2" rx="2" ry="2" />
+    <path d="M12 18h.01" />
+  </svg>
+`;
+const watchIcon = html`
+  <svg viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="6" />
+    <polyline points="12 10 12 12 13 13" />
+    <path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05" />
+    <path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05" />
+  </svg>
+`;
+
+const WATCH_PLATFORM_PATTERN = /\bwatchos\b/;
+const TABLET_PLATFORM_PATTERN = /\b(ipados|ipad)\b/;
+const PHONE_PLATFORM_PATTERN = /\b(ios|android|iphone)\b/;
+const PHONE_CLIENT_IDS: ReadonlySet<string> = new Set([
   GATEWAY_CLIENT_IDS.IOS_APP,
-  GATEWAY_CLIENT_IDS.WATCHOS_APP,
   GATEWAY_CLIENT_IDS.ANDROID_APP,
 ]);
 const BROWSER_CLIENT_IDS: ReadonlySet<string> = new Set([
@@ -101,12 +118,20 @@ const TERMINAL_CLIENT_IDS: ReadonlySet<string> = new Set([
   GATEWAY_CLIENT_IDS.TUI,
 ]);
 
-/** Rough form-factor icon: phone, browser, terminal, or desktop machine. */
+/** Rough form-factor icon: watch, tablet, phone, browser, terminal, or desktop machine. */
 export function deviceIcon(source: DeviceIconSource): TemplateResult {
   const platform = source.platform?.trim().toLowerCase() ?? "";
   const clientId = source.clientId?.trim().toLowerCase() ?? "";
   const mode = source.clientMode?.trim().toLowerCase() ?? "";
-  if (MOBILE_PLATFORM_PATTERN.test(platform) || MOBILE_CLIENT_IDS.has(clientId)) {
+  // Watch and tablet checks run before the phone check: watchOS/iPadOS
+  // platforms would otherwise never match once "ios" is tested.
+  if (WATCH_PLATFORM_PATTERN.test(platform) || clientId === GATEWAY_CLIENT_IDS.WATCHOS_APP) {
+    return watchIcon;
+  }
+  if (TABLET_PLATFORM_PATTERN.test(platform)) {
+    return tabletIcon;
+  }
+  if (PHONE_PLATFORM_PATTERN.test(platform) || PHONE_CLIENT_IDS.has(clientId)) {
     return icons.smartphone;
   }
   if (BROWSER_CLIENT_IDS.has(clientId) || mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
@@ -118,27 +143,12 @@ export function deviceIcon(source: DeviceIconSource): TemplateResult {
   return icons.monitor;
 }
 
-/** Icon tile with a connectivity dot; `connected: null` hides the dot. */
-export function renderDeviceTile(icon: TemplateResult, connected: boolean | null) {
+/* Connectivity state lives in the row's renderSettingsStatus dot + text, so
+   the tile stays a purely decorative form-factor glyph. */
+export function renderDeviceTile(icon: TemplateResult) {
   return html`
-    <div class="nodes-entry__tile">
-      <span class="nodes-entry__tile-icon" aria-hidden="true">${icon}</span>
-      ${connected === null
-        ? nothing
-        : html`
-            <span
-              class="status-dot ${connected ? "status-dot--connected" : "status-dot--offline"}"
-              role="img"
-              aria-label=${connected
-                ? t("nodes.inventory.connected")
-                : t("nodes.inventory.offline")}
-              title=${connected ? t("nodes.inventory.connected") : t("nodes.inventory.offline")}
-            ></span>
-          `}
+    <div class="nodes-entry__tile" aria-hidden="true">
+      <span class="nodes-entry__tile-icon">${icon}</span>
     </div>
   `;
-}
-
-export function renderSectionLabel(label: string) {
-  return html`<div class="nodes-section-label">${label}</div>`;
 }

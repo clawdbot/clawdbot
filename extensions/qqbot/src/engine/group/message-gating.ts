@@ -13,7 +13,7 @@ export interface GroupMessageGateResult {
   shouldBypassMention: boolean;
 }
 
-export interface GroupMessageGateInput {
+interface GroupMessageGateInput {
   mentionGatePort: MentionGatePort;
   ignoreOtherMentions: boolean;
   hasAnyMention: boolean;

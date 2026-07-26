@@ -10,6 +10,13 @@ import {
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 type MockLoggingConfig = {
   redactPatterns?: string[];
   redactSensitive?: "off" | "tools";
@@ -471,7 +478,6 @@ describe("GatewayClient security checks", () => {
   it("proxies ws:// loopback addresses when active proxy loopbackMode is proxy", async () => {
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "proxy",
     });
@@ -496,7 +502,6 @@ describe("GatewayClient security checks", () => {
   it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "block",
     });
@@ -1326,7 +1331,7 @@ describe("GatewayClient connect auth payload", () => {
       const { ws, connect } = startClientAndConnect({ client });
 
       expect(() => emitHelloOk(ws, connect.id)).not.toThrow();
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(onHelloOk).toHaveBeenCalledOnce();
       });
       expect(onConnectError).not.toHaveBeenCalled();
@@ -1387,7 +1392,7 @@ describe("GatewayClient connect auth payload", () => {
       params.failureDetails,
       params.failureMessage,
     );
-    await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
     const ws = getLatestWs();
     ws.emitOpen();
     emitConnectChallenge(ws, "nonce-2");
@@ -1554,7 +1559,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.autoCloseOnClose = false;
     client.stop();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const error = firstMockArg(onConnectError, "connect error") as Error;
       expect(error?.message).toBe("gateway client stopped");
     });
@@ -1582,7 +1587,7 @@ describe("GatewayClient connect auth payload", () => {
       "Authorization: Bearer sk-testsecret1234567890abcd wss://user:pass@gateway.example/ws?token=secret-token", // pragma: allowlist secret
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
     });
     const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
@@ -1608,7 +1613,7 @@ describe("GatewayClient connect auth payload", () => {
       "wss://gateway.example/ws?token=secret-token failed with 401 from remote gateway", // pragma: allowlist secret
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
     });
     const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
@@ -1634,7 +1639,7 @@ describe("GatewayClient connect auth payload", () => {
       "Authorization: Bearer sk-disabledredaction1234567890abcd", // pragma: allowlist secret
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
     });
     const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
@@ -2125,3 +2130,4 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

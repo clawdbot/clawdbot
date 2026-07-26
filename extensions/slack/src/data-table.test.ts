@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSlackDataTableBlock,
-  canRenderSlackDataTable,
   countSlackDataTableBlocksCellCharacters,
   countSlackDataTableCellCharacters,
   hasSlackDataTableBlock,
@@ -54,30 +53,30 @@ describe("Slack data table blocks", () => {
       headers: ["Value"],
       rows: [["ok"]],
     };
-    expect(canRenderSlackDataTable(base)).toBe(true);
+    expect(buildSlackDataTableBlock(base)).toBeDefined();
     expect(
-      canRenderSlackDataTable({
+      buildSlackDataTableBlock({
         ...base,
         headers: Array.from({ length: 21 }, (_, index) => `H${String(index)}`),
         rows: [Array.from({ length: 21 }, () => "value")],
       }),
-    ).toBe(false);
+    ).toBeUndefined();
     expect(
-      canRenderSlackDataTable({
+      buildSlackDataTableBlock({
         ...base,
         rows: Array.from({ length: 101 }, () => ["value"]),
       }),
-    ).toBe(false);
+    ).toBeUndefined();
     expect(
-      canRenderSlackDataTable(base, {
+      buildSlackDataTableBlock(base, {
         cellCharacterCountOffset: SLACK_DATA_TABLE_CELL_CHARACTERS_MAX - 7,
       }),
-    ).toBe(true);
+    ).toBeDefined();
     expect(
-      canRenderSlackDataTable(base, {
+      buildSlackDataTableBlock(base, {
         cellCharacterCountOffset: SLACK_DATA_TABLE_CELL_CHARACTERS_MAX - 6,
       }),
-    ).toBe(false);
+    ).toBeUndefined();
   });
 
   it("counts display text across raw tables and reports malformed native tables", () => {

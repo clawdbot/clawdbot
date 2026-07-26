@@ -101,8 +101,16 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--") {
-      for (const extra of argv.slice(i + 1)) {
-        const assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+      const extras = argv.slice(i + 1);
+      for (let extraIndex = 0; extraIndex < extras.length; extraIndex += 1) {
+        const extra = extras[extraIndex];
+        let assignment;
+        if (extra === "-f") {
+          assignment = readOptionValue(extras, extraIndex, extra);
+          extraIndex += 1;
+        } else {
+          assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+        }
         const [key, ...valueParts] = assignment.split("=");
         if (!key || valueParts.length === 0) {
           throw new Error(`Unsupported extra argument after --: ${extra}`);
@@ -135,6 +143,12 @@ export function parseArgs(argv) {
 
   if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
     throw new Error("reuse_evidence must be true or false");
+  }
+  if (
+    Object.hasOwn(args.inputs, "allow_unreleased_changelog") &&
+    !["true", "false"].includes(args.inputs.allow_unreleased_changelog)
+  ) {
+    throw new Error("allow_unreleased_changelog must be true or false");
   }
   if (
     args.inputs.release_profile &&
@@ -246,11 +260,67 @@ function findLatestRunId(branch, sha) {
   return match?.databaseId ? String(match.databaseId) : "";
 }
 
+function readWorkflowRun(parentRunId, workflowSha) {
+  if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
+    throw new Error("parent run ID must be a positive decimal");
+  }
+  const workflowRun = JSON.parse(
+    run("gh", ["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`]),
+  );
+  if (workflowRun.head_sha !== workflowSha) {
+    throw new Error(
+      `Full Release Validation run ${parentRunId} head ${String(workflowRun.head_sha)} does not match trusted workflow SHA ${workflowSha}`,
+    );
+  }
+  return workflowRun;
+}
+
+function waitForWorkflowRun(parentRunId, workflowSha) {
+  let lastSummary = "";
+  let consecutiveErrors = 0;
+  for (let attempt = 0; attempt < 480; attempt += 1) {
+    let suite;
+    try {
+      suite = readWorkflowRun(parentRunId, workflowSha);
+      consecutiveErrors = 0;
+    } catch (error) {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= 3) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Parent run status query failed; retrying: ${message}`);
+    }
+
+    const summary = `${String(suite?.status ?? "pending").toLowerCase()}/${String(suite?.conclusion ?? "pending").toLowerCase()}`;
+    if (summary !== lastSummary) {
+      console.log(`Parent run status: ${summary}`);
+      lastSummary = summary;
+    }
+    if (suite?.status === "completed") {
+      if (suite.conclusion === "success") {
+        return;
+      }
+      throw new Error(
+        `Full Release Validation concluded ${String(suite.conclusion).toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+      );
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 45_000);
+  }
+  throw new Error(
+    `Timed out waiting for Full Release Validation: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+  );
+}
+
 export function releaseEvidenceVerificationArgs(parentRunId) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
   }
   return ["--validate-run", String(parentRunId), "--trusted-workflow-ref", "main", "--json"];
+}
+
+export function shouldDeleteTemporaryWorkflowRef(params) {
+  return !params.keepBranch && (params.dryRun || params.parentConclusion === "success");
 }
 
 export function releaseEvidenceVerifierPath(worktreeRoot) {
@@ -300,6 +370,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveSha(args.sha);
   args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
+  args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);
@@ -321,6 +392,7 @@ function main() {
   });
 
   let parentRunId;
+  let parentConclusion = "";
   try {
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {
@@ -349,27 +421,32 @@ function main() {
     }
 
     console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
-    const watch = runStatus(
-      "gh",
-      ["run", "watch", parentRunId, "--exit-status", "--interval", "30"],
-      {
-        stdio: "inherit",
-      },
-    );
-    if (watch.status !== 0) {
+    const completedRun = waitForWorkflowRun(parentRunId, workflowSha);
+    parentConclusion = String(completedRun.conclusion ?? "");
+    if (parentConclusion !== "success") {
       throw new Error(
-        `Full Release Validation failed: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+        `Full Release Validation concluded ${parentConclusion.toLowerCase() || "without a conclusion"}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
       );
     }
     verifyReleaseEvidence(parentRunId, workflowSha);
   } finally {
-    if (!args.keepBranch) {
+    if (
+      shouldDeleteTemporaryWorkflowRef({
+        keepBranch: args.keepBranch,
+        dryRun: args.dryRun,
+        parentConclusion,
+      })
+    ) {
       run("git", ["push", "origin", `:${remoteBranchRef}`], {
         dryRun: args.dryRun,
         stdio: "inherit",
       });
     } else {
-      console.log(`Kept ${remoteBranchRef}`);
+      console.warn(
+        args.keepBranch
+          ? `Kept ${remoteBranchRef}`
+          : `Kept ${remoteBranchRef}: parent concluded ${parentConclusion || "without a conclusion"}. Keep it through any GitHub reruns; delete it after a successful parent attempt.`,
+      );
     }
   }
 }

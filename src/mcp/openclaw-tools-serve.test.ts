@@ -1,13 +1,13 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hashCrestodianOperation } from "../agents/tools/crestodian-tool.js";
+import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
 import {
-  buildCrestodianToolsMcpServerConfig,
-  OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV,
-  OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV,
-  OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV,
+  buildSystemAgentToolsMcpServerConfig,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
+  OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
-  resolveOpenClawToolsMcpCrestodianSurface,
+  resolveOpenClawToolsMcpSystemAgentSurface,
   resolveOpenClawToolsMcpToolSelection,
 } from "./openclaw-tools-serve-config.js";
 import {
@@ -45,25 +45,25 @@ describe("OpenClaw tools MCP server", () => {
     ).toBe("agent:worker:main");
   });
 
-  it("serves the ring-zero crestodian tool without an agent session key", async () => {
+  it("serves the ring-zero openclaw tool without an agent session key", async () => {
     const handlers = createPluginToolsMcpHandlers(
-      resolveOpenClawToolsForMcp({ tools: ["crestodian"], crestodianSurface: "cli" }),
+      resolveOpenClawToolsForMcp({ tools: ["openclaw"], systemAgentSurface: "cli" }),
     );
 
     const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toEqual(["crestodian"]);
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["openclaw"]);
   });
 
   it("returns approved CLI MCP mutations to the host instead of applying them", async () => {
     const operation = { kind: "config-set", path: "gateway.port", value: "19001" } as const;
-    vi.stubEnv(OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV, "1");
-    vi.stubEnv(OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV, hashCrestodianOperation(operation));
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_APPROVAL_ARMED_ENV, "1");
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV, hashSystemAgentOperation(operation));
     const handlers = createPluginToolsMcpHandlers(
-      resolveOpenClawToolsForMcp({ tools: ["crestodian"], crestodianSurface: "cli" }),
+      resolveOpenClawToolsForMcp({ tools: ["openclaw"], systemAgentSurface: "cli" }),
     );
 
     const result = await handlers.callTool({
-      name: "crestodian",
+      name: "openclaw",
       arguments: {
         action: "config_set",
         path: "gateway.port",
@@ -79,30 +79,30 @@ describe("OpenClaw tools MCP server", () => {
     expect(resolveOpenClawToolsMcpToolSelection({})).toEqual(["cron"]);
     expect(
       resolveOpenClawToolsMcpToolSelection({
-        [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: " crestodian , cron ",
+        [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: " openclaw , cron ",
       }),
-    ).toEqual(["crestodian", "cron"]);
+    ).toEqual(["openclaw", "cron"]);
     expect(() =>
       resolveOpenClawToolsMcpToolSelection({ [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "exec" }),
     ).toThrow(OPENCLAW_TOOLS_MCP_TOOLS_ENV);
   });
 
-  it("parses the crestodian surface from env and defaults to cli", () => {
-    expect(resolveOpenClawToolsMcpCrestodianSurface({})).toBe("cli");
+  it("parses the openclaw surface from env and defaults to cli", () => {
+    expect(resolveOpenClawToolsMcpSystemAgentSurface({})).toBe("cli");
     expect(
-      resolveOpenClawToolsMcpCrestodianSurface({
-        [OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV]: "gateway",
+      resolveOpenClawToolsMcpSystemAgentSurface({
+        [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "gateway",
       }),
     ).toBe("gateway");
     expect(() =>
-      resolveOpenClawToolsMcpCrestodianSurface({
-        [OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV]: "remote",
+      resolveOpenClawToolsMcpSystemAgentSurface({
+        [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "remote",
       }),
-    ).toThrow(OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV);
+    ).toThrow(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV);
   });
 
-  it("builds a crestodian-only stdio server config under the openclaw name", () => {
-    const config = buildCrestodianToolsMcpServerConfig({ surface: "gateway" });
+  it("builds a openclaw-only stdio server config under the openclaw name", () => {
+    const config = buildSystemAgentToolsMcpServerConfig({ surface: "gateway" });
 
     expect(Object.keys(config.mcpServers)).toEqual(["openclaw"]);
     const server = config.mcpServers.openclaw as {
@@ -113,8 +113,8 @@ describe("OpenClaw tools MCP server", () => {
     expect(server.command).toBe(process.execPath);
     expect(server.args?.at(-1)).toMatch(/openclaw-tools-serve\.(js|ts)$/);
     expect(server.env).toEqual({
-      [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "crestodian",
-      [OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV]: "gateway",
+      [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw",
+      [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "gateway",
     });
   });
 });

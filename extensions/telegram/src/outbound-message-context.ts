@@ -1,8 +1,10 @@
 // Telegram plugin module implements outbound message context behavior.
 import type { Message } from "grammy/types";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { TELEGRAM_GENERAL_TOPIC_ID, type TelegramThreadSpec } from "./bot/helpers.js";
 import { buildTelegramSelfSenderName } from "./group-history-window.js";
 import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
 import type { TelegramPromptContextProjection } from "./prompt-context-projection.js";
@@ -130,13 +132,31 @@ export async function recordOutboundMessageForPromptContext(params: {
   botUserId?: number;
   text?: string;
   messageThreadId?: number;
+  /** Effective server-owned thread for the successful provider send. */
+  successfulSendThread?: TelegramThreadSpec;
   promptContextTimestampMs?: number;
   promptContextProjection?: TelegramPromptContextProjection;
 }): Promise<boolean> {
   try {
-    const cacheMessage = buildOutboundCacheMessage(params);
+    const providerGeneralTopicId =
+      params.message.message_thread_id === undefined &&
+      params.message.chat?.type === "supergroup" &&
+      params.successfulSendThread?.scope === "forum" &&
+      params.successfulSendThread.id === TELEGRAM_GENERAL_TOPIC_ID
+        ? TELEGRAM_GENERAL_TOPIC_ID
+        : undefined;
+    const providerObservedThreadId = params.message.message_thread_id ?? providerGeneralTopicId;
+    const messageThreadId = params.messageThreadId ?? providerGeneralTopicId;
+    const cacheMessage = buildOutboundCacheMessage({
+      ...params,
+      ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+    });
     const cache = createTelegramMessageCache({
-      scope: resolveTelegramMessageCacheScope(resolveStorePath(params.cfg.session?.store)),
+      scope: resolveTelegramMessageCacheScope(
+        resolveStorePath(params.cfg.session?.store, {
+          agentId: params.cfg.agents ? resolveDefaultAgentId(params.cfg) : "main",
+        }),
+      ),
     });
     await cache.record({
       accountId: params.account.accountId,
@@ -146,14 +166,15 @@ export async function recordOutboundMessageForPromptContext(params: {
       ...(params.promptContextProjection
         ? { promptContextProjection: params.promptContextProjection }
         : {}),
-      ...(params.messageThreadId !== undefined ? { threadId: params.messageThreadId } : {}),
+      ...(providerObservedThreadId !== undefined ? { providerObservedThreadId } : {}),
+      ...(messageThreadId !== undefined ? { threadId: messageThreadId } : {}),
     });
     const timestamp = resolveOutboundCacheMessageTimestamp(cacheMessage);
     outboundGroupHistoryRecorders.get(params.account.accountId)?.({
       chatId: params.chatId,
       messageId: params.messageId,
       text: params.text ?? cacheMessage.text ?? cacheMessage.caption,
-      ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
+      ...(messageThreadId !== undefined ? { messageThreadId } : {}),
       ...(timestamp !== undefined ? { timestamp } : {}),
     });
     return true;

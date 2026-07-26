@@ -11,7 +11,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
-import { streamSimple } from "../llm/stream.js";
 import type {
   AssistantMessageEvent,
   ImageContent,
@@ -21,8 +20,11 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentId,
+} from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -60,11 +62,16 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 import {
   isOpenAIProvider,
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "./openai-routing.js";
+import {
+  loadPreparedModelRuntimeSnapshot,
+  preparedModelRuntimeConfigsMatch,
+  type PreparedModelRuntimeSnapshot,
+  type PreparedModelRuntimeStores,
+} from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import {
   protectPreparedProviderRuntimeAuth,
@@ -79,8 +86,10 @@ import {
   scopeAuthProfileStoreToPreparedPlan,
 } from "./runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+import { resolveSessionModelRef } from "./session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
+import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 
@@ -398,8 +407,8 @@ type BtwRuntimeModelMaterialization = {
   modelId: string;
   agentDir: string;
   workspaceDir?: string;
-  authStorage: ReturnType<typeof discoverAuthStorage>;
-  modelRegistry: ReturnType<typeof discoverModels>;
+  authStorage: PreparedModelRuntimeStores["authStorage"];
+  modelRegistry: PreparedModelRuntimeStores["modelRegistry"];
 };
 
 async function materializeBtwRuntimeModel(
@@ -477,27 +486,26 @@ async function resolveRuntimeModel(params: {
   isNewSession: boolean;
   harnessId?: string;
   harnessAuthBootstrap?: AgentHarness["authBootstrap"];
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
 }): Promise<{
   model: Model;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   authProfileStore: AuthProfileStore;
   runtimeAuthPreparation: BtwRuntimeAuthPreparation;
-  authStorage: ReturnType<typeof discoverAuthStorage>;
-  modelRegistry: ReturnType<typeof discoverModels>;
+  authStorage: PreparedModelRuntimeStores["authStorage"];
+  modelRegistry: PreparedModelRuntimeStores["modelRegistry"];
 }> {
-  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir, {
-    config: params.cfg,
-    ...modelsOptions,
-  });
+  const preparedModelRuntime = params.preparedModelRuntime;
+  const cfg = preparedModelRuntime.config;
+  const agentDir = preparedModelRuntime.agentDir;
+  const workspaceDir = preparedModelRuntime.workspaceDir;
+  const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
   let model = resolveModelWithRegistry({
     provider: params.provider,
     modelId: params.model,
     modelRegistry,
-    cfg: params.cfg,
+    cfg,
   });
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
@@ -509,13 +517,13 @@ async function resolveRuntimeModel(params: {
     provider: runtimeProvider,
     harnessRuntime: params.harnessId,
     agentHarnessId: params.harnessId,
-    config: params.cfg,
+    config: cfg,
   });
   const authProfileId = await resolveSessionAuthProfileOverride({
-    cfg: params.cfg,
+    cfg,
     provider: runtimeProvider,
     acceptedProviderIds,
-    agentDir: params.agentDir,
+    agentDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
@@ -524,12 +532,12 @@ async function resolveRuntimeModel(params: {
   });
   const authProfileIdSource = resolveReturnedAuthProfileSource(params.sessionEntry, authProfileId);
   const authProfileStoreSelection = resolveBtwAuthProfileStore({
-    cfg: params.cfg,
+    cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
     agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
+    agentDir,
+    workspaceDir,
     authProfileId,
     authProfileIdSource,
   });
@@ -542,9 +550,9 @@ async function resolveRuntimeModel(params: {
     modelId: runtimeModelId,
     modelApi: model.api,
     modelBaseUrl: model.baseUrl,
-    config: params.cfg,
+    config: cfg,
     env: process.env,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     authProfileStore: authProfileStoreSelection.store,
     sessionAuthProfileId: effectiveAuthProfileId,
     sessionAuthProfileSource: authProfileIdSource,
@@ -553,11 +561,11 @@ async function resolveRuntimeModel(params: {
     harnessAuthBootstrap: params.harnessAuthBootstrap,
   });
   model = await materializeBtwRuntimeModel({
-    cfg: params.cfg,
+    cfg,
     provider: runtimeProvider,
     modelId: runtimeModelId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
+    agentDir,
+    workspaceDir,
     authStorage,
     modelRegistry,
     plan: runtimeAuthPreparation.plan,
@@ -679,8 +687,9 @@ async function runCliBtwSideQuestion(params: {
 
 /** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
-  params: RunBtwSideQuestionParams,
+  paramsInput: RunBtwSideQuestionParams,
 ): Promise<ReplyPayload | undefined> {
+  let params = paramsInput;
   const sessionId = params.sessionEntry.sessionId?.trim();
   if (!sessionId) {
     throw new Error("No active session context.");
@@ -696,11 +705,37 @@ export async function runBtwSideQuestion(
     throw new Error("No active session transcript.");
   }
 
-  const sessionAgentId = resolveSessionAgentId({
+  const requestedAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
+  const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, requestedAgentId);
+  const preparedModelRuntime = await loadPreparedModelRuntimeSnapshot({
+    config: params.cfg,
+    agentId: requestedAgentId,
+    agentDir: params.agentDir,
+    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
+    workspaceDir: requestedWorkspaceDir,
+  });
+  const sessionAgentId =
+    preparedModelRuntime.agentId ??
+    resolveSessionAgentId({ sessionKey: params.sessionKey, config: preparedModelRuntime.config });
+  const workspaceDir =
+    preparedModelRuntime.workspaceDir ??
+    resolveAgentWorkspaceDir(preparedModelRuntime.config, sessionAgentId);
+  const preparedModelRef = preparedModelRuntimeConfigsMatch(preparedModelRuntime.config, params.cfg)
+    ? { provider: params.provider, model: params.model }
+    : resolveSessionModelRef(preparedModelRuntime.config, params.sessionEntry, sessionAgentId);
+  // BTW policy, model selection, directories, auth, and catalog must come from one generation.
+  // A reload may have committed while the command waited for its transcript/session lookup.
+  // Rebind every later policy/auth/dispatch read to the generation returned above.
+  params = {
+    ...params,
+    cfg: preparedModelRuntime.config,
+    agentDir: preparedModelRuntime.agentDir,
+    provider: preparedModelRef.provider,
+    model: preparedModelRef.model,
+  };
   const preparedHarnesses = new Map<string, AgentHarness>();
   const prepareHarness = async (
     provider: string,
@@ -778,6 +813,7 @@ export async function runBtwSideQuestion(
         isNewSession: params.isNewSession,
         harnessId: harness.id,
         harnessAuthBootstrap: harness.authBootstrap,
+        preparedModelRuntime,
       });
     }
     return runtimeSelection;
@@ -1142,6 +1178,7 @@ export async function runBtwSideQuestion(
     }
   }
   runtimeModel = applySecretRefHeaderSentinels(runtimeModel, params.cfg);
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
 
   // Use the provider's own stream fn so providers like Ollama (which build
   // `/api/chat` or `/v1/chat/completions` paths based on api mode) construct
@@ -1153,9 +1190,11 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
+    apiRegistry: modelRegistryRuntime.apiRegistry,
   });
   const streamFn = resolveEmbeddedAgentStreamFn({
-    currentStreamFn: streamSimple,
+    llmRuntime: modelRegistryRuntime.llmRuntime,
+    currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
     providerStreamFn,
     sessionId,
     signal: params.opts?.abortSignal,
@@ -1297,3 +1336,4 @@ export async function runBtwSideQuestion(
 
   return { text: answer };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

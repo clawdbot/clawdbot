@@ -55,6 +55,7 @@ type ControlUiContentEncoding = "br" | "gzip";
 type ControlUiEncodingSelection = ControlUiContentEncoding | "identity" | "not-acceptable";
 
 const CONTROL_UI_DYNAMIC_ENCODINGS = new Set<ControlUiContentEncoding>(["br", "gzip"]);
+const CONTROL_UI_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 const controlUiHtmlCompressionCache = new Map<string, Promise<Buffer>>();
 
 function contentTypeForExtension(ext: string): string {
@@ -109,7 +110,13 @@ function resolveControlUiContentEncoding(
       continue;
     }
     const qualityParam = rawParams.find((param) => param.trim().toLowerCase().startsWith("q="));
-    const parsedQuality = qualityParam ? Number.parseFloat(qualityParam.trim().slice(2)) : 1;
+    const qualityText = qualityParam?.trim().slice(2);
+    const parsedQuality =
+      qualityText === undefined
+        ? 1
+        : CONTROL_UI_QVALUE_PATTERN.test(qualityText)
+          ? Number(qualityText)
+          : Number.NaN;
     const quality =
       Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
         ? parsedQuality

@@ -1,32 +1,36 @@
 // Control UI chat module implements tool cards behavior.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
-import { keyed } from "lit/directives/keyed.js";
-import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
+import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
-  formatDistinctCollapsedToolSummaryText,
+  formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+  resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import {
   formatToolDetail,
-  resolveCanvasIframeUrl,
-  resolveEmbedSandbox,
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
+import { renderToolPreview } from "./widget-card.ts";
+
+export {
+  renderToolPreview,
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "./widget-card.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
 
@@ -85,7 +89,7 @@ ${text}
 \`\`\``;
 }
 
-export function buildToolCardSidebarContent(card: ToolCard): string {
+function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const isError = isToolCardError(card);
@@ -132,178 +136,6 @@ function handleRawDetailsToggle(event: Event) {
   body.hidden = expanded;
 }
 
-// Sandboxed widget documents report their content height via postMessage so the
-// preview iframe can fit short/tall widgets. The event source must be one of our
-// preview frames and the height is clamped, so widget code can only resize its
-// own frame within the same bounds the preview contract allows.
-const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
-const WIDGET_FRAME_MIN_HEIGHT = 160;
-const WIDGET_FRAME_MAX_HEIGHT = 1200;
-// Preview frames render inside lit shadow roots, so a document query cannot
-// find them; frames register themselves on load and are dropped once detached.
-const widgetFrameRegistry = new Set<HTMLIFrameElement>();
-// Reported heights keyed by frame src: lit re-renders re-apply the style
-// binding, so the template must read the reported height back or it resets.
-const widgetFrameHeightsBySrc = new Map<string, number>();
-const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
-let widgetSizeListenerInstalled = false;
-
-function rememberWidgetFrameHeight(src: string, height: number) {
-  if (
-    !widgetFrameHeightsBySrc.has(src) &&
-    widgetFrameHeightsBySrc.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
-  ) {
-    const oldest = widgetFrameHeightsBySrc.keys().next().value;
-    if (oldest !== undefined) {
-      widgetFrameHeightsBySrc.delete(oldest);
-    }
-  }
-  widgetFrameHeightsBySrc.set(src, height);
-}
-
-function registerWidgetFrame(event: Event) {
-  const frame = event.currentTarget;
-  if (frame instanceof HTMLIFrameElement) {
-    widgetFrameRegistry.add(frame);
-  }
-}
-
-function installWidgetSizeListener() {
-  if (widgetSizeListenerInstalled || typeof window === "undefined") {
-    return;
-  }
-  widgetSizeListenerInstalled = true;
-  window.addEventListener("message", (event: MessageEvent) => {
-    const data = event.data as { type?: unknown; height?: unknown } | null;
-    if (!data || data.type !== WIDGET_SIZE_MESSAGE_TYPE || typeof data.height !== "number") {
-      return;
-    }
-    for (const frame of widgetFrameRegistry) {
-      if (!frame.isConnected) {
-        widgetFrameRegistry.delete(frame);
-        continue;
-      }
-      if (frame.contentWindow === event.source) {
-        const height = Math.min(
-          Math.max(Math.trunc(data.height), WIDGET_FRAME_MIN_HEIGHT),
-          WIDGET_FRAME_MAX_HEIGHT,
-        );
-        // The stylesheet floors the frame at min-height 420px; reported sizes
-        // must override both properties to fit short widgets.
-        frame.style.height = `${height}px`;
-        frame.style.minHeight = `${height}px`;
-        const src = frame.getAttribute("src");
-        if (src) {
-          rememberWidgetFrameHeight(src, height);
-        }
-        return;
-      }
-    }
-  });
-}
-
-function renderPreviewFrame(params: {
-  title: string;
-  src?: string;
-  height?: number;
-  sandbox?: string;
-}) {
-  installWidgetSizeListener();
-  const sandbox = params.sandbox ?? "";
-  const src = params.src ?? "";
-  const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
-  const height = reportedHeight ?? params.height;
-  return keyed(
-    `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
-    html`
-      <iframe
-        class="chat-tool-card__preview-frame"
-        title=${params.title}
-        sandbox=${sandbox}
-        src=${src || nothing}
-        style=${height ? `height:${height}px;min-height:${height}px` : ""}
-        @load=${registerWidgetFrame}
-      ></iframe>
-    `,
-  );
-}
-
-const loadMcpAppView = () => import("../../../components/mcp-app-view.ts");
-
-function renderMcpAppView(params: {
-  sessionKey: string;
-  viewId: string;
-  height: number;
-  title: string;
-}) {
-  // Insert the tag before its chunk arrives. Native custom-element upgrade
-  // preserves these bound fields, so the first preview initializes after registration.
-  void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
-    console.error("[openclaw] failed to load MCP App view", error);
-  });
-  return html`<mcp-app-view
-    .sessionKey=${params.sessionKey}
-    .viewId=${params.viewId}
-    .height=${params.height}
-    .title=${params.title}
-  ></mcp-app-view>`;
-}
-
-export function renderToolPreview(
-  preview: ToolPreview | undefined,
-  surface: "chat_tool" | "chat_message" | "sidebar",
-  options?: {
-    onOpenSidebar?: (content: SidebarContent) => void;
-    rawText?: string | null;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
-    sessionKey?: string;
-  },
-) {
-  if (!preview) {
-    return nothing;
-  }
-  if (
-    preview.kind !== "canvas" ||
-    surface === "chat_tool" ||
-    (preview.mcpApp && surface !== "chat_message")
-  ) {
-    return nothing;
-  }
-  if (preview.surface !== "assistant_message") {
-    return nothing;
-  }
-  return html`
-    <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
-      <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label"
-          >${preview.title?.trim() || t("chat.toolCards.canvas")}</span
-        >
-      </div>
-      <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${preview.mcpApp
-          ? renderMcpAppView({
-              sessionKey: options?.sessionKey ?? "",
-              viewId: preview.mcpApp.viewId,
-              height: preview.preferredHeight ?? 600,
-              title: preview.title?.trim() || t("mcpApp.title"),
-            })
-          : renderPreviewFrame({
-              title: preview.title?.trim() || t("chat.toolCards.canvas"),
-              src: resolveCanvasIframeUrl(
-                preview.url,
-                options?.canvasPluginSurfaceUrl,
-                options?.allowExternalEmbedUrls ?? false,
-              ),
-              height: preview.preferredHeight,
-              sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
-            })}
-      </div>
-    </div>
-  `;
-}
-
 function buildSidebarContent(
   value: string,
   options?: {
@@ -319,7 +151,7 @@ function buildSidebarContent(
   };
 }
 
-export function buildPreviewSidebarContent(
+function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
   options?: { fullMessageRequest?: FullMessageRequest },
@@ -467,7 +299,6 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     `;
   }
 
-  // Generic tools keep the resolver-driven label + detail.
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const summary = resolveCollapsedToolSummaryParts({
     card,
@@ -476,12 +307,13 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
     return html`
       <span class="chat-tool-row__title">${aiTitle}</span>
-      <span class="chat-tool-row__detail">${displayLabel}</span>
+      <span class="chat-tool-row__detail">${argumentPreview ?? displayLabel}</span>
     `;
   }
   return html`
@@ -561,7 +393,7 @@ function tokenizeCommand(command: string): CommandToken[] {
   return tokens;
 }
 
-export function renderHighlightedCommand(command: string) {
+function renderHighlightedCommand(command: string) {
   if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
     return html`${command}`;
   }
@@ -731,7 +563,6 @@ export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined
   return resolveToolCardOutcome(card, runActive) === "running";
 }
 
-/** Plain-text row label, e.g. for the group header while a tool is running. */
 export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   if (view.kind === "command" && view.command) {
@@ -742,7 +573,7 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
     return `${verb} ${view.target}`;
   }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  return display.label;
+  return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
 }
 
 export function renderToolCard(
@@ -976,3 +807,4 @@ export function renderExpandedToolCardContent(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

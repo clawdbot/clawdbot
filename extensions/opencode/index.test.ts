@@ -84,6 +84,7 @@ describe("opencode provider plugin", () => {
 
     const expectedModelIds = [
       "claude-fable-5",
+      "claude-opus-5",
       "claude-opus-4-8",
       "claude-opus-4-7",
       "claude-opus-4-6",
@@ -94,9 +95,14 @@ describe("opencode provider plugin", () => {
       "claude-sonnet-4-5",
       "claude-sonnet-4",
       "claude-haiku-4-5",
+      "gemini-3.6-flash",
       "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
       "gemini-3.1-pro",
       "gemini-3-flash",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
       "gpt-5.5",
       "gpt-5.5-pro",
       "gpt-5.4",
@@ -132,7 +138,8 @@ describe("opencode provider plugin", () => {
       "big-pickle",
       "deepseek-v4-flash-free",
       "mimo-v2.5-free",
-      "hy3-free",
+      "laguna-s-2.1-free",
+      "ling-3.0-flash-free",
       "nemotron-3-ultra-free",
       "north-mini-code-free",
     ];
@@ -169,9 +176,54 @@ describe("opencode provider plugin", () => {
       api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
     });
+    expect(requireMapEntry(models, "gpt-5.6-luna")).toMatchObject({
+      name: "GPT-5.6 Luna",
+      api: "openai-responses",
+      baseUrl: "https://opencode.ai/zen/v1",
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: {
+        input: 1,
+        output: 6,
+        cacheRead: 0.1,
+        cacheWrite: 1.25,
+        tieredPricing: [
+          { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
+          { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+        ],
+      },
+      compat: {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      },
+    });
+    expect(requireMapEntry(models, "gpt-5.6-terra")).toMatchObject({
+      name: "GPT-5.6 Terra",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
+    });
+    expect(requireMapEntry(models, "gpt-5.6-sol")).toMatchObject({
+      name: "GPT-5.6 Sol",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    });
     expect(requireMapEntry(models, "gemini-3.5-flash")).toMatchObject({
       api: "google-generative-ai",
       baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(requireMapEntry(models, "gemini-3.6-flash")).toMatchObject({
+      name: "Gemini 3.6 Flash",
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+    });
+    expect(requireMapEntry(models, "gemini-3.5-flash-lite")).toMatchObject({
+      name: "Gemini 3.5 Flash-Lite",
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
     });
     expect(requireMapEntry(models, "minimax-m2.7")).toMatchObject({
       api: "openai-completions",
@@ -216,15 +268,6 @@ describe("opencode provider plugin", () => {
         ],
       },
     });
-    expect(requireMapEntry(models, "hy3-free")).toMatchObject({
-      name: "Hy3 Free",
-      api: "openai-completions",
-      baseUrl: "https://opencode.ai/zen/v1",
-      input: ["text"],
-      contextWindow: 256_000,
-      maxTokens: 64_000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    });
     expect(requireMapEntry(models, "kimi-k2.7-code")).toMatchObject({
       name: "Kimi K2.7 Code",
       api: "openai-completions",
@@ -268,17 +311,54 @@ describe("opencode provider plugin", () => {
       throw new Error("expected manifest opencode models");
     }
     expect(manifestModels.map((model) => requireRecord(model, "manifest model").id)).toEqual([
+      "claude-opus-5",
       "claude-opus-4-8",
+      "gpt-5.6-sol",
       "gpt-5.5",
+      "gemini-3.6-flash",
       "gemini-3.1-pro",
+      "minimax-m3",
       "minimax-m2.7",
+      "big-pickle",
+      "deepseek-v4-flash-free",
+      "mimo-v2.5-free",
+      "laguna-s-2.1-free",
+      "ling-3.0-flash-free",
+      "nemotron-3-ultra-free",
+      "north-mini-code-free",
     ]);
+    const manifestClaude48 = requireRecord(
+      manifestModels.find(
+        (model) => requireRecord(model, "manifest model").id === "claude-opus-4-8",
+      ),
+      "manifest claude-opus-4-8",
+    );
+    expect(manifestClaude48).toMatchObject({
+      status: "deprecated",
+      replacedBy: "claude-opus-5",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    const manifestGpt55 = requireRecord(
+      manifestModels.find((model) => requireRecord(model, "manifest model").id === "gpt-5.5"),
+      "manifest gpt-5.5",
+    );
+    expect(manifestGpt55).toMatchObject({
+      status: "deprecated",
+      replacedBy: "gpt-5.6-sol",
+      contextWindow: 1_050_000,
+    });
     const manifestMiniMax = requireRecord(
       manifestModels.find((model) => requireRecord(model, "manifest model").id === "minimax-m2.7"),
       "manifest minimax-m2.7",
     );
     expect(manifestMiniMax.api).toBe("openai-completions");
     expect(manifestMiniMax.baseUrl).toBe("https://opencode.ai/zen/v1");
+    expect(manifestMiniMax).toMatchObject({
+      status: "deprecated",
+      replacedBy: "minimax-m3",
+      cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+    });
   });
 
   it("keeps documented OpenCode Zen example models resolvable", async () => {
@@ -326,15 +406,69 @@ describe("opencode provider plugin", () => {
 
     const verifiedCostExamples = new Map([
       ["claude-fable-5", { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }],
+      ["claude-opus-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-8", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
       ["claude-sonnet-5", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }],
+      [
+        "gpt-5.6-luna",
+        {
+          input: 1,
+          output: 6,
+          cacheRead: 0.1,
+          cacheWrite: 1.25,
+          tieredPricing: [
+            { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
+            { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+          ],
+        },
+      ],
+      [
+        "gpt-5.6-terra",
+        {
+          input: 2.5,
+          output: 15,
+          cacheRead: 0.25,
+          cacheWrite: 3.125,
+          tieredPricing: [
+            {
+              input: 2.5,
+              output: 15,
+              cacheRead: 0.25,
+              cacheWrite: 3.125,
+              range: [0, 272_000],
+            },
+            {
+              input: 5,
+              output: 22.5,
+              cacheRead: 0.5,
+              cacheWrite: 6.25,
+              range: [272_000],
+            },
+          ],
+        },
+      ],
+      [
+        "gpt-5.6-sol",
+        {
+          input: 5,
+          output: 30,
+          cacheRead: 0.5,
+          cacheWrite: 6.25,
+          tieredPricing: [
+            { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25, range: [0, 272_000] },
+            { input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5, range: [272_000] },
+          ],
+        },
+      ],
       ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
       ["glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
-      ["hy3-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
       ["kimi-k2.7-code", { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 }],
-      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
+      ["laguna-s-2.1-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["ling-3.0-flash-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["minimax-m2.5", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
+      ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
       ["minimax-m3", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
     ] as const);
 
@@ -372,15 +506,16 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(52);
+    expect(result.provider.models).toHaveLength(59);
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-5");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
     expect(result.provider.models.map((model) => model.id)).toContain("grok-4.5");
-    expect(result.provider.models.map((model) => model.id)).toContain("hy3-free");
     expect(result.provider.models.map((model) => model.id)).toContain("kimi-k2.7-code");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
+    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-luna");
     expect(result.provider.models.find((model) => model.id === "minimax-m2.7")).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/v1",
@@ -395,8 +530,10 @@ describe("opencode provider plugin", () => {
       throw new Error("expected registered OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(52);
+    expect(result.provider.models).toHaveLength(59);
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-5");
     expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
+    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.6-sol");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
     expect(result.provider.models.find((model) => model.id === "grok-4.5")).toMatchObject({
       api: "openai-completions",
@@ -616,7 +753,7 @@ describe("opencode provider plugin", () => {
     });
   });
 
-  it("exposes Anthropic thinking levels for proxied Claude models", async () => {
+  it("exposes provider-owned thinking levels for proxied models", async () => {
     const { providers } = await registerProviderPlugin({
       plugin,
       id: "opencode",
@@ -655,5 +792,20 @@ describe("opencode provider plugin", () => {
     expect(sonnet46LevelIds).toContain("adaptive");
     expect(sonnet46LevelIds).not.toContain("xhigh");
     expect(sonnet46LevelIds).not.toContain("max");
+
+    const gpt56Profile = resolveThinkingProfile({
+      provider: "opencode",
+      modelId: "gpt-5.6-luna",
+      api: "openai-responses",
+      reasoning: true,
+      compat: {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      },
+    });
+    const gpt56LevelIds = gpt56Profile?.levels.map((level) => level.id) ?? [];
+    expect(gpt56Profile?.defaultLevel).toBe("medium");
+    expect(gpt56LevelIds).not.toContain("minimal");
+    expect(gpt56LevelIds).toContain("xhigh");
+    expect(gpt56LevelIds).toContain("max");
   });
 });

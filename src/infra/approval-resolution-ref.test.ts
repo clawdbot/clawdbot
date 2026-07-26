@@ -1,26 +1,14 @@
 // Approval transport reference tests cover deterministic, kind-bound locators.
 import { describe, expect, it } from "vitest";
-import {
-  APPROVAL_RESOLUTION_REF_LENGTH,
-  buildApprovalResolutionRef,
-  isApprovalResolutionRef,
-} from "./approval-resolution-ref.js";
+import { buildApprovalResolutionRef, isApprovalResolutionRef } from "./approval-resolution-ref.js";
 
 describe("approval resolution references", () => {
-  it("builds a deterministic full-digest base64url transport locator", () => {
-    const ref = buildApprovalResolutionRef({
-      approvalId: "approval/with Unicode 😀",
-      approvalKind: "exec",
-    });
+  it("builds a deterministic full-digest transport locator", () => {
+    const params = { approvalId: "approval/with Unicode 😀", approvalKind: "exec" as const };
+    const ref = buildApprovalResolutionRef(params);
 
-    expect(ref).toHaveLength(APPROVAL_RESOLUTION_REF_LENGTH);
     expect(isApprovalResolutionRef(ref)).toBe(true);
-    expect(
-      buildApprovalResolutionRef({
-        approvalId: "approval/with Unicode 😀",
-        approvalKind: "exec",
-      }),
-    ).toBe(ref);
+    expect(buildApprovalResolutionRef(params)).toBe(ref);
   });
 
   it("binds the locator to the exact id and owner kind", () => {

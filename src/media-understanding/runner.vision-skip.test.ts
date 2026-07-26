@@ -34,7 +34,7 @@ const baseCatalog: TestCatalogEntry[] = [
 let catalog: TestCatalogEntry[] = [...baseCatalog];
 const plantedVisionSentinel = "PLANTED_VISION_DESC_zq7x";
 
-const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
+const loadModelCatalog = vi.hoisted(() => vi.fn(async (_params: unknown) => catalog));
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
@@ -60,9 +60,12 @@ vi.mock("../agents/model-catalog.js", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog,
   };
 });
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalog,
+}));
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
@@ -119,14 +122,8 @@ function requireCapabilityOutput(result: CapabilityResult, index: number) {
 
 describe("runCapability image skip", () => {
   beforeAll(async () => {
-    vi.doMock("../agents/model-catalog.js", async () => {
-      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
-        "../agents/model-catalog.js",
-      );
-      return {
-        ...actual,
-        loadModelCatalog,
-      };
+    vi.doMock("../agents/prepared-model-catalog.js", () => {
+      return { loadPreparedModelCatalog: loadModelCatalog };
     });
     ({ buildProviderRegistry, resolveAutoImageModel, runCapability } = await import("./runner.js"));
     ({ applyMediaUnderstanding } = await import("./apply.js"));
@@ -139,16 +136,19 @@ describe("runCapability image skip", () => {
     vi.unstubAllEnvs();
   });
 
-  it("skips image understanding when the active model supports vision", async () => {
-    const ctx: MsgContext = { MediaPath: "/tmp/image.png", MediaType: "image/png" };
+  it("skips image understanding for a vision model when preferredModel is dangling", async () => {
+    const ctx: MsgContext = { media: [{ path: "/tmp/image.png", contentType: "image/png" }] };
     const media = normalizeMediaAttachments(ctx);
     const cache = createMediaAttachmentCache(media);
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      tools: { media: { image: { preferredModel: "missing/model" } } },
+    } as OpenClawConfig;
 
     try {
       const result = await runCapability({
         capability: "image",
         cfg,
+        agentId: "vision-agent",
         ctx,
         attachments: cache,
         media,
@@ -167,6 +167,10 @@ describe("runCapability image skip", () => {
       }
       expect(attempt.outcome).toBe("skipped");
       expect(attempt.reason).toBe("primary model supports vision natively");
+      expect(loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "vision-agent" }),
+      );
+      expect(loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
     } finally {
       await cache.cleanup();
     }
@@ -180,7 +184,7 @@ describe("runCapability image skip", () => {
         mediaType: "image/png",
         fileContents: Buffer.from("image"),
       },
-      async ({ ctx }) => {
+      async ({ ctx, mediaPath }) => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this image";
@@ -196,7 +200,7 @@ describe("runCapability image skip", () => {
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
-          workspaceDir: path.dirname(ctx.MediaPath),
+          workspaceDir: path.dirname(mediaPath),
           providers: {
             minimax: {
               id: "minimax",
@@ -240,7 +244,7 @@ describe("runCapability image skip", () => {
         mediaType: "image/png",
         fileContents: Buffer.from("image"),
       },
-      async ({ ctx }) => {
+      async ({ ctx, mediaPath }) => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this minimax image";
@@ -256,7 +260,7 @@ describe("runCapability image skip", () => {
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
-          workspaceDir: path.dirname(ctx.MediaPath),
+          workspaceDir: path.dirname(mediaPath),
           providers: {
             minimax: {
               id: "minimax",
@@ -290,16 +294,20 @@ describe("runCapability image skip", () => {
         mediaType: "image/png",
         fileContents: Buffer.from("image"),
       },
-      async ({ ctx }) => {
+      async ({ ctx, mediaPath }) => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this explicit image";
         const cfg = {
           tools: {
             media: {
-              image: {
-                models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
-              },
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
             },
           },
         } as unknown as OpenClawConfig;
@@ -308,7 +316,7 @@ describe("runCapability image skip", () => {
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
-          workspaceDir: path.dirname(ctx.MediaPath),
+          workspaceDir: path.dirname(mediaPath),
           providers: {
             openrouter: {
               id: "openrouter",
@@ -340,7 +348,19 @@ describe("runCapability image skip", () => {
         fileContents: Buffer.from("image"),
       },
       async ({ ctx, media, cache }) => {
-        const cfg = {} as OpenClawConfig;
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as OpenClawConfig;
 
         const result = await runCapability({
           capability: "image",
@@ -359,9 +379,6 @@ describe("runCapability image skip", () => {
               },
             ],
           ]),
-          config: {
-            models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
-          },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
@@ -387,7 +404,20 @@ describe("runCapability image skip", () => {
       },
       async ({ ctx, media, cache }) => {
         let seenPrompt: string | undefined;
-        const cfg = {} as OpenClawConfig;
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  prompt: "entry prompt",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as OpenClawConfig;
 
         const result = await runCapability({
           capability: "image",
@@ -411,13 +441,6 @@ describe("runCapability image skip", () => {
           ]),
           config: {
             _requestPromptOverride: "Use this request prompt",
-            models: [
-              {
-                provider: "openrouter",
-                model: "google/gemini-2.5-flash",
-                prompt: "entry prompt",
-              },
-            ],
           },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
@@ -805,9 +828,13 @@ describe("runCapability image skip", () => {
     const cfg = {
       tools: {
         media: {
-          image: {
-            models: [{ provider: "gemini", model: "gemini-3-flash-preview" }],
-          },
+          models: [
+            {
+              provider: "gemini",
+              model: "gemini-3-flash-preview",
+              capabilities: ["image"],
+            },
+          ],
         },
       },
     } as OpenClawConfig;
@@ -1080,3 +1107,4 @@ describe("runCapability image skip", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

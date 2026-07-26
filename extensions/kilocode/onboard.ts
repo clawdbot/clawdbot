@@ -6,7 +6,7 @@ import {
 import { buildKilocodeProvider } from "./provider-catalog.js";
 import { KILOCODE_BASE_URL, KILOCODE_DEFAULT_MODEL_REF } from "./provider-models.js";
 
-export { KILOCODE_BASE_URL, KILOCODE_DEFAULT_MODEL_REF };
+export { KILOCODE_DEFAULT_MODEL_REF };
 
 const kilocodePresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: KILOCODE_DEFAULT_MODEL_REF,

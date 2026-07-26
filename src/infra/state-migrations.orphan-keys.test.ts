@@ -4,10 +4,8 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  migrateOrphanedSessionKeys,
-  sessionStoreTextMayNeedCanonicalization,
-} from "./state-migrations.js";
+import { migrateOrphanedSessionKeys } from "./state-migrations.js";
+import { resolveSessionStoreOwnership } from "./state-migrations.session-store.js";
 
 const listPluginDoctorSessionStoreAgentIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
@@ -81,105 +79,6 @@ describe("migrateOrphanedSessionKeys", () => {
   beforeEach(() => {
     listPluginDoctorSessionStoreAgentIdsMock.mockReset();
     listPluginDoctorSessionStoreAgentIdsMock.mockReturnValue([]);
-  });
-
-  it("recognizes canonical stores without parsing them for migration", () => {
-    const raw = JSON.stringify({
-      "agent:main:discord:channel:123": { sessionId: "channel", updatedAt: 1 },
-      "agent:main:subagent:child": { sessionId: "child", updatedAt: 2 },
-      global: { sessionId: "global", updatedAt: 3 },
-    });
-
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw,
-        storeAgentIds: ["main"],
-        mainKey: "main",
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps migration candidates on the full parser path", () => {
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:main:main": { sessionId: "orphan", updatedAt: 1 },
-        }),
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:archive:main": { sessionId: "retired-main", updatedAt: 1 },
-        }),
-        storeAgentIds: ["main"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          main: { sessionId: "legacy-main", updatedAt: 1 },
-        }),
-        storeAgentIds: ["main"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: "{unquoted: {sessionId: 'legacy', updatedAt: 1}}",
-        storeAgentIds: ["main"],
-        mainKey: "main",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:ops:main": { sessionId: "old-main-alias", updatedAt: 1 },
-        }),
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:main:main": { sessionId: "global-main-alias", updatedAt: 1 },
-        }),
-        storeAgentIds: ["main"],
-        mainKey: "main",
-        scope: "global",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: JSON.stringify({
-          "agent:ops:work ": { sessionId: "padded-key", updatedAt: 1 },
-        }),
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    expect(
-      sessionStoreTextMayNeedCanonicalization({
-        raw: '{"agent:\\u006f\\u0070\\u0073:\\u006d\\u0061\\u0069\\u006e":{"sessionId":"escaped","updatedAt":1}}',
-        storeAgentIds: ["ops"],
-        mainKey: "work",
-      }),
-    ).toBe(true);
-    for (const malformedKey of ["agent::room", "agent:_bad:room"]) {
-      expect(
-        sessionStoreTextMayNeedCanonicalization({
-          raw: JSON.stringify({
-            [malformedKey]: { sessionId: "opaque", updatedAt: 1 },
-          }),
-          storeAgentIds: ["voice"],
-          mainKey: "main",
-        }),
-      ).toBe(true);
-    }
   });
 
   it("renames orphaned raw key to canonical form", async () => {
@@ -268,10 +167,79 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(store["agent:voice:metadata"]).toEqual({
         updatedAt: 1500,
         groupActivation: "always",
+        delivery: { kind: "none" },
       });
       expect(store["voice:15550001111"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  it("distinguishes large adjacent inodes before planning store aliases", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
+      const targetStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
+      writeStore(configuredStorePath, {});
+      writeStore(targetStorePath, {});
+      const cfg = {
+        session: { store: configuredStorePath },
+        agents: { list: [{ id: "ops", default: true }] },
+      } as OpenClawConfig;
+      const realStatSync = fs.statSync.bind(fs);
+      const largeInodes = new Map([
+        [configuredStorePath, 72057594037932382n],
+        [targetStorePath, 72057594037932383n],
+      ]);
+      const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((
+        candidate: Parameters<typeof fs.statSync>[0],
+        options?: { bigint?: boolean },
+      ) => {
+        const resolvedPath = path.resolve(candidate.toString());
+        const inode = largeInodes.get(resolvedPath);
+        const useBigInt = options?.bigint === true;
+        const stat = useBigInt
+          ? realStatSync(candidate, { bigint: true })
+          : realStatSync(candidate);
+        if (inode === undefined) {
+          return stat;
+        }
+        return new Proxy(stat, {
+          get(target, property, receiver) {
+            if (property === "dev") {
+              return useBigInt ? 2n : 2;
+            }
+            if (property === "ino") {
+              return useBigInt ? inode : Number(inode);
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+      }) as typeof fs.statSync);
+
+      let ownership: ReturnType<typeof resolveSessionStoreOwnership>;
+      try {
+        ownership = resolveSessionStoreOwnership({
+          cfg,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          stateDir,
+          targetAgentId: "voice",
+          pluginSessionStoreAgentIds: ["voice"],
+        });
+        expect(statSpy).toHaveBeenCalledWith(configuredStorePath, { bigint: true });
+        expect(statSpy).toHaveBeenCalledWith(targetStorePath, { bigint: true });
+      } finally {
+        statSpy.mockRestore();
+      }
+
+      expect(ownership).toEqual({
+        preserveAmbiguousKeys: false,
+        preserveForeignMainAliases: false,
+        targetStoreAliases: {
+          hasDistinctAliases: false,
+          hasFinalSymlink: false,
+          hasUnresolvedIdentity: false,
+        },
+      });
     });
   });
 

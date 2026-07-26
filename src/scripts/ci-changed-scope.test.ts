@@ -13,6 +13,7 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunNativeI18n,
+  writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
@@ -102,6 +103,7 @@ describe("detectChangedScope", () => {
     for (const changedPath of [
       "apps/.i18n/native-source.json",
       "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
+      "apps/android/wear/src/main/java/ai/openclaw/wear/WearScreens.kt",
       "apps/ios/Sources/RootTabs.swift",
       "apps/macos/Sources/OpenClaw/Settings.swift",
       "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
@@ -239,6 +241,7 @@ describe("detectChangedScope", () => {
       "scripts/check-swift-tools.sh",
       "scripts/format-swift.sh",
       "scripts/install-swift-tools.sh",
+      "scripts/install-xcodegen.sh",
       "scripts/lint-swift.sh",
     ]) {
       expect(detectChangedScope([toolingPath])).toEqual({
@@ -261,7 +264,7 @@ describe("detectChangedScope", () => {
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
-      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual({
@@ -847,17 +850,23 @@ describe("detectChangedScope", () => {
       runUiTests: true,
     });
 
-    expect(detectChangedScope(["scripts/control-ui-i18n.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runIosBuild: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: true,
-      runUiTests: false,
-    });
+    for (const scriptPath of [
+      "scripts/control-ui-i18n.ts",
+      "scripts/control-ui-i18n-verify.ts",
+      "scripts/lib/control-ui-i18n-raw-copy.ts",
+    ]) {
+      expect(detectChangedScope([scriptPath])).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: true,
+        runUiTests: false,
+      });
+    }
   });
 
   it.each([
@@ -970,6 +979,42 @@ describe("detectChangedScope", () => {
     expect(listChangedPaths(staleBase, "HEAD", repoDir, true)).toEqual(["src/pr.ts"]);
   });
 
+  it("reports both sides of a rename so deleted paths force safe planning", () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-rename-"));
+    tempDirs.push(repoDir);
+    git(repoDir, ["init", "-b", "main"]);
+    git(repoDir, ["config", "user.email", "ci@example.invalid"]);
+    git(repoDir, ["config", "user.name", "CI"]);
+    writeRepoFile(repoDir, "src/old.ts", "export const value = 1;\n");
+    git(repoDir, ["add", "."]);
+    git(repoDir, ["commit", "-m", "base"]);
+    const base = git(repoDir, ["rev-parse", "HEAD"]);
+    fs.renameSync(path.join(repoDir, "src/old.ts"), path.join(repoDir, "src/new.ts"));
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "rename"]);
+
+    expect(listChangedPaths(base, "HEAD", repoDir)).toEqual(["src/new.ts", "src/old.ts"]);
+  });
+
+  it("drops oversized changed-path payloads before workflow environment interpolation", () => {
+    const outputPath = path.join(os.tmpdir(), `openclaw-ci-scope-output-${Date.now()}.txt`);
+    markerPaths.push(outputPath);
+    const changedPaths = Array.from(
+      { length: 1_000 },
+      (_, index) => `src/generated/${index}-${"x".repeat(100)}.ts`,
+    );
+    writeGitHubOutput(
+      detectChangedScope(["docs/ci.md"]),
+      outputPath,
+      undefined,
+      undefined,
+      false,
+      changedPaths,
+    );
+
+    expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
+  });
+
   it("keeps direct CLI preflight empty diffs as no-op scope", () => {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-"));
     tempDirs.push(repoDir);
@@ -1002,8 +1047,11 @@ describe("detectChangedScope", () => {
       run_fast_install_smoke: "false",
       run_full_install_smoke: "false",
       run_control_ui_i18n: "false",
+      strict_control_ui_i18n: "false",
       run_ui_tests: "false",
       run_native_i18n: "false",
+      strict_native_i18n: "false",
+      changed_paths_json: "[]",
     });
   });
 });

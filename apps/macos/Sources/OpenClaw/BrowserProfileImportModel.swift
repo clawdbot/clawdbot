@@ -119,26 +119,50 @@ final class BrowserProfileImportModel {
         self.phaseGeneration += 1
     }
 
-    /// Launch/connect/window triggers. Only fills an empty banner slot so a
-    /// visible offer, in-flight import, or result is never clobbered by a
-    /// background status poll.
+    /// First inline-browser open trigger. Only fills an empty banner slot so a
+    /// visible offer, in-flight import, or result is never clobbered by the
+    /// status poll.
     @discardableResult
-    func refreshIfIdle() async -> Bool {
+    func refreshIfIdle(
+        while shouldApply: @escaping @MainActor () -> Bool = { true }) async -> Bool
+    {
         guard !self.dismissedThisSession, case .hidden = self.phase else { return false }
-        await self.refresh(force: false)
-        return true
+        return await self.performRefresh(force: false, shouldApply: shouldApply).didApply
+    }
+
+    /// Defers the one-shot automatic offer until the app can actually query
+    /// the host-local import endpoint. A remote or pre-onboarding sidebar open
+    /// must not consume the first eligible local attempt.
+    @discardableResult
+    func requestAutomaticOfferIfEligible(
+        while shouldApply: @escaping @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard self.isOnboarded(), self.isLocalMode(), shouldApply() else { return false }
+        return await self.refreshIfIdle(while: shouldApply)
     }
 
     /// Force (Settings → Import…) re-offers even after a persisted dismissal
     /// and reports why nothing can be offered so the caller can tell the user.
     @discardableResult
     func refresh(force: Bool) async -> ForceRefreshOutcome {
+        await self.performRefresh(force: force).outcome
+    }
+
+    /// Automatic offers are consumed only after a status response is applied.
+    /// Failed or stale startup/reconnect requests stay retryable.
+    private func performRefresh(
+        force: Bool,
+        shouldApply: @escaping @MainActor () -> Bool = { true }) async
+        -> (outcome: ForceRefreshOutcome, didApply: Bool)
+    {
         guard self.isOnboarded(), self.isLocalMode() else {
             self.setPhase(.hidden)
-            return .unavailable(
-                title: String(localized: "Browser import requires Local mode"),
-                message: String(
-                    localized: "Switch this Mac app to a local Gateway before importing browser cookies."))
+            return (
+                .unavailable(
+                    title: String(localized: "Browser import requires Local mode"),
+                    message: String(
+                        localized: "Switch this Mac app to a local Gateway before importing browser cookies.")),
+                false)
         }
         let generation = self.phaseGeneration
         do {
@@ -150,9 +174,14 @@ final class BrowserProfileImportModel {
             // must stay dismissed); a forced refresh wins over everything
             // except an import that is already running.
             if force {
-                if case .importing = self.phase { return .offering }
+                if case .importing = self.phase { return (.offering, true) }
             } else {
-                guard self.phaseGeneration == generation else { return .offering }
+                // The sidebar may close while the host-local status request is
+                // in flight. Never surface its automatic offer after that UI
+                // owner has gone away.
+                guard self.phaseGeneration == generation, shouldApply() else {
+                    return (.offering, false)
+                }
             }
             guard Self.shouldOffer(status: status, force: force) else {
                 self.setPhase(.hidden)
@@ -161,18 +190,22 @@ final class BrowserProfileImportModel {
                         localized: "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.")
                     : String(
                         localized: "System browser profile import is disabled in the local Gateway configuration.")
-                return .unavailable(title: String(localized: "No browser login available"), message: message)
+                return (
+                    .unavailable(title: String(localized: "No browser login available"), message: message),
+                    true)
             }
             self.setPhase(.offering(status))
-            return .offering
+            return (.offering, true)
         } catch {
             // Same interleaving rule: a failed poll only clears state it owns.
             if force, self.phaseGeneration == generation {
                 if case .importing = self.phase {} else { self.setPhase(.hidden) }
             }
-            return .unavailable(
-                title: String(localized: "Browser import unavailable"),
-                message: error.localizedDescription)
+            return (
+                .unavailable(
+                    title: String(localized: "Browser import unavailable"),
+                    message: error.localizedDescription),
+                false)
         }
     }
 

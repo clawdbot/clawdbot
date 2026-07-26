@@ -1,0 +1,35 @@
+title: Matrix E2EE bootstrap verifies the owner device and backup
+scenario:
+  id: matrix-e2ee-bootstrap-success
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 60, "matrix:e2ee-smoke": 2 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-bootstrap-success
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Bootstrap Success Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js
+  call: runMatrixQaE2eeBootstrapSuccessScenario
+  args:
+    - expr: "scenarioContext"

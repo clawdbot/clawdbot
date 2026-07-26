@@ -81,7 +81,7 @@ export function providerMatchesId(provider: VoiceModelProvider, providerId?: str
 }
 
 /** Find the provider metadata for a configured provider id or alias. */
-export function findVoiceModelProvider<T extends VoiceModelProvider>(params: {
+function findVoiceModelProvider<T extends VoiceModelProvider>(params: {
   providers: readonly T[];
   providerId?: string;
 }): T | undefined {

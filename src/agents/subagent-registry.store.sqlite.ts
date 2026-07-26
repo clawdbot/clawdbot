@@ -3,7 +3,6 @@
  * store preserves typed columns for hot delivery state while retaining the
  * normalized payload JSON for forward-compatible record hydration.
  */
-import fs from "node:fs";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -13,12 +12,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import {
-  loadSubagentRegistryFromDisk,
-  resolveSubagentRegistryPath,
-} from "./subagent-registry.store.js";
 import type {
   PendingFinalDeliveryPayload,
+  RequesterSettleWakeState,
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
   SubagentExecutionState,
@@ -94,12 +90,62 @@ function createDeliveryFromTypedColumns(
     ...(row.pending_final_delivery_last_error !== null
       ? { lastError: row.pending_final_delivery_last_error }
       : {}),
-    ...(row.completion_announced_at !== null
+    ...(row.completion_announced_at !== null && row.expects_completion_message === 1
       ? {
           status: "delivered",
           announcedAt: row.completion_announced_at,
           deliveredAt: delivery?.deliveredAt ?? row.completion_announced_at,
         }
+      : row.completion_announced_at !== null
+        ? { announcedAt: row.completion_announced_at }
+        : {}),
+    ...(row.expects_completion_message === 0 ? { status: "not_required" } : {}),
+  };
+}
+
+function createRequesterSettleWakeFromTypedColumns(
+  row: SubagentRunSqliteRow,
+  fallback: RequesterSettleWakeState | undefined,
+): RequesterSettleWakeState | undefined {
+  const fallbackStatus =
+    fallback?.status === "pending" || fallback?.status === "dispatching"
+      ? fallback.status
+      : undefined;
+  const status =
+    row.requester_settle_wake_status === "pending" ||
+    row.requester_settle_wake_status === "dispatching"
+      ? row.requester_settle_wake_status
+      : fallbackStatus;
+  if (!status) {
+    return undefined;
+  }
+  const parsedBatchRunIds = parseJson(row.requester_settle_wake_batch_run_ids_json);
+  const batchRunIds = Array.isArray(parsedBatchRunIds)
+    ? parsedBatchRunIds.filter(
+        (value): value is string => typeof value === "string" && Boolean(value),
+      )
+    : fallback?.batchRunIds;
+  return {
+    ...fallback,
+    status,
+    attemptCount:
+      normalizeFiniteNumber(row.requester_settle_wake_attempt_count) ?? fallback?.attemptCount ?? 0,
+    ...(normalizeFiniteNumber(row.requester_settle_wake_replay_count) !== undefined
+      ? { replayCount: row.requester_settle_wake_replay_count ?? undefined }
+      : fallback?.replayCount !== undefined
+        ? { replayCount: fallback.replayCount }
+        : {}),
+    ...(normalizeFiniteNumber(row.requester_settle_wake_next_attempt_at) !== undefined
+      ? { nextAttemptAt: row.requester_settle_wake_next_attempt_at ?? undefined }
+      : fallback?.nextAttemptAt !== undefined
+        ? { nextAttemptAt: fallback.nextAttemptAt }
+        : {}),
+    ...(batchRunIds && batchRunIds.length > 0 ? { batchRunIds } : {}),
+    ...(row.requester_settle_wake_last_error !== null
+      ? { lastError: row.requester_settle_wake_last_error }
+      : {}),
+    ...(sqliteBool(row.requester_settle_wake_retire_after) !== undefined
+      ? { retireAfterSettle: sqliteBool(row.requester_settle_wake_retire_after) }
       : {}),
   };
 }
@@ -134,6 +180,22 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
       }
     : undefined;
   const delivery = createDeliveryFromTypedColumns(row, payload.delivery);
+  const requesterSettleWake = createRequesterSettleWakeFromTypedColumns(
+    row,
+    payload.requesterSettleWake,
+  );
+  const structured = parseJson(row.swarm_structured_json);
+  const outputSchema = parseJson(row.swarm_output_schema_json);
+  const usage = parseJson(row.swarm_usage_json) as
+    | { inputTokens: number; outputTokens: number }
+    | undefined;
+  const collectorStatus =
+    row.swarm_completion_status === "done" ||
+    row.swarm_completion_status === "failed" ||
+    row.swarm_completion_status === "killed" ||
+    row.swarm_completion_status === "timeout"
+      ? row.swarm_completion_status
+      : undefined;
   const record = normalizeSubagentRunState({
     ...payload,
     runId: row.run_id,
@@ -186,6 +248,22 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
       ? { endedHookEmittedAt: row.ended_hook_emitted_at }
       : {}),
     ...(delivery ? { delivery } : {}),
+    ...(requesterSettleWake ? { requesterSettleWake } : {}),
+    ...(sqliteBool(row.swarm_collector) !== undefined
+      ? { collect: sqliteBool(row.swarm_collector) }
+      : {}),
+    ...(row.swarm_group_id ? { groupId: row.swarm_group_id } : {}),
+    ...(outputSchema ? { outputSchema: outputSchema as Record<string, unknown> } : {}),
+    ...(collectorStatus
+      ? {
+          collectorCompletion: {
+            status: collectorStatus,
+            ...(structured !== undefined ? { structured } : {}),
+            ...(row.swarm_schema_error ? { schemaError: row.swarm_schema_error } : {}),
+            ...(usage ? { usage } : {}),
+          },
+        }
+      : {}),
   });
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
@@ -195,10 +273,11 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
   const normalized = normalizeSubagentRunState(structuredClone(entry));
   const delivery = normalized.delivery;
   const completion = normalized.completion;
+  const requesterSettleWake = normalized.requesterSettleWake;
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,
-    controller_session_key: normalized.controllerSessionKey ?? null,
+    controller_session_key: normalized.controllerSessionKey?.trim() || null,
     requester_session_key: normalized.requesterSessionKey,
     requester_display_key: normalized.requesterDisplayKey,
     requester_origin_json: jsonStringify(normalized.requesterOrigin),
@@ -228,6 +307,13 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     ended_reason: normalized.endedReason ?? null,
     pause_reason: normalized.pauseReason ?? null,
     wake_on_descendant_settle: boolToSqlite(normalized.wakeOnDescendantSettle),
+    requester_settle_wake_status: requesterSettleWake?.status ?? null,
+    requester_settle_wake_attempt_count: requesterSettleWake?.attemptCount ?? null,
+    requester_settle_wake_replay_count: requesterSettleWake?.replayCount ?? null,
+    requester_settle_wake_next_attempt_at: requesterSettleWake?.nextAttemptAt ?? null,
+    requester_settle_wake_batch_run_ids_json: jsonStringify(requesterSettleWake?.batchRunIds),
+    requester_settle_wake_last_error: requesterSettleWake?.lastError ?? null,
+    requester_settle_wake_retire_after: boolToSqlite(requesterSettleWake?.retireAfterSettle),
     frozen_result_text: completion?.resultText ?? null,
     frozen_result_captured_at: completion?.capturedAt ?? null,
     fallback_frozen_result_text: completion?.fallbackResultText ?? null,
@@ -242,6 +328,13 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     pending_final_delivery_last_error: delivery?.lastError ?? null,
     pending_final_delivery_payload_json: jsonStringify(delivery?.payload),
     completion_announced_at: delivery?.announcedAt ?? null,
+    swarm_group_id: normalized.groupId ?? null,
+    swarm_collector: boolToSqlite(normalized.collect),
+    swarm_output_schema_json: jsonStringify(normalized.outputSchema),
+    swarm_completion_status: normalized.collectorCompletion?.status ?? null,
+    swarm_structured_json: jsonStringify(normalized.collectorCompletion?.structured),
+    swarm_schema_error: normalized.collectorCompletion?.schemaError ?? null,
+    swarm_usage_json: jsonStringify(normalized.collectorCompletion?.usage),
     payload_json: JSON.stringify(normalized),
   };
 }
@@ -264,17 +357,72 @@ function readSubagentRegistryRows(): SubagentRunSqliteRow[] {
   ).rows;
 }
 
-function removeLegacySubagentRegistryFile(): void {
-  try {
-    fs.unlinkSync(resolveSubagentRegistryPath());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+/** Loads runs controlled by one session, preserving the legacy requester fallback. */
+export function loadSubagentRunsForControllerFromSqlite(
+  controllerSessionKey: string,
+): SubagentRunRecord[] {
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
   }
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      // The write boundary canonicalizes controller keys; null/empty retains legacy fallback.
+      .where((eb) =>
+        eb.or([
+          eb("controller_session_key", "=", key),
+          eb.and([
+            eb.or([
+              eb("controller_session_key", "is", null),
+              eb("controller_session_key", "=", ""),
+            ]),
+            eb("requester_session_key", "=", key),
+          ]),
+        ]),
+      )
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const run = rowToSubagentRunRecord(row);
+    return run ? [run] : [];
+  });
 }
 
-function loadSubagentRegistryFromSqliteOnly(): Map<string, SubagentRunRecord> {
+/** Loads all persisted generations for one child session through its existing index. */
+export function loadSubagentRunsForChildSessionFromSqlite(
+  childSessionKey: string,
+): SubagentRunRecord[] {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where("child_session_key", "=", key)
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const run = rowToSubagentRunRecord(row);
+    return run ? [run] : [];
+  });
+}
+
+/** Loads the canonical subagent registry from shared SQLite state. */
+export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
+  // Retired file-era runs are intentionally not recovered here: after SQLite
+  // pruning, the file cannot prove whether a run is live or stale. Doctor owns discard.
   const runs = new Map<string, SubagentRunRecord>();
   for (const row of readSubagentRegistryRows()) {
     const entry = rowToSubagentRunRecord(row);
@@ -283,21 +431,6 @@ function loadSubagentRegistryFromSqliteOnly(): Map<string, SubagentRunRecord> {
     }
   }
   return runs;
-}
-
-/** Loads subagent runs from sqlite, importing and deleting the legacy JSON store when needed. */
-export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
-  const runs = loadSubagentRegistryFromSqliteOnly();
-  if (runs.size > 0) {
-    return runs;
-  }
-  const legacyRuns = loadSubagentRegistryFromDisk();
-  if (legacyRuns.size === 0) {
-    return runs;
-  }
-  saveSubagentRegistryToSqlite(legacyRuns);
-  removeLegacySubagentRegistryFile();
-  return loadSubagentRegistryFromSqliteOnly();
 }
 
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */

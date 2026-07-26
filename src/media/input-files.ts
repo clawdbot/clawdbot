@@ -201,7 +201,7 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
 }
 
 /** Fetches an input source URL through SSRF, redirect, timeout, and byte-limit guards. */
-export async function fetchWithGuard(params: {
+async function fetchWithGuard(params: {
   url: string;
   maxBytes: number;
   timeoutMs: number;
@@ -308,11 +308,7 @@ async function normalizeInputImage(params: {
   if (declaredMime.startsWith("image/") && detectedMime && !detectedMime.startsWith("image/")) {
     throw new Error(`Unsupported image MIME type: ${detectedMime}`);
   }
-  const sourceMime =
-    (detectedMime && HEIC_INPUT_IMAGE_MIMES.has(detectedMime)) ||
-    (HEIC_INPUT_IMAGE_MIMES.has(declaredMime) && !detectedMime)
-      ? (detectedMime ?? declaredMime)
-      : declaredMime;
+  const sourceMime = detectedMime?.startsWith("image/") ? detectedMime : declaredMime;
   if (!params.limits.allowedMimes.has(sourceMime)) {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }

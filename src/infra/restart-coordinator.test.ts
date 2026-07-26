@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetGatewayWorkAdmission,
-  tryBeginGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
   createSafeGatewayRestartPreflight,
@@ -116,8 +116,8 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("counts an admitted spawn handoff while excluding the preflight request", async () => {
-    const handoff = tryBeginGatewayIndependentRootWorkAdmission();
-    const request = tryBeginGatewayIndependentRootWorkAdmission();
+    const handoff = tryBeginGatewayRootWorkAdmission();
+    const request = tryBeginGatewayRootWorkAdmission();
     expect(handoff).not.toBeNull();
     expect(request).not.toBeNull();
 

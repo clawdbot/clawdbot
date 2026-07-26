@@ -9,7 +9,7 @@ import {
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 /** Detect source-checkout dev mode from the current CLI entrypoint. */
-export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
+function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
   return (
@@ -96,7 +96,7 @@ function addUniquePathDir(dirs: string[], dir: string | undefined): void {
 }
 
 /** Resolve the OpenClaw CLI binary directory from argv/PATH for daemon PATH. */
-export function resolveDaemonOpenClawBinDir(
+function resolveDaemonOpenClawBinDir(
   params: {
     argv?: string[];
     env?: Record<string, string | undefined>;

@@ -1,5 +1,5 @@
 // Codex tests cover harness plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import {
   createCodexTestBindingStore,
@@ -10,6 +10,10 @@ import {
 describe("Codex agent harness supports()", () => {
   it("owns auth bootstrap for every native attempt", () => {
     expect(harness.authBootstrap).toBe("harness");
+  });
+
+  it("publishes provider ids for lightweight auto selection", () => {
+    expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
   });
 
   const harness = createCodexAppServerAgentHarness({
@@ -216,6 +220,7 @@ describe("Codex agent harness supports()", () => {
     });
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
+    expect(narrowHarness.autoSelection?.providerIds).toEqual(["codex"]);
   });
 
   it("exposes the fail-closed exact runtime artifact validator", async () => {
@@ -256,5 +261,30 @@ describe("Codex agent harness reset()", () => {
     });
 
     await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+  });
+});
+
+describe("Codex agent harness dispose()", () => {
+  it("uses the preloaded shared-client lifecycle seam", async () => {
+    const sharedDisposer = Symbol.for("openclaw.codexAppServerClientDisposer");
+    const state = globalThis as typeof globalThis & {
+      [sharedDisposer]?: () => Promise<void>;
+    };
+    const previous = state[sharedDisposer];
+    const dispose = vi.fn(async () => {});
+    state[sharedDisposer] = dispose;
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    try {
+      await harness.dispose?.();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      if (previous) {
+        state[sharedDisposer] = previous;
+      } else {
+        delete state[sharedDisposer];
+      }
+    }
   });
 });

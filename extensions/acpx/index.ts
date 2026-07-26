@@ -12,6 +12,7 @@ import type {
   PluginHookReplyDispatchResult,
 } from "./runtime-api.js";
 import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./src/config-schema.js";
+import { registerPiSessionCatalog } from "./src/pi-session-catalog-plugin.js";
 
 function resolveReplyDispatchTimeoutMs(pluginConfig?: Record<string, unknown>): number {
   const timeoutSeconds = pluginConfig?.timeoutSeconds;
@@ -49,6 +50,7 @@ const plugin = {
   description: "Embedded ACP runtime backend with plugin-owned session and transport management.",
   register(api: OpenClawPluginApi) {
     const replyDispatchTimeoutMs = resolveReplyDispatchTimeoutMs(api.pluginConfig);
+    registerPiSessionCatalog(api);
     api.registerService(
       createAcpxRuntimeService({
         pluginConfig: api.pluginConfig,

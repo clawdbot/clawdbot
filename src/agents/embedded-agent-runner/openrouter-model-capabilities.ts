@@ -64,7 +64,7 @@ interface OpenRouterApiModel {
   };
 }
 
-export interface OpenRouterModelCapabilities {
+interface OpenRouterModelCapabilities {
   name: string;
   input: Array<"text" | "image">;
   reasoning: boolean;

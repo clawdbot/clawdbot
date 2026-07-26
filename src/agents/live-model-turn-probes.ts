@@ -24,7 +24,6 @@ const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
   "opencode-go/glm-5",
   "opencode-go/glm-5.1",
   "opencode-go/minimax-m2.5",
-  "openrouter/arcee-ai/trinity-mini",
   "openrouter/deepseek/deepseek-chat-v3.1",
   "openrouter/minimax/minimax-m2.5",
   "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1.5",
@@ -41,7 +40,7 @@ const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set([
 const KNOWN_EMPTY_IMAGE_PROBE_MODELS = new Set([
   "fireworks/accounts/fireworks/models/kimi-k2p5",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
   "google/gemini-3.1-pro-preview-customtools",
   "opencode/kimi-k2.6",
   "opencode-go/kimi-k2.5",

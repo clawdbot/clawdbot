@@ -12,7 +12,7 @@ import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-pr
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
-import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.js";
+import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
 import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.js";
 import type { GatewayRole } from "../../role-policy.js";
@@ -54,6 +54,7 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
+  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -119,6 +120,7 @@ export type AuthenticatedGatewayConnect = {
   usesLegacyNodeProtocol: boolean;
   role: GatewayRole;
   scopes: string[];
+  hasRequestedScopes: boolean;
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
@@ -141,6 +143,7 @@ export type AuthenticatedGatewayConnect = {
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
+  allowControlUiDeviceAuthMigration: boolean;
   skipControlUiPairingForDevice: boolean;
   skipLocalBackendSelfPairing: boolean;
   rejectUnauthorized: (failedAuth: GatewayAuthResult) => void;
@@ -148,6 +151,7 @@ export type AuthenticatedGatewayConnect = {
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
   deviceToken: DeviceAuthToken | null;
+  controlUiDeviceAuthMigrationPending: boolean;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;
     role: string;

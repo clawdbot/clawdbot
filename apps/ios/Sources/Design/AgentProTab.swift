@@ -1,11 +1,12 @@
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(\.scenePhase) var scenePhase
     let directRoute: AgentRoute?
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
     let openSettings: (() -> Void)?
     @State var overview: AgentOverviewSnapshot?
@@ -30,7 +31,11 @@ struct AgentProTab: View {
     @State var clawHubErrorText: String?
     @State var clawHubInstallSlug: String?
     @State var cronActionBusyIDs: Set<String> = []
+    @State var pendingCronRuns = AgentAutomationPendingRunRegistry()
     @State var cronActionStatusText: String?
+    @State var automationQuery = ""
+    @State var automationListFilter: AutomationListFilter = .all
+    @State var automationEditorSelection: AutomationEditorSelection?
 
     enum AgentRoute: Hashable {
         case agents
@@ -90,6 +95,24 @@ struct AgentProTab: View {
         }
     }
 
+    enum AutomationListFilter: String, CaseIterable, Identifiable {
+        case all
+        case active
+        case paused
+
+        var id: Self {
+            self
+        }
+
+        var title: String {
+            switch self {
+            case .all: String(localized: "All")
+            case .active: String(localized: "Active")
+            case .paused: String(localized: "Paused")
+            }
+        }
+    }
+
     enum AgentLayout {
         static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
@@ -112,6 +135,15 @@ struct AgentProTab: View {
         let id: String
     }
 
+    struct AutomationEditorSelection: Identifiable {
+        let initialJob: CronJob
+        let sourceGatewayID: String
+
+        var id: String {
+            self.initialJob.id
+        }
+    }
+
     struct SkillEditorMessage {
         let kind: Kind
         let text: String
@@ -124,12 +156,12 @@ struct AgentProTab: View {
 
     init(
         directRoute: AgentRoute? = nil,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String = "Agents",
         openSettings: (() -> Void)? = nil)
     {
         self.directRoute = directRoute
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.headerTitle = headerTitle
         self.openSettings = openSettings
     }
@@ -151,6 +183,22 @@ struct AgentProTab: View {
             } else {
                 self.missingSkillEditorSheet
             }
+        }
+        .sheet(item: self.$automationEditorSelection) { selection in
+            AgentAutomationDetailScreen(
+                initialJob: selection.initialJob,
+                sourceGatewayID: selection.sourceGatewayID,
+                pendingRunRegistry: self.pendingCronRuns,
+                onRunQueued: { runID, processInstanceID in
+                    self.reservePendingCronRun(
+                        jobID: selection.initialJob.id,
+                        runID: runID,
+                        processInstanceID: processInstanceID,
+                        sourceGatewayID: selection.sourceGatewayID)
+                },
+                onChanged: {
+                    Task { await self.refreshOverview(force: true) }
+                })
         }
     }
 
@@ -183,7 +231,7 @@ struct AgentProTab: View {
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
             .toolbar(
-                route != .agents && self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible,
+                route != .agents && self.directHeaderSidebarAction(for: route) != nil ? .hidden : .visible,
                 for: .navigationBar)
     }
 }

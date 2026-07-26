@@ -1,7 +1,9 @@
 // Control UI view renders usage screen content.
 import { html, nothing } from "lit";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
+import { renderSettingsPage, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/usage.css";
 import { getUsageCacheRefreshTitle } from "./cache-status.ts";
@@ -28,15 +30,7 @@ import {
   removeQueryToken,
   setQueryTokensForKey,
 } from "./query.ts";
-import type {
-  SessionLogEntry,
-  SessionLogRole,
-  UsageColumnId,
-  UsageFilterState,
-  UsageProps,
-  UsageSessionEntry,
-  UsageTotals,
-} from "./types.ts";
+import type { UsageFilterState, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderSessionDetailPanel } from "./view-details.ts";
 import {
   renderCostBreakdownCompact,
@@ -46,8 +40,6 @@ import {
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
-
-export type { UsageColumnId, SessionLogEntry, SessionLogRole };
 
 function createEmptyUsageTotals(): UsageTotals {
   return {
@@ -95,37 +87,45 @@ function addUsageTotals(
   return acc;
 }
 
-function renderUsageLoadingState(filters: UsageFilterState) {
+function renderUsageLoadingStatus(label: unknown, title?: string) {
   return html`
-    <section class="card usage-loading-card">
-      <div class="usage-loading-header">
-        <div class="usage-loading-title-group">
-          <div class="card-title usage-section-title">${t("usage.loading.title")}</div>
-          <span class="usage-loading-badge">
-            <span class="usage-loading-spinner" aria-hidden="true"></span>
-            ${t("usage.loading.badge")}
-          </span>
-        </div>
-        <div class="usage-loading-controls">
-          <div class="usage-date-range usage-date-range--loading">
-            <input class="usage-date-input" type="date" .value=${filters.startDate} disabled />
-            <span class="usage-separator">${t("usage.filters.to")}</span>
-            <input class="usage-date-input" type="date" .value=${filters.endDate} disabled />
+    <span class="settings-status settings-status--accent" title=${title ?? nothing}>
+      <span class="usage-loading-spinner" aria-hidden="true"></span>
+      ${label}
+    </span>
+  `;
+}
+
+function renderUsageLoadingState(filters: UsageFilterState) {
+  return renderSettingsSection(
+    {
+      title: t("usage.loading.title"),
+      actions: renderUsageLoadingStatus(t("usage.loading.badge")),
+    },
+    html`
+      <div class="usage-panel usage-loading-card">
+        <div class="usage-loading-header">
+          <div class="usage-loading-controls">
+            <div class="usage-date-range usage-date-range--loading">
+              <input class="usage-date-input" type="date" .value=${filters.startDate} disabled />
+              <span class="usage-separator">${t("usage.filters.to")}</span>
+              <input class="usage-date-input" type="date" .value=${filters.endDate} disabled />
+            </div>
           </div>
         </div>
+        <div class="usage-loading-grid">
+          <div class="usage-skeleton-block usage-skeleton-block--tall"></div>
+          <div class="usage-skeleton-block"></div>
+          <div class="usage-skeleton-block"></div>
+        </div>
       </div>
-      <div class="usage-loading-grid">
-        <div class="usage-skeleton-block usage-skeleton-block--tall"></div>
-        <div class="usage-skeleton-block"></div>
-        <div class="usage-skeleton-block"></div>
-      </div>
-    </section>
-  `;
+    `,
+  );
 }
 
 function renderUsageEmptyState(onRefresh: () => void) {
   return html`
-    <section class="card usage-empty-state">
+    <section class="settings-group usage-panel usage-empty-state">
       <div class="usage-empty-state__title">${t("usage.empty.title")}</div>
       <div class="card-sub usage-empty-state__subtitle">${t("usage.empty.subtitle")}</div>
       <div class="usage-empty-state__features">
@@ -146,50 +146,35 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
   if (providers.length === 0) {
     return nothing;
   }
-  return html`
-    <section class="card provider-usage-section">
-      <div class="provider-usage-heading">
-        <div>
-          <div class="card-title usage-section-title">${t("usage.providerUsage.title")}</div>
-          <div class="card-sub">${t("usage.providerUsage.subtitle")}</div>
-        </div>
-        <span class="provider-usage-count">${providers.length}</span>
-      </div>
-      <div class="provider-usage-grid">
-        ${providers.map(
-          (provider) => html`
-            <article class="provider-usage-card">
-              <div class="provider-usage-card__header">
-                <div>
-                  <div class="provider-usage-card__name">${provider.displayName}</div>
-                  <div class="provider-usage-card__id">${provider.provider}</div>
+  return renderSettingsSection(
+    {
+      title: t("usage.providerUsage.title"),
+      count: providers.length,
+      description: t("usage.providerUsage.subtitle"),
+    },
+    html`
+      <div class="usage-panel provider-usage-section">
+        <div class="provider-usage-grid">
+          ${providers.map(
+            (provider) => html`
+              <article class="provider-usage-card">
+                <div class="provider-usage-card__header">
+                  <div>
+                    <div class="provider-usage-card__name">${provider.displayName}</div>
+                    <div class="provider-usage-card__id">${provider.provider}</div>
+                  </div>
+                  ${provider.plan
+                    ? html`<span class="provider-usage-plan">${provider.plan}</span>`
+                    : nothing}
                 </div>
-                ${provider.plan
-                  ? html`<span class="provider-usage-plan">${provider.plan}</span>`
-                  : nothing}
-              </div>
-              ${renderProviderUsageDetails(provider)}
-            </article>
-          `,
-        )}
+                ${renderProviderUsageDetails(provider)}
+              </article>
+            `,
+          )}
+        </div>
       </div>
-    </section>
-  `;
-}
-
-function closeDetailsOnOutsideClick(e: Event) {
-  const el = e.currentTarget as HTMLDetailsElement;
-  if (!el.open) {
-    return;
-  }
-  const onClick = (ev: MouseEvent) => {
-    const path = ev.composedPath();
-    if (!path.includes(el)) {
-      el.open = false;
-      window.removeEventListener("click", onClick, true);
-    }
-  };
-  window.addEventListener("click", onClick, true);
+    `,
+  );
 }
 
 export function renderUsage(props: UsageProps) {
@@ -199,7 +184,10 @@ export function renderUsage(props: UsageProps) {
   const detailActions = callbacks.details;
 
   if (data.loading && !data.totals) {
-    return html`<div class="usage-page">${renderUsageLoadingState(filters)}</div>`;
+    return renderSettingsPage(
+      html`<div class="usage-page">${renderUsageLoadingState(filters)}</div>`,
+      { wide: true },
+    );
   }
 
   const isTokenMode = display.chartMode === "tokens";
@@ -423,471 +411,488 @@ export function renderUsage(props: UsageProps) {
       options.length > 0 && options.every((value) => selectedSet.has(normalizeQueryText(value)));
     const selectedCount = selected.length;
     return html`
-      <details class="usage-filter-select" @toggle=${closeDetailsOnOutsideClick}>
-        <summary>
+      <wa-dropdown
+        class="usage-filter-select"
+        placement="bottom-start"
+        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+          event.preventDefault();
+          const value = event.detail.item.value;
+          if (value === "command:select-all") {
+            filterActions.onQueryDraftChange(
+              setQueryTokensForKey(filters.queryDraft, key, options),
+            );
+            return;
+          }
+          if (value === "command:clear") {
+            filterActions.onQueryDraftChange(setQueryTokensForKey(filters.queryDraft, key, []));
+            return;
+          }
+          if (value?.startsWith("option:")) {
+            const optionValue = decodeURIComponent(value.slice("option:".length));
+            const token = `${key}:${optionValue}`;
+            const checked = selectedSet.has(normalizeQueryText(optionValue));
+            filterActions.onQueryDraftChange(
+              checked
+                ? removeQueryToken(filters.queryDraft, token)
+                : addQueryToken(filters.queryDraft, token),
+            );
+          }
+        }}
+      >
+        <button slot="trigger" type="button" class="usage-filter-trigger">
           <span>${label}</span>
           ${selectedCount > 0
-            ? html`<span class="usage-filter-badge">${selectedCount}</span>`
-            : html` <span class="usage-filter-badge">${t("usage.filters.all")}</span> `}
-        </summary>
-        <div class="usage-filter-popover">
-          <div class="usage-filter-actions">
-            <button
-              class="btn btn--sm"
-              @click=${(e: Event) => {
-                e.preventDefault();
-                e.stopPropagation();
-                filterActions.onQueryDraftChange(
-                  setQueryTokensForKey(filters.queryDraft, key, options),
-                );
-              }}
-              ?disabled=${allSelected}
+            ? html`<span class="settings-count">${selectedCount}</span>`
+            : html` <span class="settings-count">${t("usage.filters.all")}</span> `}
+        </button>
+        <wa-dropdown-item value="command:select-all" ?disabled=${allSelected}>
+          ${t("usage.filters.selectAll")}
+        </wa-dropdown-item>
+        <wa-dropdown-item value="command:clear" ?disabled=${selectedCount === 0}>
+          ${t("usage.filters.clear")}
+        </wa-dropdown-item>
+        <div class="session-menu__separator" role="separator"></div>
+        ${options.map((value) => {
+          const checked = selectedSet.has(normalizeQueryText(value));
+          return html`
+            <wa-dropdown-item
+              class="usage-filter-option"
+              type="checkbox"
+              value=${`option:${encodeURIComponent(value)}`}
+              .checked=${checked}
             >
-              ${t("usage.filters.selectAll")}
-            </button>
-            <button
-              class="btn btn--sm"
-              @click=${(e: Event) => {
-                e.preventDefault();
-                e.stopPropagation();
-                filterActions.onQueryDraftChange(setQueryTokensForKey(filters.queryDraft, key, []));
-              }}
-              ?disabled=${selectedCount === 0}
-            >
-              ${t("usage.filters.clear")}
-            </button>
-          </div>
-          <div class="usage-filter-options">
-            ${options.map((value) => {
-              const checked = selectedSet.has(normalizeQueryText(value));
-              return html`
-                <label class="usage-filter-option">
-                  <input
-                    type="checkbox"
-                    .checked=${checked}
-                    @change=${(e: Event) => {
-                      const target = e.target as HTMLInputElement;
-                      const token = `${key}:${value}`;
-                      filterActions.onQueryDraftChange(
-                        target.checked
-                          ? addQueryToken(filters.queryDraft, token)
-                          : removeQueryToken(filters.queryDraft, token),
-                      );
-                    }}
-                  />
-                  <span>${value}</span>
-                </label>
-              `;
-            })}
-          </div>
-        </div>
-      </details>
+              ${value}
+            </wa-dropdown-item>
+          `;
+        })}
+      </wa-dropdown>
     `;
   };
   const exportStamp = formatIsoDate(new Date());
 
-  return html`
-    <div class="usage-page">
-      <section class="card usage-header ${display.headerPinned ? "pinned" : ""}">
-        <div class="usage-header-row">
-          <div class="usage-header-title">
-            <div class="card-title usage-section-title">${t("usage.filters.title")}</div>
-            ${data.loading || cacheStatusTitle
-              ? html`<span class="usage-refresh-indicator" title=${cacheStatusTitle ?? ""}>
-                  ${t("usage.loading.badge")}
-                </span>`
-              : nothing}
-            ${isEmpty
-              ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
-              : nothing}
+  return renderSettingsPage(
+    html`
+      <div class="usage-page">
+        <section class="settings-section">
+          <div class="settings-section__header">
+            <h2 class="settings-section__heading">${t("usage.filters.title")}</h2>
+            <div class="settings-section__actions">
+              ${data.loading || cacheStatusTitle
+                ? renderUsageLoadingStatus(t("usage.loading.badge"), cacheStatusTitle ?? "")
+                : nothing}
+              ${isEmpty
+                ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
+                : nothing}
+            </div>
           </div>
-          <div class="usage-header-metrics">
-            ${displayTotals
-              ? html`
-                  <span class="usage-metric-badge">
-                    <strong>${formatTokens(displayTotals.totalTokens)}</strong>
-                    ${t("usage.metrics.tokens")}
-                  </span>
-                  <span class="usage-metric-badge">
-                    <strong>${formatCost(displayTotals.totalCost)}</strong>
-                    ${t("usage.metrics.cost")}
-                  </span>
-                  <span class="usage-metric-badge">
-                    <strong>${displaySessionCount}</strong>
-                    ${displaySessionCount === 1
-                      ? t("usage.metrics.session")
-                      : t("usage.metrics.sessions")}
-                  </span>
-                `
-              : nothing}
-            <button
-              class="btn btn--sm usage-pin-btn ${display.headerPinned ? "active" : ""}"
-              @click=${filterActions.onToggleHeaderPinned}
-            >
-              ${display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
-            </button>
-            <details class="usage-export-menu" @toggle=${closeDetailsOnOutsideClick}>
-              <summary class="btn btn--sm">${t("usage.export.label")} ▾</summary>
-              <div class="usage-export-popover">
-                <div class="usage-export-list">
-                  <button
-                    class="usage-export-item"
-                    @click=${() =>
-                      downloadTextFile(
-                        `openclaw-usage-sessions-${exportStamp}.csv`,
-                        buildSessionsCsv(filteredSessions),
-                        "text/csv",
-                      )}
-                    ?disabled=${filteredSessions.length === 0}
-                  >
+          <div
+            class="settings-group usage-panel usage-header ${display.headerPinned ? "pinned" : ""}"
+          >
+            <div class="usage-header-row">
+              <div class="usage-header-metrics">
+                ${displayTotals
+                  ? html`
+                      <span class="usage-metric-badge">
+                        <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                        ${t("usage.metrics.tokens")}
+                      </span>
+                      <span class="usage-metric-badge">
+                        <strong>${formatCost(displayTotals.totalCost)}</strong>
+                        ${t("usage.metrics.cost")}
+                      </span>
+                      <span class="usage-metric-badge">
+                        <strong>${displaySessionCount}</strong>
+                        ${displaySessionCount === 1
+                          ? t("usage.metrics.session")
+                          : t("usage.metrics.sessions")}
+                      </span>
+                    `
+                  : nothing}
+                <button
+                  class="btn btn--sm usage-pin-btn ${display.headerPinned ? "active" : ""}"
+                  @click=${filterActions.onToggleHeaderPinned}
+                >
+                  ${display.headerPinned ? t("usage.filters.pinned") : t("usage.filters.pin")}
+                </button>
+                <wa-dropdown
+                  class="usage-export-menu"
+                  placement="bottom-end"
+                  @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                    switch (event.detail.item.value) {
+                      case "sessions-csv":
+                        downloadTextFile(
+                          `openclaw-usage-sessions-${exportStamp}.csv`,
+                          buildSessionsCsv(filteredSessions),
+                          "text/csv",
+                        );
+                        break;
+                      case "daily-csv":
+                        downloadTextFile(
+                          `openclaw-usage-daily-${exportStamp}.csv`,
+                          buildDailyCsv(filteredDaily),
+                          "text/csv",
+                        );
+                        break;
+                      case "json":
+                        downloadTextFile(
+                          `openclaw-usage-${exportStamp}.json`,
+                          JSON.stringify(
+                            {
+                              totals: displayTotals,
+                              sessions: filteredSessions,
+                              daily: filteredDaily,
+                              aggregates: activeAggregates,
+                            },
+                            null,
+                            2,
+                          ),
+                          "application/json",
+                        );
+                        break;
+                      case undefined:
+                        break;
+                    }
+                  }}
+                >
+                  <button slot="trigger" type="button" class="btn btn--sm">
+                    ${t("usage.export.label")} ▾
+                  </button>
+                  <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
                     ${t("usage.export.sessionsCsv")}
-                  </button>
-                  <button
-                    class="usage-export-item"
-                    @click=${() =>
-                      downloadTextFile(
-                        `openclaw-usage-daily-${exportStamp}.csv`,
-                        buildDailyCsv(filteredDaily),
-                        "text/csv",
-                      )}
-                    ?disabled=${filteredDaily.length === 0}
-                  >
+                  </wa-dropdown-item>
+                  <wa-dropdown-item value="daily-csv" ?disabled=${filteredDaily.length === 0}>
                     ${t("usage.export.dailyCsv")}
-                  </button>
-                  <button
-                    class="usage-export-item"
-                    @click=${() =>
-                      downloadTextFile(
-                        `openclaw-usage-${exportStamp}.json`,
-                        JSON.stringify(
-                          {
-                            totals: displayTotals,
-                            sessions: filteredSessions,
-                            daily: filteredDaily,
-                            aggregates: activeAggregates,
-                          },
-                          null,
-                          2,
-                        ),
-                        "application/json",
-                      )}
+                  </wa-dropdown-item>
+                  <wa-dropdown-item
+                    value="json"
                     ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
                   >
                     ${t("usage.export.json")}
-                  </button>
-                </div>
+                  </wa-dropdown-item>
+                </wa-dropdown>
               </div>
-            </details>
-          </div>
-        </div>
+            </div>
 
-        <div class="usage-header-row">
-          <div class="usage-controls">
-            ${renderFilterChips(
-              filters.selectedDays,
-              filters.selectedHours,
-              filters.selectedSessions,
-              data.sessions,
-              filterActions.onClearDays,
-              filterActions.onClearHours,
-              filterActions.onClearSessions,
-              filterActions.onClearFilters,
-            )}
-            <div class="usage-presets">
-              ${datePresets.map(
-                (preset) => html`
-                  <button class="btn btn--sm" @click=${() => applyPreset(preset.days)}>
-                    ${preset.label}
-                  </button>
-                `,
-              )}
-              <button class="btn btn--sm" @click=${applyAllRange}>${t("usage.presets.all")}</button>
-            </div>
-            <div class="usage-date-range">
-              <input
-                class="usage-date-input"
-                type="date"
-                .value=${filters.startDate}
-                title=${t("usage.filters.startDate")}
-                aria-label=${t("usage.filters.startDate")}
-                @change=${(e: Event) =>
-                  filterActions.onStartDateChange((e.target as HTMLInputElement).value)}
-              />
-              <span class="usage-separator">${t("usage.filters.to")}</span>
-              <input
-                class="usage-date-input"
-                type="date"
-                .value=${filters.endDate}
-                title=${t("usage.filters.endDate")}
-                aria-label=${t("usage.filters.endDate")}
-                @change=${(e: Event) =>
-                  filterActions.onEndDateChange((e.target as HTMLInputElement).value)}
-              />
-            </div>
-            <select
-              class="usage-select"
-              title=${t("usage.filters.timeZone")}
-              aria-label=${t("usage.filters.timeZone")}
-              .value=${filters.timeZone}
-              @change=${(e: Event) =>
-                filterActions.onTimeZoneChange(
-                  (e.target as HTMLSelectElement).value as "local" | "utc",
+            <div class="usage-header-row">
+              <div class="usage-controls">
+                ${renderFilterChips(
+                  filters.selectedDays,
+                  filters.selectedHours,
+                  filters.selectedSessions,
+                  data.sessions,
+                  filterActions.onClearDays,
+                  filterActions.onClearHours,
+                  filterActions.onClearSessions,
+                  filterActions.onClearFilters,
                 )}
-            >
-              <option value="local">${t("usage.filters.timeZoneLocal")}</option>
-              <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
-            </select>
-            <div class="chart-toggle">
-              <button
-                class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
-                title=${t("usage.scope.instanceHint")}
-                @click=${() => filterActions.onScopeChange("instance")}
-              >
-                ${t("usage.scope.instance")}
-              </button>
-              <button
-                class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
-                title=${t("usage.scope.familyHint")}
-                @click=${() => filterActions.onScopeChange("family")}
-              >
-                ${t("usage.scope.family")}
-              </button>
-            </div>
-            <div class="chart-toggle">
-              <button
-                class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"
-                @click=${() => displayActions.onChartModeChange("tokens")}
-              >
-                ${t("usage.metrics.tokens")}
-              </button>
-              <button
-                class="btn btn--sm toggle-btn ${!isTokenMode ? "active" : ""}"
-                @click=${() => displayActions.onChartModeChange("cost")}
-              >
-                ${t("usage.metrics.cost")}
-              </button>
-            </div>
-            <button
-              class="btn btn--sm primary"
-              @click=${filterActions.onRefresh}
-              ?disabled=${data.loading}
-            >
-              ${t("common.refresh")}
-            </button>
-          </div>
-        </div>
-
-        <div class="usage-query-section">
-          <div class="usage-query-bar">
-            <input
-              class="usage-query-input"
-              type="text"
-              .value=${filters.queryDraft}
-              placeholder=${t("usage.query.placeholder")}
-              @input=${(e: Event) =>
-                filterActions.onQueryDraftChange((e.target as HTMLInputElement).value)}
-              @keydown=${(e: KeyboardEvent) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  filterActions.onApplyQuery();
-                }
-              }}
-            />
-            <div class="usage-query-actions">
-              <button
-                class="btn btn--sm"
-                @click=${filterActions.onApplyQuery}
-                ?disabled=${data.loading || (!hasDraftQuery && !hasQuery)}
-              >
-                ${t("usage.query.apply")}
-              </button>
-              ${hasDraftQuery || hasQuery
-                ? html`
-                    <button class="btn btn--sm" @click=${filterActions.onClearQuery}>
-                      ${t("usage.filters.clear")}
-                    </button>
-                  `
-                : nothing}
-              <span class="usage-query-hint">
-                ${hasQuery
-                  ? t("usage.query.matching", {
-                      shown: String(filteredSessions.length),
-                      total: String(totalSessions),
-                    })
-                  : t("usage.query.inRange", { total: String(totalSessions) })}
-              </span>
-            </div>
-          </div>
-          <div class="usage-filter-row">
-            ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
-            ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
-            ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}
-            ${renderFilterSelect("tool", t("usage.filters.tool"), toolOptions)}
-            <span class="usage-query-hint">${t("usage.query.tip")}</span>
-          </div>
-          ${queryTerms.length > 0
-            ? html`
-                <div class="usage-query-chips">
-                  ${queryTerms.map((term) => {
-                    const label = term.raw;
-                    return html`
-                      <span class="usage-query-chip">
-                        ${label}
-                        <openclaw-tooltip .content=${t("usage.filters.remove")}>
-                          <button
-                            aria-label=${t("usage.filters.remove")}
-                            @click=${() =>
-                              filterActions.onQueryDraftChange(
-                                removeQueryToken(filters.queryDraft, label),
-                              )}
-                          >
-                            ×
-                          </button>
-                        </openclaw-tooltip>
-                      </span>
-                    `;
-                  })}
-                </div>
-              `
-            : nothing}
-          ${querySuggestions.length > 0
-            ? html`
-                <div class="usage-query-suggestions">
-                  ${querySuggestions.map(
-                    (suggestion) => html`
-                      <button
-                        class="usage-query-suggestion"
-                        @click=${() =>
-                          filterActions.onQueryDraftChange(
-                            applySuggestionToQuery(filters.queryDraft, suggestion.value),
-                          )}
-                      >
-                        ${suggestion.label}
+                <div class="usage-presets">
+                  ${datePresets.map(
+                    (preset) => html`
+                      <button class="btn btn--sm" @click=${() => applyPreset(preset.days)}>
+                        ${preset.label}
                       </button>
                     `,
                   )}
+                  <button class="btn btn--sm" @click=${applyAllRange}>
+                    ${t("usage.presets.all")}
+                  </button>
                 </div>
-              `
-            : nothing}
-          ${queryWarnings.length > 0
-            ? html`
-                <div class="callout warning usage-callout usage-callout--tight">
-                  ${queryWarnings.join(" · ")}
+                <div class="usage-date-range">
+                  <input
+                    class="usage-date-input"
+                    type="date"
+                    .value=${filters.startDate}
+                    title=${t("usage.filters.startDate")}
+                    aria-label=${t("usage.filters.startDate")}
+                    @change=${(e: Event) =>
+                      filterActions.onStartDateChange((e.target as HTMLInputElement).value)}
+                  />
+                  <span class="usage-separator">${t("usage.filters.to")}</span>
+                  <input
+                    class="usage-date-input"
+                    type="date"
+                    .value=${filters.endDate}
+                    title=${t("usage.filters.endDate")}
+                    aria-label=${t("usage.filters.endDate")}
+                    @change=${(e: Event) =>
+                      filterActions.onEndDateChange((e.target as HTMLInputElement).value)}
+                  />
                 </div>
-              `
-            : nothing}
-        </div>
-
-        ${data.error
-          ? html`<div class="callout danger usage-callout">${data.error}</div>`
-          : nothing}
-        ${cacheStatusTitle
-          ? html`
-              <div class="callout warning usage-callout usage-cache-warning">
-                ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
-              </div>
-            `
-          : nothing}
-        ${data.sessionsLimitReached
-          ? html`
-              <div class="callout warning usage-callout">${t("usage.sessions.limitReached")}</div>
-            `
-          : nothing}
-      </section>
-
-      ${renderProviderUsage(data.providerUsage)}
-      ${isEmpty
-        ? renderUsageEmptyState(filterActions.onRefresh)
-        : html`
-            ${renderUsageInsights(
-              insightTotals,
-              insightAggregates,
-              insightStats,
-              hasMissingCost,
-              // Day totals are exact daily buckets; category rollups remain full-session totals.
-              // Hide shares instead of mixing those scopes into percentages above 100%.
-              filters.selectedDays.length === 0,
-              buildPeakErrorHours(aggregateSessions, filters.timeZone),
-              displaySessionCount,
-              totalSessions,
-            )}
-            ${renderUsageMosaic(
-              aggregateSessions,
-              filters.timeZone,
-              filters.selectedHours,
-              filterActions.onSelectHour,
-            )}
-
-            <div class="usage-grid">
-              <div class="usage-grid-column">
-                <div class="card usage-left-card">
-                  ${costWindowComparison}
-                  ${renderDailyChartCompact(
-                    filteredDaily,
-                    filters.selectedDays,
-                    display.chartMode,
-                    display.dailyChartMode,
-                    displayActions.onDailyChartModeChange,
-                    filterActions.onSelectDay,
-                  )}
-                  ${displayTotals
-                    ? renderCostBreakdownCompact(displayTotals, display.chartMode)
-                    : nothing}
-                </div>
-                ${renderSessionsCard(
-                  filteredSessions,
-                  filters.selectedSessions,
-                  filters.selectedDays,
-                  isTokenMode,
-                  display.sessionSort,
-                  display.sessionSortDir,
-                  display.recentSessions,
-                  display.sessionsTab,
-                  detailActions.onSelectSession,
-                  displayActions.onSessionSortChange,
-                  displayActions.onSessionSortDirChange,
-                  displayActions.onSessionsTabChange,
-                  display.visibleColumns,
-                  totalSessions,
-                  filterActions.onClearSessions,
-                )}
-              </div>
-              ${primarySelectedEntry
-                ? html`<div class="usage-grid-column">
-                    ${renderSessionDetailPanel(
-                      primarySelectedEntry,
-                      detail.timeSeries,
-                      detail.timeSeriesLoading,
-                      detail.timeSeriesMode,
-                      detailActions.onTimeSeriesModeChange,
-                      detail.timeSeriesBreakdownMode,
-                      detailActions.onTimeSeriesBreakdownChange,
-                      detail.timeSeriesCursorStart,
-                      detail.timeSeriesCursorEnd,
-                      detailActions.onTimeSeriesCursorRangeChange,
-                      filters.startDate,
-                      filters.endDate,
-                      filters.selectedDays,
-                      detail.sessionLogs,
-                      detail.sessionLogsLoading,
-                      detail.sessionLogsExpanded,
-                      detailActions.onToggleSessionLogsExpanded,
-                      detail.logFilters,
-                      detailActions.onLogFilterRolesChange,
-                      detailActions.onLogFilterToolsChange,
-                      detailActions.onLogFilterHasToolsChange,
-                      detailActions.onLogFilterQueryChange,
-                      detailActions.onLogFilterClear,
-                      display.contextExpanded,
-                      detailActions.onToggleContextExpanded,
-                      filterActions.onClearSessions,
+                <select
+                  class="usage-select"
+                  title=${t("usage.filters.timeZone")}
+                  aria-label=${t("usage.filters.timeZone")}
+                  .value=${filters.timeZone}
+                  @change=${(e: Event) =>
+                    filterActions.onTimeZoneChange(
+                      (e.target as HTMLSelectElement).value as "local" | "utc",
                     )}
-                  </div>`
+                >
+                  <option value="local">${t("usage.filters.timeZoneLocal")}</option>
+                  <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
+                </select>
+                <div class="chart-toggle">
+                  <button
+                    class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
+                    title=${t("usage.scope.instanceHint")}
+                    @click=${() => filterActions.onScopeChange("instance")}
+                  >
+                    ${t("usage.scope.instance")}
+                  </button>
+                  <button
+                    class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
+                    title=${t("usage.scope.familyHint")}
+                    @click=${() => filterActions.onScopeChange("family")}
+                  >
+                    ${t("usage.scope.family")}
+                  </button>
+                </div>
+                <div class="chart-toggle">
+                  <button
+                    class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"
+                    @click=${() => displayActions.onChartModeChange("tokens")}
+                  >
+                    ${t("usage.metrics.tokens")}
+                  </button>
+                  <button
+                    class="btn btn--sm toggle-btn ${!isTokenMode ? "active" : ""}"
+                    @click=${() => displayActions.onChartModeChange("cost")}
+                  >
+                    ${t("usage.metrics.cost")}
+                  </button>
+                </div>
+                <button
+                  class="btn btn--sm primary"
+                  @click=${filterActions.onRefresh}
+                  ?disabled=${data.loading}
+                >
+                  ${t("common.refresh")}
+                </button>
+              </div>
+            </div>
+
+            <div class="usage-query-section">
+              <div class="usage-query-bar">
+                <input
+                  class="usage-query-input"
+                  type="text"
+                  .value=${filters.queryDraft}
+                  placeholder=${t("usage.query.placeholder")}
+                  @input=${(e: Event) =>
+                    filterActions.onQueryDraftChange((e.target as HTMLInputElement).value)}
+                  @keydown=${(e: KeyboardEvent) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      filterActions.onApplyQuery();
+                    }
+                  }}
+                />
+                <div class="usage-query-actions">
+                  <button
+                    class="btn btn--sm"
+                    @click=${filterActions.onApplyQuery}
+                    ?disabled=${data.loading || (!hasDraftQuery && !hasQuery)}
+                  >
+                    ${t("usage.query.apply")}
+                  </button>
+                  ${hasDraftQuery || hasQuery
+                    ? html`
+                        <button class="btn btn--sm" @click=${filterActions.onClearQuery}>
+                          ${t("usage.filters.clear")}
+                        </button>
+                      `
+                    : nothing}
+                  <span class="usage-query-hint">
+                    ${hasQuery
+                      ? t("usage.query.matching", {
+                          shown: String(filteredSessions.length),
+                          total: String(totalSessions),
+                        })
+                      : t("usage.query.inRange", { total: String(totalSessions) })}
+                  </span>
+                </div>
+              </div>
+              <div class="usage-filter-row">
+                ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
+                ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
+                ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}
+                ${renderFilterSelect("tool", t("usage.filters.tool"), toolOptions)}
+                <span class="usage-query-hint">${t("usage.query.tip")}</span>
+              </div>
+              ${queryTerms.length > 0
+                ? html`
+                    <div class="usage-query-chips">
+                      ${queryTerms.map((term) => {
+                        const label = term.raw;
+                        return html`
+                          <span class="usage-query-chip">
+                            ${label}
+                            <openclaw-tooltip .content=${t("usage.filters.remove")}>
+                              <button
+                                aria-label=${t("usage.filters.remove")}
+                                @click=${() =>
+                                  filterActions.onQueryDraftChange(
+                                    removeQueryToken(filters.queryDraft, label),
+                                  )}
+                              >
+                                ×
+                              </button>
+                            </openclaw-tooltip>
+                          </span>
+                        `;
+                      })}
+                    </div>
+                  `
+                : nothing}
+              ${querySuggestions.length > 0
+                ? html`
+                    <div class="usage-query-suggestions">
+                      ${querySuggestions.map(
+                        (suggestion) => html`
+                          <button
+                            class="usage-query-suggestion"
+                            @click=${() =>
+                              filterActions.onQueryDraftChange(
+                                applySuggestionToQuery(filters.queryDraft, suggestion.value),
+                              )}
+                          >
+                            ${suggestion.label}
+                          </button>
+                        `,
+                      )}
+                    </div>
+                  `
+                : nothing}
+              ${queryWarnings.length > 0
+                ? html`
+                    <div class="callout warning usage-callout usage-callout--tight">
+                      ${queryWarnings.join(" · ")}
+                    </div>
+                  `
                 : nothing}
             </div>
-          `}
-    </div>
-  `;
+
+            ${data.error
+              ? html`<div class="callout danger usage-callout">${data.error}</div>`
+              : nothing}
+            ${cacheStatusTitle
+              ? html`
+                  <div class="callout warning usage-callout usage-cache-warning">
+                    ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
+                  </div>
+                `
+              : nothing}
+            ${data.sessionsLimitReached
+              ? html`
+                  <div class="callout warning usage-callout">
+                    ${t("usage.sessions.limitReached")}
+                  </div>
+                `
+              : nothing}
+          </div>
+        </section>
+
+        ${renderProviderUsage(data.providerUsage)}
+        ${isEmpty
+          ? renderUsageEmptyState(filterActions.onRefresh)
+          : html`
+              ${renderUsageInsights(
+                insightTotals,
+                insightAggregates,
+                insightStats,
+                hasMissingCost,
+                // Day totals are exact daily buckets; category rollups remain full-session totals.
+                // Hide shares instead of mixing those scopes into percentages above 100%.
+                filters.selectedDays.length === 0,
+                buildPeakErrorHours(aggregateSessions, filters.timeZone),
+                displaySessionCount,
+                totalSessions,
+              )}
+              ${renderUsageMosaic(
+                aggregateSessions,
+                filters.timeZone,
+                filters.selectedHours,
+                filterActions.onSelectHour,
+              )}
+
+              <div class="usage-grid">
+                <div class="usage-grid-column">
+                  <div class="settings-group usage-panel usage-left-card">
+                    ${costWindowComparison}
+                    ${renderDailyChartCompact(
+                      filteredDaily,
+                      filters.selectedDays,
+                      display.chartMode,
+                      display.dailyChartMode,
+                      displayActions.onDailyChartModeChange,
+                      filterActions.onSelectDay,
+                    )}
+                    ${displayTotals
+                      ? renderCostBreakdownCompact(displayTotals, display.chartMode)
+                      : nothing}
+                  </div>
+                  ${renderSessionsCard(
+                    filteredSessions,
+                    filters.selectedSessions,
+                    filters.selectedDays,
+                    isTokenMode,
+                    display.sessionSort,
+                    display.sessionSortDir,
+                    display.recentSessions,
+                    display.sessionsTab,
+                    detailActions.onSelectSession,
+                    displayActions.onSessionSortChange,
+                    displayActions.onSessionSortDirChange,
+                    displayActions.onSessionsTabChange,
+                    display.visibleColumns,
+                    totalSessions,
+                    filterActions.onClearSessions,
+                  )}
+                </div>
+                ${primarySelectedEntry
+                  ? html`<div class="usage-grid-column">
+                      ${renderSessionDetailPanel(
+                        primarySelectedEntry,
+                        detail.timeSeries,
+                        detail.timeSeriesLoading,
+                        detail.timeSeriesStatus,
+                        detailActions.onRetryTimeSeries,
+                        detail.timeSeriesMode,
+                        detailActions.onTimeSeriesModeChange,
+                        detail.timeSeriesBreakdownMode,
+                        detailActions.onTimeSeriesBreakdownChange,
+                        detail.timeSeriesCursorStart,
+                        detail.timeSeriesCursorEnd,
+                        detailActions.onTimeSeriesCursorRangeChange,
+                        filters.startDate,
+                        filters.endDate,
+                        filters.selectedDays,
+                        filters.timeZone,
+                        detail.sessionLogs,
+                        detail.sessionLogsLoading,
+                        detail.sessionLogsStatus,
+                        detailActions.onRetrySessionLogs,
+                        detail.sessionLogsExpanded,
+                        detailActions.onToggleSessionLogsExpanded,
+                        detail.logFilters,
+                        detailActions.onLogFilterRolesChange,
+                        detailActions.onLogFilterToolsChange,
+                        detailActions.onLogFilterHasToolsChange,
+                        detailActions.onLogFilterQueryChange,
+                        detailActions.onLogFilterClear,
+                        display.contextExpanded,
+                        detailActions.onToggleContextExpanded,
+                        filterActions.onClearSessions,
+                      )}
+                    </div>`
+                  : nothing}
+              </div>
+            `}
+      </div>
+    `,
+    { wide: true },
+  );
 }
 
 // Exposed for Playwright/Vitest browser unit tests.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -35,10 +36,6 @@ type CacheEntry = {
 
 let nextHovercardId = 0;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function requiredString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   if (typeof value !== "string" || !value.trim()) {
@@ -66,7 +63,7 @@ function decodePathSegment(value: string): string | null {
   }
 }
 
-export function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
+function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
   let url: URL;
   try {
     url = new URL(href, globalThis.location?.href ?? "http://localhost/");
@@ -92,6 +89,10 @@ export function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarge
     return null;
   }
   return { href: url.href, kind, number: Number(numberText), owner, repo };
+}
+
+export function isGitHubPullRequestLink(href: string): boolean {
+  return parseGitHubIssueOrPullRequestLink(href)?.kind === "pull";
 }
 
 function safeAvatarDataUrl(value: unknown): string | undefined {
@@ -307,6 +308,14 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
   private renderedUnavailable = false;
   private requestVersion = 0;
   private stopI18n: (() => void) | null = null;
+  private readonly activeAnchorObserver = new MutationObserver(() => {
+    const anchor = this.activeAnchor;
+    // The card is portaled outside the routed tree, whose replacement can remove
+    // a hovered link without a pointer event reaching this delegated handler.
+    if (anchor && !this.contains(anchor)) {
+      this.close();
+    }
+  });
 
   connectedCallback(): void {
     this.style.display = "contents";
@@ -415,6 +424,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.activeAnchor = anchor;
     this.activeTarget = target;
     this.describedBy = anchor.getAttribute("aria-describedby");
+    this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
     this.openTimer = window.setTimeout(() => {
       this.openTimer = null;
       void this.show(anchor, target);
@@ -516,6 +526,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
       window.clearTimeout(this.openTimer);
       this.openTimer = null;
     }
+    this.activeAnchorObserver.disconnect();
     this.requestVersion += 1;
     if (this.activeAnchor) {
       if (this.describedBy === null) {
@@ -575,8 +586,4 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.left), maxLeft)}px`;
     card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, top), maxTop)}px`;
   }
-}
-
-if (!customElements.get("openclaw-github-link-hovercard-provider")) {
-  customElements.define("openclaw-github-link-hovercard-provider", GitHubLinkHovercardProvider);
 }

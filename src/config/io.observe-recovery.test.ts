@@ -11,19 +11,23 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGood,
   recoverConfigFromLastKnownGood,
-  resolveLastKnownGoodConfigPath,
-  type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type ObserveRecoveryDeps = Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"];
+
+function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -31,7 +35,7 @@ describe("config observe recovery", () => {
   const clobberedUpdateChannelConfig = { update: { channel: "beta" } };
   const clobberedUpdateChannelRaw = `${JSON.stringify(clobberedUpdateChannelConfig, null, 2)}\n`;
   const recoverableTelegramConfig = {
-    meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+    meta: { lastTouchedVersion: "2026.4.22" },
     update: { channel: "beta" },
     gateway: { mode: "local" },
     channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
@@ -98,17 +102,11 @@ describe("config observe recovery", () => {
   }
 
   async function readObserveEvents(auditPath: string): Promise<Record<string, unknown>[]> {
-    const events: Record<string, unknown>[] = [];
-    for (const line of (await fsp.readFile(auditPath, "utf-8")).trim().split("\n")) {
-      if (!line) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      if (parsed.event === "config.observe") {
-        events.push(parsed);
-      }
-    }
-    return events;
+    const stateDir = path.dirname(path.dirname(auditPath));
+    return listConfigAuditRecordsForTests({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      homedir: () => stateDir,
+    }).filter((event) => event.event === "config.observe");
   }
 
   async function listClobberFiles(configPath: string): Promise<string[]> {
@@ -318,7 +316,7 @@ describe("config observe recovery", () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         update: { channel: "beta" },
         browser: { enabled: true },
         gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
@@ -363,7 +361,7 @@ describe("config observe recovery", () => {
       const { deps, configPath, auditPath } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         update: { channel: "beta" },
         channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
       });
@@ -430,7 +428,7 @@ describe("config observe recovery", () => {
         },
       });
       const clobbered = await writeConfigRaw(configPath, {
-        meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
+        meta: { lastTouchedVersion: "2026.4.22" },
         gateway: { mode: "local" },
       });
 
@@ -1297,3 +1295,4 @@ describe("config observe recovery", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

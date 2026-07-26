@@ -5,12 +5,12 @@ import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 // launchd defaults to a 10s spawn throttle. Keep that default explicitly so
 // crash loops back off instead of respawning every second while still allowing
 // explicit kickstart restarts to take effect.
-export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 10;
+const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 10;
 export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 20;
 // launchd stores plist integer values in decimal; 0o077 renders as 63 (owner-only files).
-export const LAUNCH_AGENT_UMASK_DECIMAL = 0o077;
-export const LAUNCH_AGENT_PROCESS_TYPE = "Interactive";
-export const LAUNCH_AGENT_STDIN_PATH = "/dev/null";
+const LAUNCH_AGENT_UMASK_DECIMAL = 0o077;
+const LAUNCH_AGENT_PROCESS_TYPE = "Interactive";
+const LAUNCH_AGENT_STDIN_PATH = "/dev/null";
 export const LAUNCH_AGENT_ENV_WRAPPER_SHELL = "/bin/sh";
 
 const plistEscape = (value: string): string =>

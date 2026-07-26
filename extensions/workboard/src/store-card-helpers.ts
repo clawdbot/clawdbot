@@ -1,4 +1,20 @@
 import { randomUUID } from "node:crypto";
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardAttemptStatus,
+  type WorkboardCard,
+  type WorkboardDiagnostic,
+  type WorkboardDiagnosticAction,
+  type WorkboardDiagnosticKind,
+  type WorkboardDiagnosticSeverity,
+  type WorkboardEvent,
+  type WorkboardExecution,
+  type WorkboardMetadata,
+  type WorkboardNotification,
+  type WorkboardRunAttempt,
+  type WorkboardStatus,
+} from "@openclaw/workboard-contract";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BLOCKED_TOO_LONG_MS,
@@ -15,21 +31,6 @@ import {
   normalizeTimestamp,
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardAttemptStatus,
-  type WorkboardCard,
-  type WorkboardDiagnostic,
-  type WorkboardDiagnosticAction,
-  type WorkboardDiagnosticKind,
-  type WorkboardDiagnosticSeverity,
-  type WorkboardEvent,
-  type WorkboardExecution,
-  type WorkboardMetadata,
-  type WorkboardNotification,
-  type WorkboardRunAttempt,
-  type WorkboardStatus,
-} from "./types.js";
 
 export function compareCards(left: WorkboardCard, right: WorkboardCard): number {
   if (left.status !== right.status) {
@@ -83,9 +84,9 @@ export function syncExecutionAttemptMetadata(
     id: existingAttempt?.id ?? key,
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
-    engine: execution.engine,
     mode: execution.mode,
-    model: execution.model,
+    ...(execution.engine ? { engine: execution.engine } : {}),
+    ...(execution.model ? { model: execution.model } : {}),
     ...(execution.sessionKey ? { sessionKey: execution.sessionKey } : {}),
     ...(execution.runId ? { runId: execution.runId } : {}),
     ...(attemptStatus !== "running" && { endedAt: execution.updatedAt || now }),
@@ -347,10 +348,9 @@ export function assertCanMutateClaimedCard(
   }
   const ownerId = normalizeOptionalString(scope.ownerId);
   const token = normalizeOptionalString(scope.token);
-  if (claim.ownerId === ownerId || (token && claim.token === token)) {
-    return;
+  if (claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
+    throw new Error(`card is claimed by ${claim.ownerId}.`);
   }
-  throw new Error(`card is claimed by ${claim.ownerId}.`);
 }
 
 export function retryBudgetExhausted(card: WorkboardCard): boolean {
@@ -742,3 +742,4 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,6 +13,7 @@ import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
@@ -66,13 +67,6 @@ const defaultDependencies: WhatsAppCallToolDependencies = {
   resolveStateDir: (accountId) =>
     path.join(resolveOAuthDir(), "whatsapp-calls", normalizeAccountId(accountId)),
 };
-
-function jsonResult(payload: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
-}
 
 async function isRegularFile(filePath: string): Promise<boolean> {
   try {
@@ -338,7 +332,7 @@ function createWhatsAppCallToolWithDependencies(
   };
 }
 
-export function createWhatsAppCallTool(
+function createWhatsAppCallTool(
   api: OpenClawPluginApi,
   context: OpenClawPluginToolContext,
 ): AnyAgentTool | null {
@@ -350,13 +344,3 @@ export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
     name: "whatsapp_call",
   });
 }
-
-export const testing = {
-  createWhatsAppCallToolWithDependencies,
-  normalizeTelephonyPcm,
-  resolveCallWindowMs,
-  resolveLinkedWhatsAppSelfE164,
-  resolveRequesterE164,
-  resolveSetupCommand,
-  wrapPcm16MonoInWav,
-};

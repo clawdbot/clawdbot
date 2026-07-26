@@ -29,10 +29,10 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type ChatAttachment,
-  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
+  stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
 
@@ -233,10 +233,8 @@ describe("parseMessageWithAttachments", () => {
     expect(ref.mimeType).toBe("application/pdf");
     expect(ref.label).toBe("report.pdf");
     expect(ref.mediaRef).toMatch(/^media:\/\/inbound\//);
-    // Non-image offloads MUST NOT inject a media://URI into the message —
-    // the caller is responsible for routing offloadedRefs[].path into
-    // ctx.MediaPaths so the workspace stage surfaces a real path.
-    expect(parsed.message).toBe("read this");
+    expect(parsed.message).toBe(`read this\n[media attached: ${ref.mediaRef}]`);
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(parsed.message);
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
     expect(savedMime()).toBe("application/pdf");
     expect(logs).toHaveLength(0);
@@ -252,7 +250,10 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/octet-stream");
     expect(savedMime()).toBe("application/octet-stream");
-    expect(parsed.message).toBe("take a look");
+    expect(parsed.message).toBe(
+      `take a look\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
+    );
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(parsed.message);
     expect(logs).toHaveLength(0);
   });
 
@@ -273,15 +274,12 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.imageOrder).toEqual(["inline"]);
   });
 
-  it("excludes non-image offloads from imageOrder in mixed batches", async () => {
+  it("keeps mixed image/PDF markers in normal and image-stripped routing order", async () => {
     // Regression: a prior revision pushed "offloaded" for every offload,
     // including non-image files. In a [non-image, inline, offloaded-image]
     // batch that produced imageOrder=["offloaded","inline","offloaded"] even
-    // though only one `[media attached: media://...]` line is ever appended
-    // to the prompt (for the image offload). extractTrailingAttachmentMediaUris
-    // then read count=2 against one trailing URI, and
-    // mergePromptAttachmentImages placed the single offloaded image into the
-    // first "offloaded" slot — swapping it ahead of the inline image.
+    // though only one image offload existed. Structural facts and imageOrder
+    // must agree so hydration cannot swap it ahead of the inline image.
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const bigPng = Buffer.alloc(2_100_000);
     bigPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
@@ -296,12 +294,18 @@ describe("parseMessageWithAttachments", () => {
       "image/png",
     ]);
     expect(parsed.imageOrder).toEqual(["inline", "offloaded"]);
-    // The offloaded-image URI is the sole trailing media:// line, matching
-    // imageOrder's single "offloaded" slot.
+    const pdfRef = expectDefined(parsed.offloadedRefs[0], "offloaded PDF ref");
+    const imageRef = expectDefined(parsed.offloadedRefs[1], "offloaded image ref");
+    expect(parsed.message).toBe(
+      `x\n[media attached: ${pdfRef.mediaRef}]\n[media attached: ${imageRef.mediaRef}]`,
+    );
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(
+      `x\n[media attached: ${pdfRef.mediaRef}]`,
+    );
     const trailingMediaLines = parsed.message
       .split("\n")
       .filter((line) => line.trim().startsWith("[media attached: media://inbound/"));
-    expect(trailingMediaLines).toHaveLength(1);
+    expect(trailingMediaLines).toHaveLength(2);
   });
 
   it("rejects oversized images before offload", async () => {
@@ -444,6 +448,7 @@ describe("parseMessageWithAttachments validation errors", () => {
   it("passes through unchanged on text-only session with no attachments", async () => {
     const { parsed } = await parseWithWarnings("hello", [], { supportsInlineImages: false });
     expect(parsed.message).toBe("hello");
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("hello");
     expect(parsed.images).toHaveLength(0);
     expect(parsed.offloadedRefs).toHaveLength(0);
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
@@ -469,7 +474,10 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.offloadedRefs).toHaveLength(1);
       expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
       expect(parsed.offloadedRefs[0]?.label).toBe("brief.pdf");
-      expect(parsed.message).toBe("read this");
+      expect(parsed.message).toBe(
+        `read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
+      );
+      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(parsed.message);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
     }
@@ -493,8 +501,17 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.images).toHaveLength(0);
       expect(parsed.imageOrder).toEqual(["offloaded"]);
       expect(parsed.offloadedRefs).toHaveLength(1);
-      expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
-      expect(parsed.message).toMatch(/^see this\n\[media attached: media:\/\/inbound\//);
+      const offloaded = expectDefined(parsed.offloadedRefs[0], "offloaded image ref");
+      expect(offloaded.mimeType).toBe("image/png");
+      expect(parsed.message).toBe(`see this\n[media attached: ${offloaded.mediaRef}]`);
+      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("see this");
+      expect(parsed.media).toEqual([
+        {
+          path: offloaded.path,
+          url: offloaded.mediaRef,
+          contentType: "image/png",
+        },
+      ]);
       expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
       expect(logs).toHaveLength(0);
     } finally {
@@ -523,6 +540,9 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.message).toContain(
         "[image attachment omitted: text-only attachment limit reached]",
       );
+      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(
+        "see these\n[image attachment omitted: text-only attachment limit reached]",
+      );
       expect(logs).toEqual([
         "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
       ]);
@@ -534,7 +554,7 @@ describe("parseMessageWithAttachments validation errors", () => {
 
 describe("resolveChatAttachmentMaxBytes", () => {
   const MB = 1024 * 1024;
-  const DEFAULT_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * MB;
+  const DEFAULT_BYTES = 20 * MB;
 
   const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
     ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;

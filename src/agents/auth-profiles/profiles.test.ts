@@ -15,18 +15,19 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { testing as externalAuthTesting } from "./external-auth.js";
+import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
   promoteAuthProfileInOrder,
+  removeAuthProfilesWithLock,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
   getRuntimeAuthProfileStoreSnapshot as getInternalRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreCredentialMutationRevision,
+  getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreStateMutationRevision,
+  getRuntimeAuthProfileStoreStateMutationToken,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
 import {
@@ -40,8 +41,8 @@ import {
   restoreAuthProfileStorePersistenceSnapshot,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   saveAuthProfileStore,
-  testing as storeTesting,
 } from "./store.js";
+import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 type ExpectedOAuthCredentialFields = {
@@ -384,8 +385,9 @@ describe("promoteAuthProfileInOrder", () => {
       replaceRuntimeAuthProfileStoreSnapshots([
         { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
       ]);
-      const credentialRevision = getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir);
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+      const credentialRevision =
+        getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
 
       runAuthProfileWriteTransaction(agentDir, (database) => {
         saveAuthProfileStore(store("sk-new"), agentDir, undefined, database);
@@ -401,10 +403,10 @@ describe("promoteAuthProfileInOrder", () => {
         "openai:backup",
         "openai:default",
       ]);
-      expect(getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir)).toBeGreaterThan(
+      expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision).toBeGreaterThan(
         credentialRevision,
       );
-      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBeGreaterThan(
+      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBeGreaterThan(
         stateRevision,
       );
     });
@@ -478,8 +480,9 @@ describe("promoteAuthProfileInOrder", () => {
         order: { openai: ["openai:old"] },
       };
       saveAuthProfileStore(oldStore, agentDir);
-      const credentialRevision = getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir);
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+      const credentialRevision =
+        getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
       const database = openOpenClawAgentDatabase({
         agentId: "main",
         path: resolveAuthProfileDatabasePath(agentDir),
@@ -507,10 +510,10 @@ describe("promoteAuthProfileInOrder", () => {
       database.db.exec("DROP TRIGGER reject_auth_profile_state_update;");
 
       expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir)).toMatchObject(oldStore);
-      expect(getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir)).toBe(
+      expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision).toBe(
         credentialRevision,
       );
-      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBe(stateRevision);
+      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBe(stateRevision);
     });
   });
 
@@ -789,7 +792,7 @@ describe("promoteAuthProfileInOrder", () => {
       };
       saveAuthProfileStore(store, agentDir);
       const credentialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
 
       saveAuthProfileStore(
         { ...store, usageStats: { "openai:default": { lastUsed: 42 } } },
@@ -797,7 +800,7 @@ describe("promoteAuthProfileInOrder", () => {
       );
 
       expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(credentialRevision);
-      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBeGreaterThan(
+      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBeGreaterThan(
         stateRevision,
       );
     });
@@ -1281,6 +1284,51 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("removes selected profiles while preserving unrelated provider credentials", async () => {
+    await withAuthProfileTestState("openclaw-auth-remove-selected-", async ({ agentDir }) => {
+      fs.mkdirSync(agentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openrouter:oauth": {
+              type: "oauth",
+              provider: "openrouter",
+              access: "oauth-access",
+              refresh: "oauth-refresh",
+              expires: Date.now() + 60_000,
+            },
+            "openrouter:api-key": {
+              type: "api_key",
+              provider: "openrouter",
+              key: "api-key",
+            },
+          },
+          order: { openrouter: ["openrouter:oauth", "openrouter:api-key"] },
+          lastGood: { openrouter: "openrouter:oauth" },
+          usageStats: {
+            "openrouter:oauth": { lastUsed: 1 },
+            "openrouter:api-key": { lastUsed: 2 },
+          },
+        },
+        agentDir,
+      );
+
+      await removeAuthProfilesWithLock({
+        agentDir,
+        profileIds: ["openrouter:oauth"],
+      });
+
+      expect(loadAuthProfileStoreForRuntime(agentDir)).toMatchObject({
+        profiles: { "openrouter:api-key": expect.any(Object) },
+        order: { openrouter: ["openrouter:api-key"] },
+        usageStats: { "openrouter:api-key": { lastUsed: 2 } },
+      });
+      expect(loadAuthProfileStoreForRuntime(agentDir).profiles["openrouter:oauth"]).toBeUndefined();
+      expect(loadAuthProfileStoreForRuntime(agentDir).lastGood).toBeUndefined();
+    });
+  });
+
   it("does not clear lastGood when the failed profile is not the stored profile", async () => {
     await withAuthProfileTestState("openclaw-auth-clear-lastgood-keep-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });
@@ -1312,3 +1360,4 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

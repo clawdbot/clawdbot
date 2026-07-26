@@ -16,6 +16,17 @@ describe("whatsapp streaming legacy config rules", () => {
   });
 });
 
+it("removes retired exposeErrorText at root and account level", () => {
+  const result = normalizeCompatibilityConfig({
+    cfg: whatsappConfig({ exposeErrorText: true, accounts: { work: { exposeErrorText: false } } }),
+  });
+  expect(result.config.channels?.whatsapp).toEqual({ accounts: { work: {} } });
+  expect(result.changes).toContain("Removed retired channels.whatsapp.exposeErrorText.");
+  expect(result.changes).toContain(
+    "Removed retired channels.whatsapp.accounts.work.exposeErrorText.",
+  );
+});
+
 describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
   it("moves flat delivery aliases at root and account level with root seeding", () => {
     const result = normalizeCompatibilityConfig({
@@ -92,7 +103,7 @@ describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
     });
   });
 
-  it("keeps the legacy ackReaction migration and stays idempotent", () => {
+  it("keeps global ackReaction canonical while migrating streaming aliases", () => {
     const first = normalizeCompatibilityConfig({
       cfg: {
         messages: { ackReaction: "👀" },
@@ -100,7 +111,8 @@ describe("whatsapp normalizeCompatibilityConfig streaming aliases", () => {
       } as never,
     });
     const whatsapp = first.config.channels?.whatsapp as unknown as Record<string, unknown>;
-    expect(whatsapp.ackReaction).toEqual({ emoji: "👀", direct: false, group: "mentions" });
+    expect(whatsapp.ackReaction).toBeUndefined();
+    expect(first.config.messages?.ackReaction).toBe("👀");
     expect(whatsapp.streaming).toEqual({ block: { enabled: true } });
 
     const second = normalizeCompatibilityConfig({ cfg: first.config });

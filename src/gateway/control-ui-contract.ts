@@ -3,6 +3,35 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
+export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
+
+/** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
+export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
+
+/** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
+export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
+
+/** Reserved query key for the sandbox cookie capability probe. */
+export const CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY = "__openclaw_plugin_frame_auth_probe";
+
+/** Exact parent origin that may receive the successful probe message. */
+export const CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY = "__openclaw_plugin_frame_auth_origin";
+
+/** Message emitted only by a successful sandbox cookie capability probe. */
+export const CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE = "openclaw-plugin-frame-auth-probe";
+
+/** Extracts the same-origin route pathname from a tab descriptor URL. */
+export function resolveControlUiPluginTabPathname(path: string): string | undefined {
+  try {
+    const baseUrl = new URL("http://openclaw.invalid");
+    const tabUrl = new URL(path, baseUrl);
+    return tabUrl.origin === baseUrl.origin ? tabUrl.pathname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Carries the gateway-configured Control UI mount path into browser bootstrap. */
 export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-path";
 
@@ -11,6 +40,13 @@ export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-ena
 
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
+
+/** Route grant successfully issued during authenticated Control UI bootstrap. */
+export type ControlUiPluginFrameGrantAck = {
+  pluginId: string;
+  path: string;
+  match: "exact" | "prefix";
+};
 
 /** Public GitHub metadata rendered by Control UI link hover cards. */
 export type ControlUiGitHubPreview = {
@@ -37,7 +73,7 @@ export type ControlUiGitHubPreview = {
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
-export type ControlUiSessionPullRequestChecks = {
+type ControlUiSessionPullRequestChecks = {
   state: "pending" | "passing" | "failing";
   passed: number;
   failed: number;
@@ -73,14 +109,21 @@ export type ControlUiSessionBranch = {
   /** Working-tree diff vs the merge base with the remote default branch. */
   additions?: number;
   deletions?: number;
-  /** GitHub "open a pull request for this branch" page. */
-  createUrl: string;
+  /**
+   * GitHub "open a pull request for this branch" page. Absent while the
+   * branch is unpushed or has nothing to compare — the row then only reports
+   * the session's local changed files.
+   */
+  createUrl?: string;
 };
 
 /** Pull requests detected for a session's git branch, chip row payload. */
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
-  /** Present when the session's non-default GitHub branch exists on origin. */
+  /**
+   * Present when the session's non-default GitHub branch has a creatable PR
+   * on origin or local changed files in the working tree.
+   */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
@@ -105,7 +148,6 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  chatMessageMaxWidth?: string;
   seamColor?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";
@@ -115,4 +157,5 @@ export type ControlUiBootstrapConfig = {
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

@@ -1,26 +1,28 @@
-// Tests status command rendering for sessions, agents, and diagnostics.
+// Tests status command rendering for sessions, agents, diagnostics, and model defaults.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry.test-helpers.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
@@ -28,6 +30,8 @@ import {
   buildCommandTestParams,
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
+
+// Tests status command rendering for sessions, agents, and diagnostics.
 
 type LoadProviderUsageSummary =
   typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
@@ -37,6 +41,14 @@ const providerUsageMock = vi.hoisted(() => ({
     updatedAt: Date.now(),
     providers: [],
   })),
+}));
+const activeProviderThinkingMock = vi.hoisted(() => ({
+  resolveThinkingProfile: vi.fn<
+    (params: {
+      provider: string;
+      context: { modelId: string };
+    }) => ProviderThinkingProfile | null | undefined
+  >(() => undefined),
 }));
 type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
@@ -69,6 +81,11 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
   };
 });
+
+vi.mock("../../plugins/provider-thinking-active.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-thinking-active.js")>()),
+  resolveActiveProviderThinkingProfile: activeProviderThinkingMock.resolveThinkingProfile,
+}));
 
 vi.mock("../../status/status-plugin-health.runtime.js", () => pluginHealthRuntimeMock);
 
@@ -134,6 +151,7 @@ function registerStatusCodexHarness(): void {
   const harness: AgentHarness = {
     id: "codex",
     label: "Codex",
+    autoSelection: { providerIds: [...codexProviders] },
     supports: (ctx) =>
       codexProviders.has(ctx.provider.trim().toLowerCase())
         ? { supported: true, priority: 100 }
@@ -197,6 +215,8 @@ afterEach(() => {
     updatedAt: Date.now(),
     providers: [],
   });
+  activeProviderThinkingMock.resolveThinkingProfile.mockReset();
+  activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue(undefined);
   pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
   pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
     plugins: [],
@@ -1525,6 +1545,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("shows DeepSeek balance summaries in /status output", async () => {
+    registerStatusCodexHarness();
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: Date.now(),
       providers: [
@@ -2270,6 +2291,46 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).not.toContain("Think: ultra");
   });
 
+  it("clamps off to the active provider's always-thinking level", async () => {
+    activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue({
+      levels: [{ id: "max", label: "max" }],
+      defaultLevel: "max",
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-kimi-k3",
+        updatedAt: 0,
+        thinkingLevel: "off",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "moonshot",
+      model: "kimi-k3",
+      contextTokens: 262_144,
+      resolvedThinkLevel: "off",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Think: max");
+    expect(activeProviderThinkingMock.resolveThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "moonshot",
+        context: expect.objectContaining({ modelId: "kimi-k3" }),
+      }),
+    );
+  });
+
   it("treats the persisted harness id as observational in /status", async () => {
     registerStatusCodexHarness();
 
@@ -2305,5 +2366,182 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
+  });
+});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+async function buildKiraStatusReply(cfg: OpenClawConfig) {
+  return await buildStatusReply({
+    cfg,
+    command: {
+      isAuthorizedSender: true,
+      channel: "whatsapp",
+    } as never,
+    sessionKey: "agent:kira:main",
+    provider: "openai",
+    model: "gpt-5.4",
+    contextTokens: 0,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+  });
+}
+
+describe("buildStatusReply", () => {
+  beforeAll(async () => {
+    await buildKiraStatusReply({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig);
+  });
+
+  it("shows per-agent thinkingDefault in the status card", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+        list: [
+          {
+            id: "kira",
+            model: "openai/gpt-5.4",
+            thinkingDefault: "xhigh",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Think: xhigh");
+  });
+
+  it("shows per-agent fallback overrides in the status card", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["google/gemini-2.5-flash"],
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: google/gemini-2.5-flash");
+    expect(reply?.text).not.toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps default fallback config when the agent has no explicit model", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps agent primary strict when the agent has no explicit fallback override", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).not.toContain("Fallbacks:");
+  });
+
+  it("treats an explicit empty per-agent fallback override as disabling inherited fallbacks", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: [],
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).not.toContain("Fallbacks:");
   });
 });

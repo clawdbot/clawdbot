@@ -28,6 +28,7 @@ describe("buildControlUiCspHeader", () => {
       "'self'",
       "ws:",
       "wss:",
+      "data:",
       "https://api.openai.com",
       "https://tweakcn.com",
     ]);
@@ -35,10 +36,17 @@ describe("buildControlUiCspHeader", () => {
     expect(connectSrc?.split(" ")).not.toContain("https:");
   });
 
-  it("limits image loading to same-origin, data, and managed blob URLs", () => {
+  it("limits image loading to local sources and the Gravatar fallback origin", () => {
     const csp = buildControlUiCspHeader();
-    expect(csp).toContain("img-src 'self' data: blob:");
-    expect(csp).not.toContain("img-src 'self' data: blob: https:");
+    const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
+    expect(imgSrc?.split(" ")).toEqual([
+      "img-src",
+      "'self'",
+      "data:",
+      "blob:",
+      "https://gravatar.com",
+    ]);
+    expect(imgSrc?.split(" ")).not.toContain("https:");
   });
 
   it("allows same-origin and inline audio/video playback", () => {
@@ -67,10 +75,10 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toMatch(/script-src 'self'(?:;|$)/);
   });
 
-  it("does not relax the policy for the terminal unless allowWasm is set", () => {
+  it("does not relax script execution for the terminal unless allowWasm is set", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).not.toContain("wasm-unsafe-eval");
-    expect(csp).not.toMatch(/connect-src[^;]*data:/);
+    expect(csp).toMatch(/connect-src[^;]*data:/);
   });
 
   it("relaxes script-src and connect-src for the terminal's ghostty-web WASM engine", () => {
@@ -78,7 +86,7 @@ describe("buildControlUiCspHeader", () => {
     // Narrow WASM compilation permission — never full unsafe-eval.
     expect(csp).toMatch(/script-src[^;]*'wasm-unsafe-eval'/);
     expect(csp).not.toMatch(/script-src[^;]*'unsafe-eval'(?!-)/);
-    // ghostty-web fetches its inlined WASM from a data: URL.
+    // Web Awesome icons and ghostty-web both fetch inlined data: assets.
     expect(csp).toMatch(/connect-src[^;]*\bdata:/);
   });
 

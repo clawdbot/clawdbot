@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import {
+  assertSqliteIntegrity,
+  confirmSqliteFileIntegrity,
+  isTerminalSqliteIntegrityError,
+} from "./sqlite-integrity.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
   it("accepts structurally and referentially consistent databases", () => {
@@ -20,7 +31,6 @@ describe("assertSqliteIntegrity", () => {
 
       expect(assertSqliteIntegrity(database, "test database")).toEqual({
         integrityCheck: "ok",
-        quickCheck: "ok",
       });
     } finally {
       database.close();
@@ -45,12 +55,37 @@ describe("assertSqliteIntegrity", () => {
         integrity_check: "ok",
       });
 
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+      let failure: unknown;
+      try {
+        assertSqliteIntegrity(database, "test database");
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ name: "SqliteIntegrityError" });
+      expect(String(failure)).toMatch(
         /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
       );
     } finally {
       database.close();
     }
+  });
+
+  it("names integrity-check failures", () => {
+    const database = {
+      prepare: () => ({ all: () => [{ integrity_check: "broken index" }] }),
+    } as unknown as DatabaseSync;
+
+    let failure: unknown;
+    try {
+      assertSqliteIntegrity(database, "test database");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      name: "SqliteIntegrityError",
+      message: "SQLite integrity_check failed for test database: broken index",
+    });
   });
 
   it("reports violations deterministically without truncating 64-bit rowids", () => {
@@ -149,6 +184,51 @@ describe("assertSqliteIntegrity", () => {
       );
     } finally {
       database.close();
+    }
+  });
+});
+
+describe("isTerminalSqliteIntegrityError", () => {
+  it("distinguishes persistent damage from transient pragma failures", () => {
+    const corrupt = new Error("integrity check found damage");
+    corrupt.name = "SqliteIntegrityError";
+    const busy = new Error("integrity check could not run", {
+      cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
+    });
+    busy.name = "SqliteIntegrityError";
+    const malformed = new Error("integrity check could not read the database", {
+      cause: Object.assign(new Error("database disk image is malformed"), { errcode: 11 }),
+    });
+    malformed.name = "SqliteIntegrityError";
+    const corruptIndex = new Error("integrity check found a corrupt index", {
+      cause: Object.assign(new Error("database index is malformed"), { errcode: 779 }),
+    });
+    corruptIndex.name = "SqliteIntegrityError";
+
+    expect(isTerminalSqliteIntegrityError(corrupt)).toBe(true);
+    expect(isTerminalSqliteIntegrityError(busy)).toBe(false);
+    expect(isTerminalSqliteIntegrityError(malformed)).toBe(true);
+    expect(isTerminalSqliteIntegrityError(corruptIndex)).toBe(true);
+  });
+});
+
+describe("confirmSqliteFileIntegrity", () => {
+  it("leaves SQLite open failures unbound because the failed file identity is unknown", () => {
+    const databasePath = path.join(tempDirs.make("sqlite-open-integrity-"), "database.sqlite");
+    fs.writeFileSync(databasePath, "not a sqlite database");
+    const openError = Object.assign(new Error("file is not a database"), { errcode: 26 });
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(() => {
+      throw openError;
+    });
+
+    try {
+      expect(confirmSqliteFileIntegrity(databasePath, "test database")).toEqual({
+        status: "failed",
+        error: openError,
+        terminal: false,
+      });
+    } finally {
+      open.mockRestore();
     }
   });
 });

@@ -125,20 +125,11 @@ async function writeConfig(params: {
         memory: "none",
       },
     },
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        memorySearch: {
-          ...cfg.agents?.defaults?.memorySearch,
-          enabled: false,
-          sync: {
-            ...cfg.agents?.defaults?.memorySearch?.sync,
-            onSearch: false,
-            onSessionStart: false,
-            watch: false,
-          },
-        },
+    memory: {
+      ...cfg.memory,
+      search: {
+        ...cfg.memory?.search,
+        enabled: false,
       },
     },
     tools: {
@@ -181,7 +172,7 @@ async function writeConfig(params: {
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 }
 
-export async function main() {
+async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
   const previousEnv = {

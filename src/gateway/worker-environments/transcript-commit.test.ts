@@ -25,10 +25,9 @@ import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitStore,
 } from "./transcript-commit-store.js";
-import {
-  createWorkerTranscriptCommitter,
-  type WorkerTranscriptCommitter,
-} from "./transcript-commit.js";
+import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
+
+type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
 
 const SESSION_ID = "session-worker-transcript";
 const SESSION_KEY = "agent:main:worker-transcript";
@@ -39,6 +38,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: ["credential", "hash", "a"].join("-"),
   bundleHash: "b".repeat(64),
   sessionId: SESSION_ID,
+  runId: "run-worker-transcript",
   ownerEpoch: RUN_EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-transcript-commit-v1"],
@@ -425,7 +425,7 @@ describe("worker transcript commit application", () => {
   });
 
   it("replays an interrupted terminal write after its branch is abandoned", async () => {
-    cfg = { ...cfg, logging: { redactSensitive: "tools" } };
+    cfg = { ...cfg };
     const initialManager = SessionManager.open(sessionFile);
     const baseLeafId = initialManager.appendMessage({
       role: "user",
@@ -485,7 +485,7 @@ describe("worker transcript commit application", () => {
     });
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
-    cfg = { ...cfg, logging: { redactSensitive: "off" } };
+    cfg = { ...cfg };
 
     const replay = await committer.commit({ identity: IDENTITY, request });
 

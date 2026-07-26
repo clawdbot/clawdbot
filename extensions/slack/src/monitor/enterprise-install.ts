@@ -21,6 +21,16 @@ export type SlackInstallationIdentity =
       reason: "auth_test_failed";
     };
 
+export type SlackIdentityHealth =
+  | {
+      healthState: "healthy";
+      lastError: null;
+    }
+  | {
+      healthState: "degraded";
+      lastError: string;
+    };
+
 export type SlackAuthTestIdentity = {
   app_id?: unknown;
   team_id?: unknown;
@@ -108,8 +118,8 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
-    values: config.dm?.allowFrom,
-    path: `channels.slack.accounts.${accountId}.dm.allowFrom`,
+    values: config.allowFrom,
+    path: `channels.slack.accounts.${accountId}.allowFrom`,
     predicate: isStableSlackAllowlistUserEntry,
   });
   assertStableEntries({
@@ -240,4 +250,28 @@ export function resolveSlackInstallationIdentity(params: {
     ...(apiAppId ? { apiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };
+}
+
+export function resolveSlackIdentityHealth(params: {
+  installationIdentity: SlackInstallationIdentity;
+  botUserId: string;
+  authTestError?: string;
+  authIdentityWarning?: string;
+}): SlackIdentityHealth {
+  // Org-wide installs intentionally have no single workspace bot user. Their
+  // enterprise identity is sufficient; applying the workspace gate would
+  // report every healthy org install as degraded.
+  if (params.installationIdentity.kind === "enterprise") {
+    return { healthState: "healthy", lastError: null };
+  }
+
+  const lastError =
+    normalizeOptionalString(params.authTestError) ??
+    normalizeOptionalString(params.authIdentityWarning) ??
+    (params.installationIdentity.kind === "degraded" || !params.botUserId.trim()
+      ? "slack bot identity unavailable"
+      : undefined);
+  return lastError
+    ? { healthState: "degraded", lastError }
+    : { healthState: "healthy", lastError: null };
 }

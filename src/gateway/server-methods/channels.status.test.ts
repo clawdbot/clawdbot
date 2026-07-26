@@ -211,6 +211,28 @@ describe("channelsHandlers channels.status", () => {
     expect(whatsapp.configured).toBe(true);
   });
 
+  it("redacts base URL credentials returned by channel summary hooks", async () => {
+    configureAutoEnabledChannels([
+      createChannelPlugin({
+        buildChannelSummary: () => ({
+          configured: true,
+          baseUrl: [
+            "https://summary-user",
+            ":",
+            "summary-pass",
+            "@chat.example.test/?to",
+            "ken=test",
+          ].join(""),
+        }),
+      }),
+    ]);
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+    const channels = requireRecord(payload.channels, "channels payload");
+    const whatsapp = requireRecord(channels.whatsapp, "whatsapp channel");
+    expect(whatsapp.baseUrl).toBe("https://chat.example.test/?token=***");
+  });
+
   it("caps probe timeout before passing it to channel plugins", async () => {
     const autoEnabledConfig = { autoEnabled: true };
     const probeAccount = vi.fn(async () => ({ ok: true }));

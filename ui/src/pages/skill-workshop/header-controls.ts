@@ -1,6 +1,7 @@
 // Workshop page header: self-learning toggle, revision-session toggle, and
 // the board/today view switch.
 import { html } from "lit";
+import "../../components/web-awesome-tabs.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillWorkshopState } from "./proposals.ts";
 import { renderSelfLearningToggle, type SkillWorkshopSelfLearning } from "./self-learning.ts";
@@ -64,18 +65,24 @@ export function renderSkillWorkshopHeaderControls(
         <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
         <span class="sw-revision-session-toggle__label">${useCurrentChatLabel}</span>
       </label>
-      <div
+      <wa-tab-group
         class="sw-mode-switch"
-        role="tablist"
         aria-label=${t("skillWorkshop.header.view")}
         data-mode=${state.skillWorkshopMode}
+        .active=${state.skillWorkshopMode}
+        activation="auto"
+        without-scroll-controls
+        @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
+          if (event.detail.name === "board" || event.detail.name === "today") {
+            setSkillWorkshopMode(state, event.detail.name, requestUpdate);
+          }
+        }}
       >
-        <button
-          type="button"
-          class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
-          role="tab"
-          aria-selected=${state.skillWorkshopMode === "board" ? "true" : "false"}
-          @click=${() => setSkillWorkshopMode(state, "board", requestUpdate)}
+        <wa-tab
+          id="skill-workshop-mode-tab-board"
+          class="sw-mode-switch__opt"
+          panel="board"
+          aria-controls="skill-workshop-mode-panel"
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
             <rect x="3" y="4" width="7" height="16" rx="1.5" />
@@ -83,13 +90,12 @@ export function renderSkillWorkshopHeaderControls(
             <rect x="14" y="15" width="7" height="5" rx="1.5" />
           </svg>
           <span>${t("skillWorkshop.header.board")}</span>
-        </button>
-        <button
-          type="button"
-          class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
-          role="tab"
-          aria-selected=${state.skillWorkshopMode === "today" ? "true" : "false"}
-          @click=${() => setSkillWorkshopMode(state, "today", requestUpdate)}
+        </wa-tab>
+        <wa-tab
+          id="skill-workshop-mode-tab-today"
+          class="sw-mode-switch__opt"
+          panel="today"
+          aria-controls="skill-workshop-mode-panel"
         >
           <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
             <circle cx="12" cy="12" r="4" />
@@ -98,9 +104,8 @@ export function renderSkillWorkshopHeaderControls(
             />
           </svg>
           <span>${t("skillWorkshop.header.today")}</span>
-        </button>
-        <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
-      </div>
+        </wa-tab>
+      </wa-tab-group>
     </div>
   `;
 }

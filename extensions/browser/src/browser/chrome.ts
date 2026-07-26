@@ -854,24 +854,12 @@ function buildOpenClawChromeLaunchArgs(params: {
 async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
-    let settled = false;
-    const finish = (value: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(value);
-    };
     ws.once("open", () => {
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
-      finish(true);
+      ws.close();
+      resolve(true);
     });
-    ws.once("error", () => finish(false));
-    ws.once("close", () => finish(false));
+    ws.once("error", () => resolve(false));
+    ws.once("close", () => resolve(false));
   });
 }
 
@@ -1465,3 +1453,4 @@ export async function stopOpenClawChrome(
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

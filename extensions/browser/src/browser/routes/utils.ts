@@ -1,8 +1,8 @@
 /**
  * Browser route utility functions.
  *
- * Wraps async handlers, profile lookup, JSON errors, and route value coercion
- * shared across browser control endpoints.
+ * Profile lookup, JSON errors, and route value coercion shared across browser
+ * control endpoints.
  */
 import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
 import {
@@ -11,15 +11,10 @@ import {
   withProfileContextOperation,
 } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
-import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
+import type { BrowserRequest, BrowserResponse } from "./types.js";
 
 function normalizeOptionalString(value: string): string | undefined {
   return value.trim() || undefined;
-}
-
-/** Convert thrown async route errors into next(error) calls for the HTTP layer. */
-export function asyncBrowserRoute(handler: BrowserRouteHandler): BrowserRouteHandler {
-  return (req, res) => handler(req, res);
 }
 
 /**

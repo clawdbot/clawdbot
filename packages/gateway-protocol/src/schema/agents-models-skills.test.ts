@@ -2,15 +2,35 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  AgentsDeleteResultSchema,
   AgentsListResultSchema,
+  AgentsUpdateParamsSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
   SkillsDetailResultSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
   ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
+
+describe("AgentsDeleteResultSchema", () => {
+  it("accepts per-path cleanup outcomes", () => {
+    expect(
+      Value.Check(AgentsDeleteResultSchema, {
+        ok: true,
+        agentId: "ops",
+        removedBindings: 1,
+        removed: [{ path: "/state/agents/ops/agent", method: "trash" }],
+        failed: [{ path: "/state/workspace-ops", reason: "trash unavailable" }],
+      }),
+    ).toBe(true);
+  });
+});
 
 /**
  * Schema regression tests for agent metadata, skill proposals, and effective
@@ -51,6 +71,7 @@ describe("AgentsListResultSchema", () => {
       agents: [
         {
           id: "investment-master",
+          kind: "agent",
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
@@ -66,12 +87,73 @@ describe("AgentsListResultSchema", () => {
 
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
   });
+
+  it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
+    const result = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "custodian", kind: "system" }],
+    };
+
+    expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(AgentsListResultSchema, {
+        ...result,
+        agents: [{ id: "custodian", kind: "worker" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("AgentsUpdateParamsSchema", () => {
+  it("distinguishes omitted, cleared, and invalid model values", () => {
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work" })).toBe(true);
+    expect(
+      Value.Check(AgentsUpdateParamsSchema, {
+        agentId: "work",
+        model: null,
+      }),
+    ).toBe(true);
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work", model: "" })).toBe(false);
+  });
 });
 
 describe("ModelsListParamsSchema", () => {
   it("accepts the provider-config inventory view", () => {
     expect(Value.Check(ModelsListParamsSchema, { view: "provider-config" })).toBe(true);
+    expect(
+      Value.Check(ModelsListParamsSchema, {
+        view: "all",
+        includeProviderCapabilities: true,
+      }),
+    ).toBe(true);
     expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
+  });
+});
+
+describe("Models auth params schemas", () => {
+  it("accepts optional agent-scoped status and logout requests", () => {
+    expect(Value.Check(ModelsAuthStatusParamsSchema, {})).toBe(true);
+    expect(Value.Check(ModelsAuthStatusParamsSchema, { refresh: true, agentId: "writer" })).toBe(
+      true,
+    );
+    expect(Value.Check(ModelsAuthStatusParamsSchema, { agentId: "" })).toBe(true);
+
+    expect(
+      Value.Check(ModelsAuthLogoutParamsSchema, {
+        provider: "openai",
+        profileIds: ["openai:writer"],
+        agentId: "writer",
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai" })).toBe(true);
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai", agentId: "" })).toBe(
+      true,
+    );
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai", profileIds: [] })).toBe(
+      false,
+    );
   });
 });
 
@@ -81,15 +163,43 @@ describe("ModelsListResultSchema", () => {
       id: "gpt-image",
       name: "GPT Image",
       provider: "openai",
+      agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
       input: ["text", "image", "audio", "video", "document"],
     };
 
     expect(Value.Check(ModelsListResultSchema, { models: [model] })).toBe(true);
     expect(
       Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(ModelsListResultSchema, {
         models: [{ ...model, input: ["text", "binary"] }],
       }),
     ).toBe(false);
+  });
+});
+
+describe("ModelsProbe schemas", () => {
+  it("accepts bounded request and secret-free result shapes", () => {
+    expect(
+      Value.Check(ModelsProbeParamsSchema, {
+        provider: "openai",
+        profileId: "work",
+        timeoutMs: 20_000,
+        agentId: "writer",
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelsProbeParamsSchema, { provider: "openai", agentId: "" })).toBe(true);
+    expect(
+      Value.Check(ModelsProbeResultSchema, {
+        provider: "openai",
+        status: "ok",
+        latencyMs: 125,
+        results: [{ profileId: "work", label: "Work", status: "ok", latencyMs: 125 }],
+      }),
+    ).toBe(true);
   });
 });
 

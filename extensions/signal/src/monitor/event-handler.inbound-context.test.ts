@@ -2,21 +2,23 @@
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
+import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
 import type { SignalReactionMessage } from "./event-handler.types.js";
 vi.useRealTimers();
-const [
-  { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
-  { createSignalEventHandler },
-  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
-] = await Promise.all([
-  import("./event-handler.test-harness.js"),
-  import("./event-handler.js"),
-  import("../reply-authors.js"),
-]);
+let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
+let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
+let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
+  cfg?: OpenClawConfig;
+  dispatcher?: {
+    sendFinalReply: (payload: { text: string }) => void;
+    markComplete: () => void;
+    waitForIdle: () => Promise<void>;
+  };
   replyOptions?: {
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     allowToolLifecycleWhenProgressHidden?: boolean;
@@ -33,7 +35,6 @@ const {
   sendTypingMock,
   sendReadReceiptMock,
   sendReactionSignalMock,
-  removeReactionSignalMock,
   dispatchInboundMessageMock,
   enqueueSystemEventMock,
   recordInboundSessionMock,
@@ -44,7 +45,6 @@ const {
     sendTypingMock: vi.fn(),
     sendReadReceiptMock: vi.fn(),
     sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
-    removeReactionSignalMock: vi.fn(async () => ({ ok: true })),
     enqueueSystemEventMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
     dispatchInboundMessageMock: vi.fn(async (params: DispatchInboundMessageMockParams) => {
@@ -68,7 +68,6 @@ vi.mock("../send.js", () => ({
 
 vi.mock("../send-reactions.js", () => ({
   sendReactionSignal: sendReactionSignalMock,
-  removeReactionSignal: removeReactionSignalMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
@@ -80,6 +79,86 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
     dispatchInboundMessage: dispatchInboundMessageMock,
     dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
     dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: RunParams) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        eventClass,
+        "kind" in preflight ? { admission: preflight } : preflight,
+      );
+      if (!("route" in resolved) || !("delivery" in resolved)) {
+        throw new Error("expected assembled Signal channel turn plan");
+      }
+      const runPrepared = async () => {
+        const pendingDeliveries: Promise<unknown>[] = [];
+        const dispatcher = {
+          sendFinalReply: (payload: { text: string }) => {
+            pendingDeliveries.push(
+              Promise.resolve(resolved.delivery.deliver(payload, { kind: "final" })),
+            );
+          },
+          markComplete: () => {},
+          waitForIdle: async () => {
+            await Promise.all(pendingDeliveries);
+          },
+        };
+        return await actual.runPreparedInboundReply({
+          channel: resolved.channel,
+          accountId: resolved.accountId,
+          routeSessionKey: resolved.route.sessionKey,
+          storePath: "/tmp/openclaw/signal-sessions.json",
+          ctxPayload: resolved.ctxPayload,
+          recordInboundSession: recordInboundSessionMock,
+          afterRecord: resolved.afterRecord,
+          record: resolved.record,
+          history: resolved.history,
+          admission: resolved.admission,
+          botLoopProtection: resolved.botLoopProtection,
+          runDispatch: async () =>
+            await dispatchInboundMessageMock({
+              ctx: resolved.ctxPayload,
+              cfg: resolved.cfg,
+              dispatcher,
+              replyOptions: {
+                ...resolved.replyOptions,
+                onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
+              },
+            }),
+        });
+      };
+      let result;
+      try {
+        result = await runPrepared();
+      } catch (err) {
+        await params.adapter.onFinalize?.({
+          admission: resolved.admission ?? { kind: "dispatch" },
+          dispatched: false,
+          ctxPayload: resolved.ctxPayload,
+          routeSessionKey: resolved.route.sessionKey,
+        });
+        throw err;
+      }
+      await params.adapter.onFinalize?.(result);
+      return result;
+    },
   };
 });
 
@@ -129,14 +208,18 @@ function nextTimerTick(): Promise<void> {
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    [{ createBaseSignalEventHandlerDeps, createSignalReceiveEvent }, { createSignalEventHandler }] =
+      await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
+  });
+
+  beforeEach(() => {
     vi.useRealTimers();
-    await clearSignalReplyAuthorsForTest();
+    resetSignalReplyAuthorsForTests();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
     sendReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
-    removeReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
     enqueueSystemEventMock.mockReset();
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockClear();
@@ -303,7 +386,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     ).resolves.toEqual({ author: "+15550002222", body: "edited hello" });
   });
 
-  it("preserves the last debounced message body for native reply quote metadata", async () => {
+  it("joins debounced message bodies with newlines and preserves the last for replies", async () => {
     vi.useFakeTimers();
     const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockImplementationOnce(async (params: any) => {
@@ -353,7 +436,8 @@ describe("signal createSignalEventHandler inbound context", () => {
         expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
       });
       const context = requireCapturedContext();
-      expect(context.BodyForAgent).toBe("first debounced message\\nsecond debounced message");
+      expect(context.BodyForAgent).toBe("first debounced message\nsecond debounced message");
+      expect(context.CommandBody).toBe("first debounced message\nsecond debounced message");
       expect(context.ReplyToId).toBe("1700000000002");
       expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
       expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
@@ -501,7 +585,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     ).map((call) => call[2]);
     expect(sentEmojis).toEqual(expect.arrayContaining(["👀", "🧠", "🛠️", "🗜️", "✅"]));
     expect(sentEmojis.at(-1)).toBe("👀");
-    expect(removeReactionSignalMock).not.toHaveBeenCalled();
     expect(dispatchInboundMessageMock.mock.calls[0]?.[0].replyOptions).toEqual(
       expect.objectContaining({
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
@@ -552,6 +635,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );
@@ -590,7 +680,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
   });
 
-  it("honors configured Signal hard-stall status reaction emoji overrides", async () => {
+  it("uses the curated Signal soft-stall emoji for hard stalls", async () => {
     vi.useFakeTimers();
     let releaseDispatch!: () => void;
     try {
@@ -612,10 +702,6 @@ describe("signal createSignalEventHandler inbound context", () => {
               inbound: { debounceMs: 0 },
               statusReactions: {
                 enabled: true,
-                emojis: {
-                  stallSoft: "⌛",
-                  stallHard: "⚠️",
-                },
                 timing: {
                   debounceMs: 0,
                   doneHoldMs: 0,
@@ -627,6 +713,13 @@ describe("signal createSignalEventHandler inbound context", () => {
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
+          statusReactionTiming: {
+            debounceMs: 0,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+            stallSoftMs: 5_000,
+            stallHardMs: 15_000,
+          },
           historyLimit: 0,
         }),
       );
@@ -648,8 +741,8 @@ describe("signal createSignalEventHandler inbound context", () => {
       let sentEmojis = (
         sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
       ).map((call) => call[2]);
-      expect(sentEmojis).toContain("⌛");
-      expect(sentEmojis).toContain("⚠️");
+      expect(sentEmojis).toContain("⏳");
+      expect(sentEmojis).not.toContain("⚠️");
 
       releaseDispatch();
       await handled;
@@ -665,7 +758,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
   });
 
-  it("clears the latest Signal status reaction after reply when removeAckAfterReply is enabled", async () => {
+  it("restores the initial Signal ack reaction after a successful reply", async () => {
     dispatchInboundMessageMock.mockImplementationOnce(
       async (params: DispatchInboundMessageMockParams) => {
         capture.ctx = params.ctx;
@@ -678,7 +771,6 @@ describe("signal createSignalEventHandler inbound context", () => {
           messages: {
             ackReaction: "👀",
             ackReactionScope: "direct",
-            removeAckAfterReply: true,
             inbound: { debounceMs: 0 },
             statusReactions: {
               enabled: true,
@@ -716,18 +808,10 @@ describe("signal createSignalEventHandler inbound context", () => {
       sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
     ).map((call) => call[2]);
     expect(sentEmojis).toContain("✅");
-    expect(removeReactionSignalMock).toHaveBeenCalledWith(
-      "+15550002222",
-      1700000000001,
-      "✅",
-      expect.objectContaining({
-        accountId: "default",
-        baseUrl: "http://localhost",
-      }),
-    );
+    expect(sentEmojis.at(-1)).toBe("👀");
   });
 
-  it("clears failed Signal status reactions after partial reply delivery", async () => {
+  it("restores the initial Signal ack reaction after partial reply delivery fails", async () => {
     dispatchInboundMessageMock.mockImplementationOnce(
       async (params: DispatchInboundMessageMockParams) => {
         capture.ctx = params.ctx;
@@ -744,7 +828,6 @@ describe("signal createSignalEventHandler inbound context", () => {
           messages: {
             ackReaction: "👀",
             ackReactionScope: "direct",
-            removeAckAfterReply: true,
             inbound: { debounceMs: 0 },
             statusReactions: {
               enabled: true,
@@ -783,15 +866,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     ).map((call) => call[2]);
     expect(sentEmojis).toContain("❌");
     expect(sentEmojis).not.toContain("✅");
-    expect(removeReactionSignalMock).toHaveBeenCalledWith(
-      "+15550002222",
-      1700000000001,
-      "❌",
-      expect.objectContaining({
-        accountId: "default",
-        baseUrl: "http://localhost",
-      }),
-    );
+    expect(sentEmojis.at(-1)).toBe("👀");
   });
 
   it("uses dataMessage timestamp fallback for Signal status reactions", async () => {
@@ -886,7 +961,6 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     expect(sendReactionSignalMock).not.toHaveBeenCalled();
-    expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });
 
   it("does not send Signal status reactions for non-positive inbound timestamps", async () => {
@@ -920,7 +994,6 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     expect(sendReactionSignalMock).not.toHaveBeenCalled();
-    expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });
 
   it("does not send Signal status reactions unless explicitly enabled", async () => {
@@ -949,7 +1022,6 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     expect(sendReactionSignalMock).not.toHaveBeenCalled();
-    expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });
 
   it("does not send Signal status reactions when reactionLevel is off", async () => {
@@ -1402,62 +1474,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.To).toBe("+15550002222");
   });
 
-  it("keeps dispatch running when Signal status reaction removal fails", async () => {
-    removeReactionSignalMock.mockRejectedValueOnce(new Error("reaction removal rejected"));
-    dispatchInboundMessageMock.mockImplementationOnce(
-      async (params: DispatchInboundMessageMockParams) => {
-        capture.ctx = params.ctx;
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 1 },
-        };
-      },
-    );
-    const handler = createSignalEventHandler(
-      createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: {
-            ackReaction: "👀",
-            ackReactionScope: "direct",
-            removeAckAfterReply: true,
-            inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
-          },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        } as OpenClawConfig,
-        historyLimit: 0,
-      }),
-    );
-
-    await handler(
-      createSignalReceiveEvent({
-        sourceNumber: "+15550002222",
-        sourceName: "Bob",
-        timestamp: 1700000000001,
-        dataMessage: {
-          message: "ship it",
-          attachments: [],
-        },
-      }),
-    );
-    for (let i = 0; i < 5; i += 1) {
-      await nextTimerTick();
-    }
-
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    expect(capture.ctx?.To).toBe("+15550002222");
-    expect(removeReactionSignalMock).toHaveBeenCalled();
-  });
-
   it("finalizes Signal status reactions as error when session recording fails", async () => {
     recordInboundSessionMock.mockRejectedValueOnce(new Error("record boom"));
     const handler = createSignalEventHandler(
@@ -1504,7 +1520,6 @@ describe("signal createSignalEventHandler inbound context", () => {
       sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
     ).map((call) => call[2]);
     expect(sentEmojis).toEqual(["👀", "❌", "👀"]);
-    expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });
 
   it("keeps pending group history structured while current text stays command-clean", async () => {
@@ -1927,7 +1942,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     const context = requireCapturedContext();
-    expect(context.BodyForAgent).toBe("quoted context");
+    expect(context.BodyForAgent).toBe("");
     expect(context.ReplyToBody).toBe("quoted context");
     expect(context.ReplyToSender).toBe("+15550002222");
     expect(context.ReplyToIsQuote).toBe(true);
@@ -1959,11 +1974,10 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     const context = requireCapturedContext();
-    expect(context.MediaPath).toBe("/tmp/a1.dat");
-    expect(context.MediaType).toBe("image/jpeg");
-    expect(context.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
-    expect(context.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
-    expect(context.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+    expect(context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/a1.dat", contentType: "image/jpeg" }),
+      expect.objectContaining({ path: "/tmp/a2.dat", contentType: "application/octet-stream" }),
+    ]);
   });
 
   it("marks failed attachment downloads unavailable without a phantom media placeholder", async () => {
@@ -1997,9 +2011,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.RawBody).toBe("please inspect this");
     expect(context.CommandBody).toBe("please inspect this");
     expect(context.BodyForAgent).not.toContain("<media:image>");
-    expect(context.MediaPath).toBeUndefined();
+    expect(context.media).toEqual([expect.objectContaining({ contentType: "image/jpeg" })]);
+    expect(context.media?.[0]?.path).toBeUndefined();
   });
-
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
     try {
@@ -2037,8 +2051,8 @@ describe("signal createSignalEventHandler inbound context", () => {
 
       const context = requireCapturedContext();
       expect(context.BodyForAgent).toContain("[signal attachment unavailable]");
-      expect(context.RawBody).toBe("first request\\nsecond request");
-      expect(context.CommandBody).toBe("first request\\nsecond request");
+      expect(context.RawBody).toBe("first request\nsecond request");
+      expect(context.CommandBody).toBe("first request\nsecond request");
     } finally {
       vi.useRealTimers();
     }
@@ -2100,9 +2114,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     const context = requireCapturedContext();
-    expect(context.MediaPath).toBe("/tmp/voice1.aac");
-    expect(context.MediaType).toBe("audio/aac");
-    expect(context.MediaTypes).toEqual(["audio/aac"]);
+    expect(context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/voice1.aac", contentType: "audio/aac" }),
+    ]);
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
@@ -2159,3 +2173,4 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

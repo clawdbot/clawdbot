@@ -7,7 +7,7 @@ vi.mock("../cron/active-jobs.js", () => ({
   getActiveCronJobCount: vi.fn(() => 2),
 }));
 
-vi.mock("../tasks/cron-task-cancel.js", () => ({
+vi.mock("../cron/service/active-run-cancellation.js", () => ({
   getSuspensionVisibleCronTaskRunCount: vi.fn(() => 4),
 }));
 

@@ -974,3 +974,4 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return unsupportedGatewayApi("oc.environments.delete");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

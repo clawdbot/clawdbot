@@ -5,6 +5,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import pLimit from "p-limit";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseStrictInteger } from "./parse-finite-number.js";
 import { isTailnetIPv4 } from "./tailnet.js";
@@ -362,45 +363,31 @@ async function discoverWideAreaViaTailnetDns(
 
   const probeName = `${GATEWAY_SERVICE_TYPE}.${domain.replace(/\.$/, "")}`;
 
-  const concurrency = 6;
-  let nextIndex = 0;
   let nameserver: string | null = null;
   let ptrs: string[] = [];
 
-  const worker = async () => {
-    while (nameserver === null) {
-      const budget = remainingMs();
-      if (budget <= 0) {
-        return;
-      }
-      const i = nextIndex;
-      nextIndex += 1;
-      if (i >= ips.length) {
-        return;
-      }
-      const ip = ips[i] ?? "";
-      if (!ip) {
-        continue;
-      }
-      try {
-        const probe = await run(
-          ["dig", "+short", "+time=1", "+tries=1", `@${ip}`, probeName, "PTR"],
-          { timeoutMs: Math.max(1, Math.min(250, budget)) },
-        );
-        const lines = parseDigShortLines(probe.stdout);
-        if (lines.length === 0) {
-          continue;
-        }
+  await pLimit(6).map(ips, async (ip) => {
+    if (nameserver !== null) {
+      return;
+    }
+    const budget = remainingMs();
+    if (budget <= 0 || !ip) {
+      return;
+    }
+    try {
+      const probe = await run(
+        ["dig", "+short", "+time=1", "+tries=1", `@${ip}`, probeName, "PTR"],
+        { timeoutMs: Math.max(1, Math.min(250, budget)) },
+      );
+      const lines = parseDigShortLines(probe.stdout);
+      if (lines.length > 0) {
         nameserver = ip;
         ptrs = lines;
-        return;
-      } catch {
-        // ignore
       }
+    } catch {
+      // ignore
     }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, ips.length) }, () => worker()));
+  });
 
   if (!nameserver || ptrs.length === 0) {
     return [];

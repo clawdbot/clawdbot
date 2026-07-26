@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import type { CronJob } from "../cron/types.js";
 
-export type SessionAutomationSource = {
+type SessionAutomationSource = {
   /** Current in-memory cron jobs; undefined until the cron store is loaded. */
   getJobs: () => readonly CronJob[] | undefined;
   getDefaultAgentId: () => string | undefined;

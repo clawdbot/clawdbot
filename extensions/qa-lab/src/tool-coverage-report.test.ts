@@ -6,8 +6,7 @@ import {
   renderQaToolCoverageMarkdownReport,
 } from "./tool-coverage-report.js";
 
-const TEST_TOOL_COVERAGE_ID =
-  "agent-runtime-and-provider-execution.tool-calls-and-response-handling.tool-call-handling";
+const TEST_TOOL_COVERAGE_ID = "agents.tool-call-handling";
 
 function makeScenario(
   id: string,
@@ -644,6 +643,13 @@ describe("qa tool coverage report", () => {
       expect.objectContaining({
         tracking:
           "#80320 Codex app-server intentionally owns apply_patch natively; this fixture still needs valid patch-shaped fault injection before it can prove product behavior.",
+      }),
+    );
+    expect(report.rows.find((row) => row.tool === "sessions_spawn")).toEqual(
+      expect.objectContaining({
+        required: true,
+        tracking: expect.stringContaining("#80319"),
+        action: expect.stringContaining("report-only"),
       }),
     );
     expect(report.rows.find((row) => row.tool === "message-tool")).toEqual(

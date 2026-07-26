@@ -243,7 +243,9 @@ export async function getCachedChromeGraphicsDiagnostics(
   running.graphicsDiagnosticsPending ??= load();
   try {
     const diagnostics = await running.graphicsDiagnosticsPending;
-    running.graphicsDiagnostics = diagnostics;
+    if (diagnostics.status === "available") {
+      running.graphicsDiagnostics = diagnostics;
+    }
     return diagnostics;
   } finally {
     running.graphicsDiagnosticsPending = undefined;

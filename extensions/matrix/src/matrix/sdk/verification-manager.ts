@@ -60,7 +60,7 @@ export type MatrixVerificationSummary = {
 type MatrixVerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 type MatrixVerificationOwnerTrustCallback = (deviceId: string) => Promise<void>;
 
-export type MatrixShowSasCallbacks = {
+type MatrixShowSasCallbacks = {
   sas: {
     decimal?: [number, number, number];
     emoji?: Array<[string, string]>;
@@ -70,12 +70,12 @@ export type MatrixShowSasCallbacks = {
   cancel: () => void;
 };
 
-export type MatrixShowQrCodeCallbacks = {
+type MatrixShowQrCodeCallbacks = {
   confirm: () => void;
   cancel: () => void;
 };
 
-export type MatrixVerifierLike = {
+type MatrixVerifierLike = {
   verify: () => Promise<void>;
   cancel: (e: Error) => void;
   getShowSasCallbacks: () => MatrixShowSasCallbacks | null;
@@ -799,3 +799,4 @@ export class MatrixVerificationManager {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

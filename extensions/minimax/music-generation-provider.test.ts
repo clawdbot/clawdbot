@@ -68,6 +68,19 @@ function expectMinimaxGuardedFetchCall(index: number, url: string) {
   };
 }
 
+function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
+  const call = fetchWithTimeoutMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected generated music download");
+  }
+  const [actualUrl, init, timeoutMs, fetchFn] = call;
+  expect(actualUrl).toBe(url);
+  expect(init).toEqual({ method: "GET" });
+  expect(timeoutMs).toBeGreaterThan(totalTimeoutMs - 1_000);
+  expect(timeoutMs).toBeLessThanOrEqual(totalTimeoutMs);
+  expect(fetchFn).toBe(fetch);
+}
+
 function expectAllowPrivateNetworkPolicy(options: Record<string, unknown> | undefined): void {
   expect(options).toEqual({
     ssrfPolicy: { allowPrivateNetwork: true },
@@ -269,12 +282,7 @@ describe("minimax music generation provider", () => {
       lyrics: "our city wakes",
     });
 
-    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
-      "https://example.com/url-audio.mp3",
-      { method: "GET" },
-      120000,
-      fetch,
-    );
+    expectDownloadFetchTimeout("https://example.com/url-audio.mp3", 120_000);
     expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(0);
     expect(result.lyrics).toEqual(["our city wakes"]);
     expect(result.metadata?.taskId).toBe("task-url");
@@ -326,12 +334,7 @@ describe("minimax music generation provider", () => {
     });
 
     expect(mockCallArg(postJsonRequestMock).timeoutMs).toBe(600000);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
-      "https://example.com/long-timeout.mp3",
-      { method: "GET" },
-      600000,
-      fetch,
-    );
+    expectDownloadFetchTimeout("https://example.com/long-timeout.mp3", 600_000);
   });
 
   it("applies explicit caller timeouts while reading streaming response bodies", async () => {

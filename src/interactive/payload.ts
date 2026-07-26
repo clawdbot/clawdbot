@@ -34,6 +34,12 @@ export type MessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | {
+      /** Resolve one runtime-authored operator question choice. */
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
       /** Open a normal external link. */
       type: "url";
       url: string;
@@ -41,7 +47,18 @@ export type MessagePresentationAction =
   | {
       /** Launch a channel-native web app. */
       type: "web-app";
+      /** External web app URL for channels that launch web apps by URL. */
       url: string;
+      /** OpenClaw hosted-widget ID whose launch mechanics are owned by the channel. */
+      widgetId?: string;
+    }
+  | {
+      /** Launch a channel-native web app. */
+      type: "web-app";
+      /** External web app URL for channels that launch web apps by URL. */
+      url?: string;
+      /** OpenClaw hosted-widget ID whose launch mechanics are owned by the channel. */
+      widgetId: string;
     };
 
 /** Portable action control rendered as a button or link by channel adapters. */
@@ -139,55 +156,53 @@ export function resolveMessagePresentationOptionAction(
   return option.value ? { type: "callback", value: option.value } : undefined;
 }
 
-/**
- * @deprecated Use MessagePresentationButton.
- */
-export type InteractiveReplyButton = MessagePresentationButton;
+export type LegacyInteractiveReplyButton = MessagePresentationButton;
 
-/**
- * @deprecated Use MessagePresentationOption.
- */
-export type InteractiveReplyOption = MessagePresentationOption;
+/** @deprecated Use MessagePresentationButton. */
+export type InteractiveReplyButton = LegacyInteractiveReplyButton;
 
-/**
- * @deprecated Use MessagePresentationTextBlock.
- */
-export type InteractiveReplyTextBlock = {
+export type LegacyInteractiveReplyOption = MessagePresentationOption;
+
+/** @deprecated Use MessagePresentationOption. */
+export type InteractiveReplyOption = LegacyInteractiveReplyOption;
+
+export type LegacyInteractiveReplyTextBlock = {
   type: "text";
   text: string;
 };
 
-/**
- * @deprecated Use MessagePresentationButtonsBlock.
- */
-type InteractiveReplyButtonsBlock = {
-  type: "buttons";
-  buttons: InteractiveReplyButton[];
-};
-
-/**
- * @deprecated Use MessagePresentationSelectBlock.
- */
-export type InteractiveReplySelectBlock = {
+export type LegacyInteractiveReplySelectBlock = {
   type: "select";
   placeholder?: string;
-  options: InteractiveReplyOption[];
+  options: LegacyInteractiveReplyOption[];
 };
 
-/**
- * @deprecated Use MessagePresentationBlock.
- */
-export type InteractiveReplyBlock =
-  | InteractiveReplyTextBlock
-  | InteractiveReplyButtonsBlock
-  | InteractiveReplySelectBlock;
+export type LegacyInteractiveReplyBlock =
+  | LegacyInteractiveReplyTextBlock
+  | MessagePresentationButtonsBlock
+  | LegacyInteractiveReplySelectBlock;
 
-/**
- * @deprecated Use MessagePresentation.
- */
-export type InteractiveReply = {
-  blocks: InteractiveReplyBlock[];
+/** @deprecated Use MessagePresentationBlock. */
+export type InteractiveReplyBlock = LegacyInteractiveReplyBlock;
+
+export type LegacyInteractiveReply = {
+  blocks: LegacyInteractiveReplyBlock[];
 };
+
+export function reduceLegacyInteractiveReply<TState>(
+  interactive: LegacyInteractiveReply | undefined,
+  initialState: TState,
+  reduce: (state: TState, block: LegacyInteractiveReplyBlock, index: number) => TState,
+): TState {
+  let state = initialState;
+  for (const [index, block] of (interactive?.blocks ?? []).entries()) {
+    state = reduce(state, block, index);
+  }
+  return state;
+}
+
+/** @deprecated Use MessagePresentation. */
+export type InteractiveReply = LegacyInteractiveReply;
 
 export type MessagePresentationTextBlock = {
   type: "text";
@@ -350,9 +365,33 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
     }
     return { type: "approval", approvalId, approvalKind, decision };
   }
-  if (type === "url" || type === "web-app") {
+  if (type === "question") {
+    if (record.type !== "question") {
+      return undefined;
+    }
+    const questionId = record.questionId;
+    const optionValue = record.optionValue;
+    if (
+      typeof questionId !== "string" ||
+      !isWellFormedApprovalId(questionId) ||
+      typeof optionValue !== "string" ||
+      !optionValue.trim()
+    ) {
+      return undefined;
+    }
+    return { type: "question", questionId, optionValue };
+  }
+  if (type === "url") {
     const url = normalizeOptionalString(record.url);
-    return url ? { type, url } : undefined;
+    return url ? { type: "url", url } : undefined;
+  }
+  if (type === "web-app") {
+    const url = normalizeOptionalString(record.url);
+    const widgetId = normalizeOptionalString(record.widgetId);
+    if (url) {
+      return { type: "web-app", url, ...(widgetId ? { widgetId } : {}) };
+    }
+    return widgetId ? { type: "web-app", widgetId } : undefined;
   }
   return undefined;
 }
@@ -597,10 +636,7 @@ function normalizeTableBlock(
   };
 }
 
-/**
- * @deprecated Use normalizeMessagePresentation.
- */
-export function normalizeInteractiveReply(raw: unknown): InteractiveReply | undefined {
+export function normalizeLegacyInteractiveReply(raw: unknown): LegacyInteractiveReply | undefined {
   const record = toRecord(raw);
   if (!record) {
     return undefined;
@@ -608,6 +644,9 @@ export function normalizeInteractiveReply(raw: unknown): InteractiveReply | unde
   const blocks = normalizeList(record.blocks, normalizeInteractiveBlock);
   return blocks.length > 0 ? { blocks } : undefined;
 }
+
+/** @deprecated Use normalizeMessagePresentation. */
+export const normalizeInteractiveReply = normalizeLegacyInteractiveReply;
 
 function normalizePresentationBlock(raw: unknown): MessagePresentationBlock | undefined {
   const record = toRecord(raw);
@@ -665,8 +704,10 @@ export function normalizeMessagePresentation(raw: unknown): MessagePresentation 
 /**
  * @deprecated Use hasMessagePresentationBlocks.
  */
-export function hasInteractiveReplyBlocks(value: unknown): value is InteractiveReply {
-  return Boolean(normalizeInteractiveReply(value));
+export const hasInteractiveReplyBlocks = hasLegacyInteractiveReplyBlocks;
+
+export function hasLegacyInteractiveReplyBlocks(value: unknown): value is LegacyInteractiveReply {
+  return Boolean(normalizeLegacyInteractiveReply(value));
 }
 
 export function hasMessagePresentationBlocks(value: unknown): value is MessagePresentation {
@@ -703,7 +744,7 @@ export function presentationToInteractiveReply(
               interactiveButton.value = actionValue;
             } else if (button.action.type === "url") {
               interactiveButton.url = button.action.url;
-            } else if (button.action.type === "web-app") {
+            } else if (button.action.type === "web-app" && button.action.url) {
               interactiveButton.webApp = { url: button.action.url };
             }
           } else {
@@ -787,11 +828,8 @@ export function presentationToInteractiveControlsReply(
   });
 }
 
-/**
- * @deprecated Legacy bridge for old InteractiveReply payloads. New producers should send MessagePresentation.
- */
-export function interactiveReplyToPresentation(
-  interactive: InteractiveReply,
+export function legacyInteractiveReplyToPresentation(
+  interactive: LegacyInteractiveReply,
 ): MessagePresentation | undefined {
   const blocks = interactive.blocks.map((block): MessagePresentationBlock => {
     if (block.type === "text") {
@@ -810,14 +848,19 @@ export function interactiveReplyToPresentation(
 }
 
 /**
+ * @deprecated Legacy bridge for old InteractiveReply payloads. New producers should send MessagePresentation.
+ */
+export const interactiveReplyToPresentation = legacyInteractiveReplyToPresentation;
+
+/**
  * Render presentation blocks as plain-text fallback for channels that do not
  * support native interactive controls.
  *
  * Text and context blocks are rendered as-is. Buttons with a `command`-typed
  * action render as `label: \`command\`` so the value is copyable. URL and web
- * app actions include their user-facing URL. Approval, callback, legacy value,
- * and select actions render label-only to keep transport data private. Disabled
- * buttons render label-only regardless of action type.
+ * app actions include their user-facing URL. Approval, question, callback,
+ * legacy value, and select actions render label-only to keep transport data
+ * private. Disabled buttons render label-only regardless of action type.
  *
  * Downstream consumers should not claim a manual command is available unless
  * they verify one was actually rendered.
@@ -898,7 +941,7 @@ export function renderMessagePresentationFallbackText(params: {
             return button.label;
           }
           const action = resolveMessagePresentationButtonAction(button);
-          if (action?.type === "url" || action?.type === "web-app") {
+          if (action?.type === "url" || (action?.type === "web-app" && action.url)) {
             return `${button.label}: ${action.url}`;
           }
           if (action?.type === "command") {
@@ -954,7 +997,7 @@ export function hasReplyContent(params: {
     mediaUrl ||
     params.mediaUrls?.some((entry) => Boolean(normalizeOptionalString(entry))) ||
     hasMessagePresentationBlocks(params.presentation) ||
-    hasInteractiveReplyBlocks(params.interactive) ||
+    hasLegacyInteractiveReplyBlocks(params.interactive) ||
     params.hasChannelData ||
     params.extraContent,
   );
@@ -987,21 +1030,21 @@ export function hasReplyPayloadContent(
   });
 }
 
-/**
- * @deprecated Use renderMessagePresentationFallbackText with MessagePresentation.
- */
-export function resolveInteractiveTextFallback(params: {
+export function resolveLegacyInteractiveTextFallback(params: {
   text?: string;
-  interactive?: InteractiveReply;
+  interactive?: LegacyInteractiveReply;
 }): string | undefined {
   const text = normalizeOptionalString(params.text);
   if (text) {
     return params.text;
   }
   const interactiveText = (params.interactive?.blocks ?? [])
-    .filter((block): block is InteractiveReplyTextBlock => block.type === "text")
+    .filter((block): block is LegacyInteractiveReplyTextBlock => block.type === "text")
     .map((block) => block.text.trim())
     .filter(Boolean)
     .join("\n\n");
   return interactiveText || params.text;
 }
+/** @deprecated Use renderMessagePresentationFallbackText with MessagePresentation. */
+export const resolveInteractiveTextFallback = resolveLegacyInteractiveTextFallback;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

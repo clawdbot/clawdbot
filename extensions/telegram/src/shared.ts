@@ -135,6 +135,7 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
 export function createTelegramPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
   | "id"
@@ -148,10 +149,12 @@ export function createTelegramPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "setupContract"
   | "secrets"
 > {
   const base = createChannelPluginBase({
     id: TELEGRAM_CHANNEL,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
     meta: {
       ...getChatChannelMeta(TELEGRAM_CHANNEL),
       quickstartAllowFrom: true,
@@ -246,9 +249,10 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            Boolean(inspected.token?.trim()) &&
+            inspected.tokenStatus !== "missing" &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
+          tokenStatus: inspected.tokenStatus,
         };
       },
     },

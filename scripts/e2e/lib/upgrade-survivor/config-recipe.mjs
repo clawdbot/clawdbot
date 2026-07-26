@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "../../../lib/npm-publish-plan.mjs";
+import { parseReleaseVersion } from "../../../lib/release-version.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -163,7 +163,27 @@ const scenarioConfigSteps = new Map([
       ),
     ],
   ],
+  [
+    "codex-allowlist-survival",
+    [
+      {
+        id: "plugins-codex-allowlist",
+        intent: "codex-allowlist-survival",
+        argv: [
+          "config",
+          "set",
+          "plugins.allow",
+          JSON.stringify(["discord", "memory", "telegram", "whatsapp", "codex"]),
+          "--strict-json",
+        ],
+      },
+    ],
+  ],
 ]);
+
+export function resolveScenarioConfigSteps(scenario) {
+  return scenarioConfigSteps.get(scenario) ?? [];
+}
 
 const recipe = [
   {
@@ -289,7 +309,7 @@ function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
   const scenario = selectedScenario();
-  const scenarioSteps = scenarioConfigSteps.get(scenario) ?? [];
+  const scenarioSteps = resolveScenarioConfigSteps(scenario);
   const summary = {
     source: "baseline-cli-command-recipe",
     recipe: "upgrade-survivor-v1",

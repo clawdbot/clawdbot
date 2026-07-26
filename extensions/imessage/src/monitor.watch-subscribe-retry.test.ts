@@ -5,10 +5,9 @@ import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 import {
-  describeIMessageInboundDropDiagnostic,
-  shouldThrottleIMessageInboundDropDiagnostic,
-} from "./monitor/monitor-provider.js";
-import { clearIMessageRuntime } from "./runtime.js";
+  installIMessageFailingStateRuntimeForTest,
+  installIMessageStateRuntimeForTest,
+} from "./test-support/runtime.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -68,10 +67,7 @@ function createRpcClient(overrides?: {
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // Sibling suites install the imessage runtime singleton without clearing
-    // it; a leaked runtime resurrects another file's recovery cursor and
-    // watch.subscribe then gains an unexpected since_rowid.
-    clearIMessageRuntime();
+    installIMessageFailingStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});
@@ -106,7 +102,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       runtime: runtime as never,
     });
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1_000);
     await monitorPromise;
 
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
@@ -151,7 +147,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       runtime: runtime as never,
     }).catch((error: unknown) => error);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(2_000);
     const monitorError = await monitorErrorPromise;
 
     expect(monitorError).toBeInstanceOf(Error);
@@ -166,61 +162,67 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect(failureLog).toContain("timeoutMs=10000");
     expect(failureLog).toContain("Error: imsg rpc timeout (watch.subscribe)");
   });
-});
 
-describe("describeIMessageInboundDropDiagnostic", () => {
-  it("describes echo-style drops without message content or sender handles", () => {
-    const diagnostic = describeIMessageInboundDropDiagnostic({
-      accountId: "default",
-      reason: "echo",
-      message: {
-        id: 42,
-        chat_id: 123,
-        guid: "p:0/secret-guid",
-        is_group: false,
-        created_at: "2026-06-09T10:00:00.000Z",
+  it("logs one redacted diagnostic for repeated from-me drops", async () => {
+    vi.useRealTimers();
+    installIMessageStateRuntimeForTest();
+    const runtime = createRuntime();
+    let onNotification:
+      | ((message: { method: string; params: unknown }) => void | Promise<void>)
+      | undefined;
+    const runId = Date.now();
+    const client = createRpcClient({
+      waitForClose: async () => {
+        for (const [id, guid] of [
+          [43, `p:0/outbound-guid-${runId}`],
+          [44, `p:0/second-outbound-guid-${runId}`],
+        ] as const) {
+          await onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id,
+                chat_id: 456,
+                guid,
+                sender: "+15550001111",
+                is_from_me: true,
+                is_group: true,
+                text: "private message text",
+                created_at: new Date().toISOString(),
+              },
+            },
+          });
+        }
+        await Promise.resolve();
+        await Promise.resolve();
       },
     });
-
-    expect(diagnostic).toBe(
-      'imessage: dropped inbound message account=default reason="echo" chat_id=123 group=false message_id=42 guid=present created_at=2026-06-09T10:00:00.000Z',
-    );
-    expect(diagnostic).not.toContain("secret-guid");
-    expect(diagnostic).not.toContain("+1555");
-  });
-
-  it("describes from-me drops and marks them for throttling", () => {
-    const diagnostic = describeIMessageInboundDropDiagnostic({
-      accountId: "default",
-      reason: "from me",
-      message: {
-        id: 43,
-        chat_id: 456,
-        guid: "p:0/outbound-guid",
-        is_group: true,
-        created_at: "2026-06-09T10:01:00.000Z",
-      },
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      onNotification = params?.onNotification;
+      return client;
     });
 
-    expect(diagnostic).toBe(
-      'imessage: dropped inbound message account=default reason="from me" chat_id=456 group=true message_id=43 guid=present created_at=2026-06-09T10:01:00.000Z',
-    );
-    expect(diagnostic).not.toContain("outbound-guid");
-    expect(shouldThrottleIMessageInboundDropDiagnostic("from me")).toBe(true);
-    expect(shouldThrottleIMessageInboundDropDiagnostic("echo")).toBe(false);
-  });
+    await monitorIMessageProvider({
+      config: { channels: { imessage: { dmPolicy: "open", groupPolicy: "open" } } } as never,
+      runtime: runtime as never,
+    });
 
-  it("keeps normal policy drops quiet", () => {
-    expect(
-      describeIMessageInboundDropDiagnostic({
-        accountId: "default",
-        reason: "no mention",
-        message: {
-          id: 42,
-          chat_id: 123,
-          is_group: true,
-        },
-      }),
-    ).toBeNull();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(runtime.error.mock.calls).toEqual([]);
+    expect(runtime.log.mock.calls.map(([message]) => String(message))).toEqual([
+      expect.stringContaining('reason="from me"'),
+    ]);
+    const diagnostics = runtime.log.mock.calls
+      .map(([message]) => String(message))
+      .filter((message) => message.includes('reason="from me"'));
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toContain(
+      'account=default reason="from me" chat_id=456 group=true message_id=43 guid=present',
+    );
+    expect(diagnostics[0]).not.toContain("outbound-guid");
+    expect(diagnostics[0]).not.toContain("private message text");
+    expect(diagnostics[0]).not.toContain("+15550001111");
   });
 });

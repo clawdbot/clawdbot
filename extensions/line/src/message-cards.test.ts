@@ -1,7 +1,7 @@
 // Line tests cover message cards plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { datetimePickerAction, postbackAction, uriAction } from "./actions.js";
+import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
 import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
@@ -21,7 +21,6 @@ import {
   createImageCarousel,
   createImageCarouselColumn,
   createProductCarousel,
-  messageAction,
 } from "./template-messages.js";
 
 const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;

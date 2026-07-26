@@ -27,10 +27,15 @@ import {
 import {
   getMemoryCapabilityRegistration,
   listMemoryCorpusSupplements,
+  listMemoryPromptPreparations,
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import type { PluginRegistry } from "./registry-types.js";
+import {
+  getSessionDiscussionProvider,
+  restoreSessionDiscussionProvider,
+} from "./session-discussion-registry.js";
 
 export type PluginProcessGlobalState = {
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
@@ -42,7 +47,9 @@ export type PluginProcessGlobalState = {
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
+  memoryPromptPreparations: ReturnType<typeof listMemoryPromptPreparations>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+  sessionDiscussionProvider: ReturnType<typeof getSessionDiscussionProvider>;
 };
 
 export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
@@ -56,7 +63,9 @@ export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
     memoryCapability: getMemoryCapabilityRegistration(),
     memoryCorpusSupplements: listMemoryCorpusSupplements(),
     memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
+    memoryPromptPreparations: listMemoryPromptPreparations(),
     memoryPromptSupplements: listMemoryPromptSupplements(),
+    sessionDiscussionProvider: getSessionDiscussionProvider(),
   };
 }
 
@@ -71,8 +80,10 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreMemoryPluginState({
     capability: state.memoryCapability,
     corpusSupplements: state.memoryCorpusSupplements,
+    promptPreparations: state.memoryPromptPreparations,
     promptSupplements: state.memoryPromptSupplements,
   });
+  restoreSessionDiscussionProvider(state.sessionDiscussionProvider);
 }
 
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
@@ -82,7 +93,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistry {
         return [key, [...value]];
       }
       if (value instanceof Map) {
-        return [key, new Map(value)];
+        return [key, new Map(value as ReadonlyMap<unknown, unknown>)];
       }
       if (value && typeof value === "object") {
         return [key, { ...value }];
@@ -102,10 +113,10 @@ type PluginRegistrationTransaction = {
 };
 
 export function createPluginRegistrationTransaction(params: {
-  registry: PluginRegistry;
+  registry?: PluginRegistry;
   rollbackGlobalSideEffects?: () => void;
 }): PluginRegistrationTransaction {
-  const registrySnapshot = snapshotPluginRegistry(params.registry);
+  const registrySnapshot = params.registry ? snapshotPluginRegistry(params.registry) : undefined;
   const processGlobalState = snapshotPluginProcessGlobalState();
   let settled = false;
 
@@ -128,7 +139,9 @@ export function createPluginRegistrationTransaction(params: {
     rollback: () => {
       settle(() => {
         params.rollbackGlobalSideEffects?.();
-        restorePluginRegistry(params.registry, registrySnapshot);
+        if (params.registry && registrySnapshot) {
+          restorePluginRegistry(params.registry, registrySnapshot);
+        }
         restorePluginProcessGlobalState(processGlobalState);
       });
     },

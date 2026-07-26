@@ -1,10 +1,11 @@
 // Versioned metadata-only activity audit query payloads.
 import { type TProperties, type TSchema, Type } from "typebox";
+import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
 const AuditActivitySchemaVersionV1Schema = Type.Integer({ minimum: 1, maximum: 1 });
 
-export const AuditActivityStatusV1Schema: TSchema = Type.Union([
+const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("started"),
   Type.Literal("succeeded"),
   Type.Literal("failed"),
@@ -14,13 +15,13 @@ export const AuditActivityStatusV1Schema: TSchema = Type.Union([
   Type.Literal("unknown"),
 ]);
 
-export const AuditActivityKindV1Schema: TSchema = Type.Union([
+const AuditActivityKindV1Schema: TSchema = Type.Union([
   Type.Literal("agent_run"),
   Type.Literal("tool_action"),
   Type.Literal("message"),
 ]);
 
-export const AuditActivityDirectionV1Schema: TSchema = Type.Union([
+const AuditActivityDirectionV1Schema: TSchema = Type.Union([
   Type.Literal("inbound"),
   Type.Literal("outbound"),
 ]);
@@ -36,38 +37,26 @@ const AuditActivityHmacRefV1Schema = Type.String({
   pattern: "^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$",
 });
 
-const AuditActivityAgentActorV1Schema = Type.Object(
-  {
-    type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
-    id: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+const AuditActivityAgentActorV1Schema = closedObject({
+  type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+  id: NonEmptyString,
+});
 
 const AuditActivityInboundActorV1Schema = Type.Union([
-  Type.Object(
-    {
-      type: Type.Literal("channel_sender"),
-      id: AuditActivityHmacRefV1Schema,
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      type: Type.Literal("system"),
-      id: NonEmptyString,
-    },
-    { additionalProperties: false },
-  ),
+  closedObject({
+    type: Type.Literal("channel_sender"),
+    id: AuditActivityHmacRefV1Schema,
+  }),
+  closedObject({
+    type: Type.Literal("system"),
+    id: NonEmptyString,
+  }),
 ]);
 
-const AuditActivityOutboundActorV1Schema = Type.Object(
-  {
-    type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
-    id: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+const AuditActivityOutboundActorV1Schema = closedObject({
+  type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+  id: NonEmptyString,
+});
 
 const commonProperties = {
   schemaVersion: AuditActivitySchemaVersionV1Schema,
@@ -433,31 +422,25 @@ export const AuditActivityEventV1Schema: TSchema = Type.Union([
 ]);
 
 /** Bounded newest-first V1 activity query filters. */
-export const AuditActivityListParamsSchema: TSchema = Type.Object(
-  {
-    agentId: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(NonEmptyString),
-    runId: Type.Optional(NonEmptyString),
-    kind: Type.Optional(AuditActivityKindV1Schema),
-    status: Type.Optional(AuditActivityStatusV1Schema),
-    direction: Type.Optional(AuditActivityDirectionV1Schema),
-    channel: Type.Optional(NonEmptyString),
-    after: Type.Optional(Type.Integer({ minimum: 0 })),
-    before: Type.Optional(Type.Integer({ minimum: 0 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    cursor: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const AuditActivityListParamsSchema: TSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
+  kind: Type.Optional(AuditActivityKindV1Schema),
+  status: Type.Optional(AuditActivityStatusV1Schema),
+  direction: Type.Optional(AuditActivityDirectionV1Schema),
+  channel: Type.Optional(NonEmptyString),
+  after: Type.Optional(Type.Integer({ minimum: 0 })),
+  before: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+  cursor: Type.Optional(NonEmptyString),
+});
 
 /** Stable sequence-cursor V1 activity page. */
-export const AuditActivityListResultSchema: TSchema = Type.Object(
-  {
-    events: Type.Array(AuditActivityEventV1Schema),
-    nextCursor: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
+export const AuditActivityListResultSchema: TSchema = closedObject({
+  events: Type.Array(AuditActivityEventV1Schema),
+  nextCursor: Type.Optional(NonEmptyString),
+});
 
 /** Metadata-only audit query payloads. */
 // These wire types stay explicit because the runtime schemas use JSON Schema

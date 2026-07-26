@@ -1,5 +1,10 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Line plugin module implements setup core behavior.
-import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
+import type {
+  ChannelSetupAdapter,
+  ChannelSetupInput,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup";
 import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
 import {
@@ -9,6 +14,12 @@ import {
   resolveLineAccount,
   type LineConfig,
 } from "./setup-runtime-api.js";
+
+type LineSetupInput = ChannelSetupInput & {
+  channelAccessToken?: string;
+  channelSecret?: string;
+  secretFile?: string;
+};
 
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
@@ -85,7 +96,7 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
       "LINE_CHANNEL_ACCESS_TOKEN can only be used for the default account.",
     whenNotUseEnv: [
       {
-        someOf: ["channelAccessToken", "tokenFile"],
+        someOf: ["channelAccessToken", "token", "tokenFile"],
         message: "LINE requires channelAccessToken or --token-file (or --use-env).",
       },
       {
@@ -95,13 +106,9 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     ],
   }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      channelAccessToken?: string;
-      channelSecret?: string;
-      tokenFile?: string;
-      secretFile?: string;
-    };
+    const typedInput = input as LineSetupInput;
+    // Shipped alias: `--token` writes channelAccessToken; the explicit switch wins.
+    const accessToken = typedInput.channelAccessToken ?? typedInput.token;
     const normalizedAccountId = normalizeAccountId(accountId);
     if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
       return patchLineAccountConfig({
@@ -116,8 +123,8 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
           : {
               ...(typedInput.tokenFile
                 ? { tokenFile: typedInput.tokenFile }
-                : typedInput.channelAccessToken
-                  ? { channelAccessToken: typedInput.channelAccessToken }
+                : accessToken
+                  ? { channelAccessToken: accessToken }
                   : {}),
               ...(typedInput.secretFile
                 ? { secretFile: typedInput.secretFile }
@@ -134,8 +141,8 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
       patch: {
         ...(typedInput.tokenFile
           ? { tokenFile: typedInput.tokenFile }
-          : typedInput.channelAccessToken
-            ? { channelAccessToken: typedInput.channelAccessToken }
+          : accessToken
+            ? { channelAccessToken: accessToken }
             : {}),
         ...(typedInput.secretFile
           ? { secretFile: typedInput.secretFile }
@@ -146,5 +153,42 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     });
   },
 };
+
+export const lineSetupContract = defineChannelSetupContract({
+  fields: {
+    channelAccessToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--channel-access-token <token>", description: "LINE channel access token" },
+    },
+    // Shipped alias: released CLIs configured LINE via the shared `--token`
+    // envelope switch; the adapter maps it onto channelAccessToken.
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "LINE channel access token (alias)" },
+    },
+    channelSecret: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--channel-secret <secret>", description: "LINE channel secret" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "LINE access token file" },
+    },
+    secretFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--secret-file <path>", description: "LINE channel secret file" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use LINE environment credentials" },
+    },
+  },
+  legacyAdapter: lineSetupAdapter,
+});
 
 export { listLineAccountIds };

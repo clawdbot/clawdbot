@@ -40,15 +40,13 @@ vi.mock("./bot-message-dispatch.js", () => ({
 }));
 
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
-let formatTelegramInboundLogLine: typeof import("./bot-message.js").formatTelegramInboundLogLine;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
 let runWithTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").runWithTelegramSpooledReplayUpdate;
 
 describe("telegram bot message processor", () => {
   beforeAll(async () => {
-    ({ createTelegramMessageProcessor, formatTelegramInboundLogLine } =
-      await import("./bot-message.js"));
+    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
     ({
       createTelegramSpooledReplayDeferredParticipant,
       runWithTelegramUpdateProcessingFrame,
@@ -99,6 +97,7 @@ describe("telegram bot message processor", () => {
     turnContext?: Partial<import("./bot-message.js").TelegramMessageProcessorTurnContext>,
     primaryCtxOverrides: Record<string, unknown> = {},
     options: Parameters<typeof processMessage>[4] = {},
+    allMedia: Parameters<typeof processMessage>[1] = [],
   ) {
     return await processMessage(
       {
@@ -108,7 +107,7 @@ describe("telegram bot message processor", () => {
         },
         ...primaryCtxOverrides,
       } as unknown as Parameters<typeof processMessage>[0],
-      [],
+      allMedia,
       [],
       {
         ...turnContext,
@@ -281,24 +280,28 @@ describe("telegram bot message processor", () => {
     expect(telegramInboundInfo).not.toHaveBeenCalled();
   });
 
-  it("formats Telegram inbound summaries without message content", () => {
-    expect(
-      formatTelegramInboundLogLine({
-        from: "telegram:123",
-        to: "@openclaw_bot",
-        chatType: "direct",
-        body: "secret message",
+  it("logs media summaries without message content through the message processor", async () => {
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        ctxPayload: {
+          From: "telegram:group:-100",
+          To: "telegram:group:-100",
+          ChatType: "group",
+          RawBody: "<media:image>",
+        },
       }),
-    ).toBe("Inbound message telegram:123 -> @openclaw_bot (direct, 14 chars)");
-    expect(
-      formatTelegramInboundLogLine({
-        from: "telegram:group:-100",
-        to: "@openclaw_bot",
-        chatType: "group",
-        body: "<media:image>",
-        mediaType: "image/jpeg",
-      }),
-    ).toBe("Inbound message telegram:group:-100 -> @openclaw_bot (group, image/jpeg, 13 chars)");
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(
+      processSampleMessage(processMessage, undefined, {}, {}, [
+        { path: "/tmp/photo.jpg", contentType: "image/jpeg", kind: "image" },
+      ]),
+    ).resolves.toEqual({ kind: "completed" });
+
+    expect(telegramInboundInfo).toHaveBeenCalledWith(
+      "Inbound message telegram:group:-100 -> @openclaw_bot (group, image/jpeg, 13 chars)",
+    );
   });
 
   it("keeps dispatch running when the early typing cue fails", async () => {
@@ -382,8 +385,8 @@ describe("telegram bot message processor", () => {
         return result;
       },
     );
-    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
-      await onTurnAdopted?.();
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onAdopted();
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -419,8 +422,8 @@ describe("telegram bot message processor", () => {
       async (result: TelegramMessageProcessingResult): Promise<TelegramMessageProcessingResult> =>
         result,
     );
-    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
-      await onTurnAdopted?.();
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onAdopted();
       return { kind: "failed-retryable", error: lateError };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -450,8 +453,8 @@ describe("telegram bot message processor", () => {
     const completeSpooledReplayAfterIrrevocableAdoption = vi.fn(
       async () => await finalizeSpooledReplayResult({ kind: "completed" }, "adopted"),
     );
-    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
-      await expect(onTurnAdopted?.()).rejects.toBe(finalizerError);
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      await expect(turnAdoptionLifecycle?.onAdopted()).rejects.toBe(finalizerError);
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -487,8 +490,8 @@ describe("telegram bot message processor", () => {
       .mockRejectedValueOnce(firstRetryError)
       .mockRejectedValueOnce(secondRetryError)
       .mockResolvedValue({ kind: "completed" });
-    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
-      await expect(onTurnAdopted?.()).rejects.toBe(finalizerError);
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      await expect(turnAdoptionLifecycle?.onAdopted()).rejects.toBe(finalizerError);
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -528,8 +531,8 @@ describe("telegram bot message processor", () => {
     const completeSpooledReplayAfterIrrevocableAdoption = vi
       .fn<() => Promise<TelegramMessageProcessingResult>>()
       .mockRejectedValue(retryError);
-    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
-      await expect(onTurnAdopted?.()).rejects.toBe(finalizerError);
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      await expect(turnAdoptionLifecycle?.onAdopted()).rejects.toBe(finalizerError);
       return { kind: "completed" };
     });
     sleepWithAbort.mockImplementationOnce(async (_delayMs, signal) => {
@@ -573,21 +576,21 @@ describe("telegram bot message processor", () => {
     let firstAdmissionError: unknown;
     let secondAdmissionError: unknown;
     let thirdAdmissionError: unknown;
-    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted, onTurnDeferred }) => {
-      onTurnDeferred?.();
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      turnAdoptionLifecycle?.onDeferred?.();
       try {
-        await onTurnAdopted?.();
+        await turnAdoptionLifecycle?.onAdopted();
       } catch (error) {
         firstAdmissionError = error;
       }
       settledAfterFirstAdmission = participantSettles > 0;
       try {
-        await onTurnAdopted?.();
+        await turnAdoptionLifecycle?.onAdopted();
       } catch (error) {
         secondAdmissionError = error;
       }
       try {
-        await onTurnAdopted?.();
+        await turnAdoptionLifecycle?.onAdopted();
       } catch (error) {
         thirdAdmissionError = error;
       }
@@ -631,9 +634,9 @@ describe("telegram bot message processor", () => {
       async (result: TelegramMessageProcessingResult): Promise<TelegramMessageProcessingResult> =>
         result,
     );
-    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAbandoned, onTurnDeferred }) => {
-      onTurnDeferred?.();
-      onTurnAbandoned?.();
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      turnAdoptionLifecycle?.onDeferred?.();
+      turnAdoptionLifecycle?.onAbandoned?.();
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -694,20 +697,19 @@ describe("telegram bot message processor", () => {
       markDeferred = resolve;
     });
     let queuedAbortSignal: AbortSignal | undefined;
-    dispatchTelegramMessage.mockImplementationOnce(
-      async ({ onTurnAbandoned, onTurnDeferred, turnAbortSignal }) => {
-        queuedAbortSignal = turnAbortSignal;
-        onTurnDeferred?.();
-        markDeferred?.();
-        if (!turnAbortSignal?.aborted) {
-          await new Promise<void>((resolve) => {
-            turnAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
-          });
-        }
-        onTurnAbandoned?.();
-        return { kind: "completed" };
-      },
-    );
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      const turnAbortSignal = turnAdoptionLifecycle?.abortSignal;
+      queuedAbortSignal = turnAbortSignal;
+      turnAdoptionLifecycle?.onDeferred?.();
+      markDeferred?.();
+      if (!turnAbortSignal?.aborted) {
+        await new Promise<void>((resolve) => {
+          turnAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+      turnAdoptionLifecycle?.onAbandoned?.();
+      return { kind: "completed" };
+    });
     const processMessage = createTelegramMessageProcessor(baseDeps);
 
     const processing = processSampleMessage(

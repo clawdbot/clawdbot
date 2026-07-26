@@ -100,6 +100,8 @@ export function collectRuntimeConfigAssignments(params: {
             resolveAccountMode(account) === "relay" &&
             !hasNestedAuthTokenOverride(account),
         )),
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && resolveAccountMode(account) === "relay" && !hasNestedAuthTokenOverride(account),
     topInactiveReason:
       "no enabled Slack relay-mode surface inherits this top-level relay authToken.",
     accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "relay",

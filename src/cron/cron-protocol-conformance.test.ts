@@ -8,7 +8,6 @@ import {
   CronJobStateSchema,
   CronRunLogEntrySchema,
 } from "../../packages/gateway-protocol/src/schema.js";
-import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;
@@ -43,6 +42,7 @@ function extractConstUnionValues(schema: SchemaLike): string[] {
 
 const UI_FILES = ["ui/src/api/types.ts", "ui/src/lib/cron/index.ts", "ui/src/pages/cron/view.ts"];
 
+const MACOS_APP_SOURCES_DIR = "apps/macos/Sources/OpenClaw";
 const SWIFT_MODEL_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/CronModels.swift`];
 const SWIFT_STATUS_CANDIDATES = [`${MACOS_APP_SOURCES_DIR}/GatewayConnection.swift`];
 

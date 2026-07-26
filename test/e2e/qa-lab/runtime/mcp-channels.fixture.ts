@@ -21,10 +21,7 @@ const [{ PROTOCOL_VERSION }, { formatErrorMessage }, { readStringValue }] = awai
 ]);
 import { resolveGatewaySuccessPayload } from "../../../../scripts/e2e/lib/gateway-frame-payload.mjs";
 import { readMcpChannelLimits } from "../../../../scripts/e2e/mcp-channel-limits.ts";
-import {
-  createGatewayWsClient,
-  type GatewayEventFrame,
-} from "../../../../scripts/lib/gateway-ws-client.ts";
+import { createGatewayWsClient } from "../../../../scripts/lib/gateway-ws-client.ts";
 import {
   connectMcpWithTimeout,
   createMcpClientTempState,
@@ -69,6 +66,10 @@ type GatewayClientInfo = {
   platform: string;
   mode: string;
 };
+
+type GatewayEventFrame = Parameters<
+  NonNullable<Parameters<typeof createGatewayWsClient>[0]["onEvent"]>
+>[0];
 
 export type McpClientHandle = {
   client: Client;

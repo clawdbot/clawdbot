@@ -1,0 +1,35 @@
+title: Matrix E2EE local crypto survives server backup deletion
+scenario:
+  id: matrix-e2ee-server-backup-deleted-local-state-intact
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 71, "matrix:e2ee-deep": 5 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-server-backup-deleted-local-state-intact
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Server Backup Deleted Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario
+  args:
+    - expr: "scenarioContext"

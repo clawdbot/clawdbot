@@ -46,7 +46,6 @@ export type PluginRegistryRecord = InstalledPluginIndexRecord;
 type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 type PluginRegistrySnapshotDiagnosticCode =
-  | "persisted-registry-disabled"
   | "persisted-registry-missing"
   | "persisted-registry-stale-policy"
   | "persisted-registry-stale-source";
@@ -64,7 +63,6 @@ type PluginRegistrySnapshotResult = {
   discovery?: PluginDiscoveryResult;
 };
 
-const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 const MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS = 8;
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
   "APPDATA",
@@ -74,7 +72,6 @@ const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
-  DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   "OPENCLAW_HOME",
   "OPENCLAW_NIX_MODE",
   "OPENCLAW_STATE_DIR",
@@ -95,10 +92,6 @@ function clearLoadPluginRegistrySnapshotMemo(): void {
 
 registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginRegistrySnapshotMemo);
 
-function formatDeprecatedPersistedRegistryDisableWarning(): string {
-  return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`openclaw plugins registry --refresh\` or \`openclaw doctor --fix\` to repair registry state.`;
-}
-
 export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     index?: PluginRegistrySnapshot;
@@ -108,11 +101,6 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
 type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
-
-function hasEnvFlag(env: NodeJS.ProcessEnv, name: string): boolean {
-  const value = env[name]?.trim().toLowerCase();
-  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
 
 function pickRegistrySnapshotMemoEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(
@@ -143,8 +131,7 @@ function resolvePluginRegistrySnapshotMemoKey(
   if (!canMemoizePluginRegistrySnapshot(params)) {
     return undefined;
   }
-  const persistedReadsEnabled =
-    params.preferPersisted !== false && !hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
+  const persistedReadsEnabled = params.preferPersisted !== false;
   const persistedRegistryFingerprint = persistedReadsEnabled
     ? hashJson(
         readPersistedInstalledPluginIndexSync({
@@ -404,7 +391,7 @@ function isAllowedPersistedBundledPluginRoot(
   }
   if (sourcePluginOptsOutOfBundledDist(path.join(legacyRoot, relativePluginRoot))) {
     // Older index records lack packageBuild. Re-derive once so runtime loading
-    // and Crestodian fingerprint the same source-only artifact.
+    // and OpenClaw fingerprint the same source-only artifact.
     return false;
   }
   // Discovery prefers a built plugin whenever the same child exists in the
@@ -561,8 +548,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
   }
   const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
   const disabledByCaller = params.preferPersisted === false;
-  const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
-  const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
+  const persistedReadsEnabled = !disabledByCaller;
   const persistedInstallRecordReadsEnabled = persistedReadsEnabled;
   let persistedIndex: InstalledPluginIndex | null;
   if (persistedInstallRecordReadsEnabled) {
@@ -648,14 +634,6 @@ export function loadPluginRegistrySnapshotWithMetadata(
         message: "Persisted plugin registry is missing or invalid; using derived plugin index.",
       });
     }
-  } else {
-    diagnostics.push({
-      level: "warn",
-      code: "persisted-registry-disabled",
-      message: disabledByEnv
-        ? `${formatDeprecatedPersistedRegistryDisableWarning()} Using legacy derived plugin index.`
-        : "Persisted plugin registry reads are disabled by the caller; using derived plugin index.",
-    });
   }
 
   const derived = loadInstalledPluginIndexWithDiscovery({

@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -13,10 +12,10 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
@@ -174,8 +173,7 @@ function resetGatewayTestState(): void {
   clearRuntimeConfigSnapshot();
   clearConfigCache();
   clearSessionStoreCacheForTest();
-  resetAgentRunContextForTest();
-  clearAllBootstrapSnapshots();
+  resetAgentEventsForTest({ preserveListeners: true });
   clearGatewaySubagentRuntime();
 }
 
@@ -784,6 +782,86 @@ module.exports = {
         expect(resToken.ok).toBe(true);
       } finally {
         await server2.close({ reason: "wizard auth verify" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
+    "routes wizard.start flow channels to the channel wizard runner",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-channels-home-",
+        minimalGateway: true,
+      });
+      const wizAuth = nextGatewayId("wiz-chan");
+      const port = await getFreeGatewayPort();
+      const channelRuns: Array<string | undefined> = [];
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: wizAuth },
+        controlUiEnabled: false,
+        wizardRunner: async () => {
+          throw new Error("setup wizard runner must not run for flow channels");
+        },
+        channelWizardRunner: async (opts, _runtime, prompter) => {
+          channelRuns.push(opts.channel);
+          await prompter.intro("Channel setup");
+          const choice = await prompter.select({
+            message: "channel",
+            options: [{ value: opts.channel ?? "none", label: opts.channel ?? "none" }],
+          });
+          opts.onConfigured?.([{ channel: choice, accountId: "default" }]);
+          await prompter.outro(`configured ${choice}`);
+        },
+      });
+
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: wizAuth,
+        clientDisplayName: "vitest-wizard-channels",
+      });
+
+      try {
+        const start = await client.request<{
+          sessionId?: string;
+          done: boolean;
+          status: "running" | "done" | "cancelled" | "error";
+          step?: { id: string; type: string };
+          channels?: string[];
+          accounts?: Array<{ channel: string; accountId: string }>;
+        }>("wizard.start", { flow: "channels", channel: "telegram" });
+        const sessionId = start.sessionId;
+        expect(typeof sessionId).toBe("string");
+
+        let next = start;
+        const seenSteps: string[] = [];
+        while (!next.done) {
+          const step = next.step;
+          if (!step) {
+            throw new Error("wizard missing step");
+          }
+          seenSteps.push(step.type);
+          next = await client.request(
+            "wizard.next",
+            {
+              sessionId,
+              answer: { stepId: step.id, value: step.type === "select" ? "telegram" : null },
+            },
+            { timeoutMs: 60_000 },
+          );
+        }
+
+        expect(next.status, `seenSteps=${seenSteps.join(",")}`).toBe("done");
+        expect(seenSteps).toContain("select");
+        expect(channelRuns).toEqual(["telegram"]);
+        expect(next.channels).toEqual(["telegram"]);
+        expect(next.accounts).toEqual([{ channel: "telegram", accountId: "default" }]);
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard channels flow complete" });
         await removeGatewayTempHome(tempHome);
         envSnapshot.restore();
       }

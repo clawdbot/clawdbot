@@ -3,23 +3,12 @@ import { z } from "zod";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
-import type {
-  CloudWorkerLifetimePolicyConfig,
-  CloudWorkerProfileConfig,
-  CloudWorkersConfig,
-} from "./types.cloud-workers.js";
+import type { CloudWorkerProfileConfig, CloudWorkersConfig } from "./types.cloud-workers.js";
 import { isSecretRef } from "./types.secrets.js";
 
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
 };
-
-const CloudWorkerLifetimePolicyShape = {
-  idleTimeoutMinutes: z.number().int().positive().optional(),
-  maxLifetimeMinutes: z.number().int().positive().optional(),
-} satisfies ConfigSchemaShape<CloudWorkerLifetimePolicyConfig>;
-
-const CloudWorkerLifetimePolicySchema = z.object(CloudWorkerLifetimePolicyShape).strict();
 
 export function validateCloudWorkerProfileSettings(value: unknown): string | undefined {
   if (
@@ -70,7 +59,6 @@ const CloudWorkerProfileShape = {
   provider: z.string().trim().min(1),
   install: z.enum(["bundle", "npm"]).optional().default("bundle"),
   settings: CloudWorkerSettingsSchema.optional(),
-  lifetime: CloudWorkerLifetimePolicySchema.optional(),
 } satisfies ConfigSchemaShape<CloudWorkerProfileConfig>;
 
 const CloudWorkerProfileSchema = z.object(CloudWorkerProfileShape).strict();

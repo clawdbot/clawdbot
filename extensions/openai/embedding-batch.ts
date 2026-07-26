@@ -174,7 +174,7 @@ function isOpenAiBatchUploadTooLargeError(error: unknown): boolean {
   );
 }
 
-export function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
+function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }

@@ -10,7 +10,7 @@ export type ReplyOperationRunState = {
 // heartbeat cleanup never infers it from whichever operation is active later.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
-export type ReplyOptionsWithOperationRunState = {
+type ReplyOptionsWithOperationRunState = {
   [REPLY_OPERATION_RUN_STATE]?: ReplyOperationRunState;
 };
 

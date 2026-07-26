@@ -1,5 +1,6 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import fs from "node:fs";
+import { readFileWindowFullySync } from "../../infra/file-read.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import {
@@ -26,7 +27,7 @@ type SessionWorkStartOptions = {
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-export const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
+const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
@@ -111,7 +112,7 @@ function readFirstLine(filePath: string): string | undefined {
     const fd = fs.openSync(filePath, "r");
     try {
       const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const bytesRead = readFileWindowFullySync(fd, buffer, 0);
       if (bytesRead <= 0) {
         return undefined;
       }

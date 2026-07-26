@@ -8,7 +8,7 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.js";
+import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -206,8 +206,7 @@ describe("followup queue deduplication", () => {
     const key = `test-dedup-cross-module-${Date.now()}`;
     const { calls, done, runFollowup } = createFollowupCollector();
 
-    enqueueA.resetRecentQueuedMessageIdDedupe();
-    enqueueB.resetRecentQueuedMessageIdDedupe();
+    resetRecentQueuedMessageIdDedupe();
 
     try {
       expect(
@@ -244,8 +243,7 @@ describe("followup queue deduplication", () => {
       expect(calls).toHaveLength(1);
     } finally {
       clearSessionQueues([key]);
-      enqueueA.resetRecentQueuedMessageIdDedupe();
-      enqueueB.resetRecentQueuedMessageIdDedupe();
+      resetRecentQueuedMessageIdDedupe();
     }
   });
 

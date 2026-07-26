@@ -51,60 +51,98 @@ func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string
 		prettyLanguageLabel(tgtLang),
 		documentationQualityRules,
 		localePromptRules(tgtLang),
+		protectedProductNameRule(),
 		buildGlossaryPrompt(glossary),
 	))
 }
 
+var alwaysProtectedProductNames = []string{
+	"OpenClaw", "Raspberry Pi", "WhatsApp", "Telegram", "Discord", "iMessage", "Slack", "Microsoft Teams", "Google Chat", "Signal",
+}
+
+var contextualProtectedProductNames = []string{
+	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+}
+
+func protectedProductNameRule() string {
+	contextualDisplay := []string{
+		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+	}
+	return fmt.Sprintf(
+		"- Keep product names in English: %s. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: %s. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.",
+		strings.Join(alwaysProtectedProductNames, ", "),
+		strings.Join(contextualDisplay, ", "),
+	)
+}
+
+func isAlwaysProtectedProductName(value string) bool {
+	for _, name := range alwaysProtectedProductNames {
+		if value == name {
+			return true
+		}
+	}
+	return false
+}
+
+func contextualProtectedProductName(value string) (string, bool) {
+	for _, name := range contextualProtectedProductNames {
+		if value == name {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 var localeRules = map[string]string{
 	"zh-cn": `Locale rules:
-- Write fluent Simplified Chinese using mainland technical terminology and simplified characters. Use neutral documentation tone with “你/你的”, not “您/您的”.
+- Use Simplified Chinese, mainland technical terminology, and simplified characters. Use “你/你的”, not “您/您的”.
 - Insert a space between Latin characters or digits and Chinese text when natural under W3C CLREQ. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.
 - Fixed terminology: “Gateway” is “Gateway 网关”; keep “Skills”, “local loopback”, and “Tailscale” in English.`,
 	"zh-tw": `Locale rules:
-- Write fluent Traditional Chinese using Taiwan terminology and traditional characters; do not emit Simplified Chinese forms. Use neutral documentation tone with “你/你的”.
+- Use Traditional Chinese, Taiwan terminology, and traditional characters; do not emit Simplified Chinese forms. Use “你/你的”.
 - Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.
 - Keep security concepts distinct: translate “credentials” as “認證資訊”, not “憑證”; reserve “憑證” for certificates.`,
 	"ja-jp": `Locale rules:
-- Write fluent technical Japanese in a neutral documentation tone. Avoid excessively formal honorifics such as “〜でございます”.
+- Avoid excessively formal Japanese honorifics such as “〜でございます”.
 - Use Japanese quotation marks 「 and 」 for Japanese prose. Do not add or remove spacing around Latin text merely because it borders Japanese; change spacing only when Japanese grammar requires it.
 - Keep “Skills”, “local loopback”, and “Tailscale” in English.`,
 	"es": `Locale rules:
-- Write neutral international Spanish and avoid region-specific colloquialisms. Prefer impersonal documentation phrasing; do not mix “tú”, “usted”, and “vos” forms within a page.`,
+- Use international Spanish, avoid region-specific colloquialisms, and prefer impersonal documentation phrasing.`,
 	"pt-br": `Locale rules:
-- Write Brazilian Portuguese, not European Portuguese. Use neutral Brazilian technical terminology and keep forms of address consistent within a page.`,
+- Use Brazilian Portuguese, not European Portuguese, and Brazilian technical terminology.`,
 	"ko": `Locale rules:
-- Write standard Korean technical documentation in a consistent formal-polite style using 합니다/하십시오 forms. Avoid mixing speech levels within a page.`,
+- Use formal-polite Korean with 합니다/하십시오 forms.`,
 	"de": `Locale rules:
-- Use formal address consistently: “Sie/Ihr/Ihnen”. Avoid informal “du/dein/dir”.
+- Use formal address: “Sie/Ihr/Ihnen”. Avoid informal “du/dein/dir”.
 - Use established technical German; keep “Provider” where it is clearer than “Anbieter”, and avoid awkward mixed compounds.`,
 	"fr": `Locale rules:
-- Write neutral technical French. Use “vous/votre” consistently and avoid informal “tu/ton”. Use established French technical terminology without forced translations of protected product terms.`,
+- Use “vous/votre” and avoid informal “tu/ton”.`,
 	"hi": `Locale rules:
-- Write standard modern Hindi in Devanagari. Use “आप/आपका” consistently and avoid unnecessary transliterated English outside protected terms.`,
+- Use modern Hindi in Devanagari and “आप/आपका” for direct address.`,
 	"ar": `Locale rules:
-- Write clear Modern Standard Arabic in a neutral technical tone. Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,
+- Use Modern Standard Arabic. Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,
 	"it": `Locale rules:
-- Write neutral technical Italian. Prefer impersonal instructional phrasing and do not mix informal “tu” with formal “Lei” within a page.`,
+- Prefer impersonal Italian instructional phrasing.`,
 	"vi": `Locale rules:
-- Write standard Vietnamese in a neutral technical tone. Use “bạn” consistently when direct address is necessary and avoid unnecessary English outside protected terms.`,
+- Use “bạn” when direct address is necessary.`,
 	"nl": `Locale rules:
-- Write standard Dutch in a concise, neutral technical tone. Use informal “je/jouw” consistently for direct address; do not switch to formal “u/uw” except inside protected literal quotations. Avoid unnecessary English outside protected terms.`,
+- Use informal “je/jouw” for direct address; do not switch to formal “u/uw” except inside protected literal quotations.`,
 	"fa": `Locale rules:
-- Write standard Iranian Persian in a neutral technical tone. Use Persian ی and ک rather than Arabic ي and ك, and use standard Persian half-spaces where required.
+- Use Iranian Persian, Persian ی and ک rather than Arabic ي and ك, and standard Persian half-spaces where required.
 - Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,
 	"ru": `Locale rules:
-- Write standard Russian in a neutral technical style. Prefer established Russian technical terminology and avoid unnecessary English outside protected terms.
+- Use established Russian technical terminology.
 - Translate the generic noun “plugin” as “плагин”; inflect it for Russian case and number, and capitalize it when normal Russian syntax requires. Never force English “Plugin” into ordinary prose. Preserve it only inside protected code or identifiers, or when a higher-precedence literal label rule applies.`,
 	"tr": `Locale rules:
-- Write standard Turkish in a concise, neutral technical tone. Preserve Turkish dotted and dotless I correctly and avoid unnecessary English outside protected terms.`,
+- Preserve Turkish dotted and dotless I correctly.`,
 	"uk": `Locale rules:
-- Write standard Ukrainian in a neutral technical style. Use established Ukrainian terminology rather than Russian calques and avoid unnecessary English outside protected terms.`,
+- Use established Ukrainian terminology rather than Russian calques.`,
 	"id": `Locale rules:
-- Write standard Indonesian in a neutral technical tone. Use “Anda” consistently when direct address is necessary and avoid unnecessary English outside protected terms.`,
+- Use “Anda” when direct address is necessary.`,
 	"pl": `Locale rules:
-- Write standard Polish in a neutral technical style. Prefer impersonal instructional constructions and avoid gendered direct address when it is not required.`,
+- Prefer impersonal Polish instructional constructions and avoid gendered direct address when it is not required.`,
 	"th": `Locale rules:
-- Write standard Thai in a neutral technical tone. Do not insert spaces between every Thai word; use spacing around Latin text, digits, and protected terms only where natural in Thai.`,
+- Do not insert spaces between every Thai word; use spacing around Latin text, digits, and protected terms only where natural in Thai.`,
 }
 
 func localePromptRules(tgtLang string) string {
@@ -118,6 +156,7 @@ const documentationQualityRules = `Documentation quality rules:
 - Label precedence, highest to lowest: literal third-party UI text; locale-specific fixed terminology stated in this prompt; supplied glossary mappings; normal translation. A higher rule overrides every lower rule and the general instructions to translate all prose, headings, and labels. OpenClaw-owned UI and documentation labels use the highest applicable fixed term or glossary mapping; otherwise translate them normally.
 - Preserve technical meaning over literal wording. Keep authentication, authorization, credentials, tokens, passwords, secrets, identities, and accounts distinct unless the source explicitly equates them. Preserve actors, objects, temporal order, negation, conditions, scope, singular/plural meaning, and requirement strength such as “must”, “required”, “only”, and “never”.
 - Preserve every factual value exactly, including numbers, units, versions, ports, limits, durations, paths, and comparison operators. Do not add explanations, infer missing facts, soften warnings, or correct the source.
+- Use one locale-appropriate register within each page. Do not mix formal, informal, honorific, or speech-level forms. Prefer impersonal documentation phrasing when the locale overlay does not specify a direct-address form.
 - Use one established target-language term per concept within a page. Avoid unnecessary English except for protected literals, code, URLs, glossary-preserved terms, and product names.`
 
 const translationPromptTemplate = `You are a translation function, not a chat assistant.
@@ -136,6 +175,7 @@ Rules:
 - Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
 - Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule: preserve angle-bracket placeholders, square-bracket config/protocol markers, and double-bracket directive tokens exactly, but translate ordinary human prose, including prose surrounding protected directive tokens.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
+- Preserve link-label association: translate each Markdown link label in place. Never move link markup to a different word or entity, and never replace a protected product-name label with a neighboring product name.
 - Do not remove, reorder, merge, summarize, or duplicate content.
 - Use fluent, idiomatic technical language in the target language with a neutral documentation tone; avoid slang and jokes.
 %s
@@ -144,7 +184,7 @@ Rules:
 
 - Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use its target exactly, including headings, link labels, and short UI-style labels.
 - If a glossary target is identical to the source text, preserve that term exactly as written.
-- Keep product names in English: OpenClaw, Raspberry Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: Render, Matrix, Raft, Chutes, fal (title: Fal), Fireworks, Inferrs, Meta, Runway, Synthetic, Upstash Box, Lobster, Mantis, Tokenjuice. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.
+%s
 - Never output an empty response; if unsure, return the source text unchanged.
 
 %s

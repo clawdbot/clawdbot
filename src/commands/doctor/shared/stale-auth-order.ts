@@ -1,22 +1,14 @@
 // Repairs configured auth orders whose referenced profiles no longer exist.
 import fs from "node:fs";
 import path from "node:path";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-} from "../../../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "../../../agents/agent-scope-config.js";
 import { listRuntimeExternalAuthProfiles } from "../../../agents/auth-profiles/external-auth.js";
 import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
-import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../../../agents/auth-profiles/paths.js";
 import {
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "../../../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
@@ -32,12 +24,17 @@ import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "../../../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../../routing/session-key.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
 } from "../../../state/openclaw-agent-db.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
+import {
+  resolveLegacyAuthProfilesPath as resolveAuthStorePath,
+  resolveLegacyAuthStatePath as resolveAuthStatePath,
+  resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
+} from "../../doctor-auth-legacy-paths.js";
 
 type StaleConfiguredAuthOrder = {
   provider: string;
@@ -291,7 +288,7 @@ function loadConfiguredAgentAuthStores(
   }
   // Every secondary agent inherits the legacy main store at runtime, even when
   // `agents.list` names a different default agent.
-  const mainAgentDir = path.resolve(resolveDefaultAgentDir({}, env));
+  const mainAgentDir = path.resolve(resolveSharedMainAuthAgentDir(env));
   const activeAgentDirs = new Set<string>();
   const expectedAgentIdsByDir = new Map<string, Set<string>>();
   const addExpectedAgentDir = (agentDir: string, agentId: string) => {
@@ -299,7 +296,7 @@ function loadConfiguredAgentAuthStores(
     owners.add(normalizeAgentId(agentId));
     expectedAgentIdsByDir.set(agentDir, owners);
   };
-  addExpectedAgentDir(mainAgentDir, DEFAULT_AGENT_ID);
+  addExpectedAgentDir(mainAgentDir, resolveAuthProfileDatabaseOwnerId(mainAgentDir));
   for (const agentId of listAgentIds(cfg)) {
     const agentDir = path.resolve(resolveAgentDir(cfg, agentId, env));
     activeAgentDirs.add(agentDir);
@@ -558,7 +555,7 @@ function scanStaleConfiguredAuthOrders(params: {
 }
 
 /** Remove provably stale config orders and restore per-agent automatic selection. */
-export function repairStaleConfiguredAuthOrders(params: {
+function repairStaleConfiguredAuthOrders(params: {
   cfg: OpenClawConfig;
   stores: readonly AuthProfileStore[];
   activeStores?: readonly AuthProfileStore[];
@@ -615,4 +612,10 @@ export function collectStaleConfiguredAuthOrderWarnings(params: {
     (hit) =>
       `- auth.order.${hit.provider} references only missing profiles while compatible stored credentials exist; run ${params.doctorFixCommand} to remove the stale override and restore automatic selection.`,
   );
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.staleAuthOrderTestApi")] = {
+    repairStaleConfiguredAuthOrders,
+  };
 }

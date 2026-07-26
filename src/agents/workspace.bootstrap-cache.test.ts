@@ -4,21 +4,16 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
-import { clearAllBootstrapSnapshots, getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
+import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
 describe("workspace bootstrap file caching", () => {
   let workspaceDir: string;
 
   beforeEach(async () => {
-    clearAllBootstrapSnapshots();
     workspaceDir = await makeTempWorkspace("openclaw-bootstrap-cache-test-");
-  });
-
-  afterEach(() => {
-    clearAllBootstrapSnapshots();
   });
 
   const loadAgentsFile = async (dir: string) => {

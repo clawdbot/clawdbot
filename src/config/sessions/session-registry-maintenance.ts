@@ -8,17 +8,17 @@ import {
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
-import { pruneStaleEntries } from "./store.js";
+import { pruneStaleEntries } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionRegistryMaintenanceStoreSummary = {
+type SessionRegistryMaintenanceStoreSummary = {
   afterCount: number;
   beforeCount: number;
   preservedRunning: number;
   pruned: number;
 };
 
-export type SessionRegistryMaintenanceStoreOptions = {
+type SessionRegistryMaintenanceStoreOptions = {
   /** Apply pruning to the backing store; false previews against a clone. */
   apply: boolean;
   /** Retention window for cron-run session entries. */
@@ -34,7 +34,7 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
   if (!parsed) {
     return undefined;
   }
-  return /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1];
+  return /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed.rest)?.[1];
 }
 
 function buildSessionRegistryPreserveKeys(params: {

@@ -2,11 +2,9 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";
 import { describe, expect, it } from "vitest";
 import type { MentionGatePort } from "../adapter/mention-gate.port.js";
-import {
-  resolveGroupMessageGate,
-  type GroupMessageGateInput,
-  type GroupMessageGateResult,
-} from "./message-gating.js";
+import { resolveGroupMessageGate, type GroupMessageGateResult } from "./message-gating.js";
+
+type GroupMessageGateInput = Parameters<typeof resolveGroupMessageGate>[0];
 
 // Real SDK-backed port so these tests prove gate parity against the canonical
 // mention decision engine, not a stub.

@@ -78,14 +78,6 @@ export function resolveReservedTargetLiteral(params: {
   return reserved.has(normalized) ? normalized : undefined;
 }
 
-function resetTargetNormalizerCacheForTests(): void {
-  targetNormalizerCacheByChannelId.clear();
-}
-
-export const testing = {
-  resetTargetNormalizerCacheForTests,
-} as const;
-
 function resolveTargetNormalizer(
   channelId: ChannelId,
   preparedPlugin?: ChannelPlugin,

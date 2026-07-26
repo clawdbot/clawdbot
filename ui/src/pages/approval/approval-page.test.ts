@@ -1,7 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AllowedApprovalSnapshot,
@@ -12,27 +10,15 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { applicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { ApprovalPage } from "./approval-page.ts";
 
 const TEST_ELEMENT_SUFFIX = crypto.randomUUID();
-const PROVIDER_ELEMENT_NAME = `test-approval-page-context-provider-${TEST_ELEMENT_SUFFIX}`;
 const APPROVAL_PAGE_ELEMENT_NAME = `test-openclaw-approval-page-${TEST_ELEMENT_SUFFIX}`;
 
-class ApprovalPageContextProvider extends LitElement {
-  private readonly contextProvider = new ContextProvider(this, {
-    context: applicationContext,
-  });
-
-  setContext(context: ApplicationContext) {
-    this.contextProvider.setValue(context);
-  }
-}
-
 // The non-isolated UI runner resets modules but not customElements. Register
-// the current provider and page graphs so context and locale state stay paired.
-customElements.define(PROVIDER_ELEMENT_NAME, ApprovalPageContextProvider);
+// the current page graph so context and locale state stay paired.
 customElements.define(APPROVAL_PAGE_ELEMENT_NAME, class extends ApprovalPage {});
 
 type TestApprovalPage = HTMLElement & {
@@ -88,8 +74,9 @@ function expiredApproval(): ExpiredApprovalSnapshot {
 function createGateway(client: GatewayBrowserClient, connected = true) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -124,9 +111,8 @@ function createPage(params: {
   withBootFallback?: boolean;
 }) {
   const source = createGateway(params.client, params.connected);
-  const provider = document.createElement(PROVIDER_ELEMENT_NAME) as ApprovalPageContextProvider;
   const page = document.createElement(APPROVAL_PAGE_ELEMENT_NAME) as TestApprovalPage;
-  provider.setContext({
+  const provider = createApplicationContextProvider({
     basePath: "",
     gateway: source.gateway,
   } as unknown as ApplicationContext);
@@ -205,6 +191,35 @@ describe("ApprovalPage", () => {
     });
     expect(page.querySelector("h1")?.textContent).toBe("Approved here");
     expect(document.activeElement).toBe(page.querySelector("h1"));
+  });
+
+  it("renders reviewer-only plugin detail in a preformatted block", async () => {
+    const approval = pendingApproval({
+      id: "plugin:approval-1",
+      urlPath: "/approve/plugin%3Aapproval-1",
+      presentation: {
+        kind: "plugin",
+        title: "Claude native tool: Bash",
+        description: '{"command":"printf …"}',
+        detail: '{"command":"printf \\\"line one\\nline two\\\""}',
+        severity: "warning",
+        pluginId: "claude-cli",
+        toolName: "Bash",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: approval.id,
+    });
+
+    await settle(page);
+
+    expect(page.querySelector("pre.approval-page__preview.mono")?.textContent).toBe(
+      approval.presentation.kind === "plugin" ? approval.presentation.detail : undefined,
+    );
   });
 
   it("keeps the selected decision named while a resolution is in flight", async () => {
@@ -335,8 +350,8 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
-    source.update({ connected: true, reconnecting: false });
+    source.update({ phase: "reconnecting" });
+    source.update({ phase: "connected" });
     await settle(page);
     resolveFirst({ approval: pendingApproval() });
     await settle(page);
@@ -402,7 +417,7 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
+    source.update({ phase: "reconnecting" });
     await page.updateComplete;
 
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");

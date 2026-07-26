@@ -1,5 +1,5 @@
 ---
-summary: "Android app (node): connection runbook + Connect/Chat/Voice/Canvas command surface"
+summary: "Android app (node): connection runbook + Connect/Chat/OpenClaw/Voice/Canvas command surface"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
@@ -19,8 +19,24 @@ The official Android app is available on [Google Play](https://play.google.com/s
 - Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a supported [GitHub Release](https://github.com/openclaw/openclaw/releases), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
+- **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
+
+## Simultaneous gateway sessions
+
+Pair each Gateway once, then open **Settings → Gateway**. The checkmark marks
+the focused Gateway and each switch controls whether a non-focused Gateway's
+operator session stays connected. Enabled Gateways reconnect independently
+while the app is in the foreground, so switching focus does not tear down the
+others. The focused Gateway alone owns the Android node session and device
+capabilities; this prevents simultaneous Gateways from issuing camera,
+location, screen, or notification commands to the same phone. Android can
+suspend the secondary connections after the app leaves the foreground.
+
+## Wear OS companion
+
+The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
 
 ## Install outside Google Play
 
@@ -227,13 +243,14 @@ with `openclaw qr`, then scan or paste it on that page and reconnect. Operators
 who want the reduced profile can select **Limited access** in Control UI or run
 `openclaw qr --limited`.
 
-### Multiple gateways
+### Manage paired gateways
 
-The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+The app keeps a registry of every gateway it has paired with, so you can keep operator sessions connected and change focus without pairing again:
 
-- **Settings -> Gateways** lists paired gateways with the active one marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway.
+- **Settings → Gateway** lists paired gateways with the focused one marked. Tap an entry to focus it; the other enabled operator sessions remain connected.
+- Each switch controls whether that non-focused Gateway stays connected while the app is in the foreground. The focused Gateway remains enabled and owns the phone's node connection and device capabilities.
 - The **Connect** tab shows a quick switcher when more than one gateway is paired.
-- Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per gateway. Switching never mixes state between gateways, and messages queued while offline are delivered only to the gateway they were written for.
+- Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per Gateway. Changing focus never mixes state between Gateways, and messages queued while offline are delivered only to the Gateway they were written for.
 - **Forget** removes a gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
 
 ### Presence alive beacons
@@ -317,11 +334,20 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 ### 8. Voice + expanded Android command surface
 
-- Voice tab: Android has two explicit capture modes. **Mic** is a manual Voice-tab session that sends each pause as a chat turn and stops when the app leaves the foreground or the user leaves the Voice tab. **Talk** is continuous Talk Mode and keeps listening until toggled off or the node disconnects.
+- Android's shell navigation is **Home**, **Chat**, and **Settings**. Voice input
+  belongs to the Chat composer; there is no separate Voice tab.
+- Tap the composer microphone for on-device speech recognition that inserts a
+  transcript into the draft. Long-press the microphone to record a voice-note
+  attachment. The UI reports unavailable recognition, missing permission,
+  busy/network failures, and no-speech outcomes instead of silently dropping
+  the attempt.
+- Start continuous **Talk** from the Chat waveform. Dictation, voice-note
+  recording, and Talk are mutually exclusive microphone paths.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
-- Android does not advertise the `voiceWake` capability. Use **Mic** or **Talk** for voice input.
+- Android does not advertise the `voiceWake` capability. Use Chat dictation,
+  a voice note, or Talk for voice input.
 - Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).
@@ -355,6 +381,15 @@ before offering another decision.
 Gateways that predate the unified approval methods fall back to the shipped
 exec-specific methods. Pending review still works, but retained terminal state
 and the richer cross-surface result require an updated Gateway.
+
+## Answer agent questions
+
+Chat shows pending Gateway questions as native cards for operator connections
+with `operator.questions` (or `operator.admin`). Cards support single- and
+multi-select options, option descriptions, free-text **Other** answers, and an
+expiry countdown. Reconnects reload pending questions from the Gateway. A card
+locks when this device answers it, another surface answers it first, or the
+question expires or is cancelled.
 
 ## Assistant entrypoints
 

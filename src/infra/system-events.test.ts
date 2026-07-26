@@ -73,6 +73,66 @@ describe("system events (session routing)", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
   });
 
+  it("requires a context key when replacing an event", () => {
+    expect(() =>
+      enqueueSystemEvent("Voice roster", {
+        sessionKey: "agent:main:main",
+        contextKey: " ",
+        replace: true,
+      }),
+    ).toThrow("contextKey");
+  });
+
+  it("replaces one keyed event without evicting unrelated queued events", () => {
+    const key = "agent:main:test-upsert";
+    enqueueSystemEvent("Voice roster 0", {
+      sessionKey: key,
+      contextKey: "discord:voice-membership:default:g1",
+      replace: true,
+    });
+    for (let index = 0; index < 19; index += 1) {
+      enqueueSystemEvent(`unrelated ${index}`, {
+        sessionKey: key,
+        contextKey: `unrelated:${index}`,
+      });
+    }
+    for (let index = 1; index <= 25; index += 1) {
+      enqueueSystemEvent(`Voice roster ${index}`, {
+        sessionKey: key,
+        contextKey: "discord:voice-membership:default:g1",
+        replace: true,
+      });
+    }
+
+    expect(peekSystemEvents(key)).toHaveLength(20);
+    expect(peekSystemEvents(key).filter((event) => event.startsWith("unrelated "))).toHaveLength(
+      19,
+    );
+    expect(peekSystemEvents(key).at(-1)).toBe("Voice roster 25");
+  });
+
+  it("consumes unchanged inspected events when a keyed event is replaced in flight", () => {
+    const key = "agent:main:test-upsert-consume-race";
+    enqueueSystemEvent("Voice roster 0", {
+      sessionKey: key,
+      contextKey: "discord:voice-membership:default:g1",
+      replace: true,
+    });
+    enqueueSystemEvent("Exec completed", { sessionKey: key, contextKey: "exec:job-1" });
+    const inspected = peekSystemEventEntries(key);
+
+    enqueueSystemEvent("Voice roster 1", {
+      sessionKey: key,
+      contextKey: "discord:voice-membership:default:g1",
+      replace: true,
+    });
+
+    expect(consumeSystemEventEntries(key, inspected).map((event) => event.text)).toEqual([
+      "Exec completed",
+    ]);
+    expect(peekSystemEvents(key)).toEqual(["Voice roster 1"]);
+  });
+
   it("returns false for consecutive duplicate events", () => {
     const first = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
     const second = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });

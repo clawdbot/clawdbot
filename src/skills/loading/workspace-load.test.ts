@@ -392,6 +392,80 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(hiddenEntry?.exposure?.includeInAvailableSkillsPrompt).toBe(false);
   });
 
+  it("loads workspace metadata with JSON5-style trailing commas", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const skillDir = path.join(workspaceDir, "skills", "json5-metadata");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      `---
+name: json5-metadata
+description: JSON5-style metadata
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "env": ["EXAMPLE_VAR"],
+          },
+      },
+  }
+---
+`,
+      "utf8",
+    );
+
+    const entry = loadTestWorkspaceSkillEntries(workspaceDir).find(
+      (candidate) => candidate.skill.name === "json5-metadata",
+    );
+
+    expect(entry?.metadata?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+  });
+
+  it("warns for malformed files and keeps loading sibling workspace skills", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const brokenDir = path.join(workspaceDir, "skills", "broken");
+    const brokenFile = path.join(brokenDir, "SKILL.md");
+    const unterminatedDir = path.join(workspaceDir, "skills", "unterminated");
+    const unterminatedFile = path.join(unterminatedDir, "SKILL.md");
+    await fs.mkdir(brokenDir, { recursive: true });
+    await fs.mkdir(unterminatedDir, { recursive: true });
+    await fs.writeFile(
+      brokenFile,
+      `---
+name: [broken
+description: Broken skill
+---
+`,
+      "utf8",
+    );
+    await fs.writeFile(
+      unterminatedFile,
+      "---\nname: unterminated\ndescription: Missing closing delimiter\n",
+      "utf8",
+    );
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "valid"),
+      name: "valid",
+      description: "Valid sibling",
+    });
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir);
+    const warningText = warn.mock.calls.flat().map(String).join("\n");
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("valid");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("broken");
+    expect(warningText).toContain(brokenFile);
+    expect(warningText).toContain("invalid frontmatter: BAD_INDENT");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("unterminated");
+    expect(warningText).toContain(unterminatedFile);
+    expect(warningText).toContain(
+      "invalid frontmatter: UNTERMINATED_FRONTMATTER: missing closing --- delimiter",
+    );
+  });
+
   it("applies agent skill filters and replacement semantics", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeWorkspaceSkills(workspaceDir, [
@@ -1340,3 +1414,4 @@ describe("loadWorkspaceSkillEntries", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

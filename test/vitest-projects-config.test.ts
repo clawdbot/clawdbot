@@ -29,6 +29,7 @@ import {
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
+import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
@@ -211,7 +212,7 @@ describe("projects vitest config", () => {
     ]);
   });
 
-  it("keeps the root ui lane aligned with the shared jsdom setup", () => {
+  it("keeps the root ui lane on the shared non-isolated runner", () => {
     const config = createUiVitestConfig();
     const testConfig = requireTestConfig(config);
     expect(testConfig.environment).toBe("jsdom");
@@ -234,6 +235,13 @@ describe("projects vitest config", () => {
     const config = createUnitFastVitestConfig();
     const testConfig = requireTestConfig(config);
     expect(testConfig.isolate).toBe(false);
+    expect(testConfig.runner).toBeUndefined();
+  });
+
+  it("isolates forced unit-fast files from shared module caches", () => {
+    const config = createUnitFastIsolatedVitestConfig();
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(true);
     expect(testConfig.runner).toBeUndefined();
   });
 

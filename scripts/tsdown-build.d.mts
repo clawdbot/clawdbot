@@ -2,9 +2,15 @@
 /**
  * Removes build output roots while preserving explicitly protected artifacts.
  */
-export function cleanTsdownOutputRoots(params?: Record<string, unknown>): void;
+export function cleanTsdownOutputRoots(params?: {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  fs?: typeof import("node:fs");
+  roots?: string[];
+}): void;
 export function pruneStaleRootChunkFiles(params?: Record<string, unknown>): void;
 export function listTsdownOutputRoots(): string[];
+export function resolveTsdownCleanOutputRoots(args?: string[]): string[];
 export function pruneUntrackedGeneratedSourceDeclarations(params?: Record<string, unknown>): number;
 export function pruneSourceCheckoutBundledPluginNodeModules(params?: Record<string, unknown>): void;
 export function parseTsdownBuildArgs(argv: unknown): {

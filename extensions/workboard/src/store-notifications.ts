@@ -1,3 +1,7 @@
+import type {
+  WorkboardNotification,
+  WorkboardNotificationSubscription,
+} from "@openclaw/workboard-contract";
 import type { PersistedWorkboardNotificationSubscription } from "./persistence-types.js";
 import {
   cardRunId,
@@ -16,7 +20,6 @@ import {
   normalizeNotificationSubscription,
 } from "./store-normalizers.js";
 import { WorkboardWorkflowStore } from "./store-workflow.js";
-import type { WorkboardNotification, WorkboardNotificationSubscription } from "./types.js";
 
 export class WorkboardNotificationStore extends WorkboardWorkflowStore {
   async subscribeNotifications(

@@ -6,11 +6,13 @@ export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
-export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Message session or configured agent.";
+export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP session.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
+export const AGENTS_WAIT_TOOL_DISPLAY_SUMMARY = "Wait for collector subagents.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
+export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
 export const SPAWN_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 
@@ -41,7 +43,9 @@ export function describeSessionsSearchTool(): string {
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(): string {
   return [
-    "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label.",
+    "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
+    "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+    "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target.",
     "Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");
@@ -68,6 +72,8 @@ export function describeSessionsSpawnTool(options?: {
     options?.threadAvailable
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
+    '`visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode="run"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override.',
+    "Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree).",
     "Inherits parent workspace. Native task arrives as first `[Subagent Task]`.",
     'Native transcript needed: `context="fork"`; else omit/isolated.',
     "Use fresh child for sidecar/parallel batch reads, multi-step search, data collection; avoid quick lookup/single read unless policy prefers.",
@@ -77,9 +83,9 @@ export function describeSessionsSpawnTool(options?: {
     return baseDescription.join(" ");
   }
   return [
-    ...baseDescription.slice(0, 3),
+    ...baseDescription.slice(0, 5),
     '`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.',
-    ...baseDescription.slice(3),
+    ...baseDescription.slice(5),
   ].join(" ");
 }
 
@@ -94,8 +100,16 @@ export function describeSessionStatusTool(): string {
 
 /** Describes the update_plan tool for model-facing instructions. */
 export function describeUpdatePlanTool(): string {
+  return "Use for multi-step work. Send the full list each call; keep statuses current and exactly one `in_progress` until done.";
+}
+
+/** Describes the ask_user tool and its decision-only use policy. */
+export function describeAskUserTool(): string {
   return [
-    "Update run plan for non-trivial multi-step work; keep current.",
-    "Short steps; max one `in_progress`; skip simple one-step.",
+    "Ask the human user 1-3 structured questions and wait for their answer.",
+    "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
+    "Prefer one question. Put the recommended option first and suffix its label with ` (Recommended)`.",
+    "Do not include an Other option; free text is added automatically.",
+    "If the result is no_answer, continue with best judgment.",
   ].join(" ");
 }

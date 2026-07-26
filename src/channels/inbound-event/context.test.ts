@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
+  resolveInboundSupplementalSenderAllowed,
   type BuildChannelInboundEventContextParams,
 } from "./context.js";
 
@@ -35,6 +36,71 @@ function createBaseContextParams(
   };
 }
 
+describe("resolveInboundSupplementalSenderAllowed", () => {
+  it.each([
+    {
+      name: "allows direct context without consulting the channel matcher",
+      isGroup: false,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: true,
+      matcherCalls: 0,
+    },
+    {
+      name: "allows open group context without consulting the channel matcher",
+      isGroup: true,
+      groupPolicy: "open",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: true,
+      matcherCalls: 0,
+    },
+    {
+      name: "allows an allowlisted supplemental sender",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: true,
+      expected: true,
+      matcherCalls: 1,
+    },
+    {
+      name: "blocks a non-allowlisted supplemental sender",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: false,
+      matcherCalls: 1,
+    },
+    {
+      name: "delegates empty allowlists to the channel matcher",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      matcherResult: false,
+      expected: false,
+      matcherCalls: 1,
+    },
+  ])("$name", ({ isGroup, groupPolicy, allowFrom, matcherResult, expected, matcherCalls }) => {
+    const isSenderAllowed = vi.fn(() => matcherResult);
+
+    expect(
+      resolveInboundSupplementalSenderAllowed({
+        isGroup,
+        groupPolicy,
+        allowFrom,
+        isSenderAllowed,
+      }),
+    ).toBe(expected);
+    expect(isSenderAllowed).toHaveBeenCalledTimes(matcherCalls);
+    if (matcherCalls > 0) {
+      expect(isSenderAllowed).toHaveBeenCalledWith(allowFrom);
+    }
+  });
+});
+
 describe("buildChannelInboundEventContext", () => {
   it("maps normalized inbound facts into a finalized message context", async () => {
     const ctx = buildChannelInboundEventContext({
@@ -62,6 +128,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       route: {
         agentId: "main",
+        dmScope: "main",
         accountId: "acct",
         routeSessionKey: "agent:main:test:group:room-1",
         parentSessionKey: "agent:main:test:group",
@@ -82,7 +149,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       access: {
         commands: {
-          authorizers: [{ configured: true, allowed: true }],
+          authorized: true,
         },
         mentions: {
           canDetectMention: true,
@@ -129,6 +196,8 @@ describe("buildChannelInboundEventContext", () => {
       },
     });
 
+    expect(ctx.InboundAccessAuthorized).toBe(true);
+
     const expectedFields = {
       Body: "[User One] hello",
       InboundEventKind: "user_request",
@@ -140,6 +209,7 @@ describe("buildChannelInboundEventContext", () => {
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
       AgentId: "main",
+      DmScope: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",
@@ -147,13 +217,20 @@ describe("buildChannelInboundEventContext", () => {
       ReplyToId: "root-1",
       ReplyToBody: "quoted",
       ReplyToSender: "Quoted User",
-      MediaPath: "/tmp/image.png",
-      MediaUrl: "/tmp/image.png",
-      MediaType: "image/png",
-      MediaPaths: ["/tmp/image.png", ""],
-      MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
-      MediaTypes: ["image/png", "audio/mpeg"],
-      MediaTranscribedIndexes: [1],
+      media: [
+        expect.objectContaining({
+          path: "/tmp/image.png",
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+        }),
+        expect.objectContaining({
+          url: "https://example.test/audio.mp3",
+          contentType: "audio/mpeg",
+          kind: "audio",
+          transcribed: true,
+        }),
+      ],
       ChatType: "group",
       ChatId: "room-1",
       ConversationLabel: "Room One",
@@ -216,17 +293,12 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.BodyForAgent).not.toContain("customSenderField");
   });
 
-  it("uses resolved command authorization instead of recomputing authorizers", async () => {
+  it("uses resolved command authorization", async () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         access: {
           commands: {
             authorized: false,
-            shouldBlockControlCommand: true,
-            reasonCode: "control_command_unauthorized",
-            allowTextCommands: true,
-            useAccessGroups: true,
-            authorizers: [{ configured: true, allowed: true }],
           },
         },
       }),
@@ -346,20 +418,6 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.To).toBe("test:room:room-1");
     expect(ctx.OriginatingTo).toBe("test:room:room-1:topic:topic-42");
     expect(ctx.MessageThreadId).toBe("topic-42");
-  });
-
-  it("keeps legacy command authorization fallback for authorizer arrays", async () => {
-    const ctx = buildChannelInboundEventContext(
-      createBaseContextParams({
-        access: {
-          commands: {
-            authorizers: [{ configured: true, allowed: true }],
-          },
-        },
-      }),
-    );
-
-    expect(ctx.CommandAuthorized).toBe(true);
   });
 
   it("derives command turns from normalized command facts", async () => {
@@ -575,8 +633,9 @@ describe("finalizeChannelInboundContext", () => {
 
     expect(result.context.ReplyToBody).toBe("quoted");
     expect(result.context.ReplyToSender).toBe("Alice");
-    expect(result.context.MediaPath).toBe("/tmp/a.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png" }),
+    ]);
     expect(Object.hasOwn(result.context, "SupplementalContext")).toBe(false);
   });
 });
@@ -630,8 +689,9 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     });
 
     expect(media).not.toHaveBeenCalled();
-    expect(result.context.MediaPath).toBe("/tmp/current.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/current.png", contentType: "image/png" }),
+    ]);
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 
@@ -659,8 +719,9 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
       },
     });
 
-    expect(result.context.MediaPath).toBe("/tmp/self.png");
-    expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/self.png", contentType: "image/png" }),
+    ]);
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 

@@ -136,7 +136,3 @@ export function listSkillCommandsForAgents(params: {
     left.skillName.localeCompare(right.skillName, "en"),
   );
 }
-
-export const testing = {
-  dedupeBySkillName,
-};

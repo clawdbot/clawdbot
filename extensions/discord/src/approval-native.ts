@@ -13,7 +13,6 @@ import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   createApproverRestrictedNativeApprovalCapability,
-  splitChannelApprovalCapability,
 } from "./approval-runtime.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import {
@@ -200,12 +199,6 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
           .discordApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
   });
-}
-
-export function createDiscordNativeApprovalAdapter(
-  configOverride?: DiscordExecApprovalConfig | null,
-) {
-  return splitChannelApprovalCapability(createDiscordApprovalCapability(configOverride));
 }
 
 let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;

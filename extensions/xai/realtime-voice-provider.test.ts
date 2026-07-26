@@ -102,6 +102,10 @@ type SentRealtimeEvent = {
   };
 };
 
+function waitForRealtimeState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload: string) => JSON.parse(payload) as SentRealtimeEvent);
 }
@@ -195,7 +199,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -234,7 +238,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -284,7 +288,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -315,7 +319,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void invalidThresholdBridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const invalidThresholdSocket = requireSocket();
     invalidThresholdSocket.readyState = FakeWebSocket.OPEN;
     invalidThresholdSocket.emit("open");
@@ -345,7 +349,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void validThresholdBridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const validThresholdSocket = requireSocket(1);
     validThresholdSocket.readyState = FakeWebSocket.OPEN;
     validThresholdSocket.emit("open");
@@ -384,7 +388,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -405,7 +409,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -459,7 +463,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -510,7 +514,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -549,7 +553,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -603,7 +607,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -660,7 +664,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -711,7 +715,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -763,7 +767,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -817,7 +821,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -878,7 +882,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -941,7 +945,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -991,7 +995,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -1043,7 +1047,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -1099,7 +1103,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1129,7 +1133,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const secondSocket = requireSocket(1);
     expect(String(secondSocket.args[0])).toContain("conversation_id=conv_tools");
     secondSocket.readyState = FakeWebSocket.OPEN;
@@ -1167,7 +1171,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1182,7 +1186,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const secondSocket = requireSocket(1);
     secondSocket.readyState = FakeWebSocket.OPEN;
     secondSocket.emit("open");
@@ -1228,7 +1232,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1281,7 +1285,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1323,7 +1327,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     firstSocket.close(1006, "connection lost after output acknowledgement");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const secondSocket = requireSocket(1);
     secondSocket.readyState = FakeWebSocket.OPEN;
     secondSocket.emit("open");
@@ -1369,7 +1373,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1399,7 +1403,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const secondSocket = requireSocket(1);
     expect(String(secondSocket.args[0])).toContain("conversation_id=conv_tool_queue");
     secondSocket.readyState = FakeWebSocket.OPEN;
@@ -1449,7 +1453,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1464,7 +1468,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const secondSocket = requireSocket(1);
     expect(String(secondSocket.args[0])).toContain("conversation_id=conv_text_queue");
     secondSocket.readyState = FakeWebSocket.OPEN;
@@ -1505,7 +1509,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1523,14 +1527,14 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       const delayMs = 1000 * 2 ** (attempt - 1);
       await vi.advanceTimersByTimeAsync(delayMs);
-      await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(attempt + 1));
+      await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(attempt + 1));
       const socket = requireSocket(attempt);
       socket.readyState = FakeWebSocket.OPEN;
       socket.emit("open");
       socket.close(1006, "session setup failed");
     }
 
-    await vi.waitFor(() =>
+    await waitForRealtimeState(() =>
       expect(onEvent).toHaveBeenCalledWith({
         direction: "client",
         type: "session.reconnect.exhausted",
@@ -1554,7 +1558,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1569,7 +1573,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const secondSocket = requireSocket(1);
     expect(String(secondSocket.args[0])).toContain("conversation_id=conv_ready");
     secondSocket.readyState = FakeWebSocket.OPEN;
@@ -1578,6 +1582,57 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     bridge.close();
 
     expect(onReady).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a pending reconnect and allows a later explicit connect", async () => {
+    vi.useFakeTimers();
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: ["xai", "test"].join("-") });
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { sessionResumption: true },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+
+    const connecting = bridge.connect();
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const firstSocket = requireSocket();
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_close" } }),
+      ),
+    );
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    firstSocket.close(1006, "connection lost");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    const reconnecting = bridge.connect();
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
+    const reconnectedSocket = requireSocket(1);
+    reconnectedSocket.readyState = FakeWebSocket.OPEN;
+    reconnectedSocket.emit("open");
+    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
+    bridge.close();
   });
 
   it("enables xAI session resumption and reconnects with the created conversation id", async () => {
@@ -1591,7 +1646,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const firstSocket = requireSocket();
     firstSocket.readyState = FakeWebSocket.OPEN;
     firstSocket.emit("open");
@@ -1607,7 +1662,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
     firstSocket.close(1006, "connection lost");
     await vi.advanceTimersByTimeAsync(1000);
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const secondSocket = requireSocket(1);
     expect(String(secondSocket.args[0])).toContain("conversation_id=conv_resume");
     secondSocket.readyState = FakeWebSocket.OPEN;
@@ -1631,7 +1686,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -1666,7 +1721,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -1705,7 +1760,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     const connecting = bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -1736,7 +1791,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
 
     void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(1));
     const socket = requireSocket();
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
@@ -1748,3 +1803,4 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(session.tool_choice).toBe("auto");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

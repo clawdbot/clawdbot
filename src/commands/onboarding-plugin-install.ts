@@ -560,7 +560,13 @@ function formatInstallErrorDetail(message: string): string {
   return `${truncateUtf16Safe(cleaned, ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS - marker.length).trimEnd()}${marker}`;
 }
 
-export const testing = { formatInstallErrorDetail, summarizeInstallError };
+const testing = { formatInstallErrorDetail, summarizeInstallError };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.onboardingPluginInstallTestApi")
+  ] = testing;
+}
 
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";
@@ -1511,3 +1517,4 @@ export async function ensureOnboardingPluginInstalled(params: {
     error: errorDetail,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

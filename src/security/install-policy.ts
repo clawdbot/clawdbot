@@ -1,14 +1,10 @@
 // Checks install policy constraints for package and plugin operations.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  forceKillChildProcessTree,
-  shouldDetachChildForProcessTree,
-} from "../process/child-process-tree.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizePositiveInt, normalizePositiveTimerMs } from "../secrets/shared.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -81,7 +77,7 @@ export type InstallPolicyFinding = {
   evidence?: string;
 };
 
-export type InstallPolicyRequest = {
+type InstallPolicyRequest = {
   targetType: InstallPolicyTarget;
   targetName: string;
   sourcePath: string;
@@ -130,14 +126,6 @@ type InstallPolicyResult =
       };
       findings?: InstallPolicyFinding[];
     };
-
-type ExecRunResult = {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  termination: "exit" | "timeout" | "no-output-timeout";
-};
 
 type InstallPolicyExecConfig = NonNullable<NonNullable<SecurityConfig["installPolicy"]>["exec"]>;
 
@@ -488,8 +476,7 @@ export async function validateInstallPolicyStatic(
       targetPath: policy.exec.command,
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     issues.push({
@@ -502,8 +489,7 @@ export async function validateInstallPolicyStatic(
       command: policy.exec.command,
       args: policy.exec.args ?? [],
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     issues.push({
@@ -512,133 +498,6 @@ export async function validateInstallPolicyStatic(
     });
   }
   return { enabled: true, targets, issues };
-}
-
-function isIgnorableStdinWriteError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return false;
-  }
-  const code = String(error.code);
-  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
-}
-
-async function runPolicyCommand(params: {
-  command: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  input: string;
-  timeoutMs: number;
-  noOutputTimeoutMs: number;
-  maxOutputBytes: number;
-}): Promise<ExecRunResult> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(params.command, params.args, {
-      cwd: params.cwd,
-      env: params.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true,
-      detached: shouldDetachChildForProcessTree(),
-    });
-
-    let settled = false;
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let noOutputTimedOut = false;
-    let outputBytes = 0;
-    let noOutputTimer: NodeJS.Timeout | null = null;
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      forceKillChildProcessTree(child);
-    }, params.timeoutMs);
-
-    const clearTimers = () => {
-      clearTimeout(timeoutTimer);
-      if (noOutputTimer) {
-        clearTimeout(noOutputTimer);
-        noOutputTimer = null;
-      }
-    };
-
-    const failCommand = (error: unknown, kill: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      if (kill) {
-        forceKillChildProcessTree(child);
-      }
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-
-    const armNoOutputTimer = () => {
-      if (noOutputTimer) {
-        clearTimeout(noOutputTimer);
-      }
-      noOutputTimer = setTimeout(() => {
-        noOutputTimedOut = true;
-        forceKillChildProcessTree(child);
-      }, params.noOutputTimeoutMs);
-    };
-
-    const append = (chunk: Buffer | string, target: "stdout" | "stderr") => {
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      outputBytes += Buffer.byteLength(text, "utf8");
-      if (outputBytes > params.maxOutputBytes) {
-        failCommand(new Error(`output exceeded maxOutputBytes (${params.maxOutputBytes})`), true);
-        return;
-      }
-      if (target === "stdout") {
-        stdout += text;
-      } else {
-        stderr += text;
-      }
-      armNoOutputTimer();
-    };
-
-    armNoOutputTimer();
-    child.on("error", (error) => {
-      failCommand(error, false);
-    });
-    child.stdout?.on("error", (error) => {
-      failCommand(new Error(`policy stdout stream failed: ${formatErrorMessage(error)}`), true);
-    });
-    child.stdout?.on("data", (chunk) => append(chunk, "stdout"));
-    child.stderr?.on("error", (error) => {
-      failCommand(new Error(`policy stderr stream failed: ${formatErrorMessage(error)}`), true);
-    });
-    child.stderr?.on("data", (chunk) => append(chunk, "stderr"));
-    child.on("close", (code, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      resolve({
-        stdout,
-        stderr,
-        code,
-        signal,
-        termination: noOutputTimedOut ? "no-output-timeout" : timedOut ? "timeout" : "exit",
-      });
-    });
-
-    const handleStdinError = (error: unknown) => {
-      if (isIgnorableStdinWriteError(error) || settled) {
-        return;
-      }
-      failCommand(new Error(`policy stdin stream failed: ${formatErrorMessage(error)}`), true);
-    };
-    child.stdin?.on("error", handleStdinError);
-    try {
-      child.stdin?.end(params.input);
-    } catch (error) {
-      handleStdinError(error);
-    }
-  });
 }
 
 function normalizeFinding(value: unknown): InstallPolicyFinding | null {
@@ -766,8 +625,7 @@ export async function runInstallPolicy(params: {
       targetPath: commandPath,
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));
@@ -777,8 +635,7 @@ export async function runInstallPolicy(params: {
       command: secureCommandPath,
       args: policy.exec.args ?? [],
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));
@@ -800,17 +657,20 @@ export async function runInstallPolicy(params: {
   const noOutputTimeoutMs = normalizePositiveTimerMs(policy.exec.noOutputTimeoutMs, timeoutMs);
   const maxOutputBytes = normalizePositiveInt(policy.exec.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES);
   const cwd = path.dirname(secureCommandPath);
-  let result: ExecRunResult;
+  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
-    result = await runPolicyCommand({
-      command: secureCommandPath,
-      args: policy.exec.args ?? [],
+    result = await runCommandWithTimeout([secureCommandPath, ...(policy.exec.args ?? [])], {
+      baseEnv: {},
       cwd,
       env: childEnv,
       input,
-      timeoutMs,
-      noOutputTimeoutMs,
+      killProcessTree: true,
+      maxCombinedOutputBytes: maxOutputBytes,
       maxOutputBytes,
+      noOutputTimeoutMs,
+      outputCapture: "head",
+      terminateOnOutputLimit: true,
+      timeoutMs,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));
@@ -820,6 +680,9 @@ export async function runInstallPolicy(params: {
   }
   if (result.termination === "no-output-timeout") {
     return failClosed(`policy command produced no output for ${noOutputTimeoutMs}ms`);
+  }
+  if (result.outputLimitExceeded) {
+    return failClosed(`output exceeded maxOutputBytes (${maxOutputBytes})`);
   }
   if (result.code !== 0) {
     return failClosed(`policy command exited with code ${String(result.code)}`);
@@ -883,3 +746,4 @@ export async function probeInstallPolicy(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

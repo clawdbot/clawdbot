@@ -161,7 +161,7 @@ struct MenuContentSmokeTests {
             let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
                 connectionMode: mode,
                 onboardingSeen: false,
-                crestodianResumePending: false,
+                systemAgentResumePending: false,
                 gatewayConnected: true,
                 configuredInferenceModel: " openai/gpt-5.5 ")
 
@@ -174,7 +174,7 @@ struct MenuContentSmokeTests {
             let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
                 connectionMode: .remote,
                 onboardingSeen: false,
-                crestodianResumePending: false,
+                systemAgentResumePending: false,
                 gatewayConnected: true,
                 configuredInferenceModel: model)
 
@@ -186,7 +186,7 @@ struct MenuContentSmokeTests {
         let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: .remote,
             onboardingSeen: false,
-            crestodianResumePending: false,
+            systemAgentResumePending: false,
             gatewayConnected: false,
             configuredInferenceModel: "openai/gpt-5.5")
 
@@ -197,18 +197,18 @@ struct MenuContentSmokeTests {
         let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: .local,
             onboardingSeen: false,
-            crestodianResumePending: false,
+            systemAgentResumePending: false,
             gatewayConnected: true,
             configuredInferenceModel: "openai/gpt-5.5")
 
         #expect(shouldOpen)
     }
 
-    @Test func `pending Crestodian handoff survives relaunch and keeps onboarding`() {
+    @Test func `pending OpenClaw handoff survives relaunch and keeps onboarding`() {
         let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: .local,
             onboardingSeen: false,
-            crestodianResumePending: true,
+            systemAgentResumePending: true,
             gatewayConnected: true,
             configuredInferenceModel: "openai/gpt-5.5")
 

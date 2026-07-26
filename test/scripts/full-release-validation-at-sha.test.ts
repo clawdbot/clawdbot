@@ -8,6 +8,7 @@ import {
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
+  shouldDeleteTemporaryWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
 describe("full-release-validation-at-sha", () => {
@@ -41,6 +42,17 @@ describe("full-release-validation-at-sha", () => {
     });
   });
 
+  it("accepts documented -f assignments after the option separator", () => {
+    expect(
+      parseArgs(["--", "-f", "release_profile=full", "-fmode=linux", "provider=anthropic"]).inputs,
+    ).toMatchObject({
+      mode: "linux",
+      provider: "anthropic",
+      release_profile: "full",
+    });
+    expect(() => parseArgs(["--", "-f"])).toThrow("-f requires a value");
+  });
+
   it("infers the release profile from the target package version", () => {
     const readVersion = (version: string) => () => JSON.stringify({ version });
 
@@ -54,6 +66,9 @@ describe("full-release-validation-at-sha", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
     expect(source).toContain("ref: targetSha");
     expect(source).toContain("target_context_ref: targetContextRef");
+    expect(source).toContain(
+      'args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true"',
+    );
   });
 
   it("rejects missing option values", () => {
@@ -112,6 +127,9 @@ describe("full-release-validation-at-sha", () => {
     expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
       "release_profile must be beta, stable, or full",
     );
+    expect(() => parseArgs(["-f", "allow_unreleased_changelog=maybe"])).toThrow(
+      "allow_unreleased_changelog must be true or false",
+    );
   });
 
   it("reserves the candidate ref for the resolved --sha", () => {
@@ -128,6 +146,38 @@ describe("full-release-validation-at-sha", () => {
       "--json",
     ]);
     expect(() => releaseEvidenceVerificationArgs("")).toThrow("positive decimal");
+  });
+
+  it("polls the exact workflow run without GraphQL quota use", () => {
+    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    expect(source).toContain("actions/runs/${parentRunId}");
+    expect(source).toContain("workflowRun.head_sha !== workflowSha");
+    expect(source).not.toContain('"graphql"');
+    expect(source).not.toContain('["run", "watch"');
+  });
+
+  it("retains a failed parent workflow ref for GitHub reruns", () => {
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: false,
+        keepBranch: false,
+        parentConclusion: "failure",
+      }),
+    ).toBe(false);
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: false,
+        keepBranch: false,
+        parentConclusion: "success",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: true,
+        keepBranch: false,
+        parentConclusion: "",
+      }),
+    ).toBe(true);
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {

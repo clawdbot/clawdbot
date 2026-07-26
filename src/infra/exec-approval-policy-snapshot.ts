@@ -1,5 +1,5 @@
 // Canonicalizes the portable policy snapshot carried with delayed exec approvals.
-export type ExecApprovalPolicyRule = {
+type ExecApprovalPolicyRule = {
   pattern: string;
   argPattern?: string;
   source?: "allow-always";

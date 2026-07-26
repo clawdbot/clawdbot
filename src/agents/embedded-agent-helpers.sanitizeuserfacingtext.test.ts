@@ -13,12 +13,11 @@ import {
 } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { formatAgentInternalEventsForPrompt } from "./internal-events.js";
 import {
-  formatAgentInternalEventsForPrompt,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-} from "./internal-events.js";
-import { sanitizeToolCallId } from "./tool-call-id.js";
+} from "./internal-runtime-context.js";
 
 describe("sanitizeUserFacingText", () => {
   it("strips final tags", () => {
@@ -64,6 +63,12 @@ describe("sanitizeUserFacingText", () => {
   it("sanitizes HTTP status errors with error hints", () => {
     expect(sanitizeUserFacingText("500 Internal Server Error", { errorContext: true })).toBe(
       "HTTP 500: Internal Server Error",
+    );
+  });
+
+  it("preserves a provider-completed finish_reason error", () => {
+    expect(sanitizeUserFacingText("Provider finish_reason: error", { errorContext: true })).toBe(
+      "Provider finish_reason: error",
     );
   });
 
@@ -724,58 +729,6 @@ describe("stripThoughtSignatures", () => {
     const input = [null, undefined, { type: "text", text: "hello" }];
     const result = stripThoughtSignatures(input);
     expect(result).toEqual([null, undefined, { type: "text", text: "hello" }]);
-  });
-});
-
-describe("sanitizeToolCallId", () => {
-  describe("strict mode (default)", () => {
-    it("keeps valid alphanumeric tool call IDs", () => {
-      expect(sanitizeToolCallId("callabc123")).toBe("callabc123");
-    });
-    it("strips underscores and hyphens", () => {
-      expect(sanitizeToolCallId("call_abc-123")).toBe("callabc123");
-      expect(sanitizeToolCallId("call_abc_def")).toBe("callabcdef");
-    });
-    it("strips invalid characters", () => {
-      expect(sanitizeToolCallId("call_abc|item:456")).toBe("callabcitem456");
-    });
-  });
-
-  describe("strict mode (alphanumeric only)", () => {
-    it("strips all non-alphanumeric characters", () => {
-      expect(sanitizeToolCallId("call_abc-123", "strict")).toBe("callabc123");
-      expect(sanitizeToolCallId("call_abc|item:456", "strict")).toBe("callabcitem456");
-      expect(sanitizeToolCallId("plugin_login_1768799841527_1", "strict")).toBe(
-        "pluginlogin17687998415271",
-      );
-    });
-  });
-
-  describe("strict9 mode (Mistral tool call IDs)", () => {
-    it("returns alphanumeric IDs with length 9", () => {
-      const out = sanitizeToolCallId("call_abc|item:456", "strict9");
-      expect(out).toMatch(/^[a-zA-Z0-9]{9}$/);
-    });
-  });
-
-  it.each([
-    {
-      modeLabel: "default",
-      run: () => sanitizeToolCallId(""),
-      assert: (value: string) => expect(value).toBe("defaulttoolid"),
-    },
-    {
-      modeLabel: "strict",
-      run: () => sanitizeToolCallId("", "strict"),
-      assert: (value: string) => expect(value).toBe("defaulttoolid"),
-    },
-    {
-      modeLabel: "strict9",
-      run: () => sanitizeToolCallId("", "strict9"),
-      assert: (value: string) => expect(value).toMatch(/^[a-zA-Z0-9]{9}$/),
-    },
-  ])("returns default for empty IDs in $modeLabel mode", ({ run, assert }) => {
-    assert(run());
   });
 });
 

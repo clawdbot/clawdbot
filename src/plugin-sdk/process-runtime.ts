@@ -4,6 +4,7 @@ export {
   type CommandOptions,
   resolveCommandEnv,
   resolveProcessExitCode,
+  runCommandBuffered,
   runCommandWithTimeout,
   runExec,
   shouldSpawnWithShell,

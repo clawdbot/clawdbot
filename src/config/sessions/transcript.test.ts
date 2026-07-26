@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -22,6 +23,8 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
 } from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import {
   appendSessionTranscriptEvent,
@@ -38,10 +41,11 @@ import {
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
-  readRecentUserAssistantTextFromSessionTranscript,
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
+
+type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
 describe("appendAssistantMessageToSessionTranscript", () => {
   beforeAll(async () => {
@@ -55,6 +59,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
       );
       await appendAssistantMessageToSessionTranscript({
+        agentId: "main",
         sessionKey: "warm",
         text: "warm",
         storePath,
@@ -66,7 +71,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   const fixture = useTempSessionsFixture("transcript-test-");
   const sessionId = "test-session-id";
-  const sessionKey = "test-session";
+  const sessionKey = "agent:main:test-session";
   type ExactAssistantMessage = Parameters<
     typeof appendExactAssistantMessageToSessionTranscript
   >[0]["message"];
@@ -82,26 +87,26 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     };
   };
 
-  async function writeTranscriptStore(entry: Partial<SessionEntry> = {}) {
+  async function writeTranscriptStore(entry: SessionEntryFixture = {}) {
     await replaceSessionEntry(
       { agentId: "main", sessionKey, storePath: fixture.storePath() },
-      {
+      normalizeLegacySessionEntryDelivery({
         sessionId,
         chatType: "direct",
-        channel: "discord",
         updatedAt: 1,
+        channel: "discord",
         ...entry,
-      },
+      } as SessionEntry),
     );
   }
 
   async function writeTranscriptSessionEntry(params: {
-    entry: Partial<SessionEntry> & Pick<SessionEntry, "sessionId">;
+    entry: SessionEntryFixture & Pick<SessionEntry, "sessionId">;
     sessionKey: string;
   }) {
     await replaceSessionEntry(
       { agentId: "main", sessionKey: params.sessionKey, storePath: fixture.storePath() },
-      { updatedAt: 1, ...params.entry },
+      normalizeLegacySessionEntryDelivery({ updatedAt: 1, ...params.entry } as SessionEntry),
     );
   }
 
@@ -473,21 +478,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         },
       },
       async () =>
-        await appendSessionTranscriptMessage({
-          transcriptPath: sessionFile,
-          message: {
-            role: "assistant",
-            content: "Hello from bound delivery",
-            timestamp: Date.now(),
-            stopReason: "stop",
-          },
+        await runWithOwnedSessionTranscriptWriteLock({ sessionFile, sessionKey }, () => {
+          events.push("write");
+          return "ok";
         }),
     );
 
     const result = await callback();
 
-    expect(result.messageId).toBeTruthy();
-    expect(events).toEqual(["lock"]);
+    expect(result).toBe("ok");
+    expect(events).toEqual(["lock", "write"]);
   });
 
   it("appends to legacy lowercase Signal group session entries", async () => {
@@ -815,6 +815,36 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("idempotently appends identified message-tool source replies", async () => {
+    await writeTranscriptStore();
+    const deliveryMirror = {
+      kind: "message-tool-source-reply" as const,
+      final: true,
+      sourceTurnId: "channel-user:v1:message-1",
+    };
+
+    const first = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Delivered once",
+      storePath: fixture.storePath(),
+      idempotencyKey: "message-tool:message-1",
+      deliveryMirror,
+    });
+    const replay = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Delivered once",
+      storePath: fixture.storePath(),
+      idempotencyKey: "message-tool:message-1",
+      deliveryMirror,
+    });
+
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    if (first.ok && replay.ok) {
+      expect(replay.messageId).toBe(first.messageId);
+    }
+  });
+
   it("idempotently appends suppressed channel finals by key while preserving source ids", async () => {
     await writeTranscriptStore();
 
@@ -944,106 +974,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("reads bounded recent user and assistant text before the current turn", async () => {
-    await writeTranscriptStore();
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        role: "user",
-        content: "Analyze this chart",
-        timestamp: 1_000,
-        provenance: { kind: "external_user", sourceChannel: "gateway" },
-      },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        ...createExactAssistantMessage({ text: "The chart is range-bound; want an alert?" }),
-        timestamp: 2_000,
-      },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        role: "user",
-        content: "no need, I closed it",
-        timestamp: 3_000,
-        provenance: { kind: "external_user", sourceChannel: "telegram" },
-      },
-    });
-
-    const recent = await readRecentUserAssistantTextFromSessionTranscript(sessionFile, {
-      beforeTimestampMs: 3_000,
-      limit: 10,
-    });
-
-    expect(recent).toEqual([
-      {
-        id: expect.any(String),
-        role: "user",
-        text: "Analyze this chart",
-        timestamp: 1_000,
-        sourceChannel: "gateway",
-      },
-      {
-        id: expect.any(String),
-        role: "assistant",
-        text: "The chart is range-bound; want an alert?",
-        timestamp: 2_000,
-      },
-    ]);
-  });
-
-  it("skips transcript-only OpenClaw assistant entries when reading recent prompt context", async () => {
-    await writeTranscriptStore();
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: { role: "user", content: "approved from gateway", timestamp: 1_000 },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        ...createExactAssistantMessage({
-          text: "Transcript delivery bookkeeping",
-          provider: "openclaw",
-          model: "gateway-injected",
-        }),
-        timestamp: 2_000,
-      },
-    });
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: {
-        ...createExactAssistantMessage({ text: "Visible assistant reply" }),
-        timestamp: 3_000,
-      },
-    });
-
-    await expect(
-      readRecentUserAssistantTextFromSessionTranscript(sessionFile, {
-        beforeTimestampMs: 4_000,
-        limit: 10,
-      }),
-    ).resolves.toEqual([
-      {
-        id: expect.any(String),
-        role: "user",
-        text: "approved from gateway",
-        timestamp: 1_000,
-      },
-      {
-        id: expect.any(String),
-        role: "assistant",
-        text: "Visible assistant reply",
-        timestamp: 3_000,
-      },
-    ]);
-  });
-
   it("resolves recent transcript context from session identity", async () => {
     await writeTranscriptStore();
     await persistSessionTranscriptTurn(
@@ -1061,6 +991,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     await expect(
       readRecentUserAssistantTextForSession({
+        agentId: "main",
         sessionKey,
         storePath: fixture.storePath(),
         beforeTimestampMs: 5_000,
@@ -1070,6 +1001,123 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         id: expect.any(String),
         role: "user",
         text: "from shared session",
+        timestamp: 4_000,
+      },
+    ]);
+  });
+
+  it("reads recent context only from the active transcript branch", async () => {
+    await writeTranscriptStore();
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+      {
+        updateMode: "none",
+        messages: [
+          {
+            eventId: "root-user",
+            parentId: null,
+            message: { role: "user", content: "keep this branch", timestamp: 1_000 },
+          },
+          {
+            eventId: "active-reply",
+            parentId: "root-user",
+            message: { role: "assistant", content: "active answer", timestamp: 2_000 },
+          },
+          {
+            eventId: "abandoned-reply",
+            parentId: "root-user",
+            message: { role: "assistant", content: "abandoned answer", timestamp: 3_000 },
+          },
+        ],
+      },
+    );
+    await appendTranscriptEvent(
+      { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+      { type: "leaf", id: "active-leaf", parentId: "abandoned-reply", targetId: "active-reply" },
+    );
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
+    ).resolves.toEqual([]);
+    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
+      agentId: "main",
+    }).path;
+    await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
+    ).resolves.toEqual([
+      { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
+      { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
+    ]);
+
+    const futureMessages = Array.from({ length: 260 }, (_, index) => ({
+      eventId: `future-${index}`,
+      parentId: index === 0 ? "active-reply" : `future-${index - 1}`,
+      message: { role: "user" as const, content: `future ${index}`, timestamp: 10_000 + index },
+    }));
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+      { updateMode: "none", messages: futureMessages },
+    );
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+        beforeTimestampMs: 2_500,
+        limit: 2,
+      }),
+    ).resolves.toEqual([
+      { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
+      { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
+    ]);
+  });
+
+  it("rejects a session key scoped to a different agent", async () => {
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey: "agent:worker:main",
+        storePath: fixture.storePath(),
+      }),
+    ).rejects.toMatchObject({
+      code: "SESSION_TRANSCRIPT_AGENT_SCOPE_MISMATCH",
+      name: "SessionTranscriptAgentScopeMismatchError",
+    });
+  });
+
+  it("resolves an unscoped main alias with the configured agent owner", async () => {
+    const mainSessionKey = "agent:main:main";
+    await writeTranscriptSessionEntry({ entry: { sessionId }, sessionKey: mainSessionKey });
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey: mainSessionKey, storePath: fixture.storePath() },
+      {
+        updateMode: "none",
+        messages: [{ message: { role: "user", content: "from main alias", timestamp: 4_000 } }],
+      },
+    );
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey: "main",
+        storePath: fixture.storePath(),
+        beforeTimestampMs: 5_000,
+      }),
+    ).resolves.toEqual([
+      {
+        id: expect.any(String),
+        role: "user",
+        text: "from main alias",
         timestamp: 4_000,
       },
     ]);
@@ -1101,6 +1149,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     await expect(
       readRecentUserAssistantTextForSession({
+        agentId: "main",
         sessionKey,
         storePath: fixture.storePath(),
         beforeTimestampMs: 5_000,
@@ -1141,6 +1190,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     await expect(
       readRecentUserAssistantTextForSession({
+        agentId: "main",
         sessionKey,
         storePath: fixture.storePath(),
         beforeTimestampMs: 5_000,
@@ -1160,6 +1210,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     await expect(
       readRecentUserAssistantTextForSession({
+        agentId: "main",
         sessionKey,
         storePath: fixture.storePath(),
         beforeTimestampMs: 5_000,
@@ -1196,6 +1247,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
       await expect(
         readRecentUserAssistantTextForSession({
+          agentId: "main",
           sessionKey,
           storePath: fixture.storePath(),
           beforeTimestampMs: 3_000,
@@ -2796,3 +2848,4 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messages[2]?.parentId).toBe("legacy-second");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

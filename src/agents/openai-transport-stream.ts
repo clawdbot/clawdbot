@@ -1,3 +1,6 @@
+import { buildOpenAICompletionsParams as buildOpenAICompletionsParamsImpl } from "@openclaw/ai/transports";
+import "./ai-transport-runtime-host.js";
+import type { OpenAICompletionsOptions, OpenAIModeModel } from "@openclaw/ai/transports";
 /**
  * Public OpenAI transport surface.
  *
@@ -5,18 +8,8 @@
  * established imports stable while sharing only transport-neutral primitives between them.
  */
 import type { Context } from "../llm/types.js";
-import {
-  buildOpenAICompletionsParams as buildOpenAICompletionsParamsImpl,
-  completionsTesting,
-} from "./openai-completions-transport.js";
-import { responsesTesting } from "./openai-responses-transport.js";
-import type { OpenAICompletionsOptions, OpenAIModeModel } from "./openai-transport-shared.js";
 
-export { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
-export {
-  createAzureOpenAIResponsesTransportStreamFn,
-  createOpenAIResponsesTransportStreamFn,
-} from "./openai-responses-transport.js";
+export { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 
 // Keep this SDK-exported declaration anchored to the long-lived facade while the
 // completions implementation remains independently owned.
@@ -27,9 +20,3 @@ export function buildOpenAICompletionsParams(
 ): Record<string, unknown> {
   return buildOpenAICompletionsParamsImpl(model, context, options);
 }
-
-export const testing = {
-  ...responsesTesting,
-  ...completionsTesting,
-};
-export { testing as __testing };

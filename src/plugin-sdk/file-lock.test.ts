@@ -10,6 +10,7 @@ import {
   drainFileLockStateForTest,
   FILE_LOCK_STALE_ERROR_CODE,
   FILE_LOCK_TIMEOUT_ERROR_CODE,
+  reclaimDefinitelyStaleFileLock,
   resetFileLockStateForTest,
 } from "./file-lock.js";
 
@@ -23,6 +24,7 @@ describe("acquireFileLock", () => {
 
   afterEach(async () => {
     await drainFileLockStateForTest();
+    vi.restoreAllMocks();
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -243,5 +245,72 @@ describe("acquireFileLock", () => {
     ).rejects.toThrow(writeError);
 
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("reclaims a definitely stale retired lock sidecar", async () => {
+    const lockPath = path.join(tempDir, "embed.lock.lock");
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+
+    await expect(reclaimDefinitelyStaleFileLock(lockPath)).resolves.toBe("removed");
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(reclaimDefinitelyStaleFileLock(lockPath)).resolves.toBe("missing");
+  });
+
+  it("retains live, malformed, and symlink lock sidecars", async () => {
+    const livePath = path.join(tempDir, "live.lock.lock");
+    const malformedPath = path.join(tempDir, "malformed.lock.lock");
+    const staleTargetPath = path.join(tempDir, "stale-target.lock");
+    const symlinkPath = path.join(tempDir, "symlink.lock.lock");
+    await fs.writeFile(
+      livePath,
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(malformedPath, "{", "utf8");
+    await fs.writeFile(
+      staleTargetPath,
+      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+    await fs.symlink(staleTargetPath, symlinkPath);
+
+    await expect(reclaimDefinitelyStaleFileLock(livePath)).resolves.toBe("retained");
+    await expect(reclaimDefinitelyStaleFileLock(malformedPath)).resolves.toBe("retained");
+    await expect(reclaimDefinitelyStaleFileLock(symlinkPath)).resolves.toBe("retained");
+    await expect(fs.readFile(livePath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
+    await expect(fs.readFile(malformedPath, "utf8")).resolves.toBe("{");
+    await expect(fs.lstat(symlinkPath)).resolves.toMatchObject({ mode: expect.any(Number) });
+    expect((await fs.lstat(symlinkPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.readFile(staleTargetPath, "utf8")).resolves.toContain(`"pid":${2 ** 30}`);
+  });
+
+  it("retains a stale snapshot replaced before reclaim approval", async () => {
+    const lockPath = path.join(tempDir, "replaced.lock.lock");
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+    const originalLstat = fs.lstat.bind(fs);
+    let lockLstatCalls = 0;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const [candidate] = args;
+      if (candidate === lockPath && ++lockLstatCalls === 3) {
+        await fs.rm(lockPath);
+        await fs.writeFile(
+          lockPath,
+          `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+          "utf8",
+        );
+      }
+      return await originalLstat(...args);
+    });
+
+    await expect(reclaimDefinitelyStaleFileLock(lockPath)).resolves.toBe("retained");
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
   });
 });

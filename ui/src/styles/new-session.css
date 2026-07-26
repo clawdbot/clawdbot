@@ -36,7 +36,10 @@ openclaw-new-session-page {
    here; its margin: auto still centers whenever there is spare room. */
 .new-session-page .agent-chat__welcome {
   flex: 0 0 auto;
+  width: 100%;
+  max-width: none;
   min-height: auto;
+  box-sizing: border-box;
 }
 
 /* Draft block inside the centered welcome column; the welcome centers text,
@@ -50,48 +53,152 @@ openclaw-new-session-page {
   text-align: left;
 }
 
-/* Cursor-style quiet trigger row: each control is a <details> whose summary
-   reads as muted text with a chevron; the menu floats below the trigger. */
+.new-session-page__visibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.new-session-page__visibility:hover:not(:disabled),
+.new-session-page__visibility--active {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-page__visibility--active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+  font-weight: 650;
+}
+
+.new-session-page__visibility:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.new-session-page__visibility svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+}
+
+/* Quiet chip row directly above the composer: the agent and place pickers
+   share one trigger treatment so the row reads as a single control
+   strip. Web Awesome owns popup/listbox behavior. */
 .new-session-page__triggers {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 16px;
-  padding: 0 2px;
+  justify-content: flex-start;
+  gap: 4px 2px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .new-session-page__select {
   position: relative;
 }
 
+.new-session-page__select--agent openclaw-agent-select {
+  width: auto;
+  max-width: min(40vw, 260px);
+}
+
+.agent-select--compact .agent-select__trigger,
+:root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-select--compact .agent-select__trigger:hover:not(:disabled),
+.agent-select--compact .agent-select__trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.agent-select--compact .agent-select__avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-select--compact .agent-select__label {
+  max-width: min(32vw, 220px);
+}
+
 .new-session-page__trigger {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 0;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
   font-size: 12px;
   color: var(--muted);
   list-style: none;
   cursor: pointer;
   user-select: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-family: inherit;
 }
 
 .new-session-page__trigger::-webkit-details-marker {
   display: none;
 }
 
-.new-session-page__trigger:hover,
-.new-session-page__select[open] > .new-session-page__trigger {
+.new-session-page__trigger:hover:not(:disabled),
+.new-session-page__trigger[aria-expanded="true"] {
   color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.new-session-page__trigger--disabled {
+.new-session-page__trigger:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.new-session-page__trigger--disabled:hover {
-  color: var(--muted);
+/* Keep the anchor focusable while Web Awesome finishes its hide animation. */
+.new-session-page__trigger--hiding {
+  pointer-events: none;
+}
+
+.new-session-page__runtime {
+  color: var(--text);
+  cursor: default;
+}
+
+.new-session-page__runtime:hover {
+  background: transparent;
+}
+
+.new-session-page__catalog-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .new-session-page__trigger-label {
@@ -127,11 +234,11 @@ openclaw-new-session-page {
 
 /* Menu panel anchored under its trigger; item rows reuse the shared
    .session-menu__* styles so every menu in the app reads the same. */
-.new-session-page__menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 80;
+wa-popover.new-session-page__select {
+  --max-width: min(320px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__select::part(body) {
   min-width: 224px;
   max-width: min(320px, calc(100vw - 24px));
   padding: 6px;
@@ -180,12 +287,86 @@ openclaw-new-session-page {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
-/* The folder menu hosts the directory browser; wider than the list menus. */
-.new-session-page__menu--browser {
+/* Context line inside a picker menu, e.g. which repo syncs to a cloud worker. */
+.new-session-page__menu-note {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* Place browsing uses the same shell as its root menu, with inset root rows. */
+wa-popover.new-session-page__place-popover {
+  --max-width: min(420px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__place-popover::part(body) {
   width: min(420px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
+}
+
+/* part(body) hides overflow for the browser view's square corners, so the
+   root menu needs its own scroll region or long place lists become unreachable. */
+.new-session-page__place-root {
+  max-height: min(420px, 60vh);
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.new-session-page__menu-chevron {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.new-session-page__menu-chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The chip row already spaces itself; keep the composer snug beneath it. */
+.new-session-page__composer.agent-chat__composer-shell {
+  position: relative;
+  margin-top: 0;
+  border-radius: var(--radius-md);
+}
+
+.new-session-page__composer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.new-session-page__composer[data-attachment-drop-active]::after {
+  opacity: 0.1;
+}
+
+.new-session-page__composer > * {
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.new-session-page__composer[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-session-page__composer::after,
+  .new-session-page__composer > * {
+    transition-duration: 0ms;
+  }
 }
 
 .new-session-page__target-icon {
@@ -303,17 +484,60 @@ openclaw-new-session-page {
   border-top: 1px solid var(--border);
 }
 
-.new-session-page__error {
+.new-session-page__browser > .new-session-page__error {
+  padding: 8px 10px 0;
   font-size: 12px;
   color: var(--danger);
+}
+
+.new-session-page__alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: fit-content;
+  max-width: min(48rem, calc(100% - 36px));
+  margin: 4px auto 2px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  text-align: left;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.new-session-page__alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.new-session-page__alert-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__alert-message {
+  min-width: 0;
+  padding-top: 3px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .new-session-page__browser-use {
   padding: 6px 14px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--accent);
-  color: var(--accent-contrast, #fff);
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -335,16 +559,14 @@ openclaw-new-session-page {
 
   .new-session-page__triggers {
     position: relative;
-    gap: 4px 12px;
+    gap: 4px 2px;
   }
 
   .new-session-page__select {
     position: static;
   }
 
-  .new-session-page__menu {
-    right: 0;
-    left: 0;
+  wa-popover.new-session-page__select::part(body) {
     width: auto;
     max-width: none;
   }

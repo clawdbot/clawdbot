@@ -21,7 +21,6 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
 });
 
 import {
-  buildActivity,
   buildConversationReference,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
@@ -159,6 +158,38 @@ function createMockApp(opts?: MockAppOptions): MSTeamsApp {
       },
     },
   } as unknown as MSTeamsApp;
+}
+
+async function buildActivity(
+  message: Parameters<typeof sendMSTeamsMessages>[0]["messages"][number],
+  conversationRef: StoredConversationReference,
+  tokenProvider?: Parameters<typeof sendMSTeamsMessages>[0]["tokenProvider"],
+  sharePointSiteId?: string,
+  mediaMaxBytes?: number,
+  options?: { feedbackLoopEnabled?: boolean },
+): Promise<Record<string, unknown>> {
+  let captured: Record<string, unknown> | undefined;
+  const app = createMockApp({
+    createFn: async (activity) => {
+      captured = activity as Record<string, unknown>;
+      return { id: "captured" };
+    },
+  });
+  await sendMSTeamsMessages({
+    replyStyle: "top-level",
+    app,
+    appId: "app123",
+    conversationRef,
+    messages: [message],
+    tokenProvider,
+    sharePointSiteId,
+    mediaMaxBytes,
+    feedbackLoopEnabled: options?.feedbackLoopEnabled,
+  });
+  if (!captured) {
+    throw new Error("expected Teams activity to be sent");
+  }
+  return captured;
 }
 
 describe("msteams messenger", () => {

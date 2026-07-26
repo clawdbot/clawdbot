@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loginMiniMaxPortalOAuth, normalizeOAuthExpires } from "./oauth.js";
+import { loginMiniMaxPortalOAuth } from "./oauth.js";
 
 const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
 
@@ -219,27 +219,92 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("normalizeOAuthExpires", () => {
-  it("converts relative expiry seconds into an absolute millisecond timestamp", () => {
-    expect(normalizeOAuthExpires(86_400, 1_700_000_000_000)).toBe(1_700_086_400_000);
-  });
-
-  it("converts Unix second timestamps into milliseconds", () => {
-    expect(normalizeOAuthExpires(1_700_000_000)).toBe(1_700_000_000_000);
-  });
-
-  it("preserves absolute millisecond timestamps", () => {
-    expect(normalizeOAuthExpires(1_700_000_000_000)).toBe(1_700_000_000_000);
-  });
-
-  it("rejects unsafe and malformed expiry values", () => {
-    expect(normalizeOAuthExpires(Number.POSITIVE_INFINITY)).toBeUndefined();
-    expect(normalizeOAuthExpires(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
-    expect(normalizeOAuthExpires("3600s")).toBeUndefined();
-  });
-});
-
 describe("loginMiniMaxPortalOAuth", () => {
+  it.each([
+    [3600, 1_700_003_600_000],
+    [1_700_000_000, 1_700_000_000_000],
+    [1_700_000_000_000, 1_700_000_000_000],
+  ])("normalizes token expiry %s through the OAuth flow", async (expiredIn, expectedExpires) => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        callCount += 1;
+        const body =
+          init?.body instanceof URLSearchParams
+            ? init.body
+            : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+        return new Response(
+          JSON.stringify(
+            callCount === 1
+              ? {
+                  user_code: "CODE",
+                  verification_uri: "https://example.com/device",
+                  expired_in: Date.now() + 10_000,
+                  state: body.get("state"),
+                }
+              : {
+                  status: "success",
+                  access_token: "access",
+                  refresh_token: "refresh",
+                  expired_in: expiredIn,
+                },
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    await expect(
+      loginMiniMaxPortalOAuth({
+        openUrl: vi.fn(async () => undefined),
+        note: vi.fn(async () => undefined),
+        progress: { update: vi.fn(), stop: vi.fn() },
+      }),
+    ).resolves.toMatchObject({ expires: expectedExpires });
+  });
+
+  it("rejects malformed token expiry through the OAuth flow", async () => {
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        callCount += 1;
+        const body =
+          init?.body instanceof URLSearchParams
+            ? init.body
+            : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+        return new Response(
+          JSON.stringify(
+            callCount === 1
+              ? {
+                  user_code: "CODE",
+                  verification_uri: "https://example.com/device",
+                  expired_in: Date.now() + 10_000,
+                  state: body.get("state"),
+                }
+              : {
+                  status: "success",
+                  access_token: "access",
+                  refresh_token: "refresh",
+                  expired_in: "3600s",
+                },
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    await expect(
+      loginMiniMaxPortalOAuth({
+        openUrl: vi.fn(async () => undefined),
+        note: vi.fn(async () => undefined),
+        progress: { update: vi.fn(), stop: vi.fn() },
+      }),
+    ).rejects.toThrow("invalid token expiry");
+  });
+
   it("times out authorization code HTTP requests against a hanging loopback server", async () => {
     const realFetch = fetch;
     const server = await startHangingLoopbackServer();

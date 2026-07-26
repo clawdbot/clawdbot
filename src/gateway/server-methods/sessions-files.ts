@@ -6,21 +6,31 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  isCloudWorkerPlacementState,
   type SessionFileBrowserEntry,
   type SessionFileBrowserResult,
   type SessionFileEntry,
   type SessionFileRelevance,
   type SessionsFilesGetParams,
+  validateSessionsFilesRevealParams,
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
+import { runGit } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
+import {
+  execOpenPath,
+  formatOpenPathError,
+  isHeadlessOpenPathError,
+  resolveOpenPathCommand,
+  sanitizePathForLog,
+} from "./open-path.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
@@ -50,6 +60,7 @@ type TouchedFile = {
 type LoadedSessionFiles = {
   root?: string;
   fileRoot?: string;
+  diffCwd?: string;
   files: TouchedFile[];
 };
 
@@ -339,7 +350,7 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntry(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
@@ -350,15 +361,21 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
       resolveDefaultAgentId(loaded.cfg),
   );
   const spawnedCwd = normalizePathValue(loaded.entry.spawnedCwd);
-  const root =
-    normalizePathValue(loaded.entry.spawnedWorkspaceDir) ??
-    spawnedCwd ??
-    normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+  const spawnedWorkspaceDir = normalizePathValue(loaded.entry.spawnedWorkspaceDir);
+  const configuredWorkspaceDir =
+    spawnedCwd || spawnedWorkspaceDir
+      ? undefined
+      : normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+  // Keep this cwd precedence aligned with sessions.diff so the advertised
+  // checkout state cannot disagree with the panel's fallback result.
+  const diffCwd = spawnedCwd ?? spawnedWorkspaceDir ?? configuredWorkspaceDir;
+  const root = spawnedWorkspaceDir ?? spawnedCwd ?? configuredWorkspaceDir;
   return {
     ...loaded,
     agentId,
     root,
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
+    diffCwd,
   };
 }
 
@@ -533,6 +550,7 @@ async function loadSessionFiles(params: {
   return {
     root: loaded.root,
     fileRoot: loaded.fileRoot,
+    diffCwd: loaded.diffCwd,
     files: [...files.values()].toSorted((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
@@ -547,9 +565,23 @@ async function buildListResult(params: {
   agentId?: string;
   path?: string;
   search?: string;
-}): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
+}): Promise<{
+  root?: string;
+  gitCheckout?: boolean;
+  files: SessionFileEntry[];
+  browser?: SessionFileBrowserResult;
+}> {
   const loaded = await loadSessionFiles(params);
   const root = loaded.root;
+  let gitCheckout: boolean | undefined;
+  if (loaded.diffCwd) {
+    try {
+      const result = await runGit(loaded.diffCwd, ["rev-parse", "--show-toplevel"]);
+      gitCheckout = result.code === 0 && Boolean(result.stdout.trim());
+    } catch {
+      gitCheckout = false;
+    }
+  }
   const workspaceFiles = root
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
@@ -567,6 +599,7 @@ async function buildListResult(params: {
   });
   return {
     ...(root ? { root } : {}),
+    ...(gitCheckout === undefined ? {} : { gitCheckout }),
     files,
     ...(browser ? { browser } : {}),
   };
@@ -678,7 +711,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       ...result,
     });
   },
-  "sessions.files.set": async ({ params, respond }) => {
+  "sessions.files.set": async ({ params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
@@ -689,14 +722,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
-    const contentBuffer = Buffer.from(params.content, "utf8");
-    // Node replaces lone UTF-16 surrogates while encoding. Reject them instead
-    // of reporting a hash for bytes that no longer match the submitted text.
-    if (contentBuffer.toString("utf8") !== params.content) {
-      respondSessionFileUnsafe(respond, params.path);
-      return;
-    }
-    const contentSize = contentBuffer.byteLength;
+    const contentSize = Buffer.byteLength(params.content, "utf8");
     if (contentSize > MAX_PREVIEW_BYTES) {
       respond(
         false,
@@ -707,6 +733,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           size: contentSize,
         }),
       );
+      return;
+    }
+    const contentBuffer = Buffer.from(params.content, "utf8");
+    // Node replaces lone UTF-16 surrogates while encoding. Reject them instead
+    // of reporting a hash for bytes that no longer match the submitted text.
+    if (contentBuffer.toString("utf8") !== params.content) {
+      respondSessionFileUnsafe(respond, params.path);
       return;
     }
     const loaded = loadSessionFileRoot(params);
@@ -733,6 +766,9 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     let update: WorkspaceFileUpdateResult;
+    // The resolved root belongs to the authorized instance. Recheck after all async path
+    // discovery so a replacement cannot redirect this write to its workspace.
+    sessionMutationAuthorization?.assertCurrent();
     try {
       update = await updateWorkspaceFile(
         loaded.root,
@@ -777,4 +813,60 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       },
     });
   },
+  "sessions.files.reveal": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsFilesRevealParams,
+        "sessions.files.reveal",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const loaded = loadSessionFileRoot({ sessionKey: params.key, agentId: params.agentId });
+    const workspaceRoot = loaded.root;
+    if (!workspaceRoot) {
+      respond(true, {
+        ok: false,
+        error: "No workspace root is available for this session.",
+      });
+      return;
+    }
+    if (loaded.entry?.execNode) {
+      respond(true, {
+        ok: false,
+        path: workspaceRoot,
+        error: "Cannot reveal this workspace because the session runs on an exec node.",
+      });
+      return;
+    }
+    const placement = loaded.entry?.sessionId
+      ? context.workerSessionPlacementService
+          ?.getMany([loaded.entry.sessionId])
+          .get(loaded.entry.sessionId)
+      : undefined;
+    if (isCloudWorkerPlacementState(placement?.state)) {
+      respond(true, {
+        ok: false,
+        path: workspaceRoot,
+        error: `Cannot reveal this workspace because the session runs remotely (${placement.state}).`,
+      });
+      return;
+    }
+    try {
+      await execOpenPath(resolveOpenPathCommand(workspaceRoot));
+      respond(true, { ok: true, path: workspaceRoot });
+    } catch (error) {
+      const errorMessage = formatOpenPathError(error);
+      const detailedError = isHeadlessOpenPathError(errorMessage)
+        ? `Cannot open path in headless environment. Path: ${workspaceRoot}. This environment appears to lack a graphical or terminal browser handler.`
+        : `Failed to reveal session workspace: ${errorMessage}`;
+      context.logGateway.warn(
+        `sessions.files.reveal failed path=${sanitizePathForLog(workspaceRoot)}: ${errorMessage}`,
+      );
+      respond(true, { ok: false, path: workspaceRoot, error: detailedError });
+    }
+  },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

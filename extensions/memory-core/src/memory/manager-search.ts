@@ -988,3 +988,4 @@ export async function searchPathKeyword(params: {
   const resultLimit = hasExplicitExactPathHeadroom ? exactPathLimit + params.limit : params.limit;
   return [...byId.values()].toSorted(comparePathKeywordSearchResults).slice(0, resultLimit);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

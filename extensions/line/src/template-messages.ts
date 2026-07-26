@@ -3,8 +3,6 @@ import type { messagingApi } from "@line/bot-sdk";
 import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
 import type { LineTemplateMessagePayload } from "./types.js";
 
-export { messageAction };
-
 type TemplateMessage = messagingApi.TemplateMessage;
 type ConfirmTemplate = messagingApi.ConfirmTemplate;
 type ButtonsTemplate = messagingApi.ButtonsTemplate;

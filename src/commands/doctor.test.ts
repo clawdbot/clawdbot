@@ -256,7 +256,6 @@ describe("doctorCommand", () => {
       integrityCheck: "ok",
       mode: "compact",
       path: "/tmp/openclaw/state/openclaw.sqlite",
-      quickCheck: "ok",
       reclaimedBytes: 12_288,
       skipped: false,
     };

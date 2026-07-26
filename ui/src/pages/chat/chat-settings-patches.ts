@@ -1,6 +1,8 @@
+import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
   type SessionCapability,
+  type SessionPatch,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import {
@@ -9,16 +11,22 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { normalizeOptionalLowercaseString } from "../../lib/string-coerce.ts";
 
 type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
+type ChatCommandSettingsContext = {
+  sessions: SessionCapability;
+  defaultAgentId?: string;
+  agentId?: string;
+};
 type PendingPatchStore = WeakMap<SessionCapability, Map<string, Promise<boolean>>>;
 
 const pendingChatPickerPatches: PendingPatchStore = new WeakMap();
-const pendingChatModelSwitches: PendingPatchStore = new WeakMap();
 
 function resolveChatPickerPatchKey(
   host: ChatPickerPatchHost,
@@ -71,10 +79,11 @@ function trackLatestPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patchPromise: Promise<boolean>,
+  agentId?: string,
 ): void {
   const pendingBySession = store.get(host.sessions) ?? new Map<string, Promise<boolean>>();
   store.set(host.sessions, pendingBySession);
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey);
+  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
   pendingBySession.set(patchKey, patchPromise);
   void patchPromise.finally(() => {
     if (pendingBySession.get(patchKey) === patchPromise) {
@@ -91,31 +100,84 @@ export function getPendingChatPickerPatch(
   return getPendingPatch(pendingChatPickerPatches, host, sessionKey, agentId);
 }
 
-export function trackPendingChatPickerPatch(
+function trackPendingChatSettingsPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patchPromise: Promise<boolean>,
+  agentId?: string,
 ): void {
-  const previous = getPendingChatPickerPatch(host, sessionKey);
-  // Aggregate every picker patch across the shared capability; overlapping
-  // Gateway handlers can overtake pane-local or latest-only tracking.
-  const pending = Promise.all([previous ?? true, patchPromise]).then(
-    ([previousReady, patchReady]) => previousReady && patchReady,
+  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, patchPromise, agentId);
+}
+
+export function patchChatSessionSettings(
+  host: ChatPickerPatchHost,
+  sessionKey: string,
+  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode">,
+  options: {
+    agentId?: string;
+    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+  } = {},
+): Promise<SessionsPatchResult | null> {
+  const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
+  const operation = (async () => {
+    // Model-dependent settings and sends share this canonical per-session tail.
+    // The capability captures this route before waiting, so a reconnect cannot
+    // redirect queued intent to a replacement Gateway.
+    const result = await host.sessions.patch(sessionKey, patch, {
+      agentId: options.agentId,
+      waitFor: previous,
+    });
+    if (result) {
+      await options.reconcile?.(result);
+    }
+    return result;
+  })();
+  trackPendingChatSettingsPatch(
+    host,
+    sessionKey,
+    operation.then(
+      (result) => result !== null,
+      () => false,
+    ),
+    options.agentId,
   );
-  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, pending);
+  return operation;
 }
 
-export function getPendingChatModelSwitch(
-  host: ChatPickerPatchHost,
+export function selectedGlobalScope(
   sessionKey: string,
-): Promise<boolean> | undefined {
-  return getPendingPatch(pendingChatModelSwitches, host, sessionKey);
+  context: Pick<ChatCommandSettingsContext, "agentId">,
+): { agentId?: string } {
+  const normalizedSessionKey = normalizeOptionalLowercaseString(sessionKey);
+  const parsed = parseAgentSessionKey(normalizedSessionKey ?? "");
+  const aliasAgentId =
+    parsed &&
+    parsed.agentId !== DEFAULT_AGENT_ID &&
+    (parsed.rest === DEFAULT_MAIN_KEY || parsed.rest === "global")
+      ? parsed.agentId
+      : undefined;
+  const agentId = aliasAgentId ?? normalizeOptionalLowercaseString(context.agentId);
+  return (normalizedSessionKey === "global" || aliasAgentId) && agentId ? { agentId } : {};
 }
 
-export function trackPendingChatModelSwitch(
-  host: ChatPickerPatchHost,
+export async function patchChatCommandSessionSettings(
+  context: ChatCommandSettingsContext,
   sessionKey: string,
-  switchPromise: Promise<boolean>,
-): void {
-  trackLatestPatch(pendingChatModelSwitches, host, sessionKey, switchPromise);
+  patch: SessionPatch,
+): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
+  const result = await patchChatSessionSettings(
+    {
+      sessions: context.sessions,
+      assistantAgentId: context.agentId,
+      agentsList: context.defaultAgentId ? { defaultId: context.defaultAgentId } : null,
+      hello: null,
+    },
+    sessionKey,
+    patch,
+    selectedGlobalScope(sessionKey, context),
+  );
+  if (!result) {
+    throw new Error("Session capability is unavailable");
+  }
+  return result;
 }

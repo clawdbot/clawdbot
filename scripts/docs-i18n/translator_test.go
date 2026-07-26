@@ -64,9 +64,12 @@ func TestDocsI18nCommandWaitDelayUsesEnvOverride(t *testing.T) {
 	}
 }
 
-func TestNormalizeThinkingDefaultsToXHigh(t *testing.T) {
+func TestNormalizeThinkingDefaultsToXHighAndAcceptsMax(t *testing.T) {
 	if got := normalizeThinking(""); got != "xhigh" {
 		t.Fatalf("expected xhigh default, got %q", got)
+	}
+	if got := normalizeThinking("MAX"); got != "max" {
+		t.Fatalf("expected max normalization, got %q", got)
 	}
 }
 

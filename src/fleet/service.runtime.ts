@@ -156,7 +156,7 @@ type FleetActionResult = {
   dataPurged?: boolean;
 };
 
-export type FleetServiceOptions = {
+type FleetServiceOptions = {
   env?: NodeJS.ProcessEnv;
   containers?: FleetContainerRuntime;
   fetch?: typeof fetch;
@@ -528,7 +528,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         },
       });
     },
-
     async logs(logOptions: FleetLogsOptions): Promise<void> {
       const record = requireCell(env, validateTenantId(logOptions.tenant));
       await containers.assertLocal(record.runtime);
@@ -538,7 +537,8 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         await containers.inspect(record.runtime, record.containerName),
       );
       const gatewayCredential = inspection.environment.OPENCLAW_GATEWAY_TOKEN;
-      await containers.logs(record.runtime, record.containerName, {
+      // Pin the inspected generation so a concurrent restore cannot redirect the stream.
+      await containers.logs(record.runtime, inspection.containerId, {
         follow: logOptions.follow,
         tail: logOptions.tail,
         since: logOptions.since,
@@ -796,3 +796,4 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

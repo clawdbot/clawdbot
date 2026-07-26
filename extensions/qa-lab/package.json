@@ -5,8 +5,10 @@
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",
   "dependencies": {
-    "@copilotkit/aimock": "1.35.0",
+    "@copilotkit/aimock": "1.37.2",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@openclaw/crabline": "0.1.11",
+    "@openclaw/matrix": "workspace:*",
     "p-limit": "7.3.0",
     "p-map": "7.0.5",
     "playwright-core": "1.61.1",
@@ -16,12 +18,12 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@openclaw/crabline": "0.1.11",
     "@openclaw/discord": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
-    "openclaw": "workspace:*"
+    "openclaw": "workspace:*",
+    "vite": "8.1.5"
   },
   "peerDependencies": {
     "openclaw": ">=2026.7.2"

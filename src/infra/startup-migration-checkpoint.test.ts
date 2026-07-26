@@ -1,5 +1,5 @@
 // Startup migration checkpoint tests cover shared-state version records and leases.
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,6 +11,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   acquireStartupMigrationLease,
+  hasActiveStartupMigrationLease,
   needsStartupMigrationCheckpoint,
   readStartupMigrationVersion,
   recordSuccessfulStartupMigrations,
@@ -23,6 +24,16 @@ afterEach(() => {
 const startupMigrationTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("startup migration checkpoint", () => {
+  it("checks migration activity without creating shared state", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const dbPath = resolveOpenClawStateSqlitePath(env);
+
+    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+    expect(existsSync(dbPath)).toBe(false);
+  });
+
   it("records the migrated OpenClaw version in shared state", () => {
     const env = {
       OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
@@ -98,14 +109,29 @@ describe("startup migration checkpoint", () => {
     };
     const lease = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" });
 
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(true);
+
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1001, owner: "second" })).toThrow(
       "OpenClaw startup migrations are already running",
     );
 
     lease.release();
 
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(false);
+
     const next = acquireStartupMigrationLease({ env, nowMs: 1002, owner: "second" });
     next.release();
+  });
+
+  it("does not report an expired startup migration lease as active", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const lease = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" });
+
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001 })).toBe(false);
+
+    lease.release();
   });
 
   it("renews startup migration leases while the owner is still running", () => {

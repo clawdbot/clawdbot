@@ -1,60 +1,56 @@
-// Full-page draft: pick agent, host, folder, and worktree, then create on first message.
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  FsListDirResult,
+  WorktreesBranchesResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
+import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
-import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
+import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import * as catalog from "./catalog-target.ts";
+import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
+import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
+import { advanceCloudDraftSession } from "./cloud-submit.ts";
+import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
+import {
+  buildDraftSessionCreateParams,
+  canStartSessionAsDraft,
+  isWorktreeNameValid,
+  type NewSessionVisibility,
+} from "./create-params.ts";
+import {
+  type BrowserTarget,
+  type DraftCloudProfile,
+  type DraftNode,
+  type DraftRepositoryState,
+  readDraftNodes,
+} from "./discovery.ts";
+import { GatewayNameDiscovery } from "./gateway-name-discovery.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { NewSessionModelControl } from "./model-control.ts";
+import { isAbsolutePath } from "./path.ts";
+import { renderPlaceSelect } from "./place-picker.ts";
+import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
+import { renderAgentSelect } from "./target-controls.ts";
 
-type NewSessionRouteData = { agentId?: string };
-
-type DraftBranches = {
-  repoRoot: string;
-  branches: Array<{ name: string; kind: "local" | "remote" }>;
-  defaultBranch?: string;
-  headBranch?: string;
-};
-
-type DraftNode = {
-  nodeId: string;
-  displayName: string;
-  connected: boolean;
-  canExec: boolean;
-  canBrowse: boolean;
-};
-
-type BrowserTarget = { nodeId: string; label: string };
-
-const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-/** Last path segment for the label; raw-path fallback keeps filesystem roots visible. */
-function folderDisplayName(path: string): string {
-  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
-}
-
-/** Focusable rows for the menu keyboard contract (menu items + browser rows). */
-const MENU_ITEM_SELECTOR =
-  ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
-
-function isAbsolutePath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
-}
+const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -65,32 +61,92 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private agentId = "";
   @state() private folder = "";
   @state() private worktree = false;
+  @state() private visibility: NewSessionVisibility = "normal";
   @state() private worktreeName = "";
   @state() private baseRef = "";
-  @state() private branches: DraftBranches | null = null;
-  @state() private branchesLoading = false;
+  @state() private repository: DraftRepositoryState = { kind: "idle" };
   @state() private nodes: DraftNode[] = [];
+  @state() private gatewayName = "";
   @state() private execNode = "";
+  @state() private cloudProfiles: DraftCloudProfile[] = [];
+  @state() private cloudProfilesHydrated = false;
+  @state() private cloudProfileId = "";
   @state() private message = "";
   @state() private submitting = false;
+  @state() private submissionOutcomeUnknown = false;
   @state() private error: string | null = null;
-  @state() private browserOpen = false;
+  @state() private catalogRetrying = false;
   @state() private browserLoading = false;
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
   @state() private browserTarget: BrowserTarget | null = null;
+  @state() private placePopoverOpen = false;
+  @state() private placePopoverHiding = false;
   // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
+  private nodesHydrated = false;
+  // Discovery retry provenance separates user choices from Gateway-derived defaults.
+  private agentSelectedByUser = false;
+  private folderSelectedByUser = false;
+  private submitRequestToken = 0;
+  private nodesRequestToken = 0;
+  private readonly gatewayNameDiscovery = new GatewayNameDiscovery(
+    () => this.context?.gateway.snapshot,
+    (name) => (this.gatewayName = name),
+  );
+  private readonly pendingCloud = new PendingCloudRecoveryState();
+  private readonly cloudProfileDiscovery = new CloudProfileDiscovery({
+    snapshot: () => ({
+      connected: this.gatewayConnected,
+      client: this.gatewayClient,
+      admin: this.isAdmin(),
+      pendingCloud: Boolean(this.pendingCloud.sessionKey),
+      selectedId: this.cloudProfileId,
+    }),
+    update: ({ profiles, hydrated, clearSelection, selectionUnavailable }) => {
+      const recovery = selectProfiles(profiles, this.gatewayClient, this.gatewayRecoveryScope);
+      this.cloudProfiles = recovery.profiles;
+      this.cloudProfilesHydrated = hydrated;
+      if (clearSelection) {
+        this.cloudProfileId = "";
+        this.closeBrowser();
+      }
+      if (selectionUnavailable) {
+        this.error = t("newSession.catalogUnavailable");
+      } else if (recovery.unsupported) {
+        this.error = t("newSession.cloudSecureContextRequired");
+      } else if (this.error === t("newSession.cloudSecureContextRequired")) {
+        this.error = null;
+      }
+    },
+  });
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
+  private readonly attachmentDraft = new NewSessionAttachmentDraft(() => this.requestUpdate());
+  private readonly modelControl = new NewSessionModelControl(() => this.requestUpdate());
+  private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
+  private gatewayUrl = "";
+  private gatewayRecoveryScope = "";
+  private gatewayRecoveryScopeReady = false;
+  private gatewayConnected = false;
+  private gatewayConnectionEpoch = 0;
+  private catalogRetryScope = "";
+  private catalogRetryAttempt = 0;
+  private catalogRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   // Re-render when agents/sessions hydrate so the hero identity and the
   // recent-chats list appear without a route change.
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeGateway(gateway),
+    )
     .watch(
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
@@ -100,111 +156,211 @@ class NewSessionPage extends OpenClawLightDomElement {
       (sessions, notify) => sessions.subscribe(notify),
     );
 
+  private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
+    const snapshot = gateway.snapshot;
+    const connected = snapshot.phase === "connected";
+    const firstBind = this.gatewaySource === null;
+    const gatewayUrlChanged = !firstBind && this.gatewayUrl !== gateway.connection.gatewayUrl;
+    const identityChanged =
+      !firstBind && (this.gatewaySource !== gateway || this.gatewayClient !== snapshot.client);
+    const connectionChanged = !firstBind && this.gatewayConnected !== connected;
+    const becameConnected = connected && (identityChanged || !this.gatewayConnected);
+    const recoveryScopeBecameReady =
+      connected && snapshot.client?.recoveryScopeReady === true && !this.gatewayRecoveryScopeReady;
+    const recoveryScope = resolveScope(
+      { client: snapshot.client, connected },
+      this.gatewayRecoveryScope,
+      firstBind,
+    );
+    this.gatewaySource = gateway;
+    this.gatewayClient = snapshot.client;
+    this.gatewayUrl = gateway.connection.gatewayUrl;
+    this.gatewayRecoveryScope = recoveryScope.next;
+    this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
+    this.gatewayConnected = connected;
+    if (this.visibility === "draft" && !this.canStartAsDraft()) {
+      this.visibility = "normal";
+    }
+    if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
+      this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
+    }
+    if (
+      firstBind ||
+      gatewayUrlChanged ||
+      recoveryScope.changed ||
+      recoveryScopeBecameReady ||
+      becameConnected
+    ) {
+      if (
+        this.pendingCloud.gatewayUrl &&
+        (this.pendingCloud.gatewayUrl !== this.gatewayUrl ||
+          this.pendingCloud.recoveryScope !== this.gatewayRecoveryScope)
+      ) {
+        this.pendingCloud.reset();
+        this.submissionOutcomeUnknown = false;
+      }
+      if (connected && snapshot.client?.recoveryScopeReady) {
+        this.restorePendingCloudRecovery(this.gatewayUrl, this.gatewayRecoveryScope);
+      }
+    }
+    if (becameConnected || recoveryScope.changed) {
+      if (becameConnected) {
+        this.gatewayConnectionEpoch += 1;
+        this.retryPendingCatalogTarget();
+        void this.gatewayNameDiscovery.load();
+      }
+      void this.cloudProfileDiscovery.load();
+    }
+  }
+
+  private invalidateGatewayDiscovery(resetHostSelection: boolean) {
+    this.nodesRequestToken += 1;
+    this.nodesHydrated = false;
+    this.gatewayNameDiscovery.invalidate();
+    this.cloudProfileDiscovery.invalidate();
+    this.branchesRequestToken += 1;
+    this.repository = { kind: "idle" };
+    this.baseRef = ""; // Never carry a derived ref across a transport epoch.
+    this.agentsHydrated = false;
+    this.modelControl.invalidate(resetHostSelection);
+    this.attachmentDraft.abortReads();
+    this.closeBrowser();
+    this.invalidateSubmission(true); // Transport loss makes an in-flight create outcome unknowable.
+    if (!resetHostSelection) {
+      return;
+    }
+    if (this.pendingCloud.sessionKey) {
+      // Keep the original Gateway identity so a failed teardown cannot hide a worker elsewhere.
+      this.pendingCloud.retryAllowed = false;
+      this.submissionOutcomeUnknown = true;
+    }
+    // A replacement client may target another Gateway. Keep the user's task,
+    // but retire every selection and discovery result owned by the old host.
+    this.agentId = "";
+    this.agentSelectedByUser = false;
+    this.folder = "";
+    this.folderSelectedByUser = false;
+    this.worktree = false;
+    this.visibility = "normal";
+    this.worktreeName = "";
+    this.baseRefEditGeneration += 1;
+    this.nodes = [];
+    this.execNode = "";
+    this.cloudProfileId = "";
+    this.error = null;
+  }
+
+  private retryPendingCatalogTarget() {
+    if (this.catalogRetrying) {
+      return;
+    }
+    if (
+      !this.gatewayConnected ||
+      !catalog.isTarget(this.data) ||
+      catalog.isResolvedTarget(this.data)
+    ) {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      this.catalogRetryScope = "";
+      this.catalogRetryAttempt = 0;
+      return;
+    }
+    const retryScope = `${this.gatewayConnectionEpoch}:${catalog.routeKey(this.data)}`;
+    if (this.catalogRetryScope !== retryScope) {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      this.catalogRetryScope = retryScope;
+      this.catalogRetryAttempt = 0;
+    }
+    if (this.catalogRetryTimer || this.catalogRetryAttempt >= CATALOG_RETRY_DELAYS_MS.length) {
+      return;
+    }
+    const delayMs = CATALOG_RETRY_DELAYS_MS[this.catalogRetryAttempt];
+    this.catalogRetryAttempt += 1;
+    this.catalogRetryTimer = globalThis.setTimeout(() => {
+      this.catalogRetryTimer = undefined;
+      if (
+        this.catalogRetryScope !== retryScope ||
+        !this.gatewayConnected ||
+        !catalog.isTarget(this.data) ||
+        catalog.isResolvedTarget(this.data)
+      ) {
+        return;
+      }
+      const revalidation = this.context?.revalidate("new-session");
+      if (!revalidation) {
+        return;
+      }
+      void revalidation
+        .catch(() => undefined)
+        .then(() => this.updateComplete)
+        .then(() => this.retryPendingCatalogTarget());
+    }, delayMs);
+  }
+
+  handleEvent(event: Event) {
+    const picker = this.querySelector<HTMLDetailsElement>(".chat-controls__model[open]");
+    if (!picker) {
+      return;
+    }
+    if (event.type === "keydown") {
+      const keyEvent = event as KeyboardEvent;
+      if (keyEvent.defaultPrevented || keyEvent.key !== "Escape") {
+        return;
+      }
+      const restoreFocus = event.composedPath().includes(picker);
+      keyEvent.preventDefault();
+      picker.open = false;
+      // Closing details does not move focus out of its now-hidden controls.
+      if (restoreFocus) {
+        picker.querySelector<HTMLElement>("summary")?.focus();
+      }
+      return;
+    }
+    if (!event.composedPath().includes(picker)) {
+      picker.open = false;
+    }
+  }
+
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    // /new renders chat controls without ChatPane, so the route owns both
+    // pointer and Escape light-dismissal for the combined picker.
+    document.addEventListener("keydown", this, true);
+    document.addEventListener("pointerdown", this, true);
   }
 
   override disconnectedCallback() {
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    document.removeEventListener("keydown", this, true);
+    document.removeEventListener("pointerdown", this, true);
     this.subscriptions.clear();
+    // This invalidates submitRequestToken before payload release below, so a
+    // late sessions.create result cannot navigate with attachments we no longer own.
+    this.invalidateGatewayDiscovery(true);
+    this.gatewaySource = null;
+    this.gatewayClient = null;
+    this.gatewayConnected = false;
+    this.gatewayConnectionEpoch = 0;
+    this.catalogRetryScope = "";
+    this.catalogRetryAttempt = 0;
+    globalThis.clearTimeout(this.catalogRetryTimer);
+    this.catalogRetryTimer = undefined;
+    this.attachmentDraft.reset({ release: true });
+    this.cloudProfileDiscovery.stop();
     super.disconnectedCallback();
   }
 
-  private openMenus(): HTMLDetailsElement[] {
-    return [...this.querySelectorAll<HTMLDetailsElement>(".new-session-page__select[open]")];
-  }
-
-  // Same central dismissal contract as the chat composer's <details> menus:
-  // pointerdown outside an open menu closes it, Escape closes and restores
-  // trigger focus.
-  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
-    const path = event.composedPath();
-    for (const details of this.openMenus()) {
-      if (!path.includes(details)) {
-        details.open = false;
-      }
-    }
-  };
-
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") {
-      return;
-    }
-    const open = this.openMenus().at(-1);
-    if (open) {
-      event.stopPropagation();
-      open.open = false;
-      open.querySelector<HTMLElement>("summary")?.focus();
-    }
-  };
-
-  // Mutual exclusion must hook the details toggle, not just pointerdown:
-  // keyboard activation (Enter/Space on a summary) opens without any pointer
-  // event, and two open panels would overlap.
-  private readonly handleMenuToggle = (event: Event) => {
-    const details = event.currentTarget as HTMLDetailsElement;
-    if (this.submitting) {
-      // Native details can reopen from keyboard or scripted activation even
-      // after the draft becomes inert. Submission owns one frozen snapshot.
-      details.open = false;
-      return;
-    }
-    if (!details.open) {
-      return;
-    }
-    for (const other of this.openMenus()) {
-      if (other !== details) {
-        other.open = false;
-      }
-    }
-    // Keyboard contract of the replaced native selects: opening moves focus
-    // into the menu (browser content renders on the next Lit update). The
-    // summary sits outside the menu div, so this only skips when the user
-    // already focused menu content (e.g. a field).
-    void this.updateComplete.then(() => {
-      if (!details.open) {
-        return;
-      }
-      const menu = details.querySelector(".new-session-page__menu");
-      if (menu && !menu.contains(document.activeElement)) {
-        menu.querySelector<HTMLElement>(MENU_ITEM_SELECTOR)?.focus();
-      }
-    });
-  };
-
-  /** ArrowUp/Down wrap through the menu's items; Home/End jump to the edges.
-      Text fields keep native caret/datalist behavior for these keys. */
-  private readonly handleMenuKeydown = (event: KeyboardEvent) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    const origin = event.target as HTMLElement;
-    if (origin instanceof HTMLInputElement || origin instanceof HTMLTextAreaElement) {
-      return;
-    }
-    const items = [
-      ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR),
-    ];
-    if (items.length === 0) {
-      return;
-    }
-    event.preventDefault();
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    const target =
-      event.key === "Home"
-        ? items[0]
-        : event.key === "End"
-          ? items.at(-1)
-          : items[(index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
-    target?.focus();
-  };
-
   override updated() {
-    const agentsReady = this.agents().length > 0;
-    const openKey = this.data?.agentId ?? "";
+    this.retryPendingCatalogTarget();
+    const agentState = this.context?.agents.state;
+    const agentsReady = Boolean(
+      this.gatewayConnected &&
+      this.gatewayClient &&
+      agentState?.connected &&
+      agentState.client === this.gatewayClient &&
+      this.agents().length > 0,
+    );
+    const openKey = catalog.routeKey(this.data);
     if (this.openedFor !== openKey) {
       this.openedFor = openKey;
       this.agentsHydrated = agentsReady;
@@ -216,12 +372,37 @@ class NewSessionPage extends OpenClawLightDomElement {
     // anything the user already typed while the list was loading.
     if (!this.agentsHydrated && agentsReady) {
       this.agentsHydrated = true;
-      this.adoptAgentDefaults();
+      this.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
     }
   }
 
+  private readonly handleCatalogRetry = () => {
+    if (
+      this.catalogRetrying ||
+      !this.gatewayConnected ||
+      !catalog.isTarget(this.data) ||
+      catalog.isResolvedTarget(this.data)
+    ) {
+      return;
+    }
+    const revalidation = this.context?.revalidate("new-session");
+    if (!revalidation) {
+      return;
+    }
+    globalThis.clearTimeout(this.catalogRetryTimer);
+    this.catalogRetryTimer = undefined;
+    this.catalogRetrying = true;
+    void revalidation
+      .catch(() => undefined)
+      .then(() => this.updateComplete)
+      .finally(() => {
+        this.catalogRetrying = false;
+        this.retryPendingCatalogTarget();
+      });
+  };
+
   private agents() {
-    return this.context?.agents.state.agentsList?.agents ?? [];
+    return listSelectableAgents(this.context?.agents.state.agentsList?.agents ?? []);
   }
 
   private selectedAgent() {
@@ -237,6 +418,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     return hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null);
   }
 
+  private canStartAsDraft(): boolean {
+    return canStartSessionAsDraft({
+      allowedVisibilities: this.context?.gateway.snapshot.hello?.policy?.allowedSessionVisibilities,
+      hasMultipleIdentities:
+        this.context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities,
+    });
+  }
+
   private workspacePath(): string {
     return normalizeOptionalString(this.selectedAgent()?.workspace) ?? "";
   }
@@ -246,32 +435,68 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
-  /** Resolves the agent selection and workspace-derived fields; keeps user input. */
-  private adoptAgentDefaults() {
+  private adoptAgentDefaults(
+    options: { preserveSelectedAgent?: boolean; preserveSelectedFolder?: boolean } = {},
+  ) {
     const agents = this.agents();
-    const requested = normalizeAgentId(this.data?.agentId || "");
-    const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
-    this.agentId = agents.some((agent) => normalizeAgentId(agent.id) === requested)
-      ? requested
-      : normalizeAgentId(fallback);
-    if (!this.folder.trim()) {
+    const configuredDefault = this.context?.agents.state.agentsList?.defaultId;
+    const fallback = agents.some((agent) => agent.id === configuredDefault)
+      ? (configuredDefault ?? "main")
+      : (agents[0]?.id ?? "main");
+    const keepSelectedAgent =
+      options.preserveSelectedAgent && this.agentSelectedByUser && Boolean(this.selectedAgent());
+    if (!keepSelectedAgent) {
+      this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
+      this.agentSelectedByUser = false;
+    }
+    const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
+    // A node cwd belongs to node discovery, and a locked cloud-recovery draft
+    // shows its staged repo; neither may be replaced by a workspace refresh.
+    if (!this.execNode && !keepSelectedFolder && !this.pendingCloud.sessionKey) {
       this.folder = this.workspacePath();
+      this.folderSelectedByUser = false;
     }
     void this.loadNodes();
+    this.modelControl.load(this.context, this.agentId, !catalog.isTarget(this.data));
     this.maybeLoadBranches();
   }
 
   private resetDraft() {
+    const preservePendingCloud = Boolean(this.pendingCloud.sessionKey);
+    this.invalidateSubmission();
+    this.submissionOutcomeUnknown = preservePendingCloud;
+    this.agentSelectedByUser = false;
     this.folder = "";
+    this.folderSelectedByUser = false;
     this.worktree = false;
+    this.visibility = "normal";
     this.worktreeName = "";
     this.baseRef = "";
-    this.branches = null;
-    this.branchesLoading = false;
+    this.repository = { kind: "idle" };
     this.execNode = "";
-    this.message = "";
-    this.submitting = false;
+    this.modelControl.reset();
+    this.attachmentDraft.reset({ release: true });
+    this.cloudProfileId = "";
+    if (preservePendingCloud) {
+      if (!this.pendingCloud.restored) {
+        this.pendingCloud.retryAllowed = false;
+      }
+      this.agentId = this.pendingCloud.agentId;
+      this.cloudProfileId = this.pendingCloud.profileId;
+      this.worktree = true;
+      this.visibility = this.pendingCloud.createParams?.incognito === true ? "incognito" : "normal";
+      // Show the staged repo (not the agent workspace) while the draft is locked.
+      this.folder = this.pendingCloud.createParams?.cwd ?? "";
+      this.pendingCloud.restored = false;
+      this.message = this.pendingCloud.message;
+      this.attachmentDraft.replace(restoreChatApiAttachments(this.pendingCloud.attachments));
+    } else {
+      this.clearPendingCloudRecovery();
+      this.message = "";
+    }
     this.error = null;
+    this.placePopoverHiding = false;
+    this.closeAgentDropdown();
     this.closeBrowser();
     this.adoptAgentDefaults();
     void this.updateComplete.then(() => {
@@ -279,59 +504,88 @@ class NewSessionPage extends OpenClawLightDomElement {
     });
   }
 
+  private invalidateSubmission(outcomeUnknown = false) {
+    this.submitRequestToken += 1;
+    if (outcomeUnknown && this.submitting) {
+      this.submissionOutcomeUnknown = true;
+    }
+    this.submitting = false;
+  }
+
+  private clearPendingCloudRecovery() {
+    this.pendingCloud.clear();
+    this.submissionOutcomeUnknown = false;
+  }
+
+  private clearPendingCloudRecoveryFor(
+    gatewayUrl: string,
+    recoveryScope: string,
+    sessionKey: string,
+  ) {
+    this.pendingCloud.clearFor(gatewayUrl, recoveryScope, sessionKey);
+    if (!this.pendingCloud.sessionKey) {
+      this.submissionOutcomeUnknown = false;
+    }
+  }
+
+  private restorePendingCloudRecovery(gatewayUrl: string, recoveryScope: string) {
+    const recovery = this.pendingCloud.restore(gatewayUrl, recoveryScope);
+    if (!recovery) {
+      return;
+    }
+    this.agentId = recovery.agentId;
+    this.cloudProfileId = recovery.profileId;
+    this.worktree = true;
+    this.visibility = recovery.createParams?.incognito === true ? "incognito" : "normal";
+    // Show the staged repo (not the agent workspace) while the draft is locked.
+    this.folder = recovery.createParams?.cwd ?? "";
+    this.message = recovery.message;
+    this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
+  }
+
   private async loadNodes() {
-    const client = this.context?.gateway.snapshot.client;
-    if (!client || !this.isAdmin()) {
+    const requestId = ++this.nodesRequestToken;
+    this.nodesHydrated = false;
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
+    if (snapshot?.phase !== "connected" || !client || !this.isAdmin()) {
       this.nodes = [];
+      this.nodesHydrated = true;
       return;
     }
     try {
       const result = await client.request<{ nodes?: unknown }>("node.list", {});
-      const rawNodes = Array.isArray(result?.nodes) ? (result.nodes as Array<unknown>) : [];
-      this.nodes = rawNodes
-        .flatMap((raw) => {
-          const node = raw as {
-            nodeId?: unknown;
-            displayName?: unknown;
-            connected?: unknown;
-            commands?: unknown;
-          };
-          const nodeId = normalizeOptionalString(node.nodeId);
-          const commands = Array.isArray(node.commands)
-            ? node.commands.filter((command): command is string => typeof command === "string")
-            : [];
-          if (!nodeId) {
-            return [];
-          }
-          const connected = node.connected === true;
-          const canExec = connected && commands.includes("system.run");
-          return [
-            {
-              nodeId,
-              displayName: normalizeOptionalString(node.displayName) ?? nodeId,
-              connected,
-              canExec,
-              canBrowse: canExec && commands.includes("fs.listDir"),
-            },
-          ];
-        })
-        .toSorted(
-          (left, right) =>
-            left.displayName.localeCompare(right.displayName) ||
-            left.nodeId.localeCompare(right.nodeId),
-        );
+      if (requestId !== this.nodesRequestToken) {
+        return;
+      }
+      const nodes = readDraftNodes(result?.nodes);
+      this.nodes = nodes;
+      this.nodesHydrated = true;
+      if (this.execNode && !nodes.some((node) => node.nodeId === this.execNode && node.canExec)) {
+        // A reconnect can remove a device. Its cwd is not meaningful on the
+        // Gateway, so fall back to the selected agent's workspace as one unit.
+        this.execNode = "";
+        this.folder = this.workspacePath();
+        this.folderSelectedByUser = false;
+        this.worktree = false;
+        this.worktreeName = "";
+        this.closeBrowser();
+        this.maybeLoadBranches();
+      }
     } catch {
-      this.nodes = [];
+      if (requestId === this.nodesRequestToken) {
+        this.nodes = [];
+        this.nodesHydrated = true;
+      }
     }
   }
 
   private maybeLoadBranches() {
-    // Branch data belongs to one repository selection. Clear it before any
-    // exit or request so a previous repo's ref can never reach sessions.create.
+    // Repository capability and branch data belong to one Gateway folder.
+    // Reset them together so a previous checkout can never leak into create params.
     const requestId = ++this.branchesRequestToken;
     const baseRefEditGeneration = this.baseRefEditGeneration;
-    this.branches = null;
-    this.branchesLoading = false;
+    this.repository = { kind: "idle" };
     this.baseRef = "";
     if (this.execNode) {
       return;
@@ -339,37 +593,59 @@ class NewSessionPage extends OpenClawLightDomElement {
     const repoRoot = this.folder.trim() || this.workspacePath();
     const agent = this.selectedAgent();
     const usesWorkspace = repoRoot === this.workspacePath();
-    if (!repoRoot || (usesWorkspace && agent?.workspaceGit !== true)) {
-      this.branches = null;
+    if (!repoRoot) {
       return;
     }
-    const client = this.context?.gateway.snapshot.client;
-    if (!client) {
+    if (usesWorkspace && agent?.workspaceGit !== true) {
+      this.repository = { kind: "direct", repoRoot };
+      if (!this.cloudProfileId) {
+        this.worktree = false;
+      }
       return;
     }
-    this.branchesLoading = true;
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
+    if (snapshot?.phase !== "connected" || !client) {
+      return;
+    }
+    this.repository = { kind: "checking", repoRoot };
     void client
-      .request<DraftBranches>("worktrees.branches", { repoRoot })
+      .request<WorktreesBranchesResult>("worktrees.branches", {
+        repoRoot,
+        includeRepositoryStatus: true,
+      })
       .then((result) => {
         if (requestId !== this.branchesRequestToken) {
           return;
         }
-        this.branches = result ? { ...result, repoRoot } : null;
+        if (result?.repositoryStatus !== "git") {
+          this.repository = {
+            kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable",
+            repoRoot,
+          };
+          if (result?.repositoryStatus === "not_git" && !this.cloudProfileId) {
+            this.worktree = false;
+          }
+          return;
+        }
+        this.repository = {
+          kind: "git",
+          repoRoot,
+          branches: result.branches,
+          ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
+          ...(result.headBranch ? { headBranch: result.headBranch } : {}),
+        };
         // Discovery supplies a default only while the field is untouched;
         // a user edit made during the request remains authoritative.
         if (baseRefEditGeneration === this.baseRefEditGeneration) {
-          this.baseRef = result?.defaultBranch ?? result?.headBranch ?? "";
+          this.baseRef = result.defaultBranch ?? result.headBranch ?? "";
         }
       })
       .catch(() => {
-        if (requestId === this.branchesRequestToken) {
-          this.branches = null;
+        if (requestId !== this.branchesRequestToken) {
+          return;
         }
-      })
-      .finally(() => {
-        if (requestId === this.branchesRequestToken) {
-          this.branchesLoading = false;
-        }
+        this.repository = { kind: "unavailable", repoRoot };
       });
   }
 
@@ -377,22 +653,100 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.execNode) {
       return false;
     }
-    if (this.usesCustomFolder()) {
-      return this.isAdmin();
+    if (this.repository.kind === "git") {
+      return true;
     }
-    return this.selectedAgent()?.workspaceGit === true;
+    return (
+      this.repository.kind === "unavailable" &&
+      this.repository.repoRoot === this.workspacePath() &&
+      this.selectedAgent()?.workspaceGit === true
+    );
+  }
+
+  private cloudProfileForSubmission(): string {
+    return this.pendingCloud.sessionKey ? this.pendingCloud.profileId : this.cloudProfileId;
+  }
+
+  private cloudRuntimeUnsupportedReason(): string | undefined {
+    const runtime = this.modelControl.resolveAgentRuntimeId({
+      agent: this.selectedAgent(),
+      context: this.context,
+    });
+    return runtime && runtime !== "openclaw"
+      ? t("newSession.cloudRequiresOpenClawRuntime", { runtime })
+      : undefined;
+  }
+
+  private cloudDisabledReason(): string | undefined {
+    const runtimeReason = this.cloudRuntimeUnsupportedReason();
+    if (runtimeReason) {
+      return runtimeReason;
+    }
+    if (this.repository.kind === "checking") {
+      return t("newSession.checkingGit");
+    }
+    if (this.repository.kind === "unavailable" && !this.worktreeAvailable()) {
+      return t("newSession.gitCheckUnavailable");
+    }
+    return this.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
   }
 
   private canSubmit(): boolean {
-    if (this.submitting || !this.message.trim() || !this.context?.gateway.snapshot.connected) {
+    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const cloudProfileId = this.cloudProfileForSubmission();
+    const message = pendingCloud ? this.pendingCloud.message : this.message.trim();
+    const hasAttachments = pendingCloud
+      ? Boolean(this.pendingCloud.attachments?.length)
+      : this.attachmentDraft.attachments.length > 0;
+    const gateway = this.context?.gateway;
+    if (
+      this.submitting ||
+      this.attachmentDraft.pendingReads > 0 ||
+      (!pendingCloud && this.submissionOutcomeUnknown) ||
+      (!message && !hasAttachments) ||
+      gateway?.snapshot.phase !== "connected" ||
+      !gateway.snapshot.client
+    ) {
       return false;
+    }
+    if (pendingCloud) {
+      return Boolean(
+        this.pendingCloud.retryAllowed &&
+        gateway.snapshot.client.recoveryScopeReady &&
+        cloudProfileId &&
+        this.pendingCloud.agentId &&
+        this.pendingCloud.gatewayUrl === gateway.connection.gatewayUrl &&
+        this.pendingCloud.recoveryScope === gateway.snapshot.client?.recoveryScope &&
+        this.isAdmin(),
+      );
     }
     // Pre-hydration the selection is a provisional fallback; submitting then
     // would create the session under the wrong agent.
     if (this.agents().length === 0) {
       return false;
     }
-    if (this.usesCustomFolder() && (!this.isAdmin() || (!this.execNode && !this.worktree))) {
+    if (!catalog.allowsSelectedAgent(this.data, this.selectedAgent())) {
+      return false;
+    }
+    if (
+      this.execNode &&
+      (!this.nodesHydrated || !this.execNodes().some((node) => node.nodeId === this.execNode))
+    ) {
+      return false;
+    }
+    if (
+      cloudProfileId &&
+      (!this.isAdmin() ||
+        !gateway.snapshot.client.recoveryScope ||
+        !gateway.snapshot.client.recoveryScopeReady ||
+        !this.cloudProfilesHydrated ||
+        !this.worktree ||
+        !this.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
+        Boolean(this.cloudRuntimeUnsupportedReason()))
+    ) {
+      return false;
+    }
+    if (this.usesCustomFolder() && !this.isAdmin()) {
       return false;
     }
     if (this.execNode && this.worktree) {
@@ -401,8 +755,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.worktree && !this.worktreeAvailable()) {
       return false;
     }
-    const name = this.worktreeName.trim();
-    if (this.worktree && name && !WORKTREE_NAME_PATTERN.test(name)) {
+    if (this.worktree && !isWorktreeNameValid(this.worktreeName)) {
       return false;
     }
     return true;
@@ -413,71 +766,266 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (!context || !this.canSubmit()) {
       return;
     }
-    const message = this.message.trim();
+    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    const message = pendingCloud ? this.pendingCloud.message : this.message.trim();
+    const attachments = this.attachmentDraft.attachments;
+    const apiAttachments = pendingCloud
+      ? this.pendingCloud.attachments
+      : buildChatApiAttachments(attachments);
+    const submissionAgentId = pendingCloud
+      ? this.pendingCloud.agentId
+      : normalizeAgentId(this.agentId);
+    const submissionGatewayUrl = pendingCloud
+      ? this.pendingCloud.gatewayUrl
+      : context.gateway.connection.gatewayUrl;
+    const submissionClient = context.gateway.snapshot.client;
+    if (!submissionClient || !context.gateway.snapshot.hello) {
+      return;
+    }
+    const submissionRecoveryScope = pendingCloud
+      ? this.pendingCloud.recoveryScope
+      : submissionClient.recoveryScope;
+    const requestId = ++this.submitRequestToken;
+    const submittedAt = Date.now();
     this.submitting = true;
     this.error = null;
-    // Collapse menus and retire browser requests before awaiting the Gateway;
-    // otherwise a now-hidden picker can keep mutating the submitted draft.
+    // Retire hidden pickers before their late requests can mutate this submitted draft.
     this.closeBrowser();
-    for (const details of this.openMenus()) {
-      details.open = false;
+    for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
+      "wa-dropdown[open]",
+    )) {
+      dropdown.open = false;
     }
     try {
-      const result = await context.sessions.createResult(
-        buildDraftSessionCreateParams({
-          agentId: this.agentId,
-          message,
-          worktree: this.worktree,
-          baseRef: this.baseRef,
-          worktreeName: this.worktreeName,
-          cwd: this.folder,
-          workspace: this.workspacePath(),
-          execNode: this.execNode,
-        }),
-      );
+      const cloudProfileId = this.cloudProfileForSubmission();
+      // Draft mode can go stale if sharing policy changed since it was selected.
+      const draftRetired = this.visibility === "draft" && !this.canStartAsDraft();
+      const createParams = buildDraftSessionCreateParams({
+        agentId: this.agentId,
+        message: cloudProfileId ? "" : message,
+        model: this.modelControl.selected,
+        thinkingLevel: this.modelControl.thinkingLevel,
+        visibility: draftRetired ? "normal" : this.visibility,
+        attachments: cloudProfileId ? undefined : apiAttachments,
+        worktree: this.worktree,
+        baseRef: this.baseRef,
+        worktreeName: this.worktreeName,
+        cwd: this.folder,
+        workspace: this.workspacePath(),
+        execNode: this.execNode,
+        catalogId: this.data?.catalogId,
+      });
+      const cloudCreateParams = cloudProfileId
+        ? pendingCloud
+          ? this.pendingCloud.createParams
+          : this.pendingCloud.stageCreate({
+              agentId: submissionAgentId,
+              profileId: cloudProfileId,
+              message,
+              attachments: apiAttachments,
+              gatewayUrl: submissionGatewayUrl,
+              recoveryScope: submissionRecoveryScope,
+              createParams,
+              persistent: this.visibility !== "incognito",
+            })
+        : undefined;
+      if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
+        this.error = t("newSession.cloudStartFailed", {
+          error: "cloud recovery storage is unavailable",
+        });
+        return;
+      }
+      const submissionCloudRecovery = cloudProfileId ? this.pendingCloud.capture() : null;
+      if (cloudProfileId && !submissionCloudRecovery) {
+        this.error = t("newSession.cloudStartFailed", {
+          error: "cloud recovery storage is unavailable",
+        });
+        return;
+      }
+      let recoveryOwnerKey = submissionCloudRecovery?.sessionKey ?? "";
+      const ownsSubmissionRecovery = () =>
+        this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, recoveryOwnerKey);
+      const isSubmissionCurrent = () =>
+        this.isConnected &&
+        submissionClient.recoveryScopeReady &&
+        requestId === this.submitRequestToken &&
+        this.gatewayClient === submissionClient &&
+        this.gatewayUrl === submissionGatewayUrl &&
+        this.gatewayRecoveryScope === submissionRecoveryScope &&
+        ownsSubmissionRecovery();
+      const result =
+        pendingCloud && this.pendingCloud.phase !== "creating"
+          ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
+          : await context.sessions.createResult(cloudCreateParams ?? createParams, {
+              reconciliation: "background",
+            });
+      if (requestId !== this.submitRequestToken && !cloudProfileId) {
+        return;
+      }
       if (!result) {
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
         this.error = context.sessions.state.error ?? t("newSession.createFailed");
         return;
       }
-      if (result.initialRun.status === "rejected") {
-        const gateway = context.gateway.snapshot;
-        const persisted = admitStoredChatComposerQueueItem(
-          {
-            settings: loadSettings(),
-            assistantAgentId: gateway.assistantAgentId,
-            agentsList: context.agents.state.agentsList,
-            hello: gateway.hello,
+      if (cloudProfileId && submissionCloudRecovery) {
+        const recoveryPhase =
+          submissionCloudRecovery.phase === "creating"
+            ? "dispatching"
+            : submissionCloudRecovery.phase;
+        if (submissionCloudRecovery.phase === "creating" && isSubmissionCurrent()) {
+          if (!this.pendingCloud.promoteToDispatching(result.key)) {
+            this.error = t("newSession.cloudStartFailed", {
+              error: "cloud recovery storage is unavailable",
+            });
+            return;
+          }
+          recoveryOwnerKey = result.key;
+        }
+        const cloudStart = await advanceCloudDraftSession({
+          client: submissionClient,
+          key: result.key,
+          agentId: submissionAgentId,
+          profileId: cloudProfileId,
+          message: submissionCloudRecovery.message,
+          attachments: submissionCloudRecovery.attachments,
+          messageId: submissionCloudRecovery.messageId,
+          gatewayUrl: submissionGatewayUrl,
+          recoveryScope: submissionRecoveryScope,
+          recoveryPhase,
+          persistRecovery: this.pendingCloud.persistent,
+          recovering: pendingCloud,
+          isCurrent: isSubmissionCurrent,
+          ownsRecovery: ownsSubmissionRecovery,
+          clearRecovery: () =>
+            this.clearPendingCloudRecoveryFor(
+              submissionGatewayUrl,
+              submissionRecoveryScope,
+              result.key,
+            ),
+          setRecoveryPhase: (phase) => {
+            if (ownsSubmissionRecovery()) {
+              this.pendingCloud.phase = phase;
+            }
           },
-          result.key,
-          {
-            id: generateUUID(),
-            text: message,
-            createdAt: Date.now(),
-            kind: "queued",
-            refreshSessions: true,
-            sendAttempts: 1,
-            sendError: result.initialRun.error,
-            sendState: "failed",
-            sessionKey: result.key,
-            agentId: normalizeAgentId(this.agentId),
-          },
-        );
-        if (!persisted) {
-          // Stay on the draft when browser storage is unavailable: preserving
-          // the typed task takes priority over navigating to the partial session.
-          this.error = result.initialRun.error;
+        });
+        if (cloudStart.status === "cancelled") {
+          if (!ownsSubmissionRecovery()) {
+            return;
+          }
+          if (cloudStart.cleanupError) {
+            this.pendingCloud.retryAllowed = cloudStart.recoveryPersisted;
+            this.submissionOutcomeUnknown = !cloudStart.recoveryPersisted;
+            this.error = t("newSession.cloudStartFailed", { error: cloudStart.cleanupError });
+          } else if (!cloudStart.recoveryPersisted) {
+            this.error = t("newSession.createFailed");
+          }
           return;
         }
+        if (cloudStart.status === "cleanup-rejected") {
+          if (!this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key)) {
+            return;
+          }
+          // Retain durable identity; clearing it could hide a failed teardown's billable worker.
+          this.pendingCloud.sessionKey = result.key;
+          if (cloudStart.messageId) {
+            this.pendingCloud.messageId = cloudStart.messageId;
+          }
+          const retryAllowed = requestId === this.submitRequestToken;
+          this.pendingCloud.retryAllowed = retryAllowed;
+          this.submissionOutcomeUnknown = !retryAllowed;
+          this.message = this.pendingCloud.message;
+          this.error = t("newSession.cloudStartFailed", { error: cloudStart.error });
+          return;
+        }
+        if (cloudStart.status === "dispatch-rejected") {
+          this.error = t("newSession.cloudStartFailed", {
+            error: cloudStart.error || t("newSession.createFailed"),
+          });
+          return;
+        }
+        if (cloudStart.status === "ownership-lost") {
+          return;
+        }
+        if (cloudStart.status === "send-rejected") {
+          if (!this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, result.key)) {
+            return;
+          }
+          this.pendingCloud.messageId = cloudStart.messageId;
+          this.pendingCloud.retryAllowed = true;
+          this.error = cloudStart.error || t("newSession.createFailed");
+          return;
+        }
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
+        prepareInitialUserMessageHandoff(
+          context.initialUserMessage,
+          result.key,
+          {
+            text: submissionCloudRecovery.message,
+            attachments,
+            createdAt: submittedAt,
+          },
+          submissionClient,
+          { messageId: cloudStart.messageId, messageSeq: cloudStart.messageSeq },
+        );
+        this.attachmentDraft.clearAfterSubmit(true);
+      } else {
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
+        const handedOffAttachments =
+          result.initialRun.status === "rejected" &&
+          retainRejectedInitialTurn({
+            agentId: this.agentId,
+            attachments,
+            context,
+            error: result.initialRun.error,
+            message,
+            sessionKey: result.key,
+          });
+        if (result.initialRun.status === "started") {
+          prepareInitialUserMessageHandoff(
+            context.initialUserMessage,
+            result.key,
+            {
+              text: message,
+              attachments,
+              createdAt: submittedAt,
+            },
+            submissionClient,
+            {
+              messageId: result.initialRun.messageId,
+              messageSeq: result.initialRun.messageSeq,
+            },
+          );
+        }
+        this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
+      }
+      if (requestId !== this.submitRequestToken) {
+        return;
       }
       context.gateway.setSessionKey(result.key);
-      context.navigate("chat", { search: searchForSession(result.key) });
+      context.navigate(
+        "chat",
+        sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey: result.key,
+          agentId: this.agentId,
+        }).options,
+      );
     } finally {
-      this.submitting = false;
+      if (requestId === this.submitRequestToken) {
+        this.submitting = false;
+      }
     }
   }
 
   private selectAgentId(agentId: string) {
-    if (this.submitting) {
+    if (this.submitting || this.pendingCloud.sessionKey || catalog.isTarget(this.data)) {
       return;
     }
     // Re-picking the checked agent must not reset the draft (the native
@@ -486,71 +1034,148 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     this.agentId = normalizeAgentId(agentId);
+    this.modelControl.reset();
+    this.error = null;
+    this.agentSelectedByUser = true;
     this.folder = this.execNode ? "" : this.workspacePath();
+    this.folderSelectedByUser = false;
+    this.cloudProfileId = "";
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
+    this.modelControl.load(this.context, this.agentId, true);
     this.maybeLoadBranches();
   }
 
+  /**
+   * Loaded branch data already covers the effective Gateway repo selection.
+   * Branch data is always Gateway-owned: maybeLoadBranches clears and never
+   * requests while a node is selected, so a path match cannot cross hosts.
+   */
+  private branchesMatchCurrentRepo(): boolean {
+    if (this.execNode || this.repository.kind === "idle") {
+      return false;
+    }
+    const repoRoot = this.folder.trim() || this.workspacePath();
+    return this.repository.repoRoot === repoRoot;
+  }
+
   private applyFolder(folder: string, execNode = this.execNode) {
-    if (this.submitting) {
+    if (this.submitting || this.pendingCloud.sessionKey) {
       return;
     }
     this.execNode = execNode;
+    if (execNode) {
+      // Node sessions run on that device; a cloud worker cannot sync a node path.
+      this.cloudProfileId = "";
+    }
+    this.error = null;
     this.folder = folder.trim();
+    this.folderSelectedByUser = true;
     if (this.execNode) {
       this.worktree = false;
-    } else if (this.usesCustomFolder()) {
-      // Explicit host paths only materialize through a managed worktree.
-      this.worktree = true;
+    } else if (!this.cloudProfileId) {
+      // A newly selected Gateway folder starts direct. Git capability discovery
+      // may reveal the optional managed-worktree control afterward.
+      this.worktree = false;
     }
+    this.worktreeName = "";
     this.maybeLoadBranches();
   }
 
   private selectExecNode(execNode: string) {
-    if (this.submitting) {
+    if (this.submitting || this.pendingCloud.sessionKey) {
       return;
     }
-    if (execNode === this.execNode) {
+    if (execNode === this.execNode && !this.cloudProfileId) {
       return;
     }
+    // Turning a cloud selection back into a plain Gateway session keeps the
+    // picked repo; only a host change retires the folder path.
+    const keepGatewayFolder = !execNode && !this.execNode;
+    const keepWorktree = keepGatewayFolder && this.worktree && this.worktreeAvailable();
     this.execNode = execNode;
-    // Folder paths belong to one host; never carry a Gateway or node path to another host.
-    this.folder = execNode ? "" : this.workspacePath();
-    this.worktree = false;
+    this.cloudProfileId = "";
+    if (!keepGatewayFolder) {
+      // Folder paths belong to one host; never carry a Gateway or node path to another host.
+      this.folder = execNode ? "" : this.workspacePath();
+      this.folderSelectedByUser = false;
+    }
+    this.worktree = keepWorktree;
     this.closeBrowser();
-    this.maybeLoadBranches();
+    if (!this.branchesMatchCurrentRepo()) {
+      this.maybeLoadBranches();
+    }
+  }
+
+  private selectCloudProfile(profileId: string) {
+    if (
+      this.submitting ||
+      this.pendingCloud.sessionKey ||
+      !this.worktreeAvailable() ||
+      !this.cloudProfiles.some((profile) => profile.id === profileId)
+    ) {
+      return;
+    }
+    // worktreeAvailable() is false for node targets, so this transition always
+    // starts from a Gateway selection and the folder is a Gateway path. It
+    // stays selected: its repo is what the managed worktree checks out and the
+    // dispatch tunnel syncs to the cloud worker.
+    this.cloudProfileId = profileId;
+    this.error = null;
+    this.worktree = true;
+    this.closeBrowser();
+    if (!this.branchesMatchCurrentRepo()) {
+      this.maybeLoadBranches();
+    }
   }
 
   private browseAvailable(): boolean {
     return this.isAdmin();
   }
 
-  /** Unavailable device rows say why; exec-only nodes remain selectable for manual paths. */
-  private nodeBrowseBlockedReason(node: DraftNode): string | undefined {
-    if (node.canBrowse) {
-      return undefined;
+  private closeAgentDropdown() {
+    const dropdown = this.querySelector<HTMLElement & { open: boolean }>(
+      ".new-session-page__select--agent wa-dropdown",
+    );
+    if (dropdown) {
+      dropdown.open = false;
     }
-    return node.connected ? t("newSession.nodeCannotBrowse") : t("newSession.nodeOffline");
   }
 
   private closeBrowser() {
     this.browserRequestToken += 1;
-    // Reset state before collapsing the <details> so its toggle handler sees
-    // browserOpen === false and does not re-enter this method.
-    this.browserOpen = false;
     this.browserLoading = false;
     this.browserError = null;
     this.browserListing = null;
     this.browserTarget = null;
     this.browserPathDraft = "";
-    const details = this.querySelector<HTMLDetailsElement>(
-      ".new-session-page__select--folder[open]",
+    this.placePopoverOpen = false;
+    const popover = this.querySelector<HTMLElement & { open: boolean }>(
+      ".new-session-page__place-popover",
     );
-    if (details) {
-      details.open = false;
+    if (popover) {
+      popover.open = false;
     }
+  }
+
+  private guardPopoverTransition(event: Event, hiding: boolean) {
+    if (!hiding) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  private restorePopoverTrigger(id: string, popoverSelector: string) {
+    const active = this.ownerDocument.activeElement;
+    const popover = this.querySelector(popoverSelector);
+    // Light-dismissal may already have moved focus to another control. Only
+    // recover when focus stayed in the closing popover or fell back to body.
+    if (active && active !== this.ownerDocument.body && !popover?.contains(active)) {
+      return;
+    }
+    this.querySelector<HTMLButtonElement>(`#${id}`)?.focus();
   }
 
   private showBrowserRoot() {
@@ -580,9 +1205,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private loadBrowser(path: string | undefined) {
-    const client = this.context?.gateway.snapshot.client;
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
     const target = this.browserTarget;
-    if (!client || !target) {
+    if (snapshot?.phase !== "connected" || !client || !target) {
       return;
     }
     // Exec-only nodes still accept a typed cwd; never probe an unsupported fs.listDir.
@@ -638,443 +1264,158 @@ class NewSessionPage extends OpenClawLightDomElement {
       });
   }
 
-  private renderBrowser() {
-    if (!this.browserOpen) {
-      return nothing;
-    }
-    const listing = this.browserListing;
-    const target = this.browserTarget;
-    // Hosts can answer fs.listDir with a shapeless payload; a missing entries
-    // array must read as an empty directory, not crash the render.
-    const entries = listing?.entries ?? [];
-    return html`
-      <div class="new-session-page__browser">
-        <div class="new-session-page__browser-head">
-          <button
-            type="button"
-            class="new-session-page__browser-nav"
-            title=${t("newSession.browserUp")}
-            aria-label=${t("newSession.browserUp")}
-            ?disabled=${!target || (!listing && this.browserLoading)}
-            @click=${() => {
-              if (listing?.parent) {
-                this.loadBrowser(listing.parent);
-              } else if (target) {
-                this.showBrowserRoot();
-              }
-            }}
-          >
-            ${icons.arrowLeft}
-          </button>
-          ${target
-            ? html`
-                <input
-                  class="new-session-page__browser-path"
-                  type="text"
-                  aria-label=${t("newSession.folder")}
-                  placeholder=${target.label}
-                  .value=${this.browserPathDraft}
-                  @input=${(event: Event) => {
-                    this.browserPathDraft = (event.target as HTMLInputElement).value;
-                  }}
-                  @keydown=${(event: KeyboardEvent) => {
-                    // Manual path entry browses there; "Use this folder" applies
-                    // the typed path even when the host cannot list it.
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      const path = this.browserPathDraft.trim();
-                      this.loadBrowser(path || undefined);
-                    }
-                  }}
-                />
-              `
-            : html`<span class="new-session-page__browser-path">${t("newSession.where")}</span>`}
-          ${this.browserLoading
-            ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-            : nothing}
-          <button
-            type="button"
-            class="new-session-page__browser-nav"
-            title=${t("common.close")}
-            aria-label=${t("common.close")}
-            @click=${() => this.closeBrowser()}
-          >
-            ${icons.x}
-          </button>
-        </div>
-        ${this.browserError
-          ? html`<div class="new-session-page__error">${this.browserError}</div>`
-          : nothing}
-        <div class="new-session-page__browser-list" role="listbox">
-          ${!target
-            ? html`
-                <button
-                  type="button"
-                  class="new-session-page__browser-entry"
-                  @click=${() =>
-                    this.selectBrowserTarget({ nodeId: "", label: t("newSession.gateway") })}
-                >
-                  <span class="new-session-page__target-icon" aria-hidden="true"
-                    >${icons.monitor}</span
-                  >
-                  <span>${t("newSession.gateway")}</span>
-                </button>
-                ${this.nodes.map(
-                  (node) => html`
-                    <button
-                      type="button"
-                      class="new-session-page__browser-entry"
-                      ?disabled=${!node.canExec}
-                      title=${this.nodeBrowseBlockedReason(node) ?? nothing}
-                      @click=${() =>
-                        this.selectBrowserTarget({
-                          nodeId: node.nodeId,
-                          label: node.displayName,
-                        })}
-                    >
-                      <span class="new-session-page__target-icon" aria-hidden="true"
-                        >${icons.monitor}</span
-                      >
-                      <span>${node.displayName}</span>
-                    </button>
-                  `,
-                )}
-              `
-            : nothing}
-          ${listing && entries.length === 0 && !this.browserLoading
-            ? html`<div class="new-session-page__browser-empty">
-                ${t("newSession.browserEmpty")}
-              </div>`
-            : nothing}
-          ${target
-            ? entries.map(
-                (entry) => html`
-                  <button
-                    type="button"
-                    class="new-session-page__browser-entry ${entry.hidden
-                      ? "new-session-page__browser-entry--hidden"
-                      : ""}"
-                    title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
-                    @click=${() => this.loadBrowser(entry.path)}
-                  >
-                    <span class="new-session-page__target-icon" aria-hidden="true"
-                      >${icons.folder}</span
-                    >
-                    <span>${entry.name}</span>
-                  </button>
-                `,
-              )
-            : nothing}
-        </div>
-        <div class="new-session-page__browser-actions">
-          <button
-            type="button"
-            class="new-session-page__browser-use"
-            ?disabled=${!target || this.usableBrowserPath() === null}
-            @click=${() => {
-              const path = this.usableBrowserPath();
-              if (target && path !== null) {
-                this.applyFolder(path, target.nodeId);
-                this.closeBrowser();
-              }
-            }}
-          >
-            ${t("newSession.browserUse")}
-          </button>
-        </div>
-      </div>
-    `;
-  }
-
-  /** Closes the menu containing the clicked item and hands focus back. */
-  private closeMenuFrom(event: Event) {
-    const details = (event.currentTarget as HTMLElement).closest("details");
-    if (details?.open) {
-      details.open = false;
-      details.querySelector<HTMLElement>("summary")?.focus();
-    }
-  }
-
-  private renderMenuItem(params: {
-    label: string;
-    checked: boolean;
-    disabled?: boolean;
-    title?: string;
-    onSelect: (event: Event) => void;
-  }) {
-    return html`
-      <button
-        type="button"
-        class="session-menu__item"
-        role="menuitemradio"
-        aria-checked=${String(params.checked)}
-        title=${params.title ?? nothing}
-        ?disabled=${this.submitting || (params.disabled ?? false)}
-        @click=${params.onSelect}
-      >
-        <span class="session-menu__check" aria-hidden="true"
-          >${params.checked ? icons.check : nothing}</span
-        >
-        <span class="session-menu__text">${params.label}</span>
-      </button>
-    `;
-  }
-
   private renderAgentSelect(agents: ReturnType<NewSessionPage["agents"]>) {
-    const selected = this.selectedAgent();
-    const label = selected?.identity?.name ?? selected?.name ?? selected?.id ?? this.agentId;
-    return html`
-      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
-        <summary
-          class="new-session-page__trigger"
-          title=${t("newSession.agent")}
-          aria-disabled=${String(this.submitting)}
-          @click=${(event: Event) => {
-            if (this.submitting) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.bot}</span>
-          <span class="new-session-page__trigger-label">${label}</span>
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </summary>
-        <div
-          class="new-session-page__menu"
-          role="menu"
-          aria-label=${t("newSession.agent")}
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${agents.map((option) =>
-            this.renderMenuItem({
-              label: option.identity?.name ?? option.name ?? option.id,
-              checked: normalizeAgentId(option.id) === this.agentId,
-              onSelect: (event) => {
-                this.selectAgentId(option.id);
-                this.closeMenuFrom(event);
-              },
-            }),
-          )}
-        </div>
-      </details>
-    `;
+    return renderAgentSelect({
+      agents,
+      agentId: this.agentId,
+      disabled: this.submitting || Boolean(this.pendingCloud.sessionKey),
+      onSelect: (agentId) => this.selectAgentId(agentId),
+    });
   }
 
-  /** Where + worktree consolidated into one "run on" menu (Cursor-style). */
-  private renderWhereSelect() {
+  private renderPlaceSelect() {
     const execNodes = this.execNodes();
-    const showNodes = this.isAdmin() && execNodes.length > 0;
-    const activeNode = execNodes.find((node) => node.nodeId === this.execNode);
-    const whereLabel = this.execNode
-      ? (activeNode?.displayName ?? this.execNode)
-      : t("newSession.gateway");
-    const customFolder = this.usesCustomFolder();
-    const worktreeAvailable = this.worktreeAvailable();
-    const branches = this.branches;
-    return html`
-      <details class="new-session-page__select" @toggle=${this.handleMenuToggle}>
-        <summary
-          class="new-session-page__trigger"
-          title=${t("newSession.where")}
-          data-worktree=${String(this.worktree)}
-          aria-disabled=${String(this.submitting)}
-          @click=${(event: Event) => {
-            if (this.submitting) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.monitor}</span>
-          <span class="new-session-page__trigger-label">${whereLabel}</span>
-          ${this.worktree
-            ? html`<span class="new-session-page__target-icon" aria-hidden="true"
-                >${icons.gitBranch}</span
-              >`
-            : nothing}
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </summary>
-        <div
-          class="new-session-page__menu"
-          role="menu"
-          aria-label=${t("newSession.where")}
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${showNodes
-            ? html`
-                <div class="new-session-page__menu-title">${t("newSession.where")}</div>
-                ${this.renderMenuItem({
-                  label: t("newSession.gateway"),
-                  checked: !this.execNode,
-                  onSelect: (event) => {
-                    this.selectExecNode("");
-                    this.closeMenuFrom(event);
-                  },
-                })}
-                ${execNodes.map((node) =>
-                  this.renderMenuItem({
-                    label: node.displayName,
-                    checked: this.execNode === node.nodeId,
-                    onSelect: (event) => {
-                      this.selectExecNode(node.nodeId);
-                      this.closeMenuFrom(event);
-                    },
-                  }),
-                )}
-              `
-            : nothing}
-          ${!this.execNode
-            ? html`
-                ${showNodes
-                  ? html`<div class="session-menu__separator" role="separator"></div>`
-                  : nothing}
-                ${this.renderMenuItem({
-                  label: t("newSession.worktree"),
-                  checked: this.worktree,
-                  disabled: !worktreeAvailable || customFolder,
-                  title: worktreeAvailable
-                    ? t("chat.runControls.newSessionWorktree")
-                    : t("newSession.worktreeUnavailable"),
-                  onSelect: () => {
-                    // Stays open: enabling reveals the branch/name fields below.
-                    this.worktree = !this.worktree;
-                    if (this.worktree) {
-                      this.maybeLoadBranches();
-                    }
-                  },
-                })}
-                ${this.worktree
-                  ? html`
-                      <label class="new-session-page__menu-field">
-                        <span>${t("newSession.baseBranch")}</span>
-                        <input
-                          type="text"
-                          list="new-session-branches"
-                          ?disabled=${this.submitting}
-                          placeholder=${this.branchesLoading
-                            ? t("common.loading")
-                            : (branches?.defaultBranch ?? t("newSession.baseBranch"))}
-                          .value=${this.baseRef}
-                          @input=${(event: Event) => {
-                            if (this.submitting) {
-                              return;
-                            }
-                            this.baseRefEditGeneration += 1;
-                            this.baseRef = (event.target as HTMLInputElement).value.trim();
-                          }}
-                        />
-                        <datalist id="new-session-branches">
-                          ${(branches?.branches ?? []).map(
-                            (branch) => html`<option value=${branch.name}></option>`,
-                          )}
-                        </datalist>
-                      </label>
-                      <label class="new-session-page__menu-field">
-                        <span>${t("newSession.worktreeName")}</span>
-                        <input
-                          type="text"
-                          ?disabled=${this.submitting}
-                          placeholder=${t("newSession.worktreeNamePlaceholder")}
-                          .value=${this.worktreeName}
-                          @input=${(event: Event) => {
-                            if (this.submitting) {
-                              return;
-                            }
-                            this.worktreeName = (event.target as HTMLInputElement).value.trim();
-                          }}
-                        />
-                      </label>
-                    `
-                  : nothing}
-              `
-            : nothing}
-        </div>
-      </details>
-    `;
-  }
-
-  private renderFolderSelect() {
-    const browseAvailable = this.browseAvailable();
-    const folder = this.folder.trim();
-    // An empty folder on a node session means that node's default directory —
-    // never the Gateway workspace, so no local-workspace fallback there.
-    const label = folder
-      ? folderDisplayName(folder)
-      : this.execNode
-        ? t("newSession.folderPlaceholder")
-        : folderDisplayName(this.workspacePath()) || t("newSession.folderPlaceholder");
-    return html`
-      <details
-        class="new-session-page__select new-session-page__select--folder"
-        @toggle=${(event: Event) => {
-          // Browser state first: handleMenuToggle captures updateComplete for
-          // its focus hook, which must wait for the render these setters
-          // schedule (a bare details-attribute flip schedules none).
-          const details = event.currentTarget as HTMLDetailsElement;
-          if (details.open) {
-            this.browserOpen = true;
-            this.showBrowserRoot();
-          } else if (this.browserOpen) {
-            this.closeBrowser();
-          }
-          this.handleMenuToggle(event);
-        }}
-      >
-        <summary
-          class="new-session-page__trigger ${browseAvailable
-            ? ""
-            : "new-session-page__trigger--disabled"}"
-          title=${browseAvailable ? t("newSession.browse") : t("newSession.browseRequiresAdmin")}
-          aria-disabled=${String(this.submitting || !browseAvailable)}
-          @click=${(event: Event) => {
-            if (this.submitting || !browseAvailable) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
-          <span class="new-session-page__trigger-label">${label}</span>
-          <span class="new-session-page__trigger-chevron" aria-hidden="true"
-            >${icons.chevronDown}</span
-          >
-        </summary>
-        <div
-          class="new-session-page__menu new-session-page__menu--browser"
-          @keydown=${this.handleMenuKeydown}
-        >
-          ${this.renderBrowser()}
-        </div>
-      </details>
-    `;
+    const cloudProfiles = catalog.isTarget(this.data) ? [] : this.cloudProfiles;
+    const branches = this.repository.kind === "git" ? this.repository : null;
+    const cloudDisabledReason = this.cloudDisabledReason();
+    return renderPlaceSelect({
+      browseAvailable: this.browseAvailable(),
+      folder: this.folder,
+      workspace: this.workspacePath(),
+      sessions: this.context?.sessions.state.result?.sessions ?? [],
+      execNodes: this.isAdmin() ? execNodes : [],
+      gatewayName: this.gatewayName,
+      cloudProfiles: this.isAdmin() ? cloudProfiles : [],
+      cloudProfileId: this.cloudProfileId,
+      execNode: this.execNode,
+      syncFolder: this.folder.trim() || this.workspacePath(),
+      worktree: this.worktree,
+      worktreeVisible: this.worktreeAvailable() || Boolean(this.cloudProfileId) || this.worktree,
+      worktreeAvailable: this.worktreeAvailable(),
+      worktreeDisabledReason:
+        this.repository.kind === "checking"
+          ? t("newSession.checkingGit")
+          : this.repository.kind === "unavailable"
+            ? t("newSession.gitCheckUnavailable")
+            : undefined,
+      cloudDisabledReason,
+      branches,
+      branchesLoading: this.repository.kind === "checking",
+      baseRef: this.baseRef,
+      worktreeName: this.worktreeName,
+      submitting: this.submitting,
+      pendingCloud: Boolean(this.pendingCloud.sessionKey),
+      // Admin gates only the discovered choices. An existing node or cloud
+      // selection always keeps the destination axis visible — hiding it (e.g.
+      // after a failed node.list or an auth downgrade) would misreport a
+      // remote-targeted draft as Gateway-local.
+      showDestinations:
+        Boolean(this.execNode) ||
+        Boolean(this.cloudProfileId) ||
+        (this.isAdmin() && (execNodes.length > 0 || cloudProfiles.length > 0)),
+      popoverOpen: this.placePopoverOpen,
+      popoverHiding: this.placePopoverHiding,
+      browserTarget: this.browserTarget,
+      browserListing: this.browserListing,
+      browserLoading: this.browserLoading,
+      browserError: this.browserError,
+      browserPathDraft: this.browserPathDraft,
+      usableBrowserPath: this.usableBrowserPath(),
+      onGuardTransition: (event) => this.guardPopoverTransition(event, this.placePopoverHiding),
+      onPopoverShow: () => {
+        this.placePopoverOpen = true;
+        this.showBrowserRoot();
+      },
+      onPopoverHide: () => {
+        this.placePopoverOpen = false;
+        this.placePopoverHiding = true;
+        this.showBrowserRoot();
+      },
+      onPopoverAfterHide: () => {
+        this.placePopoverHiding = false;
+        this.restorePopoverTrigger("new-session-place-trigger", ".new-session-page__place-popover");
+      },
+      onSelectExecNode: (nodeId) => this.selectExecNode(nodeId),
+      onSelectCloudProfile: (profileId) => this.selectCloudProfile(profileId),
+      onApplyFolder: (folder, execNode) => this.applyFolder(folder, execNode),
+      onBrowse: (target) => this.selectBrowserTarget(target),
+      onBrowserPathDraftChange: (value) => {
+        this.browserPathDraft = value;
+      },
+      onBrowserNavigate: (path) => this.loadBrowser(path),
+      onBrowserBack: () => this.showBrowserRoot(),
+      onClose: () => this.closeBrowser(),
+      onToggleWorktree: () => {
+        if (this.cloudProfileId) {
+          return;
+        }
+        this.worktree = !this.worktree;
+        if (this.worktree) {
+          this.maybeLoadBranches();
+        }
+      },
+      onBaseRefInput: (baseRef) => {
+        if (!this.submitting) {
+          this.baseRefEditGeneration += 1;
+          this.baseRef = baseRef;
+        }
+      },
+      onWorktreeNameInput: (worktreeName) => {
+        if (!this.submitting) {
+          this.worktreeName = worktreeName;
+        }
+      },
+    });
   }
 
   private renderTargetBar() {
     const agents = this.agents();
-    return html`
-      <div class="new-session-page__triggers">
-        ${agents.length > 1 ? this.renderAgentSelect(agents) : nothing} ${this.renderFolderSelect()}
-        ${this.renderWhereSelect()}
-      </div>
-    `;
+    return catalog.renderBar({
+      data: this.data,
+      agentSelect: agents.length > 1 ? this.renderAgentSelect(agents) : nothing,
+      placeSelect: this.renderPlaceSelect(),
+      retrying: this.catalogRetrying,
+      onRetry: this.handleCatalogRetry,
+    });
   }
 
   /** Target row + composer, rendered mid-screen between the hero and recents. */
   private renderDraftBlock() {
-    const worktreeNameInvalid =
-      this.worktree &&
-      this.worktreeName.trim() !== "" &&
-      !WORKTREE_NAME_PATTERN.test(this.worktreeName.trim());
+    const worktreeNameInvalid = this.worktree && !isWorktreeNameValid(this.worktreeName);
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submitting)}>
         ${this.renderTargetBar()}
-        ${worktreeNameInvalid
-          ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
+        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+        ${this.error ? renderDraftError(this.error) : nothing}
+        ${this.submissionOutcomeUnknown
+          ? renderDraftError(t("newSession.createOutcomeUnknown"))
           : nothing}
-        ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
-        ${this.renderComposer()}
+        ${renderNewSessionDraftComposer({
+          agent: this.selectedAgent(),
+          agentId: this.agentId,
+          attachmentDraft: this.attachmentDraft,
+          canSubmit: this.canSubmit(),
+          context: this.context,
+          isCatalogTarget: catalog.isTarget(this.data),
+          message: this.message,
+          visibility: this.visibility,
+          draftAvailable: this.canStartAsDraft(),
+          modelControl: this.modelControl,
+          requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
+          submitting: this.submitting,
+          messageLocked: Boolean(this.pendingCloud.sessionKey),
+          onInput: (message) => {
+            if (!this.submitting && !this.pendingCloud.sessionKey) {
+              this.message = message;
+            }
+          },
+          onVisibilityChange: (visibility) => {
+            if (!this.submitting && !this.pendingCloud.sessionKey) {
+              this.visibility = visibility;
+            }
+          },
+          onSubmit: () => void this.submit(),
+        })}
       </div>
     `;
   }
@@ -1101,17 +1442,28 @@ class NewSessionPage extends OpenClawLightDomElement {
         hello: gateway?.hello ?? null,
       },
       onDraftChange: (next) => {
-        if (!this.submitting) {
+        if (!this.submitting && !this.pendingCloud.sessionKey) {
           this.message = next;
         }
       },
       onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {
-        if (this.submitting) {
+        if (this.submitting || this.pendingCloud.sessionKey) {
           return;
         }
-        this.context?.gateway.setSessionKey(sessionKey);
-        this.context?.navigate("chat", { search: searchForSession(sessionKey) });
+        const context = this.context;
+        if (!context) {
+          return;
+        }
+        context.gateway.setSessionKey(sessionKey);
+        context.navigate(
+          "chat",
+          sessionNavigationTarget({
+            context,
+            face: "chat",
+            sessionKey,
+          }).options,
+        );
       },
     });
   }
@@ -1130,63 +1482,6 @@ class NewSessionPage extends OpenClawLightDomElement {
       </div>
     `;
   }
-
-  private handleMessageKeydown(event: KeyboardEvent) {
-    if (this.submitting) {
-      return;
-    }
-    // keyCode 229 mirrors the chat composer's IME guard: some browsers emit
-    // the candidate-confirm Enter with isComposing === false.
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
-      return;
-    }
-    // Honor the chat composer's send-shortcut setting so the draft picker
-    // sends exactly like an existing session's composer.
-    const requiresModifier = loadSettings().chatSendShortcut === "modifier-enter";
-    if (!requiresModifier || event.metaKey || event.ctrlKey) {
-      event.preventDefault();
-      void this.submit();
-    }
-  }
-
-  /** Draft message box styled as the chat composer shell so both pickers match. */
-  private renderComposer() {
-    const startLabel = this.submitting ? t("newSession.starting") : t("newSession.start");
-    return html`
-      <div class="agent-chat__input new-session-page__composer">
-        <div class="agent-chat__composer-input-row">
-          <div class="agent-chat__composer-combobox">
-            <textarea
-              class="new-session-page__message"
-              rows="3"
-              ?disabled=${this.submitting}
-              placeholder=${t("newSession.messagePlaceholder")}
-              .value=${this.message}
-              @input=${(event: Event) => {
-                if (!this.submitting) {
-                  this.message = (event.target as HTMLTextAreaElement).value;
-                }
-              }}
-              @keydown=${(event: KeyboardEvent) => this.handleMessageKeydown(event)}
-            ></textarea>
-          </div>
-          <div class="agent-chat__composer-actions">
-            <openclaw-tooltip content=${t("newSession.start")}>
-              <button
-                type="button"
-                class="chat-send-btn"
-                ?disabled=${!this.canSubmit()}
-                aria-label=${startLabel}
-                @click=${() => void this.submit()}
-              >
-                ${this.submitting ? icons.loader : icons.arrowUp}
-              </button>
-            </openclaw-tooltip>
-          </div>
-        </div>
-      </div>
-    `;
-  }
 }
 
 if (!customElements.get("openclaw-new-session-page")) {
@@ -1194,3 +1489,4 @@ if (!customElements.get("openclaw-new-session-page")) {
 }
 
 export type { NewSessionPage };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

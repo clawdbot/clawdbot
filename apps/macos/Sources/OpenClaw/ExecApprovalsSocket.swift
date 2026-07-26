@@ -1032,7 +1032,7 @@ private enum ExecHostExecutor {
     private static func ensureScreenRecordingAccess(_ needsScreenRecording: Bool?) async -> ExecHostResponse? {
         guard needsScreenRecording == true else { return nil }
         let authorized = await PermissionManager
-            .status([.screenRecording])[.screenRecording] ?? false
+            .grantedStatus([.screenRecording])[.screenRecording] ?? false
         if authorized {
             return nil
         }

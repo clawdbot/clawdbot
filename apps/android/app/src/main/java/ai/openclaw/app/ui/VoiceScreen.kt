@@ -7,6 +7,7 @@ import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.isReady
 import ai.openclaw.app.requiresSetup
+import ai.openclaw.app.takeUtf16Safe
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -53,6 +54,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
@@ -84,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 
 /** Voice home screen that routes between talk mode, dictation, and idle setup. */
 @Composable
@@ -99,6 +102,7 @@ fun VoiceScreen(
   val micEnabled by viewModel.micEnabled.collectAsState()
   val micCooldown by viewModel.micCooldown.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
+  val preferredCameraFacing by viewModel.preferredCameraFacing.collectAsState()
   val micStatusText by viewModel.micStatusText.collectAsState()
   val micLiveTranscript by viewModel.micLiveTranscript.collectAsState()
   val micQueuedMessages by viewModel.micQueuedMessages.collectAsState()
@@ -115,6 +119,22 @@ fun VoiceScreen(
   val talkOutputLevel by viewModel.talkOutputLevel.collectAsState()
   val talkSpeechActive by viewModel.talkSpeechActive.collectAsState()
   val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
+  var hasFrontAndBackCameras by remember { mutableStateOf(false) }
+
+  LaunchedEffect(talkModeEnabled) {
+    hasFrontAndBackCameras =
+      if (talkModeEnabled) {
+        try {
+          viewModel.hasFrontAndBackCameras()
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Exception) {
+          false
+        }
+      } else {
+        false
+      }
+  }
 
   var pendingAction by remember { mutableStateOf<VoiceAction?>(null) }
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
@@ -182,7 +202,12 @@ fun VoiceScreen(
       outputLevel = talkOutputLevel,
       speechActive = talkSpeechActive,
       speakerEnabled = speakerEnabled,
+      preferredCameraFacing = preferredCameraFacing,
+      showCameraFlip = hasFrontAndBackCameras,
       onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+      onFlipCamera = {
+        viewModel.setPreferredCameraFacing(if (preferredCameraFacing == "front") "back" else "front")
+      },
       onEndTalk = { viewModel.setTalkModeEnabled(false) },
       onOpenVoiceSettings = onOpenVoiceSettings,
     )
@@ -434,7 +459,7 @@ private fun DictationScreen(
 }
 
 @Composable
-private fun TalkSessionScreen(
+internal fun TalkSessionScreen(
   entries: List<VoiceConversationEntry>,
   listening: Boolean,
   speaking: Boolean,
@@ -444,9 +469,13 @@ private fun TalkSessionScreen(
   outputLevel: Float?,
   speechActive: Boolean,
   speakerEnabled: Boolean,
+  preferredCameraFacing: String,
+  showCameraFlip: Boolean,
   onToggleSpeaker: () -> Unit,
+  onFlipCamera: () -> Unit,
   onEndTalk: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
+  embeddedInChat: Boolean = false,
 ) {
   Column(
     modifier =
@@ -457,7 +486,9 @@ private fun TalkSessionScreen(
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back to voice"), onClick = onEndTalk)
+      if (!embeddedInChat) {
+        ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back to voice"), onClick = onEndTalk)
+      }
       Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(text = nativeString("Realtime Talk"), style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -515,6 +546,14 @@ private fun TalkSessionScreen(
         modifier = Modifier.weight(1f),
         onClick = onToggleSpeaker,
       )
+      if (showCameraFlip) {
+        TalkControl(
+          icon = Icons.Default.FlipCameraAndroid,
+          label = if (preferredCameraFacing == "front") nativeString("Back camera") else nativeString("Front camera"),
+          modifier = Modifier.weight(1f),
+          onClick = onFlipCamera,
+        )
+      }
       TalkControl(
         icon = Icons.Default.PhoneDisabled,
         label = nativeString("End"),
@@ -628,7 +667,7 @@ private fun VoiceHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
+      OpenClawMascot(modifier = Modifier.size(25.dp))
       Text(
         text = nativeString("OpenClaw"),
         style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -1228,7 +1267,7 @@ private fun userFacingVoiceAttentionStatus(status: String): String {
   if (lower.contains("microphone permission required")) {
     return nativeString("Microphone permission is required.")
   }
-  return if (normalized.length <= 90) normalized else "${normalized.take(87)}..."
+  return if (normalized.length <= 90) normalized else "${normalized.takeUtf16Safe(87)}..."
 }
 
 private fun String.isVoiceGatewayReady(): Boolean {

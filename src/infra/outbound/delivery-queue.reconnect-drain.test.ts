@@ -1,17 +1,17 @@
 // Covers reconnect-triggered queue drain selection, active claims, backoff
 // bypass, and concurrent drain suppression.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { RECOVERY_REPLAY_SPACING_MS } from "../delivery-recovery.shared.js";
+import { loadPendingDeliveries, reserveDeliveryAttempt } from "./delivery-queue-storage.js";
 import {
   type DeliverFn,
   drainPendingDeliveries,
   enqueueDelivery,
   failDelivery,
-  loadPendingDeliveries,
-  MAX_RETRIES,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendAttemptStarted,
   type RecoveryLogger,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
@@ -23,8 +23,17 @@ import {
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
+const RECOVERY_REPLAY_SPACING_MS = 250;
+const MAX_RETRIES = 5;
 const stubCfg = {} as OpenClawConfig;
 const NO_LISTENER_ERROR = "No active DirectChat listener";
+const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
+}));
 
 function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
   return (accountId ?? "").trim() || "default";
@@ -140,6 +149,9 @@ describe("drainPendingDeliveries for reconnect", () => {
 
   beforeEach(() => {
     tmpDir = fixtures.tmpDir();
+    sleepMock.mockReset();
+    sleepMock.mockResolvedValue(undefined);
+    resolveOutboundChannelMessageAdapterMock.mockReset();
   });
 
   it("drains entries that failed with 'no listener' error", async () => {
@@ -210,6 +222,46 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
     expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
+  });
+
+  it("reconciles an exhausted final attempt before dead-lettering", async () => {
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+    const id = await enqueueDelivery(
+      {
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "maybe sent" }],
+        accountId: "acct1",
+        maxRetries: 1,
+      },
+      tmpDir,
+    );
+    await reserveDeliveryAttempt(id, 1, tmpDir);
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir);
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "sent",
+      messageId: "platform-final",
+      receipt: {
+        primaryPlatformMessageId: "platform-final",
+        platformMessageIds: ["platform-final"],
+        parts: [{ platformMessageId: "platform-final", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+
+    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("skips entries where retryCount >= MAX_RETRIES", async () => {
@@ -308,6 +360,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       const log = createRecoveryLog();
       const startupLog = createRecoveryLog();
       let firstStarted!: () => void;
@@ -344,9 +397,9 @@ describe("drainPendingDeliveries for reconnect", () => {
       });
       releaseFirst();
 
-      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+      await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
       expect(deliver).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
+      controlledSleep.release();
       await Promise.all([reconnectDrain, startupRecovery]);
 
       expect(deliver).toHaveBeenCalledTimes(2);

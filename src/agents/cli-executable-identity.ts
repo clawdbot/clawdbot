@@ -9,7 +9,7 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 
-export type CliExecutableFileIdentity = Readonly<{
+type CliExecutableFileIdentity = Readonly<{
   path: string;
   device: string;
   inode: string;
@@ -161,7 +161,7 @@ function resolveCommandPath(params: {
     return undefined;
   }
   if (hasPathSeparator(params.command) && !isDurableRootedCommand(params.command)) {
-    // The setup probe and later Crestodian turns intentionally use different
+    // The setup probe and later OpenClaw turns intentionally use different
     // workspaces. A cwd-relative executable cannot name one durable owner.
     return undefined;
   }

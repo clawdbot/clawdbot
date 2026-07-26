@@ -47,7 +47,7 @@ type ForkSessionFromParentParams = {
 
 type ForkedParentSessionEntry = ParentForkedSessionTranscript;
 
-export type ForkSessionEntryFromParentResult =
+type ForkSessionEntryFromParentResult =
   | {
       status: "forked";
       fork: ForkedParentSessionEntry;
@@ -66,7 +66,7 @@ export type ForkSessionEntryFromParentResult =
   | { status: "missing-parent" }
   | { status: "failed" };
 
-export type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> & {
+type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> & {
   parentSessionKey: string;
   parentStoreKeys?: readonly string[];
   sessionKey: string;

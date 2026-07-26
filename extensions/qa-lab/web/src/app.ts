@@ -2,6 +2,8 @@
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
+import { getJson, getJsonNoStore, postJson } from "./http.js";
+import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
@@ -19,34 +21,6 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
-
-async function getJsonNoStore<T>(path: string): Promise<T> {
-  const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
 
 function countCaptureDimension(
   events: UiState["captureEvents"],
@@ -227,7 +201,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     selectedCaptureSessionIds: [],
     selectedCaptureEventKey: null,
     selectedEvidenceEntryId: null,
-    selectedConversationId: null,
+    selectedConversationKey: null,
     selectedThreadId: null,
     selectedScenarioId: null,
     activeTab: initialUrl.pathname === "/evidence" || initialEvidencePath ? "evidence" : "chat",
@@ -373,8 +347,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         };
         state.runnerDraftDirty = false;
       }
-      if (!state.selectedConversationId) {
-        state.selectedConversationId = snapshot.conversations[0]?.id ?? null;
+      if (!state.selectedConversationKey) {
+        const firstConversation = snapshot.conversations[0];
+        state.selectedConversationKey = firstConversation
+          ? conversationSelectionKey(firstConversation)
+          : null;
       }
       if (!state.selectedScenarioId) {
         state.selectedScenarioId = bootstrap.scenarios[0]?.id ?? null;
@@ -586,7 +563,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     state.error = null;
     render();
     try {
+      const selectedConversation = findConversationBySelectionKey(
+        state.snapshot?.conversations ?? [],
+        state.selectedConversationKey,
+      );
+      const accountId = selectedConversation?.accountId ?? "default";
       await postJson("/api/inbound/message", {
+        accountId,
         conversation: {
           id: conversationId,
           kind: state.composer.conversationKind,
@@ -597,7 +580,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         text,
         ...(state.selectedThreadId ? { threadId: state.selectedThreadId } : {}),
       });
-      state.selectedConversationId = conversationId;
+      state.selectedConversationKey = conversationSelectionKey({
+        accountId,
+        id: conversationId,
+        kind: state.composer.conversationKind,
+      });
       state.composer.text = "";
       chatScrollLocked = true;
       await refresh();
@@ -816,9 +803,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
 
     /* Conversation chips */
-    root.querySelectorAll<HTMLElement>("[data-conversation-id]").forEach((node) => {
+    root.querySelectorAll<HTMLElement>("[data-conversation-key]").forEach((node) => {
       node.addEventListener("click", () => {
-        state.selectedConversationId = node.dataset.conversationId ?? null;
+        state.selectedConversationKey = node.dataset.conversationKey ?? null;
         state.selectedThreadId = null;
         if (state.activeTab !== "chat") {
           state.activeTab = "chat";
@@ -835,9 +822,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
           state.selectedThreadId = null;
         } else {
           state.selectedThreadId = val ?? null;
-          const conv = node.dataset.threadConv;
-          if (conv) {
-            state.selectedConversationId = conv;
+          const conversationKey = node.dataset.threadConversationKey;
+          if (conversationKey) {
+            state.selectedConversationKey = conversationKey;
           }
         }
         render();
@@ -1769,3 +1756,4 @@ export async function createQaLabApp(root: HTMLDivElement) {
   setInterval(() => void refresh(), 1_000);
   setInterval(() => void pollUiVersion(), 1_000);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

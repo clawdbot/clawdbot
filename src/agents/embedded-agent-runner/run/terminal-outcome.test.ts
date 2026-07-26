@@ -1,22 +1,18 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
-import {
-  resolveEmbeddedRunAttemptTerminalOutcome,
-  type EmbeddedRunAttemptTerminalInput,
-} from "./terminal-outcome.js";
+import { resolveEmbeddedRunAttemptTerminalOutcome } from "./terminal-outcome.js";
+
+type EmbeddedRunAttemptTerminalInput = Parameters<
+  typeof resolveEmbeddedRunAttemptTerminalOutcome
+>[0]["attempt"];
 
 function makeAttempt(
   overrides: Partial<EmbeddedRunAttemptTerminalInput> = {},
 ): EmbeddedRunAttemptTerminalInput {
   return {
-    aborted: false,
-    idleTimedOut: false,
-    promptError: null,
     promptTimeoutOutcome: undefined,
-    timedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
+    terminal: { kind: "ok" },
     ...overrides,
   };
 }
@@ -45,8 +41,7 @@ describe("embedded run attempt terminal outcome", () => {
   it("keeps prompt timeout ownership ahead of generic abort metadata", () => {
     const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
       attempt: makeAttempt({
-        aborted: true,
-        timedOut: true,
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
       }),
       assistant: makeAssistant("aborted"),
     });
@@ -68,8 +63,11 @@ describe("embedded run attempt terminal outcome", () => {
     expect(
       resolveEmbeddedRunAttemptTerminalOutcome({
         attempt: makeAttempt({
-          aborted: true,
-          promptError: wrappedRestartError,
+          terminal: {
+            kind: "aborted",
+            source: "runtime",
+            failure: { error: wrappedRestartError, source: "prompt" },
+          },
         }),
         assistant: makeAssistant("aborted"),
       }),
@@ -84,7 +82,7 @@ describe("embedded run attempt terminal outcome", () => {
     expect(
       resolveEmbeddedRunAttemptTerminalOutcome({
         attempt: makeAttempt({
-          aborted: true,
+          terminal: { kind: "aborted", source: "runtime" },
         }),
         assistant: makeAssistant("stop"),
       }),
@@ -102,8 +100,7 @@ describe("embedded run attempt terminal outcome", () => {
     expect(
       resolveEmbeddedRunAttemptTerminalOutcome({
         attempt: makeAttempt({
-          aborted: true,
-          timedOut: true,
+          terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
         }),
         assistant: undefined,
         abortSignal: controller.signal,
@@ -141,7 +138,7 @@ describe("embedded run attempt terminal outcome", () => {
     expect(
       resolveEmbeddedRunAttemptTerminalOutcome({
         attempt: makeAttempt({
-          promptError: new Error("prompt failed"),
+          terminal: { kind: "failed", source: "prompt", error: new Error("prompt failed") },
         }),
         assistant: makeAssistant("stop"),
       }),
@@ -149,17 +146,23 @@ describe("embedded run attempt terminal outcome", () => {
       reason: "failed",
       status: "error",
     });
+    const nullFailure = resolveEmbeddedRunAttemptTerminalOutcome({
+      attempt: makeAttempt({
+        terminal: { kind: "failed", source: "prompt", error: null },
+      }),
+      assistant: { ...makeAssistant("error"), errorMessage: "stale assistant error" },
+    });
+    expect(nullFailure).toMatchObject({ reason: "failed", status: "error" });
+    expect(nullFailure).not.toHaveProperty("error");
   });
 
-  it.each([{ timedOutDuringCompaction: true }, { timedOutDuringToolExecution: true }])(
-    "keeps non-provider timeouts ahead of their mechanical abort flag",
-    (timeoutPhase) => {
+  it.each(["compaction", "tool_execution"] as const)(
+    "keeps %s timeouts ahead of their mechanical abort flag",
+    (phase) => {
       expect(
         resolveEmbeddedRunAttemptTerminalOutcome({
           attempt: makeAttempt({
-            aborted: true,
-            timedOut: true,
-            ...timeoutPhase,
+            terminal: { kind: "timeout", phase, source: "runtime" },
           }),
           assistant: undefined,
         }),
@@ -169,4 +172,31 @@ describe("embedded run attempt terminal outcome", () => {
       });
     },
   );
+
+  it("keeps a recovered compaction timeout observation non-terminal", () => {
+    expect(
+      resolveEmbeddedRunAttemptTerminalOutcome({
+        attempt: makeAttempt({
+          terminal: { kind: "timeout", phase: "compaction", source: "observation" },
+        }),
+        assistant: makeAssistant("stop"),
+      }),
+    ).toEqual({ reason: "completed", status: "ok", stopReason: "stop" });
+  });
+
+  it("keeps failure detail terminal on a non-terminal timeout observation", () => {
+    expect(
+      resolveEmbeddedRunAttemptTerminalOutcome({
+        attempt: makeAttempt({
+          terminal: {
+            kind: "timeout",
+            phase: "compaction",
+            source: "observation",
+            failure: { source: "compaction", error: new Error("settlement failed") },
+          },
+        }),
+        assistant: makeAssistant("stop"),
+      }),
+    ).toMatchObject({ reason: "failed", status: "error" });
+  });
 });

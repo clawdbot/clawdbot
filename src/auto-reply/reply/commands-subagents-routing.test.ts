@@ -16,8 +16,9 @@ import {
   stopWithText,
 } from "./commands-subagents-dispatch.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
-import { COMMAND } from "./commands-subagents/shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const COMMAND = "/subagents";
 
 const listControlledSubagentRunsMock = vi.hoisted(() => vi.fn(() => []));
 

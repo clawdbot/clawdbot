@@ -391,10 +391,7 @@ export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
 }
 
 /** Returns the merged catalog entry for diagnostics that need source details. */
-export function getKnownNodeEntry(
-  catalog: KnownNodeCatalog,
-  nodeId: string,
-): KnownNodeEntry | null {
+function getKnownNodeEntry(catalog: KnownNodeCatalog, nodeId: string): KnownNodeEntry | null {
   return catalog.entriesById.get(nodeId) ?? null;
 }
 

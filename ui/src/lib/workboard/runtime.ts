@@ -1,11 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { normalizeString, workboardCardSessionKey } from "./card-state.ts";
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardAutoRefreshIntervalMs,
-  type WorkboardTaskLinkState,
-  type WorkboardUiState,
-} from "./types.ts";
+import { WORKBOARD_STATUSES, type WorkboardTaskLinkState, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
 
@@ -13,10 +8,8 @@ export type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
 };
 
-type WorkboardPollingEntry = {
+type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
-  enabled: boolean;
-  intervalMs: WorkboardAutoRefreshIntervalMs;
   requestUpdate?: () => void;
 };
 
@@ -29,15 +22,20 @@ type WorkboardRuntime = {
   lifecycleWrites: Set<Promise<unknown>>;
   loadGeneration?: number;
   lifecycleReconciliationEpoch?: number;
-  pollingGeneration?: number;
+  liveRefreshGeneration?: number;
+  liveChangeEpoch?: string;
+  liveHighestSeenRevision?: number;
+  liveAppliedRevision?: number;
+  liveRefreshPending?: boolean;
+  liveRefreshPromise?: Promise<void>;
   taskPollOffset?: number;
   taskDiscoveryOffset?: number;
   defaultTaskDiscoveryCursor?: string;
-  pollingTimer?: ReturnType<typeof setTimeout>;
+  liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
   lifecycleTaskPreparedTimer?: ReturnType<typeof setTimeout>;
   lifecycleTaskRetryTimer?: ReturnType<typeof setTimeout>;
   lifecycleTaskContinuationTimer?: ReturnType<typeof setTimeout>;
-  pollingEntry?: WorkboardPollingEntry;
+  liveRefreshEntry?: WorkboardLiveRefreshEntry;
   pendingStatusTransitions: Set<string>;
   lifecycleSyncKeys: Map<string, string>;
 };
@@ -48,6 +46,7 @@ export const WORKBOARD_LIFECYCLE_TASK_CONFIRMATION_TIMEOUT_ERROR =
   "Task confirmation exceeded its freshness window.";
 const WORKBOARD_LIFECYCLE_TASK_RETRY_MS = 5000;
 const WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS = 100;
+const WORKBOARD_LIFECYCLE_TASK_RECONCILE_MS = 5000;
 
 export function nextWorkboardLoadGeneration(host: WorkboardHost): number {
   const runtime = getWorkboardRuntime(host);
@@ -58,24 +57,6 @@ export function nextWorkboardLoadGeneration(host: WorkboardHost): number {
 
 export function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
   return getWorkboardRuntime(host).loadGeneration === generation;
-}
-
-export function nextWorkboardPollingGeneration(host: WorkboardHost): number {
-  const runtime = getWorkboardRuntime(host);
-  const generation = (runtime.pollingGeneration ?? 0) + 1;
-  runtime.pollingGeneration = generation;
-  return generation;
-}
-
-export function currentWorkboardPollingGeneration(host: WorkboardHost): number {
-  return getWorkboardRuntime(host).pollingGeneration ?? 0;
-}
-
-export function isCurrentWorkboardPollingGeneration(
-  host: WorkboardHost,
-  generation: number,
-): boolean {
-  return currentWorkboardPollingGeneration(host) === generation;
 }
 
 function nextWorkboardLifecycleReconciliationEpoch(host: WorkboardHost): number {
@@ -117,7 +98,26 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
-export function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
+export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
+  const runtime = getWorkboardRuntime(host);
+  const loadInFlight = Boolean(runtime.loadPromise);
+  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
+  if (runtime.liveRefreshRetryTimer) {
+    clearTimeout(runtime.liveRefreshRetryTimer);
+    delete runtime.liveRefreshRetryTimer;
+  }
+  delete runtime.liveRefreshEntry;
+  delete runtime.liveRefreshPromise;
+  delete runtime.liveChangeEpoch;
+  delete runtime.liveHighestSeenRevision;
+  delete runtime.liveAppliedRevision;
+  delete runtime.liveRefreshPending;
+  if (loadInFlight) {
+    invalidateWorkboardLoads(host);
+  }
+}
+
+function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const timer = runtime.lifecycleTaskPreparedTimer;
   if (timer) {
@@ -126,7 +126,7 @@ export function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
   }
 }
 
-export function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
+function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const timer = runtime.lifecycleTaskRetryTimer;
   if (timer) {
@@ -219,12 +219,7 @@ export function setWorkboardLifecycleTasksPrepared(
     return;
   }
   clearWorkboardLifecycleTaskPreparedTimer(host);
-  if (
-    !prepared ||
-    !options.requestUpdate ||
-    state.autoRefreshIntervalMs === 0 ||
-    !shouldRefreshWorkboardTasksForLifecycle(state)
-  ) {
+  if (!prepared || !options.requestUpdate || !shouldRefreshWorkboardTasksForLifecycle(state)) {
     return;
   }
   const nextTimer = setTimeout(
@@ -232,7 +227,7 @@ export function setWorkboardLifecycleTasksPrepared(
       delete getWorkboardRuntime(host).lifecycleTaskPreparedTimer;
       options.requestUpdate?.();
     },
-    Math.max(0, preparedAt + state.autoRefreshIntervalMs - Date.now()),
+    Math.max(0, preparedAt + WORKBOARD_LIFECYCLE_TASK_RECONCILE_MS - Date.now()),
   );
   getWorkboardRuntime(host).lifecycleTaskPreparedTimer = nextTimer;
 }
@@ -241,10 +236,7 @@ export function workboardLifecycleTasksPreparedAt(state: WorkboardUiState, now =
   if (!state.lifecycleTasksPrepared || state.lifecycleTasksPreparedAt === null) {
     return null;
   }
-  if (
-    state.autoRefreshIntervalMs > 0 &&
-    now - state.lifecycleTasksPreparedAt >= state.autoRefreshIntervalMs
-  ) {
+  if (now - state.lifecycleTasksPreparedAt >= WORKBOARD_LIFECYCLE_TASK_RECONCILE_MS) {
     return null;
   }
   return state.lifecycleTasksPreparedAt;
@@ -267,7 +259,7 @@ export function setWorkboardLifecycleTaskRefreshFailed(
     return;
   }
   clearWorkboardLifecycleTaskRetryTimer(host);
-  if (!failed || !options.requestUpdate || state.autoRefreshIntervalMs === 0) {
+  if (!failed || !options.requestUpdate) {
     return;
   }
   const nextTimer = setTimeout(() => {
@@ -296,8 +288,7 @@ export function setWorkboardLifecycleTaskRefreshContinuation(
   if (!pending || !options.requestUpdate) {
     return;
   }
-  // Continue bounded exact-confirmation even when routine polling is off.
-  // Keep this separate so render polling cannot cancel the freshness-bounded sequence.
+  // Continue bounded exact-confirmation independently from live card invalidation.
   const nextTimer = setTimeout(() => {
     delete getWorkboardRuntime(host).lifecycleTaskContinuationTimer;
     options.requestUpdate?.();
@@ -333,6 +324,7 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    boards: [],
     statuses: WORKBOARD_STATUSES,
     tasksByCardId: new Map(),
     missingTaskIds: new Set(),
@@ -341,17 +333,16 @@ function createDefaultState(): WorkboardUiState {
     query: "",
     priorityFilter: "all",
     agentFilter: "all",
+    boardFilter: "__all__",
     viewPreset: "all",
     activeHealthHighlight: null,
     showArchived: false,
     layout: "compact",
     hideEmptyColumns: false,
-    autoRefreshIntervalMs: 0,
     lastRefreshAt: null,
     lastRefreshStartedAt: null,
     lastRefreshError: null,
     lastRefreshSource: null,
-    pollRefreshInProgress: false,
     lifecycleTasksPrepared: false,
     lifecycleTasksPreparedAt: null,
     lifecycleTaskRefreshFailed: false,

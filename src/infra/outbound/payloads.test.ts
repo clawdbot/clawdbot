@@ -7,7 +7,6 @@ import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
-  normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
   normalizeReplyPayloadsForDelivery,
   projectOutboundPayloadPlanForDelivery,
@@ -507,64 +506,6 @@ describe("normalizeOutboundPayloadsForJson", () => {
   });
 });
 
-describe("normalizeOutboundPayloads", () => {
-  it("keeps channelData-only payloads", () => {
-    const channelData = { line: { flexMessage: { altText: "Card", contents: {} } } };
-    expect(normalizeOutboundPayloads([{ channelData }])).toEqual([
-      { text: "", mediaUrls: [], channelData },
-    ]);
-  });
-
-  it("keeps location-only payloads", () => {
-    const location = { latitude: 48.858844, longitude: 2.294351 };
-    expect(normalizeOutboundPayloads([{ location }])).toEqual([
-      { text: "", mediaUrls: [], location },
-    ]);
-  });
-
-  it("suppresses reasoning payloads during runtime normalization", () => {
-    expect(
-      normalizeOutboundPayloads([
-        { text: "Reasoning:\n_step_", isReasoning: true },
-        { text: "final answer" },
-      ]),
-    ).toEqual([{ text: "final answer", mediaUrls: [] }]);
-  });
-
-  it("formats BTW replies prominently for external delivery", () => {
-    expect(
-      normalizeOutboundPayloads([
-        {
-          text: "323",
-          btw: { question: "what is 17 * 19?" },
-        },
-      ]),
-    ).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
-  });
-
-  it("keeps delivery and mirror projections aligned", () => {
-    const payloads: ReplyPayload[] = [
-      { text: "Hello" },
-      { text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png" },
-      { text: '{"action":"NO_REPLY"}' },
-      { text: "NO_REPLY", mediaUrl: "https://x.test/c.png" },
-    ];
-
-    const deliveryProjection = normalizeOutboundPayloads(payloads);
-    const mirrorProjection = resolveMirrorProjection(payloads);
-
-    expect(mirrorProjection.text).toBe(
-      deliveryProjection
-        .map((payload) => payload.text)
-        .filter((text) => Boolean(text))
-        .join("\n"),
-    );
-    expect(mirrorProjection.mediaUrls).toEqual(
-      deliveryProjection.flatMap((payload) => payload.mediaUrls),
-    );
-  });
-});
-
 describe("OutboundPayloadPlan projections", () => {
   const matrix: ReplyPayload[] = [
     { text: "hello" },
@@ -583,9 +524,15 @@ describe("OutboundPayloadPlan projections", () => {
     );
   });
 
-  it("matches normalizeOutboundPayloads", () => {
+  it("projects transport payloads without no-reply or reasoning entries", () => {
     const plan = createOutboundPayloadPlan(matrix);
-    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual(normalizeOutboundPayloads(matrix));
+    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual([
+      { text: "hello", mediaUrls: [] },
+      { text: "", mediaUrls: ["https://x.test/1.png"] },
+      { text: "world", mediaUrls: ["https://x.test/2.png"] },
+      { text: '{"action":"NO_REPLY","note":"keep"}', mediaUrls: [] },
+      { text: "", mediaUrls: [], channelData: { mode: "flex" } },
+    ]);
   });
 
   it("matches normalizeOutboundPayloadsForJson", () => {

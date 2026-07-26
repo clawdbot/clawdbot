@@ -9,7 +9,6 @@ export type ReadSessionUpdatedAt = (params: {
   storePath: string;
   sessionKey: string;
 }) => number | undefined;
-
 export type RecordSessionMetaFromInbound = (params: {
   storePath: string;
   sessionKey: string;
@@ -21,7 +20,7 @@ export type RecordSessionMetaFromInbound = (params: {
 export type UpdateLastRoute = (params: {
   storePath: string;
   sessionKey: string;
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;

@@ -2,23 +2,27 @@
 
 ## Unreleased
 
-Allows Android to connect to Gateway protocol v3 or v4 while preserving the current v4 chat stream behavior.
-Creates or adopts Android's existing per-device chat session before loading connected history, preserving prior conversations while isolating each device. Thanks @snowzlmbot.
-Adds polished Installed/Browse skill management on Android with readiness filters, enable/disable controls, and readable Gateway-enforced ClawHub risk review. Thanks @snowzlmbot.
-Marks already installed ClawHub slugs in Browse and prevents fresh-install retries from overwriting or failing against existing skill directories. (#105741)
-Routes exec approval review through the Gateway's durable approval records, including first-answer-wins results from other authorized surfaces, fail-closed reconciliation after ambiguous writes, and compatibility with older Gateway v4 peers.
-Keeps Android session search in the Sessions screen with direct focus, clear controls, and accurate loading and no-match states. Thanks @IWhatsskill.
-Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
+Fixes secondary Gateway sessions disconnecting during temporary discovery gaps and preserves manual TLS when reopening saved Gateways and Control UI pages.
 
-Recovers Android permission prompts after timeouts or cancellation without exhausting future requests. Thanks @NianJiuZst.
+## 2026.7.3 - 2026-07-20
 
-Requires a clear in-app disclosure and fresh consent before Installed Apps can share app names, package IDs, and status with a paired Gateway; existing opt-ins must consent again. Thanks @joshavant.
+Adds a Wear OS companion for sessions, transcripts, text and voice replies, realtime Talk, Gateway controls, notifications, settings, and a launch Tile.
 
-Adds an Android system share target that stages bounded text and image shares for review without losing existing composer drafts. Thanks @NianJiuZst.
+Adds foreground, on-device Voice Wake with editable Gateway-synced wake words, plus copy and save-as-PNG actions for rendered chat widgets.
 
-Displays configured agent avatars across Android overview, settings, and chat, with bounded data and public remote image loading. Thanks @guarismo.
+Fixes composer media leaking across chats and malformed agent or profile initials when display names begin with emoji.
 
-Shows source-configured provider model inventory, capabilities, and route-aware availability in Android without exposing runtime route details. Thanks @snowzlmbot.
+Thanks @sibbl, @IWhatsskill, and @Leon-SK668.
+
+## 2026.7.2 - 2026-07-13
+
+Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.
+
+Improves chat with per-device history, durable approval status, session search, sharing, and agent avatars.
+
+Adds provider model details, build identity, safer permission recovery, fresh Installed Apps consent, and Gateway protocol v3/v4 support.
+
+Thanks @snowzlmbot, @IWhatsskill, @NianJiuZst, and @guarismo.
 
 ## 2026.7.1 - 2026-07-08
 

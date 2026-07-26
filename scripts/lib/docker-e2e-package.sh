@@ -7,6 +7,10 @@
 DOCKER_E2E_PACKAGE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="${ROOT_DIR:-$(cd "$DOCKER_E2E_PACKAGE_LIB_DIR/../.." && pwd)}"
 
+if ! declare -F docker_e2e_docker_run_with_resource_diagnostics >/dev/null 2>&1; then
+  source "$DOCKER_E2E_PACKAGE_LIB_DIR/docker-e2e-resource-diagnostics.sh"
+fi
+
 if ! declare -F run_logged >/dev/null 2>&1; then
   source "$DOCKER_E2E_PACKAGE_LIB_DIR/docker-e2e-logs.sh"
 fi
@@ -108,30 +112,10 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     fi
   }
 fi
-if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
-  docker_e2e_docker_run_cmd() {
-    if [ "${1:-}" = "run" ]; then
-      shift
-      docker_e2e_docker_run_resource_args "$@" || return $?
-      if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-        if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-        else
-          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "$@"
-        fi
-        return
-      fi
-      if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-        set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-      else
-        set -- run "$@"
-      fi
-    fi
-    if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-      docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
-      return
-    fi
-    local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
+if ! declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
+  docker_e2e_timeout_cmd() {
+    local timeout_value="$1"
+    shift
     local timeout_bin=""
     if command -v timeout >/dev/null 2>&1; then
       timeout_bin="timeout"
@@ -140,14 +124,27 @@ if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
     fi
     if [ -n "$timeout_bin" ]; then
       if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-        "$timeout_bin" --kill-after=30s "$timeout_value" docker "$@"
+        "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
       else
-        "$timeout_bin" "$timeout_value" docker "$@"
+        "$timeout_bin" "$timeout_value" "$@"
       fi
       return
     fi
     echo "timeout command not found; cannot bound Docker run after ${timeout_value}" >&2
     return 127
+  }
+fi
+if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
+  docker_e2e_docker_run_cmd() {
+    if [ "${1:-}" = "run" ]; then
+      shift
+      docker_e2e_docker_run_resource_args "$@" || return $?
+      docker_e2e_docker_run_with_resource_diagnostics \
+        "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" \
+        "$@"
+      return
+    fi
+    docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
   }
 fi
 
@@ -403,6 +400,7 @@ docker_e2e_harness_mount_args() {
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
     -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro"
+    -v "$ROOT_DIR/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"
     -v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"

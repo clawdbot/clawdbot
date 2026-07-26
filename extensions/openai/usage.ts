@@ -3,6 +3,7 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
   fetchCodexUsage,
@@ -10,7 +11,6 @@ import {
   type ProviderUsageModelBreakdown,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 
 const OPENAI_COSTS_URL = "https://api.openai.com/v1/organization/costs";
@@ -118,14 +118,13 @@ function resolveDailyRange(now: number, periodDays: number) {
 }
 
 async function readPage(response: Response, timeoutMs: number): Promise<OpenAIUsagePage> {
-  const buffer = await readResponseWithLimit(response, OPENAI_USAGE_RESPONSE_MAX_BYTES, {
+  const payload = await readProviderJsonObjectResponse(response, "OpenAI usage", {
+    maxBytes: OPENAI_USAGE_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`OpenAI usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`OpenAI usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const payload = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
-  if (!payload || !Array.isArray(payload.data)) {
+  if (!Array.isArray(payload.data)) {
     throw new Error("OpenAI usage response is not an object with data");
   }
   const nextPage =
@@ -356,7 +355,7 @@ function aggregateHistory(params: {
   };
 }
 
-export async function fetchOpenAIAdminUsage(params: {
+async function fetchOpenAIAdminUsage(params: {
   apiKey: string;
   projectId?: string;
   timeoutMs: number;

@@ -7,7 +7,7 @@ import {
   applyAnthropicEphemeralCacheControlMarkers,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
@@ -46,7 +46,7 @@ function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   });
 }
 
-export function buildCopilotDynamicHeaders(params: {
+function buildCopilotDynamicHeaders(params: {
   messages: Context["messages"];
   hasImages: boolean;
 }): Record<string, string> {
@@ -62,11 +62,11 @@ export function buildCopilotDynamicHeaders(params: {
 function patchOnPayloadResult(result: unknown): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      rewriteCopilotResponsePayloadConnectionBoundIds(next);
+      sanitizeCopilotReplayResponsePayload(next);
       return next;
     });
   }
-  rewriteCopilotResponsePayloadConnectionBoundIds(result);
+  sanitizeCopilotReplayResponsePayload(result);
   return result;
 }
 
@@ -115,7 +115,7 @@ export function wrapCopilotAnthropicStream(
   };
 }
 
-export function wrapCopilotOpenAIResponsesStream(
+function wrapCopilotOpenAIResponsesStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
   if (!baseStreamFn) {
@@ -132,7 +132,7 @@ export function wrapCopilotOpenAIResponsesStream(
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
-        rewriteCopilotResponsePayloadConnectionBoundIds(payload);
+        sanitizeCopilotReplayResponsePayload(payload);
         return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
       },
     };
@@ -140,7 +140,7 @@ export function wrapCopilotOpenAIResponsesStream(
   };
 }
 
-export function wrapCopilotOpenAICompletionsStream(
+function wrapCopilotOpenAICompletionsStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
   if (!baseStreamFn) {

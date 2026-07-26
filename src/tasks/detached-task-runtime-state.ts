@@ -4,8 +4,6 @@ import type {
   DetachedTaskLifecycleRuntimeRegistration,
 } from "./detached-task-runtime-contract.js";
 
-export type { DetachedTaskLifecycleRuntime };
-
 // Process-wide detached task runtime registration, owned by plugin activation.
 let detachedTaskLifecycleRuntimeRegistration: DetachedTaskLifecycleRuntimeRegistration | undefined;
 

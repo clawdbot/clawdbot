@@ -95,7 +95,20 @@ class GroupFairQueue {
   }
 }
 
-const throttlerByToken = new Map<string, ApiThrottlerTransformer>();
+const TELEGRAM_ACCOUNT_THROTTLERS_KEY = Symbol.for("openclaw.telegram.accountThrottlers");
+
+function getAccountThrottlers(): Map<string, ApiThrottlerTransformer> {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] as
+    | Map<string, ApiThrottlerTransformer>
+    | undefined;
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, ApiThrottlerTransformer>();
+  globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] = created;
+  return created;
+}
 
 function readNumericId(value: unknown): number | undefined {
   return parseStrictInteger(value);
@@ -126,7 +139,7 @@ function resolveForumLaneKey(payload: TelegramApiPayload): string {
   return "main";
 }
 
-export function createTelegramAccountThrottler(
+function createTelegramAccountThrottler(
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): ApiThrottlerTransformer {
   const baseThrottler = createThrottler();
@@ -154,14 +167,11 @@ export function getOrCreateAccountThrottler(
   token: string,
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): ApiThrottlerTransformer {
+  const throttlerByToken = getAccountThrottlers();
   let throttler = throttlerByToken.get(token);
   if (!throttler) {
     throttler = createTelegramAccountThrottler(createThrottler);
     throttlerByToken.set(token, throttler);
   }
   return throttler;
-}
-
-export function clearAccountThrottlersForTest(): void {
-  throttlerByToken.clear();
 }

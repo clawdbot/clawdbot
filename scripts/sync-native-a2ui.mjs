@@ -23,7 +23,22 @@ export function getNativeA2uiResourcePaths(repoRoot = rootDir) {
       "Resources",
       "CanvasA2UI",
     ),
+    linuxConsumerFile: path.join(repoRoot, "apps", "linux", "src-tauri", "src", "canvas.rs"),
   };
+}
+
+export async function checkLinuxCanvasA2uiReferences({ linuxConsumerFile }) {
+  const source = await fs.readFile(linuxConsumerFile, "utf8");
+  const expectedReferences = [
+    "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/index.html",
+    "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js",
+  ];
+  const missing = expectedReferences.filter((reference) => !source.includes(reference));
+  if (missing.length > 0) {
+    throw new Error(
+      `Linux Canvas must embed the synced native A2UI resources.\nMissing references:\n${formatList(missing)}`,
+    );
+  }
 }
 
 function normalizeRelativePath(filePath) {
@@ -170,6 +185,7 @@ async function main() {
   await withFreshBundleCheckSource(paths.sourceDir, async (sourceDir) => {
     await checkNativeA2uiResources({ sourceDir, nativeDir: paths.nativeDir });
   });
+  await checkLinuxCanvasA2uiReferences(paths);
   console.log("[canvas] native A2UI resources up to date.");
 }
 

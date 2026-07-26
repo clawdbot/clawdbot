@@ -10,7 +10,6 @@ vi.mock("../../actions.js", () => ({
 }));
 
 let finalizeSlackPreviewEdit: typeof import("./preview-finalize.js").finalizeSlackPreviewEdit;
-let testing: typeof import("./preview-finalize.js").testing;
 
 function createClient(overrides?: {
   historyMessages?: Array<Record<string, unknown>>;
@@ -26,7 +25,7 @@ function createClient(overrides?: {
 
 describe("finalizeSlackPreviewEdit", () => {
   beforeAll(async () => {
-    ({ finalizeSlackPreviewEdit, testing } = await import("./preview-finalize.js"));
+    ({ finalizeSlackPreviewEdit } = await import("./preview-finalize.js"));
   });
 
   beforeEach(() => {
@@ -96,40 +95,6 @@ describe("finalizeSlackPreviewEdit", () => {
         text: "final answer",
       }),
     ).rejects.toThrow("socket closed");
-  });
-
-  it("requires matching blocks when finalizing a blocks-only edit", () => {
-    const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Done*" } }] as const;
-
-    expect(
-      testing.buildExpectedSlackEditText({
-        text: "",
-        blocks: blocks as unknown as Parameters<
-          typeof testing.buildExpectedSlackEditText
-        >[0]["blocks"],
-      }),
-    ).toBe("_Done_");
-  });
-
-  it("builds complete fallback text for long blocks-only edits", () => {
-    const longContextText = "a".repeat(3000);
-    const blocks = [
-      {
-        type: "context",
-        elements: [
-          { type: "mrkdwn", text: longContextText },
-          { type: "mrkdwn", text: longContextText },
-          { type: "mrkdwn", text: longContextText },
-        ],
-      },
-    ] as const;
-    const expectedText = testing.buildExpectedSlackEditText({
-      text: "",
-      blocks: blocks as unknown as Parameters<
-        typeof testing.buildExpectedSlackEditText
-      >[0]["blocks"],
-    });
-    expect(expectedText).toHaveLength(9002);
   });
 
   it("accepts native-data fallback blocks after an ambiguous retry response", async () => {

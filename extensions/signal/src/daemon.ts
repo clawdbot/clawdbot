@@ -20,12 +20,14 @@ type SignalDaemonOpts = {
 
 export type SignalDaemonHandle = {
   pid?: number;
-  stop: () => void;
+  stop: () => Promise<void>;
   exited: Promise<SignalDaemonExitEvent>;
   isExited: () => boolean;
 };
 
-export type SignalDaemonExitEvent = {
+const SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS = 1_500;
+
+type SignalDaemonExitEvent = {
   source: "process" | "spawn-error";
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -39,7 +41,7 @@ function isRecoverableSignalCliReceiveException(line: string): boolean {
   return /\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(line);
 }
 
-export function classifySignalCliLogLine(line: string): "log" | "error" | null {
+function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
   if (!trimmed) {
     return null;
@@ -130,6 +132,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const error = opts.runtime?.error ?? (() => {});
   let exited = false;
   let settledExit = false;
+  let stopPromise: Promise<void> | undefined;
   let resolveExit!: (value: SignalDaemonExitEvent) => void;
   const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
     resolveExit = resolve;
@@ -163,8 +166,14 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     });
   });
   child.on("error", (err) => {
-    error(`signal-cli spawn error: ${String(err)}`);
-    settleExit({ source: "spawn-error", code: null, signal: null });
+    // ChildProcess also emits "error" when signaling an already-spawned process fails.
+    // Only a missing pid proves there was no daemon whose exit still needs to be observed.
+    if (child.pid === undefined) {
+      error(`signal-cli spawn error: ${String(err)}`);
+      settleExit({ source: "spawn-error", code: null, signal: null });
+    } else {
+      error(`signal-cli process error: ${String(err)}`);
+    }
   });
 
   return {
@@ -172,16 +181,38 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     exited: exitedPromise,
     isExited: () => exited,
     stop: () => {
-      if (!child.killed && !exited) {
-        child.kill("SIGTERM");
+      if (exited) {
+        return Promise.resolve();
       }
+      if (stopPromise) {
+        return stopPromise;
+      }
+      if (!child.killed) {
+        try {
+          child.kill("SIGTERM");
+        } catch (err) {
+          error(`signal-cli stop error: ${String(err)}`);
+        }
+      }
+      stopPromise = new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          if (!exited) {
+            try {
+              child.kill("SIGKILL");
+            } catch (err) {
+              error(`signal-cli force-stop error: ${String(err)}`);
+            }
+          }
+        }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
+        timeout.unref?.();
+        // Do not resolve merely because SIGKILL was sent: monitor lifetime prevents the gateway
+        // from starting a replacement before the old daemon releases its port and config lock.
+        void exitedPromise.then(() => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
+      return stopPromise;
     },
   };
 }
-
-export const testApi = {
-  bindSignalCliOutput,
-  buildDaemonArgs,
-  classifySignalCliLogLine,
-  resolveSignalCliConfigPath,
-} as const;

@@ -53,6 +53,32 @@ export function formatUnresolvedShellPromptAdvisory(names: string[]): string | n
   ].join("\n");
 }
 
+/** Advisory for jobs whose scheduled authority cannot be recovered without a caller decision. */
+export function formatScheduledToolPolicyAdvisory(params: {
+  legacyJobs: string[];
+  invalidJobs: string[];
+}): string | null {
+  const lines: string[] = [];
+  if (params.legacyJobs.length > 0) {
+    lines.push(
+      `${pluralize(params.legacyJobs.length, "tool-bearing cron job")} ${params.legacyJobs.length === 1 ? "keeps" : "keep"} legacy sender-policy resolution because stored account authority is not provable${formatJobNameList(params.legacyJobs)}.`,
+    );
+  }
+  if (params.invalidJobs.length > 0) {
+    lines.push(
+      `${pluralize(params.invalidJobs.length, "tool-bearing cron job")} ${params.invalidJobs.length === 1 ? "has" : "have"} invalid or inconsistent scheduled authority provenance${formatJobNameList(params.invalidJobs)}.`,
+    );
+  }
+  if (lines.length === 0) {
+    return null;
+  }
+  lines.push(
+    "- These jobs continue through restrictive sender-policy resolution; doctor will not infer authority from delivery or current configuration.",
+    "- Reauthorize with `openclaw cron edit <id> --tools <tool,...>`, or use `--clear-tools` to adopt the current default cap.",
+  );
+  return lines.join("\n");
+}
+
 /** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const lines: string[] = [];
@@ -104,6 +130,11 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   if (issues.legacyDeliveryMode) {
     lines.push(
       `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
+    );
+  }
+  if (issues.migratedScheduledToolPolicy) {
+    lines.push(
+      `- ${pluralize(issues.migratedScheduledToolPolicy, "job")} can recover scheduled account authority from persisted owner identity`,
     );
   }
   if (issues.invalidSchedule) {
@@ -190,6 +221,7 @@ export function needsSqliteProjectionBackfill(params: {
     "name",
     "payload",
     "schedule",
+    "scheduledToolPolicy",
     "sessionKey",
     "sessionTarget",
     "wakeMode",

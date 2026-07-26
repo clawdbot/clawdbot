@@ -1,4 +1,3 @@
-// Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_MODES,
@@ -19,13 +18,15 @@ import type {
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
-import {
-  isLoopbackIpAddress,
-  normalizeIpAddress,
-  parseCanonicalIpAddress,
-  type ParsedIpAddress,
-} from "@openclaw/net-policy/ip";
+import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import {
+  isSensitiveUrlQueryParamName,
+  normalizeFingerprint,
+  normalizeLowercaseStringOrEmpty,
+  parseGatewayIpAddress,
+  parseHostForAddressChecks,
+} from "./client-address-utils.js";
 import {
   buildGatewayConnectAuth,
   type GatewayConnectAuthSelection,
@@ -43,7 +44,13 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
-import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
+  resolveSafeTimeoutDelayMs,
+} from "./timeouts.js";
+import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -115,56 +122,6 @@ function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayCli
   ) as Required<GatewayClientHostDeps>;
 }
 
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function rawDataToString(data: unknown): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((entry) => Buffer.from(entry))).toString("utf8");
-  }
-  return String(data);
-}
-
-function isSensitiveUrlQueryParamName(key: string): boolean {
-  return /(?:token|password|secret|key|auth|credential)/iu.test(key);
-}
-
-function normalizeFingerprint(fingerprint: string | undefined): string {
-  return (fingerprint ?? "").replaceAll(":", "").trim().toLowerCase();
-}
-
-function parseHostForAddressChecks(
-  host: string,
-): { isLocalhost: boolean; unbracketedHost: string } | null {
-  if (!host) {
-    return null;
-  }
-  const normalizedHost = host.toLowerCase().trim();
-  const canonicalHost = normalizedHost.replace(/\.+$/, "");
-  if (canonicalHost === "localhost") {
-    return { isLocalhost: true, unbracketedHost: canonicalHost };
-  }
-  return {
-    isLocalhost: false,
-    // URL.hostname canonicalizes IPv6 with brackets in some call sites. Strip
-    // them before net.isIP so address checks do not fall back to hostname rules.
-    unbracketedHost:
-      normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
-        ? normalizedHost.slice(1, -1)
-        : normalizedHost,
-  };
-}
-
 const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
   "loopback",
   "private",
@@ -178,11 +135,6 @@ const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<string>([
   "uniqueLocal",
   "deprecatedSiteLocal",
 ]);
-
-function parseGatewayIpAddress(host: string): ParsedIpAddress | undefined {
-  const normalized = normalizeIpAddress(host);
-  return normalized ? parseCanonicalIpAddress(normalized) : undefined;
-}
 
 function isPrivateOrLoopbackIpAddress(address: ParsedIpAddress): boolean {
   const ranges =
@@ -378,30 +330,6 @@ export type GatewayClientConnectionMetadata = {
   preauthHandshakeTimeoutMs?: number;
 };
 
-export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
-  1000: "normal closure",
-  1006: "abnormal closure (no close frame)",
-  1008: "policy violation",
-  1012: "service restart",
-  1013: "try again later",
-};
-
-export function describeGatewayCloseCode(code: number): string | undefined {
-  return GATEWAY_CLOSE_CODE_HINTS[code];
-}
-
-function readConnectChallengeTimeoutOverride(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs">,
-): number | undefined {
-  if (
-    typeof opts.connectChallengeTimeoutMs === "number" &&
-    Number.isFinite(opts.connectChallengeTimeoutMs)
-  ) {
-    return opts.connectChallengeTimeoutMs;
-  }
-  return undefined;
-}
-
 function isGatewayClientStoppedError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message === "gateway client stopped" || message === "Error: gateway client stopped";
@@ -415,18 +343,6 @@ function formatGatewayClientErrorForLog(err: unknown): string {
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
     );
   return redactedUrlLikeString;
-}
-
-export function resolveGatewayClientConnectChallengeTimeoutMs(
-  opts: Pick<
-    GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
-  >,
-): number {
-  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
-    env: opts.env,
-    configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
-  });
 }
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
@@ -472,7 +388,14 @@ export class GatewayClient {
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
         ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
-        : 30_000;
+        : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
+    const connectChallengeTimeoutMs = resolveConnectChallengeTimeoutMs(
+      this.opts.connectChallengeTimeoutMs,
+      {
+        env: this.opts.env,
+        configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+      },
+    );
     this.protocol = new GatewayProtocolClient<AssembledConnect>({
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,
@@ -525,9 +448,9 @@ export class GatewayClient {
         ),
       handshake: {
         mode: "require-challenge",
-        timeoutMs: resolveGatewayClientConnectChallengeTimeoutMs(this.opts),
+        timeoutMs: connectChallengeTimeoutMs,
         timeoutMessage: (elapsedMs) =>
-          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${resolveGatewayClientConnectChallengeTimeoutMs(this.opts)}ms)`,
+          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${connectChallengeTimeoutMs}ms)`,
       },
       reconnect: { initialMs: 1_000, multiplier: 2, maxMs: 30_000 },
       requestTimeoutMs: this.requestTimeoutMs,
@@ -542,6 +465,19 @@ export class GatewayClient {
       mode: this.opts.mode,
       preauthHandshakeTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
     };
+  }
+
+  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    this.opts = {
+      ...this.opts,
+      caps: [...manifest.caps],
+      commands: [...manifest.commands],
+    };
+    // Node command declarations are connect metadata. Reconnect so the Gateway
+    // can reconcile approval before dispatching a newly available command.
+    if (!this.stopped) {
+      this.protocol.closeSocket(1012, "node manifest changed");
+    }
   }
 
   start() {
@@ -582,8 +518,15 @@ export class GatewayClient {
     }
     // Allow node screen snapshots and other large responses.
     this.deps.beforeConnect();
+    // Challenge timeout arms only after `open`. Bound the opening handshake so a
+    // peer that accepts TCP without upgrading cannot hang createSocket forever.
+    const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+      env: this.opts.env,
+      configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+    });
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      handshakeTimeout: handshakeTimeoutMs,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
@@ -622,6 +565,7 @@ export class GatewayClient {
     }
     try {
       ws = new WebSocket(url, wsOptions as ClientOptions);
+      ws.binaryType = "nodebuffer";
     } catch (error) {
       throw error instanceof Error ? error : new Error(String(error));
     } finally {
@@ -643,7 +587,7 @@ export class GatewayClient {
     });
     ws.on("message", (data) => handlers.message(rawDataToString(data)));
     ws.on("close", (code, reason) => {
-      const reasonText = rawDataToString(reason);
+      const reasonText = reason.toString();
       if (this.ws === ws) {
         this.ws = null;
       }
@@ -1245,6 +1189,7 @@ export class GatewayClient {
       expectFinal,
       timeoutMs,
       signal: opts?.signal,
+      onSent: opts?.onSent,
       onAccepted: opts?.onAccepted,
     });
   }
@@ -1255,3 +1200,4 @@ function createGatewayRequestAbortError(method: string): Error {
   err.name = "AbortError";
   return err;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,8 +8,8 @@ import { isLiveTestEnabled } from "./live-test-helpers.js";
 import {
   buildOpenAICompletionsParams,
   createOpenAIResponsesTransportStreamFn,
-  testing as openAITransportTesting,
 } from "./openai-transport-stream.js";
+import { testing as openAITransportTesting } from "./openai-transport-stream.test-support.js";
 
 const { buildOpenAIResponsesParams } = openAITransportTesting;
 

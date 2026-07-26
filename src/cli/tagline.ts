@@ -330,5 +330,3 @@ export function pickTagline(options: TaglineOptions = {}): string {
   const index = Math.floor(rand() * pool.length) % pool.length;
   return expectDefined(pool[index], "pool entry at index");
 }
-
-export { DEFAULT_TAGLINE };

@@ -23,6 +23,22 @@ describe("history media recording", () => {
     ]);
   });
 
+  it("preserves native sticker classification for local sticker images", () => {
+    expect(
+      normalizeHistoryMediaEntries({
+        messageId: "msg-sticker",
+        media: [{ path: "/tmp/sticker.png", contentType: "image/png", kind: "sticker" }],
+      }),
+    ).toEqual([
+      {
+        path: "/tmp/sticker.png",
+        contentType: "image/png",
+        kind: "sticker",
+        messageId: "msg-sticker",
+      },
+    ]);
+  });
+
   it("records text history unchanged when media resolver has no usable media", async () => {
     const historyMap = new Map<string, HistoryEntry[]>();
 

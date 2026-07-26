@@ -477,5 +477,3 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
 
   return { commit };
 }
-
-export type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;

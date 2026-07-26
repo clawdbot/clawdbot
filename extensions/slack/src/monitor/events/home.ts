@@ -3,10 +3,10 @@ import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import type { HomeView } from "@slack/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import type { SlackMonitorContext } from "../context.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS, type SlackMonitorContext } from "../context.js";
 import type { SlackAppHomeOpenedEvent } from "../types.js";
 
-export function buildSlackHomeView(slashCommandName?: string): HomeView {
+function buildSlackHomeView(slashCommandName?: string): HomeView {
   const startSessionText = slashCommandName
     ? `Send a DM, mention OpenClaw in a channel, or use \`/${slashCommandName}\` to start a session.`
     : "Send a DM or mention OpenClaw in a channel to start a session.";
@@ -58,7 +58,24 @@ export function registerSlackHomeEvents(params: {
         trackEvent?.();
 
         const payload = event as SlackAppHomeOpenedEvent;
-        if (!payload.user || payload.tab === "messages") {
+        if (!payload.user) {
+          return;
+        }
+        if (payload.tab === "messages") {
+          if (!payload.channel) {
+            return;
+          }
+          const promptsSet = await ctx.setSlackSuggestedPrompts({
+            channelId: payload.channel,
+            title: "Try asking",
+            prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
+          });
+          // Both experiences can subscribe to App Home events. Assistant View
+          // requires thread_ts here, so only Slack accepting this threadless
+          // call proves Agent View and makes the durable mode write safe.
+          if (promptsSet) {
+            await ctx.recordSlackAgentView();
+          }
           return;
         }
 

@@ -26,17 +26,9 @@ import {
   createWorkerTranscriptRuntime,
   toAgentMessage,
   toWorkerInferenceContext,
-  toWorkerTranscriptMessage,
 } from "./embedded-agent-transcript.runtime.js";
-
-const LOCAL_WORKER_TOOL_NAMES = [
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-  "exec",
-  "process",
-] as const;
+import { WORKER_LOCAL_TOOL_NAMES, type WorkerLocalToolName } from "./tool-authority.js";
+import { toWorkerTranscriptMessage } from "./transcript-message.js";
 
 function toError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
@@ -75,8 +67,10 @@ type RunWorkerEmbeddedTurnParams = {
   transcript: WorkerEmbeddedTranscriptClient;
   live: WorkerEmbeddedLiveClient;
   initialMessages?: WorkerTranscriptMessage[];
+  suppressPromptTranscript?: boolean;
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
+  allowedToolNames: readonly WorkerLocalToolName[];
   signal?: AbortSignal;
 };
 
@@ -110,7 +104,7 @@ export async function runWorkerEmbeddedTurn(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    ...(params.systemPrompt === undefined ? {} : { systemPrompt: params.systemPrompt }),
+    ...(params.systemPrompt === undefined ? {} : { appendSystemPrompt: [params.systemPrompt] }),
     agentsFilesOverride: () => ({ agentsFiles: contextFiles }),
   });
   await resourceLoader.reload();
@@ -122,10 +116,13 @@ export async function runWorkerEmbeddedTurn(
 
   const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript);
   const sessionManager = guardSessionManager(baseSessionManager, {
+    suppressNextUserMessagePersistence: params.suppressPromptTranscript,
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
   });
 
-  const toolNameSet = new Set<string>(LOCAL_WORKER_TOOL_NAMES);
+  const allowedToolNameSet = new Set<string>(params.allowedToolNames);
+  const activeToolNames = WORKER_LOCAL_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
+  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const localTools = createOpenClawCodingTools({
     cwd: params.cwd,
     workspaceDir: params.cwd,
@@ -136,7 +133,7 @@ export async function runWorkerEmbeddedTurn(
     oneShotCliRun: true,
     senderIsOwner: true,
     disableMessageTool: true,
-    runtimeToolAllowlist: [...LOCAL_WORKER_TOOL_NAMES],
+    runtimeToolAllowlist: [...WORKER_LOCAL_TOOL_NAMES],
     modelProvider: params.modelRef.provider,
     modelId: params.modelRef.model,
     modelApi: model.api,
@@ -150,9 +147,9 @@ export async function runWorkerEmbeddedTurn(
       includeOpenClawTools: false,
       includePluginTools: false,
     },
-  }).filter((tool) => toolNameSet.has(tool.name));
+  }).filter((tool) => localToolNameSet.has(tool.name));
   const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
-  for (const toolName of LOCAL_WORKER_TOOL_NAMES) {
+  for (const toolName of WORKER_LOCAL_TOOL_NAMES) {
     if (!discoveredToolNames.has(toolName)) {
       throw new Error(`Worker coding tool unavailable: ${toolName}`);
     }
@@ -165,8 +162,8 @@ export async function runWorkerEmbeddedTurn(
     modelRegistry,
     model,
     thinkingLevel: "medium",
-    tools: [...LOCAL_WORKER_TOOL_NAMES],
-    customTools: toToolDefinitions(localTools),
+    tools: [...activeToolNames],
+    customTools: toToolDefinitions(localTools.filter((tool) => allowedToolNameSet.has(tool.name))),
     noTools: "all",
     sessionManager,
     settingsManager,
@@ -174,7 +171,7 @@ export async function runWorkerEmbeddedTurn(
     withSessionWriteLock: transcriptRuntime.withSessionWriteLock,
   });
   session.agent.sessionId = params.sessionId;
-  session.setActiveToolsByName([...LOCAL_WORKER_TOOL_NAMES]);
+  session.setActiveToolsByName([...activeToolNames]);
   session.agent.streamFn = (_model, context, options) =>
     params.inference.stream({
       modelRef: params.modelRef,
@@ -221,13 +218,14 @@ export async function runWorkerEmbeddedTurn(
 
   let finalTranscriptFailure: Error | undefined;
   try {
-    if (!params.signal?.aborted) {
-      try {
-        await transcriptRuntime.withSessionWriteLock(() => undefined);
-      } catch (error) {
-        finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
-      }
-      await liveRuntime.flush();
+    try {
+      await transcriptRuntime.withSessionWriteLock(() => undefined);
+    } catch (error) {
+      finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
+    }
+    await liveRuntime.flush();
+    if (finalTranscriptFailure === undefined) {
+      await liveRuntime.emitTerminal();
     }
   } finally {
     params.signal?.removeEventListener("abort", abortTurn);

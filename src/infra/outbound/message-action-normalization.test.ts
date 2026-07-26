@@ -303,6 +303,48 @@ describe("normalizeMessageActionInput", () => {
   });
 
   it.each([
+    { name: "a nonempty targets array", targets: ["C_TARGET"] },
+    { name: "an empty targets array", targets: [] },
+    { name: "a malformed targets value", targets: "C_TARGET" },
+  ])("does not replace $name with the current conversation", ({ targets }) => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "read",
+        args: { targets },
+        toolContext: {
+          currentChannelId: "C_CURRENT",
+          currentChannelProvider: "workspace",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it.each(["react", "edit", "delete"] as const)(
+    "infers the exact current conversation for a provider-owned %s message resource",
+    (action) => {
+      expect(
+        normalizeMessageActionInput({
+          action,
+          args: { channel: "forum", messageId: "901" },
+          toolContext: {
+            currentChannelProvider: "forum",
+            currentChannelId: "-1001:topic:77",
+          },
+          targetAliasSpec: {
+            aliases: ["messageId"],
+            deliveryTargetAliases: [],
+          },
+        }),
+      ).toMatchObject({
+        channel: "forum",
+        messageId: "901",
+        target: "-1001:topic:77",
+        to: "-1001:topic:77",
+      });
+    },
+  );
+
+  it.each([
     { action: "react" as const, args: { channel: "imessage", messageId: "msg_123" } },
     { action: "poll-vote" as const, args: { channel: "imessage", pollId: "poll_123" } },
   ])(

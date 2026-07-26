@@ -3,18 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
-  DEFAULT_MINIMAX_CONTEXT_WINDOW,
   DEFAULT_MINIMAX_MAX_TOKENS,
   MINIMAX_API_COST,
-  MINIMAX_API_HIGHSPEED_COST,
   MINIMAX_HOSTED_MODEL_ID,
-  MINIMAX_M27_API_COST,
-  MINIMAX_M25_API_COST,
-  MINIMAX_M25_API_HIGHSPEED_COST,
 } from "./model-definitions.js";
 import { MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
 
 const MINIMAX_M3_CATALOG_CONTEXT_WINDOW = MINIMAX_TEXT_MODEL_CATALOG["MiniMax-M3"].contextWindow;
+const EXPECTED_DEFAULT_CONTEXT_WINDOW = 204800;
 
 describe("minimax model definitions", () => {
   it("uses M3 as default hosted model", () => {
@@ -23,7 +19,9 @@ describe("minimax model definitions", () => {
 
   it("uses the current upstream MiniMax context, token, and pricing defaults", () => {
     expect(MINIMAX_M3_CATALOG_CONTEXT_WINDOW).toBe(1_000_000);
-    expect(DEFAULT_MINIMAX_CONTEXT_WINDOW).toBe(204800);
+    expect(buildMinimaxApiModelDefinition("MiniMax-Future").contextWindow).toBe(
+      EXPECTED_DEFAULT_CONTEXT_WINDOW,
+    );
     expect(DEFAULT_MINIMAX_MAX_TOKENS).toBe(131072);
     expect(MINIMAX_API_COST).toEqual({
       input: 0.6,
@@ -55,11 +53,11 @@ describe("minimax model definitions", () => {
     const model = buildMinimaxModelDefinition({
       id: "MiniMax-M2.5",
       cost: MINIMAX_API_COST,
-      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      contextWindow: EXPECTED_DEFAULT_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
     expect(model).toEqual({
-      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      contextWindow: EXPECTED_DEFAULT_CONTEXT_WINDOW,
       cost: MINIMAX_API_COST,
       id: "MiniMax-M2.5",
       input: ["text"],
@@ -86,8 +84,8 @@ describe("minimax model definitions", () => {
   it("keeps M2.7 on its existing price and text-only metadata", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
     expect(model.input).toEqual(["text"]);
-    expect(model.cost).toEqual(MINIMAX_M27_API_COST);
-    expect(model.contextWindow).toBe(DEFAULT_MINIMAX_CONTEXT_WINDOW);
+    expect(model.cost).toEqual({ input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 });
+    expect(model.contextWindow).toBe(EXPECTED_DEFAULT_CONTEXT_WINDOW);
   });
 
   it("keeps M2.7 text-only on the Anthropic-compatible chat path", () => {
@@ -98,17 +96,17 @@ describe("minimax model definitions", () => {
   it("keeps M2.7-highspeed text-only on the Anthropic-compatible chat path", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
     expect(model.input).toEqual(["text"]);
-    expect(model.cost).toEqual(MINIMAX_API_HIGHSPEED_COST);
+    expect(model.cost).toEqual({ input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 });
   });
 
   it("M2.5 model remains text-only", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.5");
     expect(model.input).toEqual(["text"]);
-    expect(model.cost).toEqual(MINIMAX_M25_API_COST);
+    expect(model.cost).toEqual({ input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.375 });
   });
 
   it("M2.5-highspeed keeps the M2.5 cache-read pricing", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.5-highspeed");
-    expect(model.cost).toEqual(MINIMAX_M25_API_HIGHSPEED_COST);
+    expect(model.cost).toEqual({ input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 });
   });
 });

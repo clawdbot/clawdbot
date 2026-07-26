@@ -65,12 +65,12 @@ const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   "*.tencentcos.com",
 ];
 
-export const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
+const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
   hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
   allowRfc2544BenchmarkRange: true,
 };
 
-export const QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+const QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 /** Result of local file-size validation. */
 interface FileSizeCheckResult {

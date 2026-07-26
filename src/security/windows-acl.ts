@@ -1,4 +1,4 @@
-/** Windows ACL audit facade backed by shared infra permission helpers. */
+/** Windows ACL remediation facade backed by shared infra permission policy. */
 export {
   createIcaclsResetCommand,
   formatIcaclsResetCommand,

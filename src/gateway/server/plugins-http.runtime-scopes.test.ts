@@ -11,7 +11,6 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { resolveControlPlaneRateLimitKey } from "../control-plane-rate-limit.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
@@ -247,60 +246,6 @@ describe("plugin HTTP route runtime scopes", () => {
       pluginSource: "route",
       gatewayMethodDispatchAllowed: true,
     });
-  });
-
-  it("threads resolved HTTP client IP into the shared control-plane rate identity", async () => {
-    const observed: Array<{ clientIp?: string; connId?: string; rateLimitKey: string }> = [];
-    const handler = createPluginRequestHandler({
-      routes: [
-        createRoute({
-          path: SECURE_HOOK_PATH,
-          auth: "gateway",
-          gatewayRuntimeScopeSurface: "trusted-operator",
-          gatewayMethodDispatchAllowed: true,
-          handler: async () => {
-            const client = getPluginRuntimeGatewayRequestScope()?.client;
-            observed.push({
-              ...(client?.clientIp ? { clientIp: client.clientIp } : {}),
-              ...(client?.connId ? { connId: client.connId } : {}),
-              rateLimitKey: resolveControlPlaneRateLimitKey(client ?? null),
-            });
-            return true;
-          },
-        }),
-      ],
-    });
-
-    for (const clientIp of ["203.0.113.10", "203.0.113.10", "203.0.113.11"]) {
-      const { handled, res } = await dispatchPluginRequest(handler, {
-        path: SECURE_HOOK_PATH,
-        authContext: {
-          gatewayAuthSatisfied: true,
-          gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
-          gatewayRequestClientIp: clientIp,
-        },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-    }
-
-    expect(observed).toEqual([
-      {
-        clientIp: "203.0.113.10",
-        connId: "plugin-http:203.0.113.10",
-        rateLimitKey: "unknown-device|203.0.113.10",
-      },
-      {
-        clientIp: "203.0.113.10",
-        connId: "plugin-http:203.0.113.10",
-        rateLimitKey: "unknown-device|203.0.113.10",
-      },
-      {
-        clientIp: "203.0.113.11",
-        connId: "plugin-http:203.0.113.11",
-        rateLimitKey: "unknown-device|203.0.113.11",
-      },
-    ]);
   });
 
   it("uses server-local routes and gateway context when the active registry belongs to another gateway", async () => {

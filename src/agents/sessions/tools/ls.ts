@@ -27,8 +27,6 @@ const lsSchema = Type.Object({
   path: Type.Optional(Type.String({ description: "Directory; default cwd." })),
   limit: Type.Optional(Type.Number({ description: "Max entries; default 500." })),
 });
-export type { LsToolDetails, LsToolInput } from "./tool-contracts.js";
-
 const DEFAULT_LIMIT = 500;
 
 /**

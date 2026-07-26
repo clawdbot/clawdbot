@@ -33,10 +33,6 @@ type ReusableSkillSnapshotResult = {
   snapshotVersion: number;
 };
 
-export function resetResolvedSkillsCacheForTests(): void {
-  resolvedSkillsCache.clear();
-}
-
 function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
   return crypto
     .createHash("sha256")

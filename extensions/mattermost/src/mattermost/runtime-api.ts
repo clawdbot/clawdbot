@@ -10,7 +10,6 @@ export type {
   ReplyPayload,
 } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -31,9 +30,6 @@ export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 export {

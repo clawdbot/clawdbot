@@ -115,7 +115,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
       setup: {
         choiceId: "google-gemini-cli",
         choiceLabel: "Gemini CLI OAuth",
-        choiceHint: "Google OAuth with project-aware token payload",
+        choiceHint: "Sign in with your Google account (opens a browser)",
         methodId: "oauth",
       },
     },

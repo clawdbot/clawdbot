@@ -5,6 +5,11 @@
   },
   "enabledByDefault": true,
   "providers": ["vllm"],
+  "modelCatalog": {
+    "discovery": {
+      "vllm": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "vllm": {

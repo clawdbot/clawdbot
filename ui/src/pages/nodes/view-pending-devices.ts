@@ -81,41 +81,39 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
   const repair = req.isRepair ? ` · ${t("nodes.inventory.repair")}` : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
-    <div class="list-item nodes-entry nodes-entry--pending">
-      ${renderDeviceTile(icons.monitorSmartphone, null)}
-      <div class="list-main">
-        <div class="list-title">${name}</div>
-        <div class="list-sub">${req.deviceId}${ip}</div>
-        <div class="muted" style="margin-top: 6px;">
+    <div class="settings-row nodes-entry">
+      ${renderDeviceTile(icons.monitorSmartphone)}
+      <div class="settings-row__text">
+        <span class="settings-row__title">${name}</span>
+        <span class="settings-row__desc">${req.deviceId}${ip}</span>
+        <span class="settings-row__desc">
           ${t("nodes.inventory.requestedAt", {
             note: renderPendingApprovalNote(approval.kind),
             time: age,
           })}${repair}
-        </div>
-        <div class="muted" style="margin-top: 6px;">
+        </span>
+        <span class="settings-row__desc">
           ${t("nodes.inventory.requestedAccess", {
             access: formatAccessSummary(approval.requested),
           })}
-        </div>
+        </span>
         ${approval.approved
           ? html`
-              <div class="muted" style="margin-top: 6px;">
+              <span class="settings-row__desc">
                 ${t("nodes.inventory.approvedAccess", {
                   access: formatAccessSummary(approval.approved),
                 })}
-              </div>
+              </span>
             `
           : nothing}
       </div>
-      <div class="list-meta">
-        <div class="row" style="justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
-          <button class="btn btn--sm primary" @click=${() => props.onDeviceApprove(req.requestId)}>
-            ${t("nodes.inventory.approve")}
-          </button>
-          <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
-            ${t("nodes.inventory.reject")}
-          </button>
-        </div>
+      <div class="settings-row__control">
+        <button class="btn btn--sm" @click=${() => props.onDeviceApprove(req.requestId)}>
+          ${t("nodes.inventory.approve")}
+        </button>
+        <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
+          ${t("nodes.inventory.reject")}
+        </button>
       </div>
     </div>
   `;

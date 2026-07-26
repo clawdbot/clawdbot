@@ -14,9 +14,9 @@ import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
 
-export type ApprovalType = "dm" | "channel" | "group";
+type ApprovalType = "dm" | "channel" | "group";
 
-export type CreateApprovalParams = {
+type CreateApprovalParams = {
   type: ApprovalType;
   requestingShip: string;
   channelNest?: string;
@@ -35,7 +35,7 @@ export type CreateApprovalParams = {
 /**
  * Generate a unique approval ID in the format: {type}-{timestamp}-{shortHash}
  */
-export function generateApprovalId(type: ApprovalType): string {
+function generateApprovalId(type: ApprovalType): string {
   const timestamp = Date.now();
   const randomPart = randomBytes(3).toString("hex");
   return `${type}-${timestamp}-${randomPart}`;
@@ -98,7 +98,7 @@ export function formatApprovalRequest(approval: PendingApproval): string {
   throw new Error("Unsupported approval type");
 }
 
-export type ApprovalResponse = {
+type ApprovalResponse = {
   action: "approve" | "deny" | "block";
   id?: string;
 };
@@ -197,10 +197,7 @@ export function formatApprovalConfirmation(
 // Admin Commands
 // ============================================================================
 
-export type AdminCommand =
-  | { type: "unblock"; ship: string }
-  | { type: "blocked" }
-  | { type: "pending" };
+type AdminCommand = { type: "unblock"; ship: string } | { type: "blocked" } | { type: "pending" };
 
 /**
  * Parse an admin command from owner message.

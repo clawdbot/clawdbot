@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 
-export type GatewayLaneConcurrency = {
+type GatewayLaneConcurrency = {
   cron: number;
   main: number;
   subagent: number;
@@ -18,7 +18,7 @@ export type GatewayLaneConcurrency = {
 
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
   return {
-    cron: resolveCronMaxConcurrentRuns(cfg.cron),
+    cron: resolveCronMaxConcurrentRuns(),
     main: resolveAgentMaxConcurrent(cfg),
     subagent: resolveSubagentMaxConcurrent(cfg),
   };

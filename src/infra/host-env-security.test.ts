@@ -13,7 +13,8 @@ import {
   sanitizeHostExecEnvWithDiagnostics,
   sanitizeSystemRunEnvOverrides,
 } from "./host-env-security.js";
-import { OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
+
+const OPENCLAW_CLI_ENV_VALUE = "1";
 
 function findSystemCommandPath(command: string) {
   if (process.platform === "win32") {
@@ -179,6 +180,7 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("aws_web_identity_token_file")).toBe(false);
     expect(isDangerousHostEnvVarName("AZURE_AUTH_LOCATION")).toBe(false);
     expect(isDangerousHostEnvVarName("CC")).toBe(true);
+    expect(isDangerousHostEnvVarName("cpp")).toBe(true);
     expect(isDangerousHostEnvVarName("cxx")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
@@ -383,6 +385,7 @@ describe("sanitizeHostExecEnv", () => {
         AZURE_AUTH_LOCATION: "/tmp/azure-auth.json",
         AWS_CONFIG_FILE: "/tmp/aws-config",
         SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
+        CPP: "/tmp/evil-cpp",
         CARGO_HOME: "/tmp/cargo",
         RUSTUP_DIST_ROOT: "https://mirror.example.test/deprecated-dist",
         RUSTUP_DIST_SERVER: "https://mirror.example.test",
@@ -518,6 +521,7 @@ describe("sanitizeHostExecEnv", () => {
       ["BASH_ENV", "/tmp/pwn.sh"],
       ["BROWSER", "/tmp/browser"],
       ["CC", "/tmp/evil-cc"],
+      ["CPP", "/tmp/evil-cpp"],
       ["CXX", "/tmp/evil-cxx"],
       ["CARGO_BUILD_RUSTC", "/tmp/evil-rustc"],
       ["CARGO_BUILD_RUSTC_WRAPPER", "/tmp/evil-rustc-wrapper"],
@@ -1178,6 +1182,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
   it("reports blocked and invalid requested overrides", () => {
     const overrides = envRecord([
       ["PATH", "/tmp/evil"],
+      ["CPP", "/tmp/evil-cpp"],
       ["CXX", "/tmp/evil-cxx"],
       ["CARGO_BUILD_RUSTC_WRAPPER", "/tmp/evil-rustc-wrapper"],
       ["CARGO_REGISTRIES_CRATES_IO_INDEX", "https://example.invalid/crates.io-index"],
@@ -1279,6 +1284,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "CONDA_PREFIX",
       "CPATH",
       "CPLUS_INCLUDE_PATH",
+      "CPP",
       "CURL_CA_BUNDLE",
       "CXX",
       "C_INCLUDE_PATH",
@@ -2164,3 +2170,4 @@ describe("make env exploit regression", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,12 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { Model } from "../../llm/types.js";
 import {
-  testing as extraParamsTesting,
   resolvePreparedExtraParams,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
 } from "./extra-params.js";
-import { runExtraParamsCase } from "./extra-params.test-support.js";
+import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 

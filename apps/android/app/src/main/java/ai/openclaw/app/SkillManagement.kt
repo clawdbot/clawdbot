@@ -181,6 +181,22 @@ internal fun isClawHubSkillInstalled(
     skills.any { it.matchesClawHubReference(reference) && it.clawHubInstalledVersion == version }
   } ?: false
 
+internal fun isClawHubSkillOperationActive(
+  activeSlugs: Set<String>,
+  slug: String,
+): Boolean {
+  val reference = parseClawHubSkillReference(slug) ?: return false
+  return activeSlugs.any { activeSlug ->
+    val active = parseClawHubSkillReference(activeSlug) ?: return@any false
+    active.slug.equals(reference.slug, ignoreCase = true) &&
+      (
+        active.ownerHandle == null ||
+          reference.ownerHandle == null ||
+          active.ownerHandle.equals(reference.ownerHandle, ignoreCase = true)
+      )
+  }
+}
+
 private data class ClawHubSkillReference(
   val slug: String,
   val ownerHandle: String?,

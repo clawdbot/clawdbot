@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -1309,8 +1309,8 @@ class GatewayExecApprovalRuntimeTest {
     }
     """.trimIndent()
 
-  private fun gatewayErrorDetails(reason: String): GatewayConnectErrorDetails =
-    GatewayConnectErrorDetails(
+  private fun gatewayErrorDetails(reason: String): GatewayErrorDetails =
+    GatewayErrorDetails(
       code = null,
       canRetryWithDeviceToken = false,
       recommendedNextStep = null,

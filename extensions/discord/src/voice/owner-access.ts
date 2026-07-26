@@ -3,25 +3,32 @@ import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/c
 import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import { resolveDiscordCommandOwnerAllowFrom } from "../monitor/allow-list.js";
 
-export function resolveDiscordVoiceOwnerAccess(params: {
+export function resolveDiscordVoiceAccess(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
-}): { ownerAllowFrom: string[]; ownerAllowAll: boolean } {
+}): {
+  admissionAllowFrom: string[];
+  ownerAllowFrom: string[];
+  ownerAllowAll: boolean;
+} {
   const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(params.cfg);
   if (commandOwnerAllowFrom) {
+    const allowAll = commandOwnerAllowFrom.includes("*");
     return {
+      admissionAllowFrom: commandOwnerAllowFrom,
       ownerAllowFrom: commandOwnerAllowFrom,
-      ownerAllowAll: commandOwnerAllowFrom.includes("*"),
+      ownerAllowAll: allowAll,
     };
   }
+  const admissionAllowFrom =
+    resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
+    params.discordConfig.allowFrom ??
+    params.discordConfig.allowFrom ??
+    [];
   return {
-    ownerAllowFrom:
-      resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
-      params.discordConfig.allowFrom ??
-      params.discordConfig.dm?.allowFrom ??
-      [],
-    // Legacy Discord wildcards grant transport access, not owner authority.
+    admissionAllowFrom,
+    ownerAllowFrom: [],
     ownerAllowAll: false,
   };
 }

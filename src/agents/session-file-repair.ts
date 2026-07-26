@@ -981,3 +981,4 @@ export async function repairSessionFileIfNeeded(params: {
     ...(retainedBackupPath ? { backupPath: retainedBackupPath } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

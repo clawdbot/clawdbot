@@ -2,10 +2,7 @@ import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tu
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import {
-  createTuiPluginApprovalController,
-  parseTuiPluginApproval,
-} from "./tui-plugin-approvals.js";
+import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
 type TestSelector = Component & {
   items: SelectItem[];
@@ -121,9 +118,12 @@ function createHarness() {
 }
 
 describe("TUI plugin approvals", () => {
-  it("parses the pending plugin approval gateway shape", () => {
-    expect(parseTuiPluginApproval(approvalPayload())).toEqual(approvalPayload());
-    expect(parseTuiPluginApproval({ id: "plugin:missing-request" })).toBeNull();
+  it("ignores malformed plugin approval gateway payloads", () => {
+    const harness = createHarness();
+    harness.controller.handleEvent("plugin.approval.requested", {
+      id: "plugin:missing-request",
+    });
+    expect(harness.openOverlay).not.toHaveBeenCalled();
   });
 
   it("shows workspace skill approvals for the active session and resolves the selection", async () => {

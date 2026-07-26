@@ -1,15 +1,15 @@
-import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
+import {
+  readSessionTranscriptMessageAnchorPage,
+  type SessionTranscriptReadScope,
+} from "../config/sessions/session-accessor.js";
 import {
   isSqliteReadTarget,
-  readSqliteMessageRecords,
   resolveTranscriptReadTarget,
-  sqliteRecordMessageWithSeq,
+  sqliteMessageEventWithSeq,
+  toTranscriptReadScope,
   type ReadRecentSessionMessagesResult,
 } from "./session-transcript-readers.js";
-import {
-  readSessionMessagesAroundIdWithStatsAsync as readSessionMessagesAroundIdWithStatsAsyncFile,
-  resolveSessionMessageAnchorBounds,
-} from "./session-utils.fs-anchor.js";
+import { readSessionMessagesAroundIdWithStatsAsync as readSessionMessagesAroundIdWithStatsAsyncFile } from "./session-utils.fs-anchor.js";
 
 type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
   found: boolean;
@@ -30,9 +30,8 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
       ? undefined
       : target.sessionFile;
   if (isSqliteReadTarget(target)) {
-    const records = await readSqliteMessageRecords(target);
-    const bounds = resolveSessionMessageAnchorBounds(records, opts.messageId, opts.maxMessages);
-    if (!bounds) {
+    const page = readSessionTranscriptMessageAnchorPage(toTranscriptReadScope(target), opts);
+    if (!page.found) {
       if (opts.allowResetArchiveFallback === true) {
         return await readSessionMessagesAroundIdWithStatsAsyncFile(
           target.sessionId,
@@ -47,17 +46,19 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
         hasOverreadContext: false,
         messages: [],
         offset: 0,
-        totalMessages: records.length,
+        totalMessages: page.totalMessages,
         transcriptPath: target.sessionFile,
       };
     }
-    const readStart = Math.max(0, bounds.start - 1);
     return {
       found: true,
-      hasOverreadContext: readStart < bounds.start,
-      messages: records.slice(readStart, bounds.endExclusive).map(sqliteRecordMessageWithSeq),
-      offset: bounds.offset,
-      totalMessages: records.length,
+      hasOverreadContext: page.hasOverreadContext,
+      messages: page.events.flatMap((entry) => {
+        const message = sqliteMessageEventWithSeq(entry);
+        return message === undefined ? [] : [message];
+      }),
+      offset: page.offset,
+      totalMessages: page.totalMessages,
       transcriptPath: target.sessionFile,
     };
   }

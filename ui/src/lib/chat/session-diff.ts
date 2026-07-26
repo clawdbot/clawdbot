@@ -6,7 +6,7 @@
 import type { DiffLine } from "./tool-call-diff.ts";
 
 /** Per-file render bound; the panel shows a truncation notice past this. */
-export const MAX_SESSION_DIFF_FILE_LINES = 600;
+const MAX_SESSION_DIFF_FILE_LINES = 600;
 
 export type ParsedFilePatch = {
   lines: DiffLine[];

@@ -6,10 +6,7 @@ import type { CronServiceContract } from "./service-contract.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 import type { CronJob } from "./types.js";
 
-export type CronJobSessionBinding = Pick<
-  CronJob,
-  "id" | "agentId" | "sessionKey" | "sessionTarget"
->;
+type CronJobSessionBinding = Pick<CronJob, "id" | "agentId" | "sessionKey" | "sessionTarget">;
 
 /**
  * Resolves every canonical session key a job is bound to: the session the run

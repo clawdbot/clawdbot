@@ -2,10 +2,11 @@ title: WhatsApp commands list reply
 
 scenario:
   id: whatsapp-commands-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify WhatsApp renders the full native command catalog.
   successCriteria:
     - The command catalog is returned in a WhatsApp DM.
@@ -14,10 +15,10 @@ scenario:
     - src/auto-reply/reply/commands-core.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
+    profiles: { "whatsapp:mock-default": 33 }
     kind: flow
     channel: whatsapp
     config:
-      requiredChannelDriver: live
       expectedAny: [/session, /verbose]
     summary: Request the WhatsApp command catalog and verify representative entries.
 

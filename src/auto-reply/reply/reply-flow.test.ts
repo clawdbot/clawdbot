@@ -7,7 +7,7 @@ import {
   createReplyDispatcher,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
-import { createReplyToModeFilter } from "./reply-threading.js";
+import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 type DeliverPayload = Parameters<Parameters<typeof createReplyDispatcher>[0]["deliver"]>[0];
 type DeliverMock = { mock: { calls: unknown[][] } };
@@ -164,6 +164,31 @@ describe("createReplyDispatcher", () => {
 
     await dispatcher.waitForIdle();
     expect(delivered).toEqual(["tool", "block", "final"]);
+  });
+
+  it("waits for asynchronous delivery error cleanup before becoming idle", async () => {
+    const cleanup = createDeferred<void>();
+    const order: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw new Error("delivery failed");
+      },
+      onError: async () => {
+        order.push("cleanup-start");
+        await cleanup.promise;
+        order.push("cleanup-end");
+      },
+    });
+
+    dispatcher.sendFinalReply({ text: "final" });
+    const idle = dispatcher.waitForIdle().then(() => {
+      order.push("idle");
+    });
+    await vi.waitFor(() => expect(order).toEqual(["cleanup-start"]));
+
+    cleanup.resolve();
+    await idle;
+    expect(order).toEqual(["cleanup-start", "cleanup-end", "idle"]);
   });
 
   it("releases the same dispatcher after a beforeDeliver timeout", async () => {
@@ -539,25 +564,25 @@ describe("waitForReplyDispatcherIdle", () => {
   });
 });
 
-describe("createReplyToModeFilter", () => {
+describe("createReplyToModeFilterForChannel", () => {
   it("handles off/all mode behavior for replyToId", () => {
     const cases: Array<{
-      filter: ReturnType<typeof createReplyToModeFilter>;
+      filter: ReturnType<typeof createReplyToModeFilterForChannel>;
       input: { text: string; replyToId?: string; replyToTag?: boolean };
       expectedReplyToId?: string;
     }> = [
       {
-        filter: createReplyToModeFilter("off"),
+        filter: createReplyToModeFilterForChannel("off"),
         input: { text: "hi", replyToId: "1" },
         expectedReplyToId: undefined,
       },
       {
-        filter: createReplyToModeFilter("off", { allowExplicitReplyTagsWhenOff: true }),
+        filter: createReplyToModeFilterForChannel("off", "slack"),
         input: { text: "hi", replyToId: "1", replyToTag: true },
         expectedReplyToId: "1",
       },
       {
-        filter: createReplyToModeFilter("all"),
+        filter: createReplyToModeFilterForChannel("all"),
         input: { text: "hi", replyToId: "1" },
         expectedReplyToId: "1",
       },
@@ -568,7 +593,7 @@ describe("createReplyToModeFilter", () => {
   });
 
   it("keeps only the first replyToId when mode is first", () => {
-    const filter = createReplyToModeFilter("first");
+    const filter = createReplyToModeFilterForChannel("first");
     expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");
     expect(filter({ text: "next", replyToId: "1" }).replyToId).toBeUndefined();
   });

@@ -8,8 +8,8 @@
   position: relative;
 }
 
-/* Host is a zero-layout overlay strip above the footer bar. Its bottom edge
-   sits 3px inside the footer so feet dangle over the divider, and
+/* Every visit variant shares this zero-layout overlay strip above the footer.
+   Its bottom edge sits 3px inside the bar so feet dangle over the divider, and
    overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
 openclaw-lobster-pet {
   position: absolute;
@@ -20,17 +20,6 @@ openclaw-lobster-pet {
   height: 52px;
   overflow: hidden;
   pointer-events: none;
-}
-
-/* Bar anchor: the pet stands inside the footer bar's free stretch, between
-   the status dot and the settings icons. */
-openclaw-lobster-pet[data-spot="bar"] {
-  bottom: 0;
-  height: 34px;
-}
-
-openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
-  bottom: 2px;
 }
 
 /* Departure/dismissal: duck down behind the ledge and fade. */
@@ -60,6 +49,39 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   transition: left 1.15s ease-in-out;
 }
 
+/* Seeded glint tint rides its own variable, mapped here (before the palette
+   rules) so palette and offline class rules still out-cascade it on both
+   look surfaces. */
+.lobster-pet {
+  --lob-glint: var(--lob-glint-seed, #00e5cc);
+}
+
+/* The Elder does everything at Elder speed. */
+.lobster-pet--elder {
+  transition: left 2.6s ease-in-out;
+}
+
+/* Completed Lobsterdex: a quiet golden trim along the ledge, earned once
+   every palette has visited this browser. */
+openclaw-lobster-pet[data-dex-complete]::after {
+  content: "";
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #f4b840 30%,
+    #f9d47a 50%,
+    #f4b840 70%,
+    transparent
+  );
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* ---- Rare palette variants (weights + lore in lobster-pet.ts) ---- */
 
 /* Ghost/albino: pale translucent shell, icy glints. */
@@ -79,6 +101,87 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 .lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(3),
 .lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(4) {
   filter: drop-shadow(0 0 2.5px rgba(82, 245, 227, 0.9));
+}
+
+/* Lumen: photophore running lights. They pulse and glow in the dark theme;
+   daylight (light theme) washes them down to faint speckles. */
+.lobster-pet--palette-lumen {
+  --lob-glint: #7ef5dd;
+}
+
+.lob-lumen {
+  filter: drop-shadow(0 0 3px rgba(126, 245, 221, 0.9));
+  animation: lobster-pet-lumen 3.2s ease-in-out infinite;
+}
+
+:root[data-theme-mode="light"] .lob-lumen {
+  filter: none;
+  opacity: 0.3;
+  animation: none;
+}
+
+@keyframes lobster-pet-lumen {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* Cotton candy: pastel two-tone with a slow iridescent drift. The breathe
+   animation must ride along - a lone animation list would replace it. */
+.lobster-pet--palette-cottoncandy {
+  --lob-glint: #ff9fd6;
+}
+
+.lobster-pet--palette-cottoncandy .lobster-pet__svg {
+  animation:
+    lobster-pet-breathe 3.4s ease-in-out infinite,
+    lobster-pet-iridesce 8s linear infinite;
+}
+
+@keyframes lobster-pet-iridesce {
+  0%,
+  100% {
+    filter: hue-rotate(0deg) saturate(1);
+  }
+  50% {
+    filter: hue-rotate(26deg) saturate(1.2);
+  }
+}
+
+/* Shiny: saturated sheen plus twinkling sparks. The filter skips retro so
+   the sticker-outline halo survives; sparkle spans carry the show there. */
+.lobster-pet--shiny:not(.lobster-pet--palette-retro) .lobster-pet__svg {
+  filter: saturate(1.3) brightness(1.07);
+}
+
+.lobster-pet__sparkle {
+  position: absolute;
+  color: #ffe27a;
+  font-size: calc(4px * var(--lob-scale, 2));
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lobster-pet--shiny .lobster-pet__sparkle {
+  animation: lobster-pet-twinkle 2.2s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 1.1s);
+}
+
+@keyframes lobster-pet-twinkle {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5) rotate(0deg);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.1) rotate(24deg);
+  }
 }
 
 /* Retro: homage to the classic OpenClaw logo — white sticker outline around
@@ -111,6 +214,13 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 .lobster-pet--offline .lob-eye-open circle:nth-of-type(3),
 .lobster-pet--offline .lob-eye-open circle:nth-of-type(4) {
   filter: none;
+}
+
+/* Offline also dims the lumen running lights - no power, no glow. */
+.lobster-pet--offline .lob-lumen {
+  filter: none;
+  animation: none;
+  opacity: 0.4;
 }
 
 .lobster-pet__body {
@@ -147,17 +257,19 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 }
 
 /* Claw size scales the paths inside the group: act animations own the group
-   transform, so scaling here composes instead of being overridden mid-wave. */
+   transform, so scaling here composes instead of being overridden mid-wave.
+   Per-side vars let crusher/pincer asymmetry size each claw on its own. */
 .lob-claw > path {
-  transform: scale(var(--lob-claw-scale, 1));
   transform-box: view-box;
 }
 
 .lob-claw--l > path {
+  transform: scale(var(--lob-claw-l, 1));
   transform-origin: 25px 52px;
 }
 
 .lob-claw--r > path {
+  transform: scale(var(--lob-claw-r, 1));
   transform-origin: 95px 52px;
 }
 
@@ -183,10 +295,98 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   animation-delay: var(--lob-blink-delay, 0s);
 }
 
-/* ---- Entrance: pops up from behind the footer ledge ---- */
+/* ---- Entrances ----
+   Walk pops up from behind the footer ledge; rare arrivals descend under a
+   balloon or pop out of a bubble. Durations mirror LOBSTER_PET_ENTRANCE_MS
+   in lobster-pet-plans.ts. */
 
 .lobster-pet--entering .lobster-pet__body {
   animation: lobster-pet-enter 0.45s ease-out;
+}
+
+.lobster-pet--enter-balloon .lobster-pet__body {
+  animation: lobster-pet-descend 1.25s ease-out;
+}
+
+.lobster-pet__balloon {
+  position: absolute;
+  left: 24%;
+  bottom: 92%;
+  width: calc(6.5px * var(--lob-scale, 2));
+  height: calc(10px * var(--lob-scale, 2));
+  pointer-events: none;
+  animation: lobster-pet-balloon 1.25s ease-out forwards;
+}
+
+.lobster-pet--enter-bubble .lobster-pet__body {
+  animation: lobster-pet-bubble-rise 0.7s ease-out;
+}
+
+.lobster-pet__entry-bubble {
+  position: absolute;
+  inset: -12% -8%;
+  border: 1.5px solid var(--lob-glint, #00e5cc);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  animation: lobster-pet-bubble-pop 0.7s ease-out forwards;
+}
+
+@keyframes lobster-pet-descend {
+  0% {
+    transform: translateY(-170%);
+  }
+  75% {
+    transform: translateY(4%);
+  }
+  88% {
+    transform: translateY(-2%) scaleY(0.96);
+  }
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+@keyframes lobster-pet-balloon {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-40%);
+  }
+}
+
+@keyframes lobster-pet-bubble-rise {
+  0% {
+    transform: translateY(30%) scale(0.35);
+  }
+  60% {
+    transform: translateY(-4%) scale(1.05);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes lobster-pet-bubble-pop {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.45);
+  }
+  55% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
 }
 
 /* ---- Acts ---- */
@@ -713,7 +913,9 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 
 @media (prefers-reduced-motion: reduce) {
   openclaw-lobster-pet .lobster-pet,
-  openclaw-lobster-pet .lobster-pet * {
+  openclaw-lobster-pet .lobster-pet *,
+  openclaw-lobster-pet .lobster-bottle,
+  openclaw-lobster-pet .lobster-bottle * {
     animation: none !important;
     transition: none !important;
   }
@@ -722,7 +924,8 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 /* ---- Pass-through visitors ---- */
 
 /* Passers cross the whole ledge once; left/right position comes from the
-   crossing keyframes, not the perch variable. */
+   crossing keyframes, not the perch variable, and each kind sets its own
+   crossing time through --lob-cross (LOBSTER_PASSER_CROSS_MS). */
 .lobster-pet--passer {
   pointer-events: none;
   cursor: default;
@@ -734,17 +937,36 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 }
 
 .lobster-pet--passer-ltr {
-  animation: lobster-pet-cross-ltr 11s linear forwards;
+  animation: lobster-pet-cross-ltr var(--lob-cross, 11s) linear forwards;
 }
 
 .lobster-pet--passer-rtl {
-  animation: lobster-pet-cross-rtl 11s linear forwards;
+  animation: lobster-pet-cross-rtl var(--lob-cross, 11s) linear forwards;
 }
 
 /* The crab walks sideways by definition: it crosses while facing you and
    feels no need to explain itself. */
 .lobster-pet--crab .lobster-pet__body {
   animation: lobster-pet-crab-scuttle 0.24s ease-in-out infinite;
+}
+
+/* The snail neither waddles nor hurries. */
+.lobster-pet--snail .lobster-pet__body {
+  animation: none;
+}
+
+/* The duck bobs like the bath toy it is. */
+.lobster-pet--duck .lobster-pet__body {
+  animation: lobster-pet-duck-bob 1.6s ease-in-out infinite;
+}
+
+/* The jellyfish drifts above the ledge, pulsing softly. */
+.lobster-pet--jellyfish {
+  bottom: 12px;
+}
+
+.lobster-pet--jellyfish .lobster-pet__body {
+  animation: lobster-pet-jelly-pulse 2.4s ease-in-out infinite;
 }
 
 @keyframes lobster-pet-cross-ltr {
@@ -775,6 +997,66 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   }
 }
 
+@keyframes lobster-pet-duck-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-3deg);
+  }
+  50% {
+    transform: translateY(-6%) rotate(3deg);
+  }
+}
+
+@keyframes lobster-pet-jelly-pulse {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  45% {
+    transform: translateY(-14%) scaleY(0.92);
+  }
+}
+
+/* ---- Message in a bottle ----
+   Washes up on its own schedule, bobs until opened, and ebbs away. The
+   fortune travels in the title tooltip. */
+
+.lobster-bottle {
+  position: absolute;
+  bottom: 0;
+  left: var(--lob-x, 50%);
+  width: 22px;
+  height: 20px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.lobster-bottle__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  animation: lobster-bottle-bob 3.6s ease-in-out infinite;
+}
+
+.lobster-bottle--open .lobster-bottle__svg {
+  animation: none;
+}
+
+@keyframes lobster-bottle-bob {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: translateY(-6%) rotate(-4deg);
+  }
+}
+
 /* ---- Lobsterdex (appearance settings gallery) ---- */
 
 .lobsterdex {
@@ -800,72 +1082,13 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   filter: grayscale(1) brightness(0.45) opacity(0.55);
 }
 
-/* ---- Logo stand-in ----
-   On planned loads (isLobsterLogoLoad) the pet's first scheduled visit
-   perches in the sidebar brand slot instead of the ledge. The sidebar
-   renders this sprite into .sidebar-brand__logo-slot (layout.css); the
-   ledge stays empty meanwhile - one crab, two homes. */
-
-.sidebar-brand__pet {
+/* A shiny of this palette has visited: a small gold spark on the mini. */
+.lobsterdex__mini-star {
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  cursor: default;
-  animation: lobster-pet-logo-settle 0.45s ease-out;
-}
-
-.sidebar-brand__pet .lobster-pet__svg {
-  width: calc(22px * var(--lob-w, 1));
-  height: calc(19px * var(--lob-h, 1));
-  overflow: visible;
-  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
-}
-
-/* Blink like the ledge sprite. The closed-lid curves need an explicit
-   resting opacity here: the base rule is scoped to .lobster-pet, which the
-   brand slot intentionally does not use (it would drag perch layout along). */
-.sidebar-brand__pet .lob-eye-closed {
-  opacity: 0;
-  animation: lobster-pet-blink-closed 5.2s linear infinite;
-  animation-delay: var(--lob-blink-delay, 0s);
-}
-
-.sidebar-brand__pet .lob-eye-open {
-  animation: lobster-pet-blink-open 5.2s linear infinite;
-  animation-delay: var(--lob-blink-delay, 0s);
-}
-
-/* Departure mirrors LEAVE_MS in lobster-pet.ts: the stand-in sinks toward
-   the ledge while the real logo scales back in underneath. */
-.sidebar-brand__pet--leaving {
-  opacity: 0;
-  transform: translateY(7px);
-  transition:
-    transform 0.3s ease-in,
-    opacity 0.25s ease 0.05s;
-}
-
-@keyframes lobster-pet-logo-settle {
-  0% {
-    opacity: 0;
-    transform: translateY(-7px);
-  }
-  55% {
-    opacity: 1;
-    transform: translateY(1.5px) scaleY(0.92);
-  }
-  100% {
-    transform: translateY(0) scaleY(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-brand__pet,
-  .sidebar-brand__pet *,
-  .sidebar-brand__logo {
-    animation: none !important;
-    transition: none !important;
-  }
+  top: -5px;
+  right: -4px;
+  font-size: 9px;
+  line-height: 1;
+  color: #f4b840;
+  pointer-events: none;
 }

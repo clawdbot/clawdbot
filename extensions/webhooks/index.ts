@@ -25,7 +25,6 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
       routeId: route.routeId,
       path: route.path,
       secretInput: route.secret,
-      secretConfigPath: `plugins.entries.webhooks.routes.${route.routeId}.secret`,
       defaultControllerId: route.controllerId,
       taskFlow,
     };

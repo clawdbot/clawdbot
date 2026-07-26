@@ -27,18 +27,11 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { VERSION } from "../version.js";
 
 export {
-  GATEWAY_CLOSE_CODE_HINTS,
   GatewayClientRequestError,
-  describeGatewayCloseCode,
   isGatewayConnectAssemblyError,
-  resolveGatewayClientConnectChallengeTimeoutMs,
 } from "../../packages/gateway-client/src/index.js";
 export type {
-  DeviceAuthTokenRecord,
-  DeviceIdentity,
   GatewayClientCloseInfo,
-  GatewayClientConnectionMetadata,
-  GatewayClientHostDeps,
   GatewayClientOptions,
   GatewayClientRequestOptions,
   GatewayReconnectPausedInfo,
@@ -99,5 +92,9 @@ export class GatewayClient {
 
   getConnectionMetadata(): GatewayClientConnectionMetadata {
     return this.#client.getConnectionMetadata();
+  }
+
+  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    this.#client.updateNodeManifest(manifest);
   }
 }

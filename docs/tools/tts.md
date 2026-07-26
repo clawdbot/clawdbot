@@ -30,15 +30,13 @@ synthesize an assistant voice reply.
     `ELEVENLABS_API_KEY`). Microsoft and Local CLI need no key.
   </Step>
   <Step title="Enable in config">
-    Set `messages.tts.auto: "always"` and `messages.tts.provider`:
+    Set `tts.auto: "always"` and `tts.provider`:
 
     ```json5
     {
-      messages: {
-        tts: {
-          auto: "always",
-          provider: "elevenlabs",
-        },
+      tts: {
+        auto: "always",
+        provider: "elevenlabs",
       },
     }
     ```
@@ -51,7 +49,7 @@ synthesize an assistant voice reply.
 </Steps>
 
 <Note>
-Auto-TTS is **off** by default. When `messages.tts.provider` is unset,
+Auto-TTS is **off** by default. When `tts.provider` is unset,
 OpenClaw picks the first configured provider in registry auto-select order.
 The built-in `tts` agent tool is explicit-intent only: ordinary chat stays
 text unless the user asks for audio, uses `/tts`, or enables Auto-TTS/directive
@@ -93,7 +91,7 @@ config; new configs should always use `microsoft`.
 
 ## Configuration
 
-TTS config lives under `messages.tts` in `~/.openclaw/openclaw.json`. Pick a
+TTS config lives under `tts` in `~/.openclaw/openclaw.json`. Pick a
 preset and adapt the provider block. The `speakerVoice`/`speakerVoiceId`
 fields shown below are canonical; each provider's own `voice`/`voiceId`/
 `voiceName` field names still work as legacy aliases.
@@ -102,19 +100,17 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Azure Speech">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "azure-speech",
-      providers: {
-        "azure-speech": {
-          apiKey: "${AZURE_SPEECH_KEY}",
-          region: "eastus",
-          speakerVoice: "en-US-JennyNeural",
-          lang: "en-US",
-          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-          voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
-        },
+  tts: {
+    auto: "always",
+    provider: "azure-speech",
+    providers: {
+      "azure-speech": {
+        apiKey: "${AZURE_SPEECH_KEY}",
+        region: "eastus",
+        speakerVoice: "en-US-JennyNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
       },
     },
   },
@@ -124,16 +120,14 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="ElevenLabs">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "elevenlabs",
-      providers: {
-        elevenlabs: {
-          apiKey: "${ELEVENLABS_API_KEY}",
-          model: "eleven_multilingual_v2",
-          speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
-        },
+  tts: {
+    auto: "always",
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        apiKey: "${ELEVENLABS_API_KEY}",
+        model: "eleven_multilingual_v2",
+        speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
       },
     },
   },
@@ -143,19 +137,17 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Google Gemini">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "google",
-      providers: {
-        google: {
-          apiKey: "${GEMINI_API_KEY}",
-          model: "gemini-3.1-flash-tts-preview",
-          speakerVoice: "Kore",
-          // Optional natural-language style prompts:
-          // audioProfile: "Speak in a calm, podcast-host tone.",
-          // speakerName: "Alex",
-        },
+  tts: {
+    auto: "always",
+    provider: "google",
+    providers: {
+      google: {
+        apiKey: "${GEMINI_API_KEY}",
+        model: "gemini-3.1-flash-tts-preview",
+        speakerVoice: "Kore",
+        // Optional natural-language style prompts:
+        // audioProfile: "Speak in a calm, podcast-host tone.",
+        // speakerName: "Alex",
       },
     },
   },
@@ -165,15 +157,13 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Gradium">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "gradium",
-      providers: {
-        gradium: {
-          apiKey: "${GRADIUM_API_KEY}",
-          speakerVoiceId: "YTpq7expH9539ERJ",
-        },
+  tts: {
+    auto: "always",
+    provider: "gradium",
+    providers: {
+      gradium: {
+        apiKey: "${GRADIUM_API_KEY}",
+        speakerVoiceId: "YTpq7expH9539ERJ",
       },
     },
   },
@@ -183,17 +173,15 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Inworld">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "inworld",
-      providers: {
-        inworld: {
-          apiKey: "${INWORLD_API_KEY}",
-          modelId: "inworld-tts-1.5-max",
-          speakerVoiceId: "Sarah",
-          temperature: 0.7,
-        },
+  tts: {
+    auto: "always",
+    provider: "inworld",
+    providers: {
+      inworld: {
+        apiKey: "${INWORLD_API_KEY}",
+        modelId: "inworld-tts-1.5-max",
+        speakerVoiceId: "Sarah",
+        temperature: 0.7,
       },
     },
   },
@@ -203,17 +191,15 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Local CLI">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "tts-local-cli",
-      providers: {
-        "tts-local-cli": {
-          command: "say",
-          args: ["-o", "{{OutputPath}}", "{{Text}}"],
-          outputFormat: "wav",
-          timeoutMs: 120000,
-        },
+  tts: {
+    auto: "always",
+    provider: "tts-local-cli",
+    providers: {
+      "tts-local-cli": {
+        command: "say",
+        args: ["-o", "{{OutputPath}}", "{{Text}}"],
+        outputFormat: "wav",
+        timeoutMs: 120000,
       },
     },
   },
@@ -223,19 +209,17 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Microsoft (no key)">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "microsoft",
-      providers: {
-        microsoft: {
-          enabled: true,
-          speakerVoice: "en-US-MichelleNeural",
-          lang: "en-US",
-          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-          rate: "+0%",
-          pitch: "+0%",
-        },
+  tts: {
+    auto: "always",
+    provider: "microsoft",
+    providers: {
+      microsoft: {
+        enabled: true,
+        speakerVoice: "en-US-MichelleNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        rate: "+0%",
+        pitch: "+0%",
       },
     },
   },
@@ -245,19 +229,17 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="MiniMax">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "minimax",
-      providers: {
-        minimax: {
-          apiKey: "${MINIMAX_API_KEY}",
-          model: "speech-2.8-hd",
-          speakerVoiceId: "English_expressive_narrator",
-          speed: 1.0,
-          vol: 1.0,
-          pitch: 0,
-        },
+  tts: {
+    auto: "always",
+    provider: "minimax",
+    providers: {
+      minimax: {
+        apiKey: "${MINIMAX_API_KEY}",
+        model: "speech-2.8-hd",
+        speakerVoiceId: "English_expressive_narrator",
+        speed: 1.0,
+        vol: 1.0,
+        pitch: 0,
       },
     },
   },
@@ -267,26 +249,24 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="OpenAI + ElevenLabs">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "openai",
-      summaryModel: "openai/gpt-4.1-mini",
-      modelOverrides: { enabled: true },
-      providers: {
-        openai: {
-          apiKey: "${OPENAI_API_KEY}",
-          model: "gpt-4o-mini-tts",
-          speakerVoice: "alloy",
-        },
-        elevenlabs: {
-          apiKey: "${ELEVENLABS_API_KEY}",
-          model: "eleven_multilingual_v2",
-          speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
-          voiceSettings: { stability: 0.5, similarityBoost: 0.75, style: 0.0, useSpeakerBoost: true, speed: 1.0 },
-          applyTextNormalization: "auto",
-          languageCode: "en",
-        },
+  tts: {
+    auto: "always",
+    provider: "openai",
+    summaryModel: "openai/gpt-4.1-mini",
+    modelOverrides: { enabled: true },
+    providers: {
+      openai: {
+        apiKey: "${OPENAI_API_KEY}",
+        model: "gpt-4o-mini-tts",
+        speakerVoice: "alloy",
+      },
+      elevenlabs: {
+        apiKey: "${ELEVENLABS_API_KEY}",
+        model: "eleven_multilingual_v2",
+        speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+        voiceSettings: { stability: 0.5, similarityBoost: 0.75, style: 0.0, useSpeakerBoost: true, speed: 1.0 },
+        applyTextNormalization: "auto",
+        languageCode: "en",
       },
     },
   },
@@ -296,17 +276,15 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="OpenRouter">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "openrouter",
-      providers: {
-        openrouter: {
-          apiKey: "${OPENROUTER_API_KEY}",
-          model: "hexgrad/kokoro-82m",
-          speakerVoice: "af_alloy",
-          responseFormat: "mp3",
-        },
+  tts: {
+    auto: "always",
+    provider: "openrouter",
+    providers: {
+      openrouter: {
+        apiKey: "${OPENROUTER_API_KEY}",
+        model: "hexgrad/kokoro-82m",
+        speakerVoice: "af_alloy",
+        responseFormat: "mp3",
       },
     },
   },
@@ -316,16 +294,14 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Volcengine">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "volcengine",
-      providers: {
-        volcengine: {
-          apiKey: "${VOLCENGINE_TTS_API_KEY}",
-          resourceId: "seed-tts-1.0",
-          speakerVoice: "en_female_anna_mars_bigtts",
-        },
+  tts: {
+    auto: "always",
+    provider: "volcengine",
+    providers: {
+      volcengine: {
+        apiKey: "${VOLCENGINE_TTS_API_KEY}",
+        resourceId: "seed-tts-1.0",
+        speakerVoice: "en_female_anna_mars_bigtts",
       },
     },
   },
@@ -335,17 +311,15 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="xAI">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "xai",
-      providers: {
-        xai: {
-          apiKey: "${XAI_API_KEY}",
-          speakerVoiceId: "eve",
-          language: "en",
-          responseFormat: "mp3",
-        },
+  tts: {
+    auto: "always",
+    provider: "xai",
+    providers: {
+      xai: {
+        apiKey: "${XAI_API_KEY}",
+        speakerVoiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
       },
     },
   },
@@ -355,17 +329,15 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
   <Tab title="Xiaomi MiMo">
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "xiaomi",
-      providers: {
-        xiaomi: {
-          apiKey: "${XIAOMI_API_KEY}",
-          model: "mimo-v2.5-tts",
-          speakerVoice: "mimo_default",
-          format: "mp3",
-        },
+  tts: {
+    auto: "always",
+    provider: "xiaomi",
+    providers: {
+      xiaomi: {
+        apiKey: "${XIAOMI_API_KEY}",
+        model: "mimo-v2.5-tts",
+        speakerVoice: "mimo_default",
+        format: "mp3",
       },
     },
   },
@@ -380,19 +352,17 @@ and does not send `audio.voice` for the voicedesign model.
 
 ### Per-agent voice overrides
 
-Use `agents.list[].tts` when one agent should speak with a different provider,
+Use `agents.entries.*.tts` when one agent should speak with a different provider,
 voice, model, persona, or auto-TTS mode. The agent block deep-merges over
-`messages.tts`, so provider credentials can stay in the global provider config:
+`tts`, so provider credentials can stay in the global provider config:
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "elevenlabs",
-      providers: {
-        elevenlabs: { apiKey: "${ELEVENLABS_API_KEY}", model: "eleven_multilingual_v2" },
-      },
+  tts: {
+    auto: "always",
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: { apiKey: "${ELEVENLABS_API_KEY}", model: "eleven_multilingual_v2" },
     },
   },
   agents: {
@@ -410,32 +380,30 @@ voice, model, persona, or auto-TTS mode. The agent block deep-merges over
 }
 ```
 
-To pin a per-agent persona, set `agents.list[].tts.persona` alongside provider
-config — it overrides the global `messages.tts.persona` for that agent only.
+To pin a per-agent persona, set `agents.entries.*.tts.persona` alongside provider
+config — it overrides the global `tts.persona` for that agent only.
 
 Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
 `tts` agent tool:
 
-1. `messages.tts`
-2. active `agents.list[].tts`
+1. `tts`
+2. active `agents.entries.*.tts`
 3. channel override, when the channel supports `channels.<channel>.tts`
 4. account override, when the channel passes `channels.<channel>.accounts.<id>.tts`
 5. local `/tts` preferences for this host
 6. inline `[[tts:...]]` directives when [model overrides](#model-driven-directives) are enabled
 
-Channel and account overrides use the same shape as `messages.tts` and
+Channel and account overrides use the same shape as `tts` and
 deep-merge over the earlier layers, so shared provider credentials can stay in
-`messages.tts` while a channel or bot account changes only speaker voice, model, persona,
+`tts` while a channel or bot account changes only speaker voice, model, persona,
 or auto mode:
 
 ```json5
 {
-  messages: {
-    tts: {
-      provider: "openai",
-      providers: {
-        openai: { apiKey: "${OPENAI_API_KEY}", model: "gpt-4o-mini-tts" },
-      },
+  tts: {
+    provider: "openai",
+    providers: {
+      openai: { apiKey: "${OPENAI_API_KEY}", model: "gpt-4o-mini-tts" },
     },
   },
   channels: {
@@ -465,19 +433,17 @@ templates, seeds, and voice settings.
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      persona: "narrator",
-      personas: {
-        narrator: {
-          label: "Narrator",
-          provider: "elevenlabs",
-          providers: {
-            elevenlabs: {
-              speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
-              modelId: "eleven_multilingual_v2",
-            },
+  tts: {
+    auto: "always",
+    persona: "narrator",
+    personas: {
+      narrator: {
+        label: "Narrator",
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+            modelId: "eleven_multilingual_v2",
           },
         },
       },
@@ -486,47 +452,36 @@ templates, seeds, and voice settings.
 }
 ```
 
-### Full persona (provider-neutral prompt)
+### Full persona (provider-specific shaping)
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      persona: "alfred",
-      personas: {
-        alfred: {
-          label: "Alfred",
-          description: "Dry, warm British butler narrator.",
-          provider: "google",
-          fallbackPolicy: "preserve-persona",
-          prompt: {
-            profile: "A brilliant British butler. Dry, witty, warm, charming, emotionally expressive, never generic.",
-            scene: "A quiet late-night study. Close-mic narration for a trusted operator.",
-            sampleContext: "The speaker is answering a private technical request with concise confidence and dry warmth.",
-            style: "Refined, understated, lightly amused.",
-            accent: "British English.",
-            pacing: "Measured, with short dramatic pauses.",
-            constraints: ["Do not read configuration values aloud.", "Do not explain the persona."],
+  tts: {
+    auto: "always",
+    persona: "alfred",
+    personas: {
+      alfred: {
+        label: "Alfred",
+        description: "Dry, warm British butler narrator.",
+        provider: "google",
+        fallbackPolicy: "preserve-persona",
+        providers: {
+          google: {
+            model: "gemini-3.1-flash-tts-preview",
+            speakerVoice: "Algieba",
+            promptTemplate: "audio-profile-v1",
           },
-          providers: {
-            google: {
-              model: "gemini-3.1-flash-tts-preview",
-              speakerVoice: "Algieba",
-              promptTemplate: "audio-profile-v1",
-            },
-            openai: { model: "gpt-4o-mini-tts", speakerVoice: "cedar" },
-            elevenlabs: {
-              speakerVoiceId: "voice_id",
-              modelId: "eleven_multilingual_v2",
-              seed: 42,
-              voiceSettings: {
-                stability: 0.65,
-                similarityBoost: 0.8,
-                style: 0.25,
-                useSpeakerBoost: true,
-                speed: 0.95,
-              },
+          openai: { model: "gpt-4o-mini-tts", speakerVoice: "cedar" },
+          elevenlabs: {
+            speakerVoiceId: "voice_id",
+            modelId: "eleven_multilingual_v2",
+            seed: 42,
+            voiceSettings: {
+              stability: 0.65,
+              similarityBoost: 0.8,
+              style: 0.25,
+              useSpeakerBoost: true,
+              speed: 0.95,
             },
           },
         },
@@ -541,7 +496,7 @@ templates, seeds, and voice settings.
 The active persona is selected deterministically:
 
 1. `/tts persona <id>` local preference, if set.
-2. `messages.tts.persona`, if set.
+2. `tts.persona`, if set.
 3. No persona.
 
 Provider selection runs explicit-first:
@@ -549,42 +504,25 @@ Provider selection runs explicit-first:
 1. Direct overrides (CLI, gateway, Talk, allowed TTS directives).
 2. `/tts provider <id>` local preference.
 3. Active persona's `provider`.
-4. `messages.tts.provider`.
+4. `tts.provider`.
 5. Registry auto-select.
 
 For each provider attempt, OpenClaw merges configs in this order:
 
-1. `messages.tts.providers.<id>`
-2. `messages.tts.personas.<persona>.providers.<id>`
+1. `tts.providers.<id>`
+2. `tts.personas.<persona>.providers.<id>`
 3. Trusted request overrides
 4. Allowed model-emitted TTS directive overrides
 
-### How providers use persona prompts
+### Custom persona shaping
 
-Persona prompt fields (`profile`, `scene`, `sampleContext`, `style`, `accent`,
-`pacing`, `constraints`) are **provider-neutral**. Each provider decides how
-to use them:
-
-<AccordionGroup>
-  <Accordion title="Google Gemini">
-    Wraps persona prompt fields in a Gemini TTS prompt structure **only when**
-    the effective Google provider config sets `promptTemplate: "audio-profile-v1"`
-    or `personaPrompt`. The older `audioProfile` and `speakerName` fields are
-    still prepended as Google-specific prompt text. Inline audio tags such as
-    `[whispers]` or `[laughs]` inside a `[[tts:text]]` block are preserved
-    inside the Gemini transcript; OpenClaw does not generate these tags.
-  </Accordion>
-  <Accordion title="OpenAI">
-    Maps persona prompt fields to the request `instructions` field **only when**
-    no explicit OpenAI `instructions` is configured. Explicit `instructions`
-    always wins.
-  </Accordion>
-  <Accordion title="Other providers">
-    Use only the provider-specific persona bindings under
-    `personas.<id>.providers.<provider>`. Persona prompt fields are ignored
-    unless the provider implements its own persona-prompt mapping.
-  </Accordion>
-</AccordionGroup>
+Provider-neutral `personas.<id>.prompt.*` config is retired. Doctor removes
+those fields and points to the speech-provider seam. Put built-in provider
+settings under `personas.<id>.providers.<provider>` (for example Google
+`personaPrompt` or OpenAI `instructions`). For custom shaping, implement a
+speech provider plugin with `prepareSynthesis(ctx)` and return adjusted text,
+provider config, or overrides before `synthesize()` runs. This keeps expressive
+prompt construction in provider code where request semantics are known.
 
 ### Fallback policy
 
@@ -603,7 +541,7 @@ or fails.
 Talk session provider selection is session-scoped. A Talk client should choose
 provider ids, model ids, voice ids, and locales from `talk.catalog` and pass
 them through the Talk session or handoff request. Opening a voice session should
-not mutate `messages.tts` or global Talk provider defaults.
+not mutate `tts` or global Talk provider defaults.
 
 ## Model-driven directives
 
@@ -619,7 +557,7 @@ Here you go.
 [[tts:text]](laughs) Read the song once more.[[/tts:text]]
 ```
 
-When `messages.tts.auto` is `"tagged"`, **directives are required** to trigger
+When `tts.auto` is `"tagged"`, **directives are required** to trigger
 audio. Streaming block delivery strips directives from visible text before the
 channel sees them, even when split across adjacent blocks.
 
@@ -688,9 +626,11 @@ Behavior notes:
 
 ## Per-user preferences
 
-Slash commands write local overrides to `prefsPath`. The default is
-`~/.openclaw/settings/tts.json`; override with the `OPENCLAW_TTS_PREFS` env var
-or `messages.tts.prefsPath`.
+Slash commands write local overrides to the TTS preferences path. The default is
+`~/.openclaw/settings/tts.json`; override it with `OPENCLAW_TTS_PREFS`. Doctor
+moves the retired global `tts.prefsPath` value into shared machine state.
+Advanced multi-agent setups may still set `agents.entries.<id>.tts.prefsPath`
+when agents intentionally use separate preference stores.
 
 | Stored field | Effect                                                                           |
 | ------------ | -------------------------------------------------------------------------------- |
@@ -700,8 +640,8 @@ or `messages.tts.prefsPath`.
 | `maxLength`  | Summary/truncation threshold (default `1500` chars, `/tts limit` range 100–4096) |
 | `summarize`  | Summary toggle (default `true`)                                                  |
 
-These override the effective config from `messages.tts` plus the active
-`agents.list[].tts` block for that host.
+These override the effective config from `tts` plus the active
+`agents.entries.*.tts` block for that host.
 
 ## Output formats
 
@@ -725,7 +665,7 @@ Per-provider notes:
 - **Google Gemini:** returns raw 24 kHz PCM. OpenClaw wraps it as WAV for audio attachments, transcodes it to 48 kHz Opus for voice-note targets, and returns PCM directly for Talk/telephony.
 - **Gradium:** WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
 - **Inworld:** MP3 for normal audio attachments, native `OGG_OPUS` for voice-note targets, and raw `PCM` at 22050 Hz for Talk/telephony.
-- **xAI:** MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. Uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported.
+- **xAI:** MP3 by default; audio-file synthesis may use `mp3`, `wav`, `pcm`, `mulaw`, or `alaw` for both buffered and streaming output. Voice-note targets use MP3 for streaming and buffered fallback because xAI's `pcm`, `mulaw`, and `alaw` outputs are headerless raw audio. Buffered synthesis uses xAI's batch REST `/v1/tts` endpoint; `textToSpeechStream` uses native `wss://api.x.ai/v1/tts`. This is not the realtime voice contract. Native Opus voice-note format is not supported.
 - **Microsoft:** uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
@@ -737,7 +677,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
 ## Auto-TTS behavior
 
-When `messages.tts.auto` is enabled, OpenClaw:
+When `tts.auto` is enabled, OpenClaw:
 
 - Skips TTS if the reply already contains structured media.
 - Skips very short replies (under 10 chars).
@@ -771,7 +711,7 @@ Reply -> TTS enabled?
 ## Field reference
 
 <AccordionGroup>
-  <Accordion title="Top-level messages.tts.*">
+  <Accordion title="Top-level tts.*">
     <ParamField path="auto" type='"off" | "always" | "inbound" | "tagged"'>
       Auto-TTS mode. `inbound` only sends audio after an inbound voice message; `tagged` only sends audio when the reply includes `[[tts:...]]` directives or a `[[tts:text]]` block.
     </ParamField>
@@ -797,18 +737,27 @@ Reply -> TTS enabled?
       Allow the model to emit TTS directives. `enabled` defaults to `true`; `allowProvider` defaults to `false`.
     </ParamField>
     <ParamField path="providers.<id>" type="object">
-      Provider-owned settings keyed by speech provider id. Legacy direct blocks (`messages.tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `messages.tts.providers.<id>`.
+      Provider-owned settings keyed by speech provider id. Legacy direct blocks (`tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `tts.providers.<id>`.
     </ParamField>
     <ParamField path="maxTextLength" type="number" default="4096">
       Hard cap for TTS input characters. `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded.
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
-      Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `messages.tts.timeoutMs` wins over any plugin-authored provider default.
-    </ParamField>
-    <ParamField path="prefsPath" type="string">
-      Override the local prefs JSON path (provider/limit/summary). Default `~/.openclaw/settings/tts.json`.
+      Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `tts.timeoutMs` wins over any plugin-authored provider default.
     </ParamField>
   </Accordion>
+
+Provider `apiKey` fields can be raw strings or SecretRefs. During cold Gateway
+startup, an unavailable TTS SecretRef marks the built-in TTS capability
+configured-unavailable instead of stopping the Gateway. `tts.speak` then returns
+`UNAVAILABLE` with reason `SECRET_SURFACE_UNAVAILABLE`, and no provider request is
+sent. Status and doctor list the degraded TTS owner and its config paths. The
+explicit refs remain in the runtime snapshot, so environment or profile
+credentials cannot silently select a different account. Reloads and config-write
+preflight apply the owner-aware degradation policy: an unchanged eligible TTS
+owner may keep its last-known-good credentials as stale, while a new or changed
+failure becomes cold without blocking healthy owners. Structurally invalid refs
+and resolved values still fail startup or reject the update.
 
   <Accordion title="Azure Speech">
     <ParamField path="apiKey" type="string">Env: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`.</ParamField>
@@ -938,7 +887,7 @@ Reply -> TTS enabled?
   <Accordion title="Xiaomi MiMo">
     <ParamField path="apiKey" type="string">Env: `XIAOMI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.xiaomimimo.com/v1`. Env: `XIAOMI_BASE_URL`.</ParamField>
-    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2-tts` and `mimo-v2.5-tts-voicedesign`.</ParamField>
+    <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2.5-tts-voicedesign`.</ParamField>
     <ParamField path="speakerVoice" type="string">Default `mimo_default` for preset-voice models. Env: `XIAOMI_TTS_VOICE`. Legacy alias: `voice`. Not sent for `mimo-v2.5-tts-voicedesign`.</ParamField>
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
     <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken. For `mimo-v2.5-tts-voicedesign`, this is the voice-design prompt; OpenClaw supplies a default when omitted.</ParamField>
@@ -959,7 +908,7 @@ clients do not consistently render captions on voice notes.
 
 The tool accepts optional `channel` and `timeoutMs` fields; `timeoutMs` is a
 per-call provider request timeout in milliseconds. Per-call values override
-`messages.tts.timeoutMs`; configured TTS timeouts override any plugin-authored
+`tts.timeoutMs`; configured TTS timeouts override any plugin-authored
 provider default.
 
 ## Gateway RPC

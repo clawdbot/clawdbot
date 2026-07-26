@@ -598,6 +598,35 @@ describe("executeNodeHostCommand", () => {
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
   });
 
+  it("denies non-interactive approval requests without creating operator events", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "always",
+      nonInteractiveApproval: true,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "collector",
+      sessionKey: "agent:collector:subagent:child",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "failed",
+      failureKind: "approval_required",
+    });
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+  });
+
   it("forwards prepared systemRunPlan on async node invoke after approval", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -608,6 +637,7 @@ describe("executeNodeHostCommand", () => {
 
     const result = await executeNodeHostCommand({
       command: "bun ./script.ts",
+      toolCallId: "tool-node",
       workdir: "/tmp/work",
       env: {},
       security: "full",
@@ -624,7 +654,10 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.details?.status).toBe("approval-pending");
-    expect(requireRegisteredApprovalRequest().systemRunPlan).toEqual(preparedPlan);
+    expect(requireRegisteredApprovalRequest()).toMatchObject({
+      systemRunPlan: preparedPlan,
+      toolCallId: "tool-node",
+    });
 
     await vi.waitFor(() => {
       expect(callGatewayToolMock).toHaveBeenCalledTimes(3);
@@ -3819,3 +3852,4 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

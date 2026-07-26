@@ -1,49 +1,5 @@
-openclaw-approval-page {
-  display: block;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 100vh;
-  min-height: 100svh;
-  overflow: hidden;
-}
-
-.approval-page {
-  position: relative;
-  isolation: isolate;
-  display: grid;
-  grid-template-columns: minmax(0, 720px);
-  grid-template-rows: max-content max-content;
-  grid-auto-rows: max-content;
-  height: 100%;
-  min-height: 100vh;
-  min-height: 100svh;
-  align-content: start;
-  align-content: safe center;
-  justify-content: center;
-  place-items: center;
-  gap: 18px;
-  overflow: hidden auto;
-  padding: max(32px, var(--safe-area-top)) max(22px, var(--safe-area-right))
-    max(24px, var(--safe-area-bottom)) max(22px, var(--safe-area-left));
-  background: var(--bg);
-  color: var(--text);
-}
-
-@media (display-mode: standalone) {
-  openclaw-approval-page {
-    height: 100%;
-    min-height: 0;
-  }
-
-  .approval-page {
-    min-height: 100%;
-  }
-}
-
-.approval-page--booting {
-  align-content: center;
-  color: var(--muted);
-}
+/* Full approval-page styles; loaded with the lazy page chunk. The shell boot
+ * subset lives in approval-boot.css and must stay in the entry stylesheet. */
 
 .approval-page__backdrop {
   position: fixed;
@@ -312,13 +268,21 @@ openclaw-approval-page {
 
 .approval-page__action--allow-once {
   border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .approval-page__action--allow-once:hover:not(:disabled) {
   border-color: var(--accent-hover);
   background: var(--accent-hover);
+}
+
+:root[data-theme="dark"] .approval-page__action--allow-once:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+:root[data-theme="openknot"] .approval-page__action--allow-once:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 
 .approval-page__action--deny {

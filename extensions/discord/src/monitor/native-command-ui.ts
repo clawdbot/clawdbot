@@ -12,7 +12,6 @@ export {
   resolveDiscordNativeChoiceContext,
   shouldOpenDiscordModelPickerFromCommand,
 } from "./native-command-model-picker-ui.js";
-export type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 export type {
   DiscordCommandArgContext,
   DiscordModelPickerContext,

@@ -1313,3 +1313,4 @@ describe("tools.invoke Gateway RPC", () => {
     expect(error?.message).toContain("invalid tools.invoke params");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,6 +6,7 @@ export type NamedCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  hidden?: boolean;
   parentDefaultHelp?: boolean;
 };
 
@@ -33,7 +34,7 @@ function buildDescriptorIndex<TDescriptor extends NamedCommandDescriptor>(
 }
 
 /** Resolve named command-group specs into descriptor-backed entries. */
-export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
+function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
   descriptors: readonly TDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TRegister>[],
 ): ResolvedCommandGroupEntry<TDescriptor, TRegister>[] {

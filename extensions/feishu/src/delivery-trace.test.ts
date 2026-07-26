@@ -1,7 +1,7 @@
 // Feishu delivery trace goldens: replayable wire-level lifecycle recordings.
 //
-// IN events are fed straight into the reply-dispatcher wiring (the options
-// createReplyDispatcherWithTyping receives plus replyOptions callbacks); OUT
+// IN events are fed straight into the reply-dispatcher plan (dispatcher,
+// delivery, and replyOptions callbacks); OUT
 // events are recorded at the mocked Lark SDK client and the mocked CardKit
 // HTTP fetch, so streaming-card entity calls are captured at the wire seam.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
@@ -14,26 +14,21 @@ import {
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, describe, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
-import type { ReplyPayload } from "./reply-dispatcher-runtime-api.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
-
-type FeishuDispatcherOptions = {
-  onReplyStart?: () => Promise<void> | void;
-  onIdle?: () => Promise<void> | void;
-  onCleanup?: () => void;
-  deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<void> | void;
-};
+type CreateFeishuReplyDispatcher =
+  typeof import("./reply-dispatcher.js").createFeishuReplyDispatcher;
+type StreamingStartBackoffMap =
+  typeof import("./reply-dispatcher-state.js").streamingStartBackoffUntilByAccount;
 
 type FeishuTraceState = {
   recordWireCall: (call: RecordedWireCall) => void;
   account: ResolvedFeishuAccount | null;
   larkClient: unknown;
   cardKitFetch: typeof fetch | null;
-  dispatcherOptions: FeishuDispatcherOptions | null;
   messageCount: number;
   reactionCount: number;
   cardCount: number;
@@ -47,7 +42,6 @@ const traceState = vi.hoisted(
     account: null,
     larkClient: null,
     cardKitFetch: null,
-    dispatcherOptions: null,
     messageCount: 0,
     reactionCount: 0,
     cardCount: 0,
@@ -102,13 +96,6 @@ vi.mock("./runtime.js", async () => {
         convertMarkdownTables: textChunking.convertMarkdownTables,
         resolveMarkdownTableMode: markdownTables.resolveMarkdownTableMode,
       },
-      reply: {
-        createReplyDispatcherWithTyping: (options: FeishuDispatcherOptions) => {
-          traceState.dispatcherOptions = options;
-          return { dispatcher: {}, replyOptions: {}, markDispatchIdle: () => {} };
-        },
-        resolveHumanDelayConfig: () => undefined,
-      },
     },
     logging: { shouldLogVerbose: () => false },
   };
@@ -137,10 +124,16 @@ vi.mock("./streaming-card.js", async (importOriginal) => {
   return { ...actual, FeishuStreamingSession: RecordingFeishuStreamingSession };
 });
 
-import {
-  clearFeishuStreamingStartBackoffForTests,
-  createFeishuReplyDispatcher,
-} from "./reply-dispatcher.js";
+let createFeishuReplyDispatcher: CreateFeishuReplyDispatcher;
+let streamingStartBackoffUntilByAccount: StreamingStartBackoffMap;
+
+beforeAll(async () => {
+  // Collection can share a worker with suites that mock the same Feishu modules.
+  // Reload only after this file's hoisted mocks are registered.
+  vi.resetModules();
+  ({ createFeishuReplyDispatcher } = await import("./reply-dispatcher.js"));
+  ({ streamingStartBackoffUntilByAccount } = await import("./reply-dispatcher-state.js"));
+});
 
 afterAll(() => {
   vi.doUnmock("./accounts.js");
@@ -154,9 +147,8 @@ afterEach(() => {
   traceState.account = null;
   traceState.larkClient = null;
   traceState.cardKitFetch = null;
-  traceState.dispatcherOptions = null;
   traceState.wireFaults = [];
-  clearFeishuStreamingStartBackoffForTests();
+  streamingStartBackoffUntilByAccount.clear();
 });
 
 function jsonResponse(payload: unknown, status = 200, headers?: Record<string, string>): Response {
@@ -363,10 +355,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
     sendTarget: "oc-trace-chat",
     replyToMessageId: "om-inbound",
   });
-  const options = traceState.dispatcherOptions;
-  if (!options) {
-    throw new Error("dispatcher options were not captured");
-  }
+  const options = created.dispatcherOptions;
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -377,13 +366,13 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         created.replyOptions.onPartialReply?.({ text: step.text });
         break;
       case "block-final":
-        await options.deliver({ text: step.text }, { kind: "block" });
+        await created.delivery.deliver({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
         created.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
         break;
       case "final":
-        await options.deliver(
+        await created.delivery.deliver(
           {
             ...(step.text !== undefined ? { text: step.text } : {}),
             ...(step.mediaUrls ? { mediaUrls: step.mediaUrls } : {}),

@@ -6,8 +6,9 @@ import type {
   AgentsListResult,
   ModelCatalogEntry,
 } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
+import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
+import { t } from "../../i18n/index.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -15,6 +16,7 @@ import {
   resolveAgentConfig,
   resolveAgentRuntimeLabel,
   resolveAgentTextAvatar,
+  resolveEffectiveModelFallbacks,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
@@ -92,8 +94,7 @@ export function renderAgentOverview(params: {
   const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
   const selectedPrimary = isDefault ? effectivePrimary : entryPrimary;
   const modelFallbacks =
-    resolveModelFallbacks(config.entry?.model) ??
-    resolveModelFallbacks(config.defaults?.model) ??
+    resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agentModel));
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
@@ -144,81 +145,84 @@ export function renderAgentOverview(params: {
   };
 
   return html`
-    <section class="card">
-      <div class="card-title">${t("agents.identity.title")}</div>
-      <div class="card-sub">${t("agents.identity.subtitle")}</div>
-
-      <div class="agent-identity-editor">
-        <span class="agent-identity-editor__avatar" aria-hidden="true">
-          ${identityAvatarUrl
-            ? html`<img src=${identityAvatarUrl} alt="" decoding="async" />`
-            : html`<span class="agent-identity-editor__avatar-text">${identityAvatarText}</span>`}
-        </span>
-        <div class="agent-identity-editor__fields">
-          <label class="field">
-            <span>${t("agents.identity.name")}</span>
-            <input
-              type="text"
-              maxlength="64"
-              .value=${identityName}
-              placeholder=${t("agents.identity.namePlaceholder")}
-              ?disabled=${identityBusy}
-              @input=${(e: Event) =>
-                params.onIdentityFieldChange("name", (e.target as HTMLInputElement).value)}
-            />
-          </label>
-          <label class="field agent-identity-editor__emoji">
-            <span>${t("agents.identity.emoji")}</span>
-            <input
-              type="text"
-              maxlength="8"
-              .value=${identityEmoji}
-              placeholder="🦞"
-              ?disabled=${identityBusy}
-              @input=${(e: Event) =>
-                params.onIdentityFieldChange("emoji", (e.target as HTMLInputElement).value)}
-            />
-          </label>
+    ${renderSettingsSection(
+      { title: t("agents.identity.title"), description: t("agents.identity.subtitle") },
+      html`
+        <div class="settings-row settings-row--stacked">
+          <div class="agent-identity-editor">
+            <span class="agent-identity-editor__avatar" aria-hidden="true">
+              ${identityAvatarUrl
+                ? html`<img src=${identityAvatarUrl} alt="" decoding="async" />`
+                : html`<span class="agent-identity-editor__avatar-text"
+                    >${identityAvatarText}</span
+                  >`}
+            </span>
+            <div class="agent-identity-editor__fields">
+              <label class="field">
+                <span>${t("agents.identity.name")}</span>
+                <input
+                  type="text"
+                  maxlength="64"
+                  .value=${identityName}
+                  placeholder=${t("agents.identity.namePlaceholder")}
+                  ?disabled=${identityBusy}
+                  @input=${(e: Event) =>
+                    params.onIdentityFieldChange("name", (e.target as HTMLInputElement).value)}
+                />
+              </label>
+              <label class="field agent-identity-editor__emoji">
+                <span>${t("agents.identity.emoji")}</span>
+                <input
+                  type="text"
+                  maxlength="8"
+                  .value=${identityEmoji}
+                  placeholder="🦞"
+                  ?disabled=${identityBusy}
+                  @input=${(e: Event) =>
+                    params.onIdentityFieldChange("emoji", (e.target as HTMLInputElement).value)}
+                />
+              </label>
+            </div>
+          </div>
+          ${params.identityError
+            ? html`<div class="settings-row__desc" role="alert" style="color: var(--danger);">
+                ${params.identityError}
+              </div>`
+            : nothing}
+          <div class="agent-identity-editor__actions">
+            <label class="btn btn--sm">
+              ${identityAvatarUrl
+                ? t("agents.identity.replaceImage")
+                : t("agents.identity.chooseImage")}
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                ?disabled=${identityBusy}
+                @change=${handleAvatarFileSelect}
+              />
+            </label>
+            <button
+              type="button"
+              class="btn btn--sm primary"
+              ?disabled=${identityBusy || !identityDirty || identityInvalid}
+              @click=${() => params.onIdentitySave()}
+            >
+              ${identityBusy ? t("common.saving") : t("common.save")}
+            </button>
+          </div>
+          <div class="settings-row__desc agent-identity-editor__hint">
+            ${t("agents.identity.fileHint")}
+          </div>
         </div>
-      </div>
-
-      ${params.identityError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${params.identityError}</div>`
-        : nothing}
-
-      <div class="agent-model-actions" style="margin-top: 12px;">
-        <label class="btn btn--sm">
-          ${identityAvatarUrl
-            ? t("agents.identity.replaceImage")
-            : t("agents.identity.chooseImage")}
-          <input
-            type="file"
-            accept="image/*"
-            hidden
-            ?disabled=${identityBusy}
-            @change=${handleAvatarFileSelect}
-          />
-        </label>
-        <button
-          type="button"
-          class="btn btn--sm primary"
-          ?disabled=${identityBusy || !identityDirty || identityInvalid}
-          @click=${() => params.onIdentitySave()}
-        >
-          ${identityBusy ? t("common.saving") : t("common.save")}
-        </button>
-      </div>
-      <div class="muted agent-identity-editor__hint">${t("agents.identity.fileHint")}</div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">${t("agents.overview.title")}</div>
-      <div class="card-sub">${t("agents.overview.subtitle")}</div>
-
-      <div class="agents-overview-grid" style="margin-top: 16px;">
-        <div class="agent-kv">
-          <div class="label">${t("agents.context.workspace")}</div>
-          <div>
+      `,
+    )}
+    ${renderSettingsSection(
+      { title: t("agents.overview.title"), description: t("agents.overview.subtitle") },
+      html`
+        <dl class="settings-kv">
+          <dt>${t("agents.context.workspace")}</dt>
+          <dd>
             <openclaw-tooltip .content=${t("agents.context.openFilesTab")}>
               <button
                 type="button"
@@ -229,48 +233,55 @@ export function renderAgentOverview(params: {
                 ${workspace}
               </button>
             </openclaw-tooltip>
-          </div>
-        </div>
-        <div class="agent-kv">
-          <div class="label">${t("agents.context.primaryModel")}</div>
-          <div class="mono">${model}</div>
-        </div>
-        <div class="agent-kv">
-          <div class="label">${t("agents.context.runtime")}</div>
-          <div class="mono">${runtime}</div>
-        </div>
-        <div class="agent-kv">
-          <div class="label">${t("agents.context.thinkingDefault")}</div>
-          <div class="mono">${thinkingDefault}</div>
-        </div>
-        <div class="agent-kv">
-          <div class="label">${t("agents.context.skillsFilter")}</div>
-          <div>
+          </dd>
+          <dt>${t("agents.context.primaryModel")}</dt>
+          <dd><code>${model}</code></dd>
+          <dt>${t("agents.context.runtime")}</dt>
+          <dd><code>${runtime}</code></dd>
+          <dt>${t("agents.context.thinkingDefault")}</dt>
+          <dd><code>${thinkingDefault}</code></dd>
+          <dt>${t("agents.context.skillsFilter")}</dt>
+          <dd>
             ${skillFilter
               ? t("agents.overview.selectedSkills", { count: String(skillCount) })
               : t("agents.overview.allSkills")}
-          </div>
-        </div>
-      </div>
-
-      ${configDirty
-        ? html`
-            <div class="callout warn" style="margin-top: 16px">
-              ${t("agents.overview.unsavedConfig")}
-            </div>
-          `
-        : nothing}
-
-      <div class="agent-model-select" style="margin-top: 20px;">
-        <div class="label">${t("agents.overview.modelSelection")}</div>
-        <div class="agent-model-fields">
-          <label class="field">
-            <span>
-              ${isDefault
-                ? t("agents.overview.primaryModelDefault")
-                : t("agents.overview.primaryModel")}
-            </span>
+          </dd>
+        </dl>
+      `,
+    )}
+    ${configDirty
+      ? html`<div class="callout warn">${t("agents.overview.unsavedConfig")}</div>`
+      : nothing}
+    ${renderSettingsSection(
+      {
+        title: t("agents.overview.modelSelection"),
+        actions: html`
+          <button
+            type="button"
+            class="btn btn--sm"
+            ?disabled=${configLoading}
+            @click=${onConfigReload}
+          >
+            ${t("common.reloadConfig")}
+          </button>
+          <button
+            type="button"
+            class="btn btn--sm primary"
+            ?disabled=${configSaving || !configDirty}
+            @click=${onConfigSave}
+          >
+            ${configSaving ? t("common.saving") : t("common.save")}
+          </button>
+        `,
+      },
+      html`
+        ${renderSettingsRow({
+          title: isDefault
+            ? t("agents.overview.primaryModelDefault")
+            : t("agents.overview.primaryModel"),
+          control: html`
             <select
+              class="settings-select"
               .value=${selectedPrimary ?? ""}
               ?disabled=${disabled}
               @change=${(e: Event) =>
@@ -296,9 +307,12 @@ export function renderAgentOverview(params: {
                 selectedPrimary,
               )}
             </select>
-          </label>
-          <div class="field">
-            <span>${t("agents.overview.fallbacks")}</span>
+          `,
+        })}
+        ${renderSettingsRow({
+          title: t("agents.overview.fallbacks"),
+          stacked: true,
+          control: html`
             <div
               class="agent-chip-input"
               @click=${(e: Event) => {
@@ -338,27 +352,9 @@ export function renderAgentOverview(params: {
                 }}
               />
             </div>
-          </div>
-        </div>
-        <div class="agent-model-actions">
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${configLoading}
-            @click=${onConfigReload}
-          >
-            ${t("common.reloadConfig")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm primary"
-            ?disabled=${configSaving || !configDirty}
-            @click=${onConfigSave}
-          >
-            ${configSaving ? t("common.saving") : t("common.save")}
-          </button>
-        </div>
-      </div>
-    </section>
+          `,
+        })}
+      `,
+    )}
   `;
 }

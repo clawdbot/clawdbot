@@ -200,27 +200,8 @@ function isTempDirHelperImportSpec(filePath, specifier) {
   return stripKnownExtension(resolvedPath) === stripKnownExtension(TEMP_DIR_HELPER_PATH);
 }
 
-function scriptKindForFile(filePath) {
-  if (/\.[cm]?tsx$/u.test(filePath)) {
-    return ts.ScriptKind.TSX;
-  }
-  if (/\.[cm]?jsx$/u.test(filePath)) {
-    return ts.ScriptKind.JSX;
-  }
-  if (/\.[cm]?js$/u.test(filePath)) {
-    return ts.ScriptKind.JS;
-  }
-  return ts.ScriptKind.TS;
-}
-
 function createSourceFile(filePath, sourceText) {
-  return ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKindForFile(filePath),
-  );
+  return ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
 }
 
 function lineForNode(sourceFile, node) {
@@ -454,7 +435,7 @@ export function collectTempCreationFindingsFromDiff(diffText, options = {}) {
   return findings;
 }
 
-export async function main(argv, io) {
+async function main(argv, io) {
   const args = parseArgs(argv ?? process.argv.slice(2));
   const stdout = io?.stdout ?? process.stdout;
   const stderr = io?.stderr ?? process.stderr;

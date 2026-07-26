@@ -13,6 +13,13 @@ import {
   type WorkerInferenceSink,
 } from "./inference.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const REQUEST: WorkerInferenceStartParams = {
   runEpoch: 3,
   sessionId: "s",
@@ -27,6 +34,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: "d",
   bundleHash: "b",
   sessionId: REQUEST.sessionId,
+  runId: REQUEST.runId,
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -162,7 +170,7 @@ describe("worker inference manager", () => {
     }, store);
     const sink = createSink();
     accept(instance, { sink: sink.sink });
-    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    await waitForFast(() => expect(signals).toHaveLength(1));
     for (let index = 0; index < 2; index += 1) {
       expect(instance.cancel({ identity: IDENTITY, request: CANCEL })).toEqual({
         ok: true,
@@ -171,7 +179,7 @@ describe("worker inference manager", () => {
     }
     expect(signals[0]?.aborted).toBe(true);
     accept(instance, { request: { ...REQUEST, runId: "new-run", turnId: "new-turn" } });
-    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    await waitForFast(() => expect(signals).toHaveLength(2));
     expect(instance.cancelSession(REQUEST.sessionId, "new-run")).toEqual(["new-run"]);
     expect(signals[1]?.aborted).toBe(true);
     await instance.stop();
@@ -200,8 +208,8 @@ describe("worker inference manager", () => {
     });
     const sink = createSink();
     accept(instance, { sink: sink.sink });
-    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
-    await vi.waitFor(() =>
+    await waitForFast(() => expect(signal?.aborted).toBe(true));
+    await waitForFast(() =>
       expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
         reason: "provider-error",
       }),
@@ -222,7 +230,7 @@ describe("worker inference manager", () => {
     const sink = createSink();
     const instance = makeManager(async () => ERROR, store);
     accept(instance, { sink: sink.sink });
-    await vi.waitFor(() => expect(store.complete).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(store.complete).toHaveBeenCalledOnce());
     expect(terminalFrames(sink.frames)).toEqual([]);
     await instance.stop();
   });
@@ -238,13 +246,13 @@ describe("worker inference manager", () => {
     const instance = makeManager(execute);
     const first = createSink("first");
     accept(instance, { sink: first.sink });
-    await vi.waitFor(() => expect(first.frames).toHaveLength(1));
+    await waitForFast(() => expect(first.frames).toHaveLength(1));
 
     const second = createSink("second");
     expect(accept(instance, { sink: second.sink }).result.status).toBe("accepted");
     release.resolve();
 
-    await vi.waitFor(() => expect(terminalFrames(second.frames)).toHaveLength(1));
+    await waitForFast(() => expect(terminalFrames(second.frames)).toHaveLength(1));
     expect(execute).toHaveBeenCalledOnce();
     expect(terminalFrames(first.frames)).toEqual([]);
     expect(second.frames[0]).toMatchObject({
@@ -270,12 +278,12 @@ describe("worker inference manager", () => {
       false,
     );
     accepted.launch();
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(execute).toHaveBeenCalledOnce());
 
     current = false;
     pending.resolve(DONE);
 
-    await vi.waitFor(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
+    await waitForFast(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
     expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
       reason: "epoch-mismatch",
     });
@@ -311,7 +319,7 @@ describe("worker inference manager", () => {
         throw new Error("revalidation failed");
       },
     });
-    await vi.waitFor(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
+    await waitForFast(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
     expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
       reason: "provider-error",
     });

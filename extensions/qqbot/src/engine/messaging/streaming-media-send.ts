@@ -19,6 +19,7 @@ import {
   resolveUserFacingMediaError,
   type MediaTargetContext,
 } from "./outbound.js";
+import { raceWithTimeout } from "./race-with-timeout.js";
 
 function formatStreamSendErr(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -318,17 +319,13 @@ export async function executeSendQueue(
           account.config?.audioFormatPolicy?.uploadDirectFormats ??
           account.config?.voiceDirectUploadFormats;
         const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
-        const voiceTimeout = 45000; // 45s
+        const voiceTimeout = 45_000;
         try {
-          const result = await Promise.race([
-            sendVoice(mediaTarget, item.content, uploadFormats, transcodeEnabled),
-            new Promise<{ channel: string; error: string }>((resolve) => {
-              setTimeout(
-                () => resolve({ channel: "qqbot", error: "语音发送超时，已跳过" }),
-                voiceTimeout,
-              );
-            }),
-          ]);
+          const result = await raceWithTimeout(
+            () => sendVoice(mediaTarget, item.content, uploadFormats, transcodeEnabled),
+            voiceTimeout,
+            () => ({ channel: "qqbot", error: "语音发送超时，已跳过" }),
+          );
           if (result.error) {
             log?.error(`${prefix} sendVoice error: ${result.error}`);
             await sendFallbackText(resolveUserFacingMediaError(result));

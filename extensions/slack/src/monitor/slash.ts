@@ -1,7 +1,11 @@
 // Slack plugin module implements slash behavior.
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  loadPreparedModelCatalog,
+  resolveAgentDir,
+  resolveDefaultModelForAgent,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
@@ -619,7 +623,16 @@ export async function registerSlackMonitorSlashCommands(params: {
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: cfg, readOnly: true })
+            ? await loadPreparedModelCatalog({
+                config: cfg,
+                ...(menuRoute
+                  ? {
+                      agentId: menuRoute.agentId,
+                      agentDir: resolveAgentDir(cfg, menuRoute.agentId),
+                    }
+                  : {}),
+                readOnly: true,
+              })
             : undefined;
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
@@ -687,7 +700,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         sessionPrefix: slashCommand.sessionPrefix,
         userId: command.user_id,
         targetSessionKey: route.sessionKey,
-        lowercaseSessionKey: true,
+        sessionKeyCase: "lowercase",
       });
       const slashReplyTarget =
         !slashCommand.ephemeral && isRoomish
@@ -785,15 +798,20 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
       };
       const pendingSlashReplies: ReplyPayload[] = [];
+      const shouldDeliverBlockImmediately = commandDefinition?.key === "login";
 
       const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          // response_url has one shared five-call budget. Plan the whole turn
-          // before its first post so a later payload cannot strand a partial reply.
-          deliver: async (payload) => {
+          // /login must expose its device code before the auth flow can finish. Other block
+          // streams stay batched so the response_url planner can honor Slack's five-call cap.
+          deliver: async (payload, info) => {
+            if (info.kind === "block" && shouldDeliverBlockImmediately) {
+              await deliverSlashPayloads([payload]);
+              return;
+            }
             pendingSlashReplies.push(payload);
           },
           onError: (err, info) => {
@@ -1020,7 +1038,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         respond ??
         (async (message) => {
           if (!body.channel?.id || !body.user?.id) {
-            return;
+            return new Response(null, { status: 204 });
           }
           const payload =
             typeof message === "string"
@@ -1038,6 +1056,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             ...(payload.blocks ? { blocks: payload.blocks } : {}),
             ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
           });
+          return new Response(null, { status: 200 });
         });
       const actionValue = action?.value ?? action?.selected_option?.value;
       const parsed = parseSlackCommandArgValue(actionValue);
@@ -1096,3 +1115,4 @@ export async function registerSlackMonitorSlashCommands(params: {
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
   return registration;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

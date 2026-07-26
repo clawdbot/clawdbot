@@ -445,7 +445,7 @@ function maskMarkdownCode(markdown: string): string {
   return masked.join("");
 }
 
-export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];
@@ -759,3 +759,4 @@ export function toWikiPageSummary(params: {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

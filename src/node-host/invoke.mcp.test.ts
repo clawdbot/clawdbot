@@ -1,7 +1,8 @@
 /** Tests the built-in node-host MCP invocation command. */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { handleInvoke, testing } from "./invoke.js";
+import { handleInvoke } from "./invoke.js";
+import { testing } from "./invoke.test-support.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 
 async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {

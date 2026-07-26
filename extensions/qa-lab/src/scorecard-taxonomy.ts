@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -23,13 +24,6 @@ const qaScorecardIdSchema = z
   .trim()
   .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
     message: "scorecard ids must use lowercase dotted or dashed tokens",
-  });
-
-const qaCoverageIdSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
-    message: "coverage ids must use lowercase dotted tokens",
   });
 
 function isRepoRootRelativeRef(value: string) {
@@ -59,11 +53,10 @@ function maturityScoreLabelForScore(score: number) {
 }
 
 const qaMaturityScoreObjectSchema = z
-  .object({
+  .strictObject({
     score: z.number().int().min(0).max(100),
     label: z.enum(QA_MATURITY_SCORE_LABELS),
   })
-  .strict()
   .superRefine((value, ctx) => {
     const expectedLabel = maturityScoreLabelForScore(value.score);
     if (value.label !== expectedLabel) {
@@ -91,93 +84,75 @@ const qaMaturityLegacyCoverageShape = {
   coverage: qaMaturityScoreObjectSchema.optional(),
 } satisfies z.ZodRawShape;
 
-const qaMaturityScoreBundleSchema = z
-  .object({
-    ...qaMaturityLegacyCoverageShape,
-    ...qaMaturityScoreBundleShape,
-  })
-  .strict();
+const qaMaturityScoreBundleSchema = z.strictObject({
+  ...qaMaturityLegacyCoverageShape,
+  ...qaMaturityScoreBundleShape,
+});
 
-const qaMaturityScoreLastRunSchema = z
-  .object({
-    status: z.string().trim().min(1).optional(),
-    completed_at: z.string().trim().min(1).optional(),
-    by: z.string().trim().min(1).optional(),
-    source_ref: z.string().trim().min(1).nullable().optional(),
-    process_version: z.number().int().positive().optional(),
-  })
-  .strict();
+const qaMaturityScoreLastRunSchema = z.strictObject({
+  status: z.string().trim().min(1).optional(),
+  completed_at: z.string().trim().min(1).optional(),
+  by: z.string().trim().min(1).optional(),
+  source_ref: z.string().trim().min(1).nullable().optional(),
+  process_version: z.number().int().positive().optional(),
+});
 
-const qaMaturityScoreCategoryLtsSchema = z
-  .object({
-    supported: z.boolean(),
-    reason: z.string().trim().min(1).optional(),
-    human_override: z.boolean(),
-  })
-  .strict();
+const qaMaturityScoreCategoryLtsSchema = z.strictObject({
+  supported: z.boolean(),
+  reason: z.string().trim().min(1).optional(),
+  human_override: z.boolean(),
+});
 
-const qaMaturityScoreSurfaceLtsSchema = z
-  .object({
-    supported_categories: z.number().int().nonnegative(),
-    total_categories: z.number().int().nonnegative(),
-    status: z.string().trim().min(1),
-  })
-  .strict();
+const qaMaturityScoreSurfaceLtsSchema = z.strictObject({
+  supported_categories: z.number().int().nonnegative(),
+  total_categories: z.number().int().nonnegative(),
+  status: z.string().trim().min(1),
+});
 
-const qaMaturityScoreCategorySchema = z
-  .object({
-    name: z.string().trim().min(1),
-    ...qaMaturityLegacyCoverageShape,
-    ...qaMaturityScoreBundleShape,
-    lts: qaMaturityScoreCategoryLtsSchema,
-  })
-  .strict();
+const qaMaturityScoreCategorySchema = z.strictObject({
+  name: z.string().trim().min(1),
+  ...qaMaturityLegacyCoverageShape,
+  ...qaMaturityScoreBundleShape,
+  lts: qaMaturityScoreCategoryLtsSchema,
+});
 
-const qaMaturityScoreSurfaceSchema = z
-  .object({
-    id: qaScorecardIdSchema,
-    name: z.string().trim().min(1),
-    family: z.string().trim().min(1).optional(),
-    level: z.union([
-      z.string().trim().min(1),
-      z
-        .object({
-          id: z.string().trim().min(1).optional(),
-          code: z.string().trim().min(1).optional(),
-          label: z.string().trim().min(1).optional(),
-        })
-        .strict(),
-    ]),
-    scores: qaMaturityScoreBundleSchema,
-    categories: z.array(qaMaturityScoreCategorySchema),
-    lts: qaMaturityScoreSurfaceLtsSchema,
-    last_score_run: qaMaturityScoreLastRunSchema.optional(),
-  })
-  .strict();
+const qaMaturityScoreSurfaceSchema = z.strictObject({
+  id: qaScorecardIdSchema,
+  name: z.string().trim().min(1),
+  family: z.string().trim().min(1).optional(),
+  level: z.union([
+    z.string().trim().min(1),
+    z.strictObject({
+      id: z.string().trim().min(1).optional(),
+      code: z.string().trim().min(1).optional(),
+      label: z.string().trim().min(1).optional(),
+    }),
+  ]),
+  scores: qaMaturityScoreBundleSchema,
+  categories: z.array(qaMaturityScoreCategorySchema),
+  lts: qaMaturityScoreSurfaceLtsSchema,
+  last_score_run: qaMaturityScoreLastRunSchema.optional(),
+});
 
-const qaMaturityScoresSchema = z
-  .object({
-    version: z.literal(1),
-    process_version: z.number().int().positive(),
-    counts: z
-      .object({
-        active_surfaces: z.number().int().nonnegative(),
-        category_scores: z.number().int().nonnegative(),
-      })
-      .strict(),
-    rollups: z
-      .object({
-        surface_average: qaMaturityScoreBundleSchema,
-        category_average: qaMaturityScoreBundleSchema,
-      })
-      .strict(),
-    surfaces: z.array(qaMaturityScoreSurfaceSchema),
-  })
-  .strict();
+const qaMaturityScoresSchema = z.strictObject({
+  version: z.literal(1),
+  process_version: z.number().int().positive(),
+  counts: z.strictObject({
+    active_surfaces: z.number().int().nonnegative(),
+    category_scores: z.number().int().nonnegative(),
+  }),
+  rollups: z.strictObject({
+    surface_average: qaMaturityScoreBundleSchema,
+    category_average: qaMaturityScoreBundleSchema,
+  }),
+  surfaces: z.array(qaMaturityScoreSurfaceSchema),
+});
 
 const qaMaturityFeatureSchema = z.object({
   name: z.string().trim().min(1),
-  coverageIds: z.array(qaCoverageIdSchema).default([]),
+  coverageIds: z
+    .array(qaCoverageIdSchema)
+    .length(1, { message: "taxonomy features must define exactly one coverage ID" }),
   description: z.string().trim().min(1).optional(),
 });
 
@@ -219,11 +194,10 @@ const qaMaturityTaxonomySchema = z
     title: z.string().trim().min(1),
     summary: z.string().trim().min(1).optional(),
     snapshot: z
-      .object({
+      .strictObject({
         date: z.string().trim().min(1).optional(),
         source_ref: z.string().trim().min(1).optional(),
       })
-      .strict()
       .optional(),
     profiles: z.array(qaScorecardProfileSchema).default([]),
     levels: z.array(qaMaturityLevelSchema).default([]),
@@ -277,6 +251,7 @@ const qaMaturityTaxonomySchema = z
     }
 
     const categoryIds = new Set<string>();
+    const coverageIdOwners = new Map<string, { key: string; label: string }>();
     const surfaceIds = new Set<string>();
     for (const [surfaceIndex, surface] of taxonomy.surfaces.entries()) {
       if (surfaceIds.has(surface.id)) {
@@ -299,6 +274,50 @@ const qaMaturityTaxonomySchema = z
         }
         localCategoryIds.add(category.id);
         categoryIds.add(`${surface.id}.${category.id}`);
+
+        for (const [featureIndex, feature] of category.features.entries()) {
+          const featureOwner = {
+            key: `${surfaceIndex}.${categoryIndex}.${featureIndex}`,
+            label: `${surface.id}.${category.id} feature ${feature.name}`,
+          };
+          for (const [coverageIdIndex, coverageId] of feature.coverageIds.entries()) {
+            if (!coverageId.startsWith(`${surface.id}.`)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [
+                  "surfaces",
+                  surfaceIndex,
+                  "categories",
+                  categoryIndex,
+                  "features",
+                  featureIndex,
+                  "coverageIds",
+                  coverageIdIndex,
+                ],
+                message: `coverage ID ${coverageId} must belong to surface ${surface.id}`,
+              });
+            }
+            const existingOwner = coverageIdOwners.get(coverageId);
+            if (existingOwner && existingOwner.key !== featureOwner.key) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [
+                  "surfaces",
+                  surfaceIndex,
+                  "categories",
+                  categoryIndex,
+                  "features",
+                  featureIndex,
+                  "coverageIds",
+                  coverageIdIndex,
+                ],
+                message: `coverage ID ${coverageId} already belongs to ${existingOwner.label}; coverage IDs must identify exactly one taxonomy feature`,
+              });
+              continue;
+            }
+            coverageIdOwners.set(coverageId, featureOwner);
+          }
+        }
       }
     }
 
@@ -336,13 +355,13 @@ export type QaMaturityCoverageScores = {
 };
 
 type QaScorecardValidationIssueCode =
-  | "coverage-id-missing-primary-evidence"
+  | "coverage-id-missing-primary-inventory"
   | "coverage-id-not-found"
-  | "evidence-ref-not-found"
+  | "inventory-ref-not-found"
   | "taxonomy-ref-not-found"
   | "taxonomy-category-ref-not-found"
   | "profile-category-ref-not-found"
-  | "profile-category-missing-evidence";
+  | "profile-category-missing-inventory";
 
 type QaScorecardValidationIssue = {
   code: QaScorecardValidationIssueCode;
@@ -352,7 +371,7 @@ type QaScorecardValidationIssue = {
   message: string;
 };
 
-type QaScorecardEvidenceReport = {
+type QaScorecardInventoryRef = {
   coverageId: string;
   kind: QaScorecardEvidenceKind;
   path: string | null;
@@ -364,15 +383,15 @@ export type QaScorecardCategoryCoverageReport = {
   id: string;
   taxonomySurfaceId: string;
   taxonomyCategoryName: string;
-  coverageStatus: "covered" | "partial" | "missing";
+  inventoryStatus: "complete" | "partial" | "missing";
   profiles: string[];
   features: QaScorecardCategoryFeatureCoverageReport[];
   coverageIds: string[];
-  fulfilledCoverageIds: string[];
-  evidence: QaScorecardEvidenceReport[];
+  inventoriedCoverageIds: string[];
+  inventoryRefs: QaScorecardInventoryRef[];
   scenarioRefs: string[];
   missingCoverageIds: string[];
-  missingEvidenceRefs: string[];
+  missingInventoryRefs: string[];
 };
 
 type QaScorecardCategoryFeatureCoverageReport = {
@@ -397,12 +416,12 @@ export type QaScorecardTaxonomyReport = {
   profiles: QaScorecardProfileReport[];
   categoryCount: number;
   requiredCategoryCount: number;
-  fulfilledCategoryCount: number;
-  categoryFulfillmentPercent: number;
+  inventoriedCategoryCount: number;
+  categoryInventoryPercent: number;
   requiredCoverageIdCount: number;
-  fulfilledCoverageIdCount: number;
-  coverageIdFulfillmentPercent: number;
-  evidenceRefCount: number;
+  inventoriedCoverageIdCount: number;
+  coverageIdInventoryPercent: number;
+  inventoryRefCount: number;
   scenarioCoverageIdCount: number;
   unknownCoverageIdCount: number;
   unknownCoverageIds: string[];
@@ -519,25 +538,25 @@ function scenarioCoverageIds(scenario: QaSeedScenarioWithSource) {
   return [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])];
 }
 
-type ScenarioEvidenceRef = {
+type ScenarioInventoryRef = {
   sourcePath: string;
   kind: QaScorecardEvidenceKind;
   path: string | null;
 };
 
-function scenarioEvidenceKind(scenario: QaSeedScenarioWithSource): QaScorecardEvidenceKind {
+function scenarioInventoryKind(scenario: QaSeedScenarioWithSource): QaScorecardEvidenceKind {
   return scenario.execution.kind === "flow" ? "qa-scenario" : scenario.execution.kind;
 }
 
-function scenarioEvidencePath(scenario: QaSeedScenarioWithSource) {
+function scenarioInventoryPath(scenario: QaSeedScenarioWithSource) {
   return scenario.execution.kind === "flow" ? null : scenario.execution.path;
 }
 
-function collectScenarioEvidenceByCoverageId(params: {
+function collectScenarioInventoryByCoverageId(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
   role: QaCoverageEvidenceRole;
 }) {
-  const refsByCoverageId = new Map<string, ScenarioEvidenceRef[]>();
+  const refsByCoverageId = new Map<string, ScenarioInventoryRef[]>();
   for (const scenario of params.scenarios) {
     const coverageIds =
       params.role === "primary"
@@ -547,8 +566,8 @@ function collectScenarioEvidenceByCoverageId(params: {
       const refs = refsByCoverageId.get(coverageId) ?? [];
       refs.push({
         sourcePath: scenario.sourcePath,
-        kind: scenarioEvidenceKind(scenario),
-        path: scenarioEvidencePath(scenario),
+        kind: scenarioInventoryKind(scenario),
+        path: scenarioInventoryPath(scenario),
       });
       refsByCoverageId.set(coverageId, refs);
     }
@@ -824,22 +843,22 @@ export function readQaScorecardProfileOptions(profileId: string | undefined, rep
   };
 }
 
-function pushMissingPrimaryIssues(params: {
+function pushMissingPrimaryInventoryIssues(params: {
   issues: QaScorecardValidationIssue[];
   category: MaturityCategoryRef;
-  coverageIdsWithPrimaryEvidence: ReadonlySet<string>;
-  coverageIdsWithSecondaryEvidence: ReadonlySet<string>;
+  coverageIdsWithPrimaryInventory: ReadonlySet<string>;
+  coverageIdsWithSecondaryInventory: ReadonlySet<string>;
 }) {
   for (const feature of params.category.features) {
     for (const coverageId of feature.coverageIds) {
-      if (params.coverageIdsWithPrimaryEvidence.has(coverageId)) {
+      if (params.coverageIdsWithPrimaryInventory.has(coverageId)) {
         continue;
       }
-      const reason = params.coverageIdsWithSecondaryEvidence.has(coverageId)
-        ? "only has secondary evidence"
-        : "has no primary evidence";
+      const reason = params.coverageIdsWithSecondaryInventory.has(coverageId)
+        ? "only has a secondary inventory entry"
+        : "has no primary inventory entry";
       params.issues.push({
-        code: "coverage-id-missing-primary-evidence",
+        code: "coverage-id-missing-primary-inventory",
         severity: "warning",
         categoryId: params.category.id,
         ref: coverageId,
@@ -849,28 +868,28 @@ function pushMissingPrimaryIssues(params: {
   }
 }
 
-function collectEvidenceReportsForCoverageId(params: {
+function collectInventoryRefsForCoverageId(params: {
   coverageId: string;
   role: QaCoverageEvidenceRole;
-  refs: readonly ScenarioEvidenceRef[];
+  refs: readonly ScenarioInventoryRef[];
   repoRoot?: string;
   categoryId: string;
   issues: QaScorecardValidationIssue[];
-  missingEvidenceRefsByCategoryId: Map<string, Set<string>>;
+  missingInventoryRefsByCategoryId: Map<string, Set<string>>;
 }) {
-  const grouped = new Map<string, QaScorecardEvidenceReport>();
+  const grouped = new Map<string, QaScorecardInventoryRef>();
   for (const ref of params.refs) {
     if (ref.path && !pathExists(params.repoRoot, ref.path)) {
       const missingRefs =
-        params.missingEvidenceRefsByCategoryId.get(params.categoryId) ?? new Set();
+        params.missingInventoryRefsByCategoryId.get(params.categoryId) ?? new Set();
       missingRefs.add(ref.path);
-      params.missingEvidenceRefsByCategoryId.set(params.categoryId, missingRefs);
+      params.missingInventoryRefsByCategoryId.set(params.categoryId, missingRefs);
       params.issues.push({
-        code: "evidence-ref-not-found",
+        code: "inventory-ref-not-found",
         severity: "warning",
         categoryId: params.categoryId,
         ref: ref.path,
-        message: `${params.categoryId} references missing ${ref.kind} evidence ${ref.path}`,
+        message: `${params.categoryId} references missing ${ref.kind} inventory target ${ref.path}`,
       });
       continue;
     }
@@ -884,7 +903,7 @@ function collectEvidenceReportsForCoverageId(params: {
         path: ref.path,
         role: params.role,
         scenarioRefs: [],
-      } satisfies QaScorecardEvidenceReport);
+      } satisfies QaScorecardInventoryRef);
     report.scenarioRefs.push(ref.sourcePath);
     grouped.set(key, report);
   }
@@ -895,7 +914,7 @@ function collectEvidenceReportsForCoverageId(params: {
   });
 }
 
-export function buildQaScorecardTaxonomyReport(params: {
+function buildQaScorecardTaxonomyReport(params: {
   taxonomy: QaMaturityTaxonomy | null;
   taxonomyPath?: string | null;
   repoRoot?: string;
@@ -904,16 +923,16 @@ export function buildQaScorecardTaxonomyReport(params: {
   const maturityRefs = buildMaturityRefs(params.taxonomy);
   const issues: QaScorecardValidationIssue[] = [];
   const categories: QaScorecardCategoryCoverageReport[] = [];
-  const primaryScenarioRefsByCoverageId = collectScenarioEvidenceByCoverageId({
+  const primaryInventoryRefsByCoverageId = collectScenarioInventoryByCoverageId({
     scenarios: params.scenarios,
     role: "primary",
   });
-  const secondaryScenarioRefsByCoverageId = collectScenarioEvidenceByCoverageId({
+  const secondaryInventoryRefsByCoverageId = collectScenarioInventoryByCoverageId({
     scenarios: params.scenarios,
     role: "secondary",
   });
   const allScenarioCoverageIds = uniqueSorted(params.scenarios.flatMap(scenarioCoverageIds));
-  const missingEvidenceRefsByCategoryId = new Map<string, Set<string>>();
+  const missingInventoryRefsByCategoryId = new Map<string, Set<string>>();
 
   if (!pathExists(params.repoRoot, QA_MATURITY_TAXONOMY_PATH) || !params.taxonomy) {
     issues.push({
@@ -965,23 +984,23 @@ export function buildQaScorecardTaxonomyReport(params: {
       };
     }) ?? [];
 
-  const categoryIdsWithEvidence = new Set<string>();
+  const categoryIdsWithInventory = new Set<string>();
   for (const coverageId of [
-    ...primaryScenarioRefsByCoverageId.keys(),
-    ...secondaryScenarioRefsByCoverageId.keys(),
+    ...primaryInventoryRefsByCoverageId.keys(),
+    ...secondaryInventoryRefsByCoverageId.keys(),
   ]) {
     const coverageRefs = maturityRefs.coverageIds.get(coverageId) ?? [];
     for (const coverageRef of coverageRefs) {
-      categoryIdsWithEvidence.add(coverageRef.categoryId);
+      categoryIdsWithInventory.add(coverageRef.categoryId);
     }
   }
   const relevantCategoryIds = uniqueSorted([
     ...profileCategoryIdsByCategoryId.keys(),
-    ...categoryIdsWithEvidence,
+    ...categoryIdsWithInventory,
   ]);
 
   const requiredCoverageIds = new Set<string>();
-  const fulfilledRequiredCoverageIds = new Set<string>();
+  const inventoriedRequiredCoverageIds = new Set<string>();
   for (const categoryId of relevantCategoryIds) {
     const category = maturityRefs.categories.get(categoryId);
     if (!category) {
@@ -996,92 +1015,90 @@ export function buildQaScorecardTaxonomyReport(params: {
 
     const profileIds = uniqueSorted(profileCategoryIdsByCategoryId.get(categoryId) ?? []);
     const required = profileIds.length > 0;
-    const evidenceReports: QaScorecardEvidenceReport[] = [];
+    const inventoryRefs: QaScorecardInventoryRef[] = [];
     const categoryScenarioRefs = new Set<string>();
-    const fulfilledCoverageIds = new Set<string>();
+    const inventoriedCoverageIds = new Set<string>();
     const secondaryOnlyCoverageIds = new Set<string>();
-    const coverageIdsWithAnyEvidence = new Set<string>();
+    const coverageIdsWithAnyInventory = new Set<string>();
 
     for (const coverageId of category.coverageIds) {
-      const primaryScenarioRefs = primaryScenarioRefsByCoverageId.get(coverageId) ?? [];
-      const secondaryScenarioRefs = secondaryScenarioRefsByCoverageId.get(coverageId) ?? [];
-      const primaryEvidenceReports = collectEvidenceReportsForCoverageId({
+      const primaryScenarioRefs = primaryInventoryRefsByCoverageId.get(coverageId) ?? [];
+      const secondaryScenarioRefs = secondaryInventoryRefsByCoverageId.get(coverageId) ?? [];
+      const primaryInventoryRefs = collectInventoryRefsForCoverageId({
         coverageId,
         role: "primary",
         refs: primaryScenarioRefs,
         repoRoot: params.repoRoot,
         categoryId,
         issues,
-        missingEvidenceRefsByCategoryId,
+        missingInventoryRefsByCategoryId,
       });
-      const secondaryEvidenceReports = collectEvidenceReportsForCoverageId({
+      const secondaryInventoryRefs = collectInventoryRefsForCoverageId({
         coverageId,
         role: "secondary",
         refs: secondaryScenarioRefs,
         repoRoot: params.repoRoot,
         categoryId,
         issues,
-        missingEvidenceRefsByCategoryId,
+        missingInventoryRefsByCategoryId,
       });
 
-      if (primaryEvidenceReports.length > 0) {
-        for (const scenarioRef of primaryEvidenceReports.flatMap((report) => report.scenarioRefs)) {
+      if (primaryInventoryRefs.length > 0) {
+        for (const scenarioRef of primaryInventoryRefs.flatMap((report) => report.scenarioRefs)) {
           categoryScenarioRefs.add(scenarioRef);
         }
-        fulfilledCoverageIds.add(coverageId);
-        coverageIdsWithAnyEvidence.add(coverageId);
-        evidenceReports.push(...primaryEvidenceReports);
+        inventoriedCoverageIds.add(coverageId);
+        coverageIdsWithAnyInventory.add(coverageId);
+        inventoryRefs.push(...primaryInventoryRefs);
       }
 
-      if (secondaryEvidenceReports.length > 0) {
-        for (const scenarioRef of secondaryEvidenceReports.flatMap(
-          (report) => report.scenarioRefs,
-        )) {
+      if (secondaryInventoryRefs.length > 0) {
+        for (const scenarioRef of secondaryInventoryRefs.flatMap((report) => report.scenarioRefs)) {
           categoryScenarioRefs.add(scenarioRef);
         }
-        if (!fulfilledCoverageIds.has(coverageId)) {
+        if (!inventoriedCoverageIds.has(coverageId)) {
           secondaryOnlyCoverageIds.add(coverageId);
         }
-        coverageIdsWithAnyEvidence.add(coverageId);
-        evidenceReports.push(...secondaryEvidenceReports);
+        coverageIdsWithAnyInventory.add(coverageId);
+        inventoryRefs.push(...secondaryInventoryRefs);
       }
     }
 
-    const fulfilledCoverageIdCountForCategory = category.coverageIds.filter((coverageId) =>
-      fulfilledCoverageIds.has(coverageId),
+    const inventoriedCoverageIdCountForCategory = category.coverageIds.filter((coverageId) =>
+      inventoriedCoverageIds.has(coverageId),
     ).length;
     if (required) {
       for (const coverageId of category.coverageIds) {
         requiredCoverageIds.add(coverageId);
-        if (fulfilledCoverageIds.has(coverageId)) {
-          fulfilledRequiredCoverageIds.add(coverageId);
+        if (inventoriedCoverageIds.has(coverageId)) {
+          inventoriedRequiredCoverageIds.add(coverageId);
         }
       }
-      pushMissingPrimaryIssues({
+      pushMissingPrimaryInventoryIssues({
         issues,
         category,
-        coverageIdsWithPrimaryEvidence: fulfilledCoverageIds,
-        coverageIdsWithSecondaryEvidence: secondaryOnlyCoverageIds,
+        coverageIdsWithPrimaryInventory: inventoriedCoverageIds,
+        coverageIdsWithSecondaryInventory: secondaryOnlyCoverageIds,
       });
-      if (fulfilledCoverageIdCountForCategory === 0) {
+      if (inventoriedCoverageIdCountForCategory === 0) {
         issues.push({
-          code: "profile-category-missing-evidence",
+          code: "profile-category-missing-inventory",
           severity: "warning",
           categoryId,
-          message: `${categoryId} is selected by a runnable profile but has no primary coverage evidence`,
+          message: `${categoryId} is selected by a runnable profile but has no primary coverage inventory`,
         });
       }
     }
 
     const missingCoverageIds = required
-      ? category.coverageIds.filter((coverageId) => !coverageIdsWithAnyEvidence.has(coverageId))
+      ? category.coverageIds.filter((coverageId) => !coverageIdsWithAnyInventory.has(coverageId))
       : [];
-    const coverageStatus =
+    const inventoryStatus =
       required &&
       category.coverageIds.length > 0 &&
-      fulfilledCoverageIdCountForCategory === category.coverageIds.length
-        ? "covered"
-        : evidenceReports.length > 0
+      inventoriedCoverageIdCountForCategory === category.coverageIds.length
+        ? "complete"
+        : inventoryRefs.length > 0
           ? "partial"
           : "missing";
 
@@ -1089,25 +1106,25 @@ export function buildQaScorecardTaxonomyReport(params: {
       id: category.id,
       taxonomySurfaceId: category.surfaceId,
       taxonomyCategoryName: category.categoryName,
-      coverageStatus,
+      inventoryStatus,
       profiles: profileIds,
       features: category.features,
       coverageIds: category.coverageIds,
-      fulfilledCoverageIds: uniqueSorted(fulfilledCoverageIds),
-      evidence: evidenceReports.toSorted((left, right) =>
+      inventoriedCoverageIds: uniqueSorted(inventoriedCoverageIds),
+      inventoryRefs: inventoryRefs.toSorted((left, right) =>
         `${left.coverageId}:${left.kind}:${left.path ?? ""}:${left.role}`.localeCompare(
           `${right.coverageId}:${right.kind}:${right.path ?? ""}:${right.role}`,
         ),
       ),
       scenarioRefs: uniqueSorted(categoryScenarioRefs),
       missingCoverageIds: uniqueSorted(missingCoverageIds),
-      missingEvidenceRefs: uniqueSorted(missingEvidenceRefsByCategoryId.get(categoryId) ?? []),
+      missingInventoryRefs: uniqueSorted(missingInventoryRefsByCategoryId.get(categoryId) ?? []),
     });
   }
 
   const requiredCategories = categories.filter((category) => category.profiles.length > 0);
-  const fulfilledCategoryCount = requiredCategories.filter(
-    (category) => category.coverageStatus === "covered",
+  const inventoriedCategoryCount = requiredCategories.filter(
+    (category) => category.inventoryStatus === "complete",
   ).length;
   const unknownCoverageIds = allScenarioCoverageIds.filter(
     (coverageId) => !maturityRefs.coverageIds.has(coverageId),
@@ -1126,15 +1143,18 @@ export function buildQaScorecardTaxonomyReport(params: {
     profiles,
     categoryCount: maturityRefs.categories.size,
     requiredCategoryCount: requiredCategories.length,
-    fulfilledCategoryCount,
-    categoryFulfillmentPercent: percent(fulfilledCategoryCount, requiredCategories.length),
+    inventoriedCategoryCount,
+    categoryInventoryPercent: percent(inventoriedCategoryCount, requiredCategories.length),
     requiredCoverageIdCount: requiredCoverageIds.size,
-    fulfilledCoverageIdCount: fulfilledRequiredCoverageIds.size,
-    coverageIdFulfillmentPercent: percent(
-      fulfilledRequiredCoverageIds.size,
+    inventoriedCoverageIdCount: inventoriedRequiredCoverageIds.size,
+    coverageIdInventoryPercent: percent(
+      inventoriedRequiredCoverageIds.size,
       requiredCoverageIds.size,
     ),
-    evidenceRefCount: categories.reduce((count, category) => count + category.evidence.length, 0),
+    inventoryRefCount: categories.reduce(
+      (count, category) => count + category.inventoryRefs.length,
+      0,
+    ),
     scenarioCoverageIdCount: allScenarioCoverageIds.length,
     unknownCoverageIdCount: unknownCoverageIds.length,
     unknownCoverageIds,
@@ -1154,3 +1174,4 @@ export function readQaScorecardTaxonomyReport(scenarios: readonly QaSeedScenario
     scenarios,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

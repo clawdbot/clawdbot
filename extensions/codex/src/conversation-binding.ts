@@ -14,6 +14,10 @@ import type {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  unsubscribeCodexThreadBestEffort,
+} from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
@@ -71,6 +75,7 @@ import {
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+import { isIncognitoSessionKey } from "./incognito-session.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
@@ -513,6 +518,7 @@ async function requestNewConversationBindingThread(
           ...buildThreadRequestRuntimeOptions(params, resolved),
           developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
           experimentalRawEvents: true,
+          ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
         },
         requestOptions,
       ),
@@ -729,6 +735,7 @@ async function runBoundTurn(params: {
                 ...(serviceTier ? { serviceTier } : {}),
                 developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                 experimentalRawEvents: true,
+                ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
               },
               requestOptions,
             ),
@@ -891,6 +898,22 @@ async function runBoundTurn(params: {
         text: replyText || "Codex completed without a text reply.",
       },
     };
+  } catch (error) {
+    if (isIncognitoSessionKey(params.sessionKey)) {
+      const bindingReleased = await params.bindingStore.mutate(identity, {
+        kind: "clear",
+        threadId,
+      });
+      const timedOut =
+        error instanceof Error && error.message === "codex app-server bound turn timed out";
+      if (bindingReleased && !timedOut) {
+        await unsubscribeCodexThreadBestEffort(client, {
+          threadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        });
+      }
+    }
+    throw error;
   } finally {
     notificationCleanup();
     requestCleanup();
@@ -1241,3 +1264,4 @@ export const codexConversationBindingRuntime = {
   handleInboundClaim: handleCodexConversationInboundClaim,
   handleBindingResolved: handleCodexConversationBindingResolved,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,7 +8,7 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
-const readSessionMessagesMock = vi.fn();
+const readSessionMessageCountAsyncMock = vi.fn();
 const loadGatewaySessionRowMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
@@ -19,8 +19,17 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-    readSessionMessages: (...args: unknown[]) => readSessionMessagesMock(...args),
     loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
+  };
+});
+
+vi.mock("../session-transcript-readers.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
+    "../session-transcript-readers.js",
+  );
+  return {
+    ...actual,
+    readSessionMessageCountAsync: (...args: unknown[]) => readSessionMessageCountAsyncMock(...args),
   };
 });
 
@@ -50,7 +59,7 @@ import { sessionsHandlers } from "./sessions.js";
 describe("sessions.send completed subagent follow-up status", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-    readSessionMessagesMock.mockReset();
+    readSessionMessageCountAsyncMock.mockReset().mockResolvedValue(0);
     loadGatewaySessionRowMock.mockReset();
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
@@ -79,7 +88,6 @@ describe("sessions.send completed subagent follow-up status", () => {
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-followup" },
     });
-    readSessionMessagesMock.mockReturnValue([]);
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(completedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
     loadGatewaySessionRowMock.mockReturnValue({
@@ -145,7 +153,6 @@ describe("sessions.send completed subagent follow-up status", () => {
         storePath: "/tmp/work/sessions.json",
         entry: { sessionId: "sess-work-global" },
       });
-      readSessionMessagesMock.mockReturnValue([]);
       loadGatewaySessionRowMock.mockReturnValue(null);
       chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
         respond(true, { runId: "run-work", status: "started" }, undefined, undefined);

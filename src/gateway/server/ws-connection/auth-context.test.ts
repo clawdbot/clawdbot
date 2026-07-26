@@ -1,7 +1,9 @@
 // WebSocket auth-context tests cover token, password, bootstrap, and device-token decision state.
 import { describe, expect, it, vi } from "vitest";
 import { createAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
-import { resolveConnectAuthDecision, type ConnectAuthState } from "./auth-context.js";
+import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
+
+type ConnectAuthState = Awaited<ReturnType<typeof resolveConnectAuthState>>;
 
 type VerifyDeviceTokenFn = Parameters<typeof resolveConnectAuthDecision>[0]["verifyDeviceToken"];
 type VerifyBootstrapTokenFn = Parameters<

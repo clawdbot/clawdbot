@@ -72,6 +72,7 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<s
 
 describe("outbound channel resolution", () => {
   beforeEach(async () => {
+    vi.resetModules();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     getLoadedChannelPluginMock.mockReset();
@@ -101,9 +102,6 @@ describe("outbound channel resolution", () => {
     });
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
-
-    const channelResolution = await importChannelResolution("reset");
-    channelResolution.resetOutboundChannelResolutionStateForTest();
   });
 
   it.each([

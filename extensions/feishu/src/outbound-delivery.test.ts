@@ -1,8 +1,8 @@
 // Feishu tests cover the shared outbound delivery path.
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createOutboundTestPlugin,
   createTestRegistry,
-  deliverOutboundPayloads,
   releasePinnedPluginChannelRegistry,
   resetGlobalHookRunner,
   setActivePluginRegistry,
@@ -60,7 +60,7 @@ describe("Feishu outbound shared delivery", () => {
   });
 
   it("routes oversized presentation media through one media send and chunked fallback text", async () => {
-    await deliverOutboundPayloads({
+    await sendDurableMessageBatch({
       cfg: {},
       channel: "feishu",
       to: "chat_1",

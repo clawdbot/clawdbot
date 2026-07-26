@@ -24,9 +24,10 @@ export default defineSingleProviderPluginEntry({
         envVar: "CEREBRAS_API_KEY",
         promptMessage: "Enter Cerebras API key",
         defaultModel: CEREBRAS_DEFAULT_MODEL_REF,
+        preserveExistingPrimary: true,
         applyConfig: (cfg) => applyCerebrasConfig(cfg),
         noteMessage: [
-          "Cerebras provides high-speed OpenAI-compatible inference for GPT OSS, GLM, Qwen, and Llama models.",
+          "Cerebras provides high-speed OpenAI-compatible inference for GPT OSS and GLM models.",
           "Get your API key at: https://cloud.cerebras.ai",
         ].join("\n"),
         noteTitle: "Cerebras",
@@ -39,6 +40,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildCerebrasProvider,
       buildStaticProvider: buildCerebrasProvider,
+      liveModelDiscovery: true,
     },
   },
 });

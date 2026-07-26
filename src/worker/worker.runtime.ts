@@ -9,8 +9,11 @@ import {
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
 
-type WorkerRuntimeResult =
+// Cross-process contract: serialized to stdout by runWorkerCommand and parsed by the
+// gateway worker turn launcher.
+export type WorkerRuntimeResult =
   | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
+  | { status: "failed"; reason: "turn-failed" }
   | { status: "fenced"; reason: "credential-replaced" | "owner-epoch-mismatch" };
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
@@ -52,6 +55,7 @@ export async function runWorkerDescriptor(
 
   const abortController = new AbortController();
   let turnStarted = false;
+  let terminalLiveAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
   const connection = createWorkerConnection({
     socketPath: descriptor.socketPath,
@@ -121,12 +125,14 @@ export async function runWorkerDescriptor(
         sessionKey: `worker:${descriptor.admission.sessionId}`,
         runId: descriptor.assignment.runId,
         prompt: descriptor.assignment.prompt,
+        suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
         modelRef: descriptor.assignment.modelRef,
         initialMessages: descriptor.assignment.initialMessages,
         ...(descriptor.assignment.systemPrompt === undefined
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
+        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
         inference: { stream },
         transcript: {
           commit: async (messages) => {
@@ -136,6 +142,12 @@ export async function runWorkerDescriptor(
         live: {
           emit: async (event) => {
             await live.emit(descriptor.assignment.runId, event);
+            if (
+              event.kind === "lifecycle" &&
+              (event.payload.phase === "end" || event.payload.phase === "error")
+            ) {
+              terminalLiveAcked = true;
+            }
           },
         },
         signal: abortController.signal,
@@ -147,6 +159,12 @@ export async function runWorkerDescriptor(
       const fenced = fencedResult(connection.state);
       if (fenced) {
         return fenced;
+      }
+      if (options.signal?.aborted) {
+        throw toError(options.signal.reason, "worker interrupted");
+      }
+      if (terminalLiveAcked && connection.state.kind === "ready") {
+        return { status: "failed", reason: "turn-failed" };
       }
       throw toError(error, "worker session failed");
     }

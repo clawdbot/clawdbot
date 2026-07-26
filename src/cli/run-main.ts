@@ -27,6 +27,7 @@ import {
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import { isUnconfiguredConfigSource } from "./fresh-install-config.js";
 import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
@@ -34,7 +35,7 @@ import {
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
-import { flushExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
@@ -269,8 +270,6 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   }
 }
 
-const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
-
 function isUnconfiguredConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
 ): boolean {
@@ -280,9 +279,7 @@ function isUnconfiguredConfigSnapshot(
   if (!snapshot.valid) {
     return false;
   }
-  return Object.keys(snapshot.sourceConfig).every((key) =>
-    UNCONFIGURED_CONFIG_IGNORED_KEYS.has(key),
-  );
+  return isUnconfiguredConfigSource(snapshot.sourceConfig);
 }
 
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
@@ -515,7 +512,6 @@ async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<Gatew
   if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
     const url = await resolveValidatedRemoteGatewayUrl(config);
     const tlsFingerprint = normalizeOptionalString(config.gateway?.remote?.tlsFingerprint);
-    const preauthHandshakeTimeoutMs = config.gateway?.handshakeTimeoutMs;
     return url
       ? [
           {
@@ -523,7 +519,6 @@ async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<Gatew
             auth: "remote",
             scope: "remote",
             ...(tlsFingerprint ? { tlsFingerprint } : {}),
-            ...(preauthHandshakeTimeoutMs ? { preauthHandshakeTimeoutMs } : {}),
           },
         ]
       : [];
@@ -680,6 +675,10 @@ function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
+}
+
+function isAgentExecInvocation(commandPath: string[]): boolean {
+  return commandPath[0] === "agent" && commandPath[1] === "exec";
 }
 
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
@@ -1004,7 +1003,11 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   assertSupportedRuntime();
 
-  if (!isHelpOrVersionInvocation && (isGatewayRunInvocation || shouldLoadCliDotEnv())) {
+  if (
+    !isHelpOrVersionInvocation &&
+    !isAgentExecInvocation(normalizedInvocation.commandPath) &&
+    (isGatewayRunInvocation || shouldLoadCliDotEnv())
+  ) {
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
@@ -1411,13 +1414,22 @@ export async function runCli(argv: string[] = process.argv) {
       );
       stopStartupProgress();
 
+      let completedHelpOrVersion = false;
       try {
         await startupTrace.measure("parse", () => program.parseAsync(parseArgv));
+        completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
           throw error;
         }
         process.exitCode = error.exitCode;
+        completedHelpOrVersion = isHelpOrVersionInvocation && error.exitCode === 0;
+      }
+      if (completedHelpOrVersion) {
+        // Lazy command-group registrars can import native/runtime resources solely to
+        // render complete help. Request an exit now; the top-level finally flushes it
+        // after shared async teardown completes.
+        requestExitAfterOneShotOutput();
       }
     } finally {
       stopStartupProgress();
@@ -1428,6 +1440,6 @@ export async function runCli(argv: string[] = process.argv) {
     await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
-    flushExitAfterOneShotOutput();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

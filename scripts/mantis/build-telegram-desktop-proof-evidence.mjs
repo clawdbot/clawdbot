@@ -163,7 +163,7 @@ function laneArtifactEntries() {
 /**
  * Builds the manifest for paired baseline/candidate Telegram Desktop proof artifacts.
  */
-export function buildTelegramDesktopProofManifest({
+function buildTelegramDesktopProofManifest({
   baseline,
   baselineRef,
   baselineSha,

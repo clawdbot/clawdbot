@@ -5,4 +5,3 @@ export {
   createConfigRuntimeEnv,
   isConfigRuntimeEnvVarAllowed,
 } from "./config-env-vars.js";
-export { collectDurableServiceEnvVars, readStateDirDotEnvVars } from "./state-dir-dotenv.js";

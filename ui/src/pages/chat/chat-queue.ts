@@ -1,5 +1,6 @@
 // Control UI page module owns Chat queue storage and queue item cleanup.
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import {
   scopedAgentIdForSession,
   visibleSessionMatches,
@@ -35,7 +36,7 @@ type ChatQueueSessionHost = ChatQueueStoreHost &
     sessionKey: string;
   };
 
-type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
+export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
 const chatOutboxProjectionHosts = new Set<ChatQueueScopedSessionHost>();
 // Durable rows use crash-safe states. Overlay live work process-wide so panes
@@ -48,7 +49,7 @@ const localRecoveryItemIds = new WeakMap<ChatQueueScopedSessionHost, Set<string>
 // quota fallback may bypass durable admission on an explicit retry.
 const volatileQueueItemIds = new WeakMap<ChatQueueScopedSessionHost, Set<string>>();
 
-function markLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): void {
+export function markLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): void {
   const ids = localRecoveryItemIds.get(host) ?? new Set<string>();
   ids.add(id);
   localRecoveryItemIds.set(host, ids);
@@ -66,7 +67,7 @@ export function isVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: st
   return volatileQueueItemIds.get(host)?.has(id) === true;
 }
 
-function markVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): void {
+export function markVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): void {
   const ids = volatileQueueItemIds.get(host) ?? new Set<string>();
   ids.add(id);
   volatileQueueItemIds.set(host, ids);
@@ -305,6 +306,7 @@ export function enqueueChatMessage(
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
   localCommand?: { args: string; name: string },
+  sender?: SenderIdentity,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -321,6 +323,7 @@ export function enqueueChatMessage(
     localCommandName: localCommand?.name,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
+    ...(sender ? { sender } : {}),
   };
   host.chatQueue = [...host.chatQueue, item];
   return item;
@@ -331,12 +334,15 @@ export function enqueuePendingRunMessage(
   text: string,
   pendingRunId: string,
   attachments?: ChatAttachment[],
+  sender?: SenderIdentity,
 ) {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return;
   }
+  // Local commands join an existing run without a wire chat.send, so this is
+  // intentionally a non-SteeredChip pending row with no fake sendRunId.
   host.chatQueue = [
     ...host.chatQueue,
     {
@@ -346,6 +352,7 @@ export function enqueuePendingRunMessage(
       kind: "steered",
       attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
       pendingRunId,
+      ...(sender ? { sender } : {}),
     },
   ];
 }
@@ -384,7 +391,7 @@ export function replacePendingQueuedMessageProjection(
   return true;
 }
 
-function writeChatQueueForScope(
+export function writeChatQueueForScope(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   queue: ChatQueueItem[],

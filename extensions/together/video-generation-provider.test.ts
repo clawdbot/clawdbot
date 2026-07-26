@@ -96,6 +96,15 @@ describe("together video generation provider", () => {
     expectExplicitVideoGenerationCapabilities(buildTogetherVideoGenerationProvider());
   });
 
+  it("uses Together's canonical video model ids", () => {
+    expect(buildTogetherVideoGenerationProvider().models).toEqual([
+      "Wan-AI/Wan2.2-T2V-A14B",
+      "Wan-AI/Wan2.2-I2V-A14B",
+      "minimax/hailuo-02",
+      "kwaivgI/kling-2.1-master",
+    ]);
+  });
+
   it("creates a video, polls completion, and downloads the output", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: streamedJsonResponse({

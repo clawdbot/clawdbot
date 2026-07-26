@@ -1,6 +1,6 @@
-// Timestamp tests cover timezone validation and timestamp formatting.
+// Timestamp tests cover timestamp formatting and timezone fallback behavior.
 import { describe, expect, it } from "vitest";
-import { formatTimestamp, isValidTimeZone } from "./timestamps.js";
+import { formatTimestamp } from "./timestamps.js";
 
 describe("formatTimestamp", () => {
   const testDate = new Date("2024-01-15T14:30:45.123Z");
@@ -27,19 +27,5 @@ describe("formatTimestamp", () => {
     expect(formatTimestamp(testDate, { style: "short", timeZone: "not-a-tz" })).toMatch(
       /^\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
     );
-  });
-});
-
-describe("isValidTimeZone", () => {
-  it("returns true for valid IANA timezones", () => {
-    expect(isValidTimeZone("UTC")).toBe(true);
-    expect(isValidTimeZone("America/New_York")).toBe(true);
-    expect(isValidTimeZone("Asia/Shanghai")).toBe(true);
-  });
-
-  it("returns false for invalid timezone strings", () => {
-    expect(isValidTimeZone("not-a-tz")).toBe(false);
-    expect(isValidTimeZone("yo agent's")).toBe(false);
-    expect(isValidTimeZone("")).toBe(false);
   });
 });

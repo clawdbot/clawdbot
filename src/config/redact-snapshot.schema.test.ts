@@ -10,38 +10,42 @@ import { buildConfigSchema } from "./schema.js";
 describe("realredactConfigSnapshot_real", () => {
   it("main schema redact works (samples)", () => {
     const snapshot = makeSnapshot({
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: "1234",
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: "1234",
           },
         },
-        list: [
-          {
-            memorySearch: {
-              remote: {
-                apiKey: "6789",
+      },
+
+      agents: {
+        defaults: {},
+        entries: {
+          main: {
+            memory: {
+              search: {
+                remote: {
+                  apiKey: "6789",
+                },
               },
             },
           },
-        ],
+        },
       },
     });
 
     const result = redactConfigSnapshot(snapshot, mainSchemaHints);
     const config = result.config as typeof snapshot.config;
-    expect(config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
+    expect(config.memory.search.remote.apiKey).toBe(REDACTED_SENTINEL);
     expect(
-      expectDefined(config.agents.list[0], "config.agents.list[0] test invariant").memorySearch
-        .remote.apiKey,
+      expectDefined(config.agents.entries.main, "config.agents.entries.main test invariant").memory
+        .search.remote.apiKey,
     ).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
-    expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
+    expect(restored.memory.search.remote.apiKey).toBe("1234");
     expect(
-      expectDefined(restored.agents.list[0], "restored.agents.list[0] test invariant").memorySearch
-        .remote.apiKey,
+      expectDefined(restored.agents.entries.main, "restored.agents.entries.main test invariant")
+        .memory.search.remote.apiKey,
     ).toBe("6789");
   });
 
@@ -66,5 +70,25 @@ describe("realredactConfigSnapshot_real", () => {
     expect(restored.channels.nostr.privateKey).toBe(
       "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
     );
+  });
+
+  it("redacts Discord Activity client secrets registered on plain string schemas", () => {
+    const hints = buildConfigSchema().uiHints;
+    expect(hints["channels.discord.activities.clientSecret"]?.sensitive).toBe(true);
+    const snapshot = makeSnapshot({
+      channels: {
+        discord: {
+          activities: {
+            clientSecret: "cfgsec",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    const discord = expectDefined(channels.discord, "channels.discord test invariant");
+    const activities = discord.activities as Record<string, unknown>;
+    expect(activities.clientSecret).toBe(REDACTED_SENTINEL);
   });
 });

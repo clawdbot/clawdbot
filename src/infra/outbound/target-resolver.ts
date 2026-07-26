@@ -408,7 +408,7 @@ function pickAmbiguousMatch(
 }
 
 /** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
-export async function resolveMessagingTarget(params: {
+async function resolveMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   input: string;

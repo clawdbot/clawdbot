@@ -1,7 +1,6 @@
 // Builds approval prompt view models from request and resolution events.
 import { resolveApprovalRequestKind } from "./approval-types.js";
 import type {
-  ApprovalActionView,
   ApprovalMetadataView,
   ApprovalRequest,
   ApprovalResolved,
@@ -10,7 +9,6 @@ import type {
   PendingApprovalView,
   PluginApprovalViewBase,
   ResolvedApprovalView,
-  TypedApprovalActionView,
 } from "./approval-view-model.types.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { buildTypedApprovalActionDescriptors } from "./exec-approval-reply.js";
@@ -24,13 +22,6 @@ import type { PluginApprovalRequest } from "./plugin-approvals.js";
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
 export { resolveApprovalRequestKind } from "./approval-types.js";
-
-/** Narrow a public compatibility action to the host-built typed approval shape. */
-export function isTypedApprovalActionView(
-  action: ApprovalActionView,
-): action is TypedApprovalActionView {
-  return action.action?.type === "approval" && action.action.decision === action.decision;
-}
 
 function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[] {
   const metadata: ApprovalMetadataView[] = [];

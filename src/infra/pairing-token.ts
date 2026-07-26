@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
 
 /** Random byte length for base64url device/node/bootstrap bearer tokens. */
-export const PAIRING_TOKEN_BYTES = 32;
+const PAIRING_TOKEN_BYTES = 32;
 
 /** Generate a URL-safe bearer token for pairing and bootstrap flows. */
 export function generatePairingToken(): string {

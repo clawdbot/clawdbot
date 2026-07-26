@@ -3,7 +3,7 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { backupFleetCell, resolveRestoreOwner, restoreFleetCell } from "./backup.runtime.js";
+import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
 import type { FleetCellRecord } from "./registry.js";
@@ -18,6 +18,7 @@ const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-backup-tes
 function inspection(running = false): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: running ? "running" : "exited",
     running,
     labels: {
@@ -43,7 +44,7 @@ function inspection(running = false): Extract<FleetContainerInspectResult, { kin
   };
 }
 
-function containerMock(current = inspection()) {
+function containerMock(current: FleetContainerInspectResult = inspection()) {
   return {
     assertLocal: vi.fn(async () => undefined),
     inspect: vi.fn(async () => current),
@@ -113,6 +114,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await tempRoot.cleanup();
 });
 
@@ -307,6 +309,16 @@ describe("fleet restore runtime", () => {
     );
   });
 
+  it("gives a usable recovery sequence when the registered container is missing", async () => {
+    const archive = await createArchive();
+    const containers = containerMock({ kind: "missing", state: "missing" });
+
+    await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
+      /fleet rm acme --force.*fleet create acme --no-start --image <image>.*retry fleet restore/iu,
+    );
+    expect(containers.remove).not.toHaveBeenCalled();
+  });
+
   it("rejects archives inside cell state and foreign cell networks before mutation", async () => {
     const archive = await createArchive();
     const inside = path.join(record.dataDir, "inside.tgz");
@@ -479,21 +491,31 @@ describe("fleet restore runtime", () => {
     [
       "root with explicit non-root mapping",
       { uid: 0, gid: 0 },
-      { mode: "numeric", uid: 1001, gid: 1002 } as const,
+      "1001:1002",
       { uid: 1001, gid: 1002 },
     ],
-    [
-      "root with rootless uid-0 mapping",
-      { uid: 0, gid: 0 },
-      { mode: "numeric", uid: 0, gid: 0 } as const,
-      undefined,
-    ],
-  ])(
-    "derives the restore ownership repair for %s",
-    (_label, hostIdentity, containerUser, expected) => {
-      expect(resolveRestoreOwner(hostIdentity, containerUser)).toEqual(expected);
-    },
-  );
+    ["root with rootless uid-0 mapping", { uid: 0, gid: 0 }, "0:0", undefined],
+  ] as const)("repairs restored ownership for %s", async (_label, hostIdentity, user, expected) => {
+    const archive = await createArchive();
+    const current = inspection();
+    current.user = user;
+    const containers = containerMock(current);
+    const chown = vi.spyOn(fs, "chown").mockResolvedValue();
+
+    await restoreFleetCell({
+      ...restoreParams(containers, archive),
+      hostIdentity,
+    });
+
+    if (!expected) {
+      expect(chown).not.toHaveBeenCalled();
+      return;
+    }
+    expect(chown).toHaveBeenCalled();
+    for (const [, uid, gid] of chown.mock.calls) {
+      expect({ uid, gid }).toEqual(expected);
+    }
+  });
 
   it("preserves replaced and extracted trees when replacement run fails", async () => {
     const archive = await createArchive();

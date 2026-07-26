@@ -593,6 +593,22 @@ export async function withAllocatedGatewayPort<T>(lane: LaneState, callback: () 
   );
 }
 
+export async function reserveGatewayPortForLane(lane: LaneState) {
+  const reservation = await reservePort();
+  lane.gatewayPort = reservation.port;
+  let released = false;
+  return {
+    port: reservation.port,
+    release: async () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      await reservation.release();
+    },
+  };
+}
+
 function reservePort(): Promise<{ port: number; release: () => Promise<void> }> {
   return new Promise((resolvePromise, rejectPromise) => {
     const server = createNetServer();

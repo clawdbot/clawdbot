@@ -65,6 +65,7 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
   "updateSessionStore",
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
+const materializingSessionEntryAccessorNames = new Set(["listSessionEntries", "loadSessionEntry"]);
 
 // Shipped beta.5 official plugins import these deprecated helpers during
 // doctor migrations. Remove this ratchet with the compatibility bridge once
@@ -75,6 +76,24 @@ export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
   "resolveSessionStoreEntry",
   "updateSessionStore",
 ]);
+
+const gatewaySessionServerMethodFiles = [
+  "src/gateway/server-methods/sessions-abort.ts",
+  "src/gateway/server-methods/sessions-compact.ts",
+  "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
+  "src/gateway/server-methods/sessions-compaction-queries.ts",
+  "src/gateway/server-methods/sessions-compaction-runner.ts",
+  "src/gateway/server-methods/sessions-create.ts",
+  "src/gateway/server-methods/sessions-delete.ts",
+  "src/gateway/server-methods/sessions-dispatch.ts",
+  "src/gateway/server-methods/sessions-groups.ts",
+  "src/gateway/server-methods/sessions-messaging.ts",
+  "src/gateway/server-methods/sessions-mutations.ts",
+  "src/gateway/server-methods/sessions-read.ts",
+  "src/gateway/server-methods/sessions-shared.ts",
+  "src/gateway/server-methods/sessions-subscriptions.ts",
+  "src/gateway/server-methods/sessions.ts",
+];
 
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
@@ -120,7 +139,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/gateway/server-methods/chat.ts",
   "src/gateway/sessions-resolve.ts",
   "src/gateway/server-methods/sessions-files.ts",
-  "src/gateway/server-methods/sessions.ts",
+  ...gatewaySessionServerMethodFiles,
   "src/gateway/server-session-events.ts",
   "src/gateway/session-reset-service.ts",
   "src/infra/outbound/message-action-tts.ts",
@@ -143,6 +162,7 @@ export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/mattermost/src/mattermost/model-picker.ts",
   "extensions/matrix/src/matrix/monitor/handler.ts",
   "extensions/matrix/src/session-route.ts",
+  "extensions/qqbot/src/engine/group/activation.ts",
   "extensions/slack/src/monitor/slash.ts",
   "extensions/telegram/src/bot-core.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",
@@ -166,7 +186,9 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
-  "src/agents/main-session-restart-recovery.ts",
+  "src/agents/main-session-restart-recovery-checkpoint.ts",
+  "src/agents/main-session-restart-recovery-marking.ts",
+  "src/agents/main-session-restart-recovery-store.ts",
   "src/agents/session-suspension.ts",
   "src/auto-reply/reply/abort.ts",
   "src/agents/subagent-control.ts",
@@ -197,7 +219,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",
   "src/gateway/server-methods/chat.ts",
-  "src/gateway/server-methods/sessions.ts",
+  ...gatewaySessionServerMethodFiles,
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",
   "src/infra/outbound/outbound-session.ts",
@@ -218,13 +240,32 @@ export const migratedTranscriptWriterFiles = new Set([
 ]);
 
 export const migratedSessionCompactManualTrimFiles = new Set([
-  "src/gateway/server-methods/sessions.ts",
+  "src/gateway/server-methods/sessions-compact.ts",
 ]);
 
 export const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
   "src/infra/heartbeat-runner.ts",
+]);
+
+export const readOnlyGatewaySessionAccessorFiles = new Set([
+  "src/gateway/approval-session-audience.ts",
+  "src/gateway/control-ui-session-prs.ts",
+  "src/gateway/managed-image-attachments.ts",
+  "src/gateway/mcp-app-reconstruction.ts",
+  "src/gateway/server-chat.ts",
+  "src/gateway/server-methods/artifacts.ts",
+  "src/gateway/server-methods/chat-history-handler.ts",
+  "src/gateway/server-methods/chat-message-get-handler.ts",
+  "src/gateway/server-methods/sessions-diff.ts",
+  "src/gateway/server-methods/sessions-files.ts",
+  "src/gateway/server-methods/sessions-read.ts",
+  "src/gateway/server-methods/sessions-subscriptions.ts",
+  "src/gateway/server-methods/task-suggestions.ts",
+  "src/gateway/server-methods/tools-effective.ts",
+  "src/gateway/server-methods/usage.ts",
+  "src/gateway/server-session-events.ts",
 ]);
 
 export const migratedMemoryHostSessionCorpusFiles = new Set([
@@ -441,6 +482,15 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
   const legacyNames = legacyNamesForFile(fileName);
   const legacyKind = legacyNames === legacyWholeStoreAccessNames ? "access" : "reader";
   return findNamedSessionStoreViolations(content, fileName, legacyNames, legacyKind);
+}
+
+export function findReadOnlySessionAccessorViolations(content, fileName = "source.ts") {
+  return findNamedBoundaryViolations(
+    content,
+    fileName,
+    materializingSessionEntryAccessorNames,
+    "materializing session entry accessor",
+  );
 }
 
 export function findEmbeddedAgentSessionTargetViolations(content, fileName = "source.ts") {
@@ -863,7 +913,7 @@ export async function main() {
     sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway/server-methods"]),
     skipFile: (filePath) =>
       normalizeRelativePath(path.relative(repoRoot, filePath)) !==
-      "src/gateway/server-methods/sessions.ts",
+      "src/gateway/server-methods/sessions-create.ts",
     findViolations: findGatewaySessionCreateLifecycleViolations,
   });
   const manualCompactTrimViolations = await collectFileViolations({
@@ -902,6 +952,15 @@ export async function main() {
       ),
     findViolations: findEmbeddedAgentSessionTargetViolations,
   });
+  const readOnlyGatewaySessionAccessorViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: resolveSourceRoots(repoRoot, ["src/gateway"]),
+    skipFile: (filePath) =>
+      !readOnlyGatewaySessionAccessorFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findReadOnlySessionAccessorViolations,
+  });
   const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
   const sessionStoreRuntimeCompatViolations =
     findSessionStoreRuntimeFileBackedCompatExportViolations(
@@ -919,6 +978,7 @@ export async function main() {
     ...lifecycleCleanupViolations,
     ...memoryHostSessionCorpusViolations,
     ...embeddedAgentSessionTargetViolations,
+    ...readOnlyGatewaySessionAccessorViolations,
     ...sessionStoreRuntimeCompatViolations,
   ];
 

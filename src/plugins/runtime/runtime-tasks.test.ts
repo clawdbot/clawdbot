@@ -1,9 +1,7 @@
 // Runtime task tests cover plugin task runtime registration, invocation, and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getDetachedTaskLifecycleRuntime,
-  setDetachedTaskLifecycleRuntime,
-} from "../../tasks/detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,
@@ -49,7 +47,7 @@ describe("runtime tasks", () => {
 
   it("exposes canonical task and TaskFlow DTOs without leaking raw registry fields", () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
@@ -149,7 +147,7 @@ describe("runtime tasks", () => {
 
   it("maps task cancellation results onto canonical task DTOs", async () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
@@ -198,7 +196,7 @@ describe("runtime tasks", () => {
 
   it("routes runtime task cancellation through the detached task runtime seam", async () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",
@@ -250,7 +248,7 @@ describe("runtime tasks", () => {
 
   it("does not allow cross-owner task cancellation or leak task details", async () => {
     const runtimeTasks = createRuntimeTasks({
-      legacyTaskFlow: createRuntimeTaskFlow(),
+      managedTaskFlow: createRuntimeTaskFlow(),
     });
     const legacyTaskFlow = runtimeTasks.managedFlows.bindSession({
       sessionKey: "agent:main:main",

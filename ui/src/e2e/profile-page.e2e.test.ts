@@ -1,4 +1,6 @@
 // Control UI tests cover the settings profile page against a mocked Gateway.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -13,6 +15,19 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "profile-identity");
+
+async function screenshot(page: Page, name: string) {
+  if (!captureUiProof) {
+    return;
+  }
+  await mkdir(proofDir, { recursive: true });
+  await page.locator("#settings-profile-identity").screenshot({
+    animations: "disabled",
+    path: path.join(proofDir, name),
+  });
+}
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -117,6 +132,25 @@ const sessionsUsageResponse = {
   },
 };
 
+const testProfile = {
+  id: "11111111-1111-4111-8111-111111111111",
+  displayName: "Test Person",
+  avatarMime: null,
+  mergedInto: null,
+  createdAt: 1,
+  updatedAt: 2,
+  emails: ["test@example.com"],
+  hasAvatar: false,
+};
+const testPresenceUsers = [
+  {
+    self: true,
+    id: testProfile.id,
+    name: testProfile.displayName,
+    email: testProfile.emails[0],
+  },
+];
+
 describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -161,21 +195,112 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       expect(chips.some((chip) => chip.includes("In the reef since"))).toBe(true);
       expect(chips.some((chip) => chip.includes("Whatsapp"))).toBe(true);
 
-      const statValues = await page.locator(".profile-stats .stat-value").allTextContents();
+      const statValues = await page.locator(".profile-stats__value").allTextContents();
       expect(statValues[0]?.trim()).toBe("2.8T");
       expect(statValues[1]?.trim()).toBe("82.1B");
-      expect(statValues[2]?.trim()).toBe("59h 4m");
+      expect(statValues[2]?.trim()).toBe("2d 11h");
       expect(statValues[3]?.trim()).toBe("3 days");
 
       const cellCount = await page.locator(".profile-heatmap__svg rect").count();
       expect(cellCount).toBe(52 * 7);
 
-      const insightValues = await page.locator(".profile-insights__value").allTextContents();
+      const insightValues = await page.locator(".settings-kv dd").allTextContents();
       expect(insightValues[0]?.trim()).toBe("claude-opus-4-8");
       expect(insightValues.some((value) => value.replace(/[^0-9]/gu, "") === "2787815")).toBe(true);
 
       const toolNames = await page.locator(".profile-tools__name").allTextContents();
       expect(toolNames.map((name) => name.trim())).toEqual(["exec", "browser", "message"]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders the gateway avatar route in the profile preview", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const gatewayUrl = server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
+    await page.addInitScript((sameOriginGatewayUrl) => {
+      (
+        window as Window & {
+          ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+        }
+      )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+        gatewayUrl: sameOriginGatewayUrl,
+        token: "test",
+      };
+    }, gatewayUrl);
+    const avatarRequests: string[] = [];
+    // The gateway serves the avatar (uploaded first, Gravatar fallback second)
+    // behind its own same-origin route; the Control UI renders only that route,
+    // so the preview never requests gravatar.com directly — the Control UI CSP
+    // (img-src 'self') would block it.
+    await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
+      avatarRequests.push(route.request().url());
+      await route.fulfill({
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
+        contentType: "image/svg+xml",
+        status: 200,
+      });
+    });
+    await installMockGateway(page, {
+      presenceUsers: testPresenceUsers,
+      methodResponses: {
+        "usage.cost": usageCostResponse,
+        "sessions.usage": sessionsUsageResponse,
+        "users.self": { profile: testProfile },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      expect(response?.status()).toBe(200);
+
+      const profileAvatar = page.locator("#settings-profile-identity openclaw-viewer-avatar img");
+      await profileAvatar.waitFor({ timeout: 10_000 });
+      // profile-page derives the src from userProfileAvatarUrl(id, updatedAt);
+      // the gateway origin may absolutize it, so match the canonical path suffix.
+      expect(await profileAvatar.getAttribute("src")).toContain(
+        `/api/users/${testProfile.id}/avatar?v=2`,
+      );
+      await expect
+        .poll(() =>
+          avatarRequests.some((url) => url.includes(`/api/users/${testProfile.id}/avatar`)),
+        )
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("retries the missing identity bootstrap and opens the profile editor", async () => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      presenceUsers: testPresenceUsers,
+      methodResponses: {
+        "usage.cost": usageCostResponse,
+        "sessions.usage": sessionsUsageResponse,
+        "users.self": { sequence: [{}, { profile: testProfile }] },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/profile`);
+      expect(response?.status()).toBe(200);
+
+      const emptyState = page.locator(".profile-identity-empty");
+      await emptyState.waitFor({ timeout: 10_000 });
+      await expect(emptyState.textContent()).resolves.toContain("Identity is not set.");
+      await screenshot(page, "01-identity-not-set.png");
+
+      await page.getByRole("button", { name: "Set identity" }).click();
+
+      await page.locator('.identity-name-control input[type="text"]').waitFor({ timeout: 10_000 });
+      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+      await expect(page.locator(".identity-name-control input").inputValue()).resolves.toBe(
+        testProfile.displayName,
+      );
+      await screenshot(page, "02-identity-editor.png");
     } finally {
       await context.close();
     }
@@ -200,10 +325,10 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/profile`);
       expect(response?.status()).toBe(200);
 
-      await page.locator(".profile-note").waitFor({ timeout: 10_000 });
+      await page.locator(".settings-empty").waitFor({ timeout: 10_000 });
       // Zero totals with a refreshing cache must not claim a fresh shell.
-      await expect(page.locator(".profile-note .card-title").count()).resolves.toBe(0);
-      await expect(page.locator(".profile-note").textContent()).resolves.toContain(
+      await expect(page.locator(".settings-empty strong").count()).resolves.toBe(0);
+      await expect(page.locator(".settings-empty").textContent()).resolves.toContain(
         "Diving for stats",
       );
     } finally {
@@ -233,8 +358,8 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}settings/profile`);
       expect(response?.status()).toBe(200);
 
-      await page.locator(".profile-note .card-title").waitFor({ timeout: 10_000 });
-      await expect(page.locator(".profile-note .card-title").textContent()).resolves.toContain(
+      await page.locator(".settings-empty strong").waitFor({ timeout: 10_000 });
+      await expect(page.locator(".settings-empty strong").textContent()).resolves.toContain(
         "A fresh shell",
       );
       await expect(page.locator(".profile-heatmap__svg").count()).resolves.toBe(0);

@@ -139,6 +139,43 @@ describe("QA UX Matrix evidence producer CLI", () => {
       expect(cliLog).not.toContain(fakeRepoRoot);
       expect(`${evidence}\n${cliLog}`).toContain("<repo-root>");
       expect(visualLog).toBe("blocked: --skip-visual-proof was set\n");
+
+      const evidenceJson = JSON.parse(evidence) as {
+        entries: Array<{
+          coverage: unknown[];
+          execution?: { artifacts: Array<{ kind: string }> };
+          test: { id: string };
+        }>;
+      };
+      const matrix = JSON.parse(
+        fs.readFileSync(path.join(artifactBase, "matrix.json"), "utf8"),
+      ) as { cells: Array<{ coverageIds: unknown[] }> };
+      const releaseLedger = JSON.parse(
+        fs.readFileSync(path.join(artifactBase, "release-ledger.json"), "utf8"),
+      ) as { entries: Array<{ coverageIds: unknown[] }> };
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(artifactBase, "manifest.json"), "utf8"),
+      ) as { run: Record<string, unknown> };
+      const commands = fs.readFileSync(path.join(artifactBase, "commands.txt"), "utf8");
+
+      expect(evidenceJson.entries.map((entry) => entry.test.id)).toEqual([
+        "ux-matrix.qa-lab.producer-artifact-fixture",
+        "ux-matrix.control-ui.screenshot-artifact",
+        "ux-matrix.cli.entrypoint-help",
+      ]);
+      expect(evidenceJson.entries.every((entry) => entry.coverage.length === 0)).toBe(true);
+      expect(matrix.cells.every((cell) => cell.coverageIds.length === 0)).toBe(true);
+      expect(releaseLedger.entries.every((entry) => entry.coverageIds.length === 0)).toBe(true);
+      expect(manifest.run).not.toHaveProperty("scenarioId");
+      expect(commands).toContain(
+        "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base",
+      );
+      expect(commands).not.toContain("qa suite --scenario");
+      expect(
+        evidenceJson.entries.flatMap(
+          (entry) => entry.execution?.artifacts.map((artifact) => artifact.kind) ?? [],
+        ),
+      ).toEqual(expect.arrayContaining(["html", "log"]));
     } finally {
       fs.rmSync(artifactBase, { recursive: true, force: true });
       fs.rmSync(fakeRepoRoot, { recursive: true, force: true });

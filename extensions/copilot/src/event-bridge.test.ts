@@ -554,7 +554,11 @@ describe("attachEventBridge", () => {
         title: "Plan updated",
         source: "copilot-sdk",
         explanation: "Plan ready",
-        steps: ["# Plan", "inspect", "patch"],
+        steps: [
+          { step: "# Plan", status: "pending" },
+          { step: "inspect", status: "pending" },
+          { step: "patch", status: "pending" },
+        ],
         actions: ["approve", "edit"],
         requestId: "request-1",
         recommendedAction: "approve",
@@ -1152,3 +1156,4 @@ describe("attachEventBridge", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

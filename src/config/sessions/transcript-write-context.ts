@@ -87,27 +87,45 @@ export async function runWithOwnedSessionTranscriptWriteLock<T>(
   return await runWithOwnedSessionTranscriptWriteContext(params, run);
 }
 
-export async function runWithOwnedSessionTranscriptWritePublication<T>(
-  params: {
-    sessionFile?: string;
-    sessionKey?: string;
-  },
-  run: () => Promise<T> | T,
-): Promise<T> {
-  return await runWithOwnedSessionTranscriptWriteContext(params, run, {
-    publishOwnedWrite: true,
-  });
-}
-
-export function resolveOwnedSessionTranscriptWriteLockRunner(params: {
+export async function acquireOwnedSessionTranscriptWriteLock(params: {
   sessionFile?: string;
   sessionKey?: string;
-}): OwnedSessionTranscriptWriteContext["withSessionWriteLock"] | undefined {
+}): Promise<{ release: () => Promise<void> } | undefined> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {
     return undefined;
   }
-  return context.withSessionWriteLock;
+
+  // Keep the owner callback pending until release so release-shaped callers
+  // cannot outlive the logical writer lock or leak a tracked nested operation.
+  let markAcquired!: () => void;
+  let rejectAcquire!: (error: unknown) => void;
+  const acquired = new Promise<void>((resolve, reject) => {
+    markAcquired = resolve;
+    rejectAcquire = reject;
+  });
+  let releaseOperation!: () => void;
+  const releaseRequested = new Promise<void>((resolve) => {
+    releaseOperation = resolve;
+  });
+  const operation = context.withSessionWriteLock(async () => {
+    markAcquired();
+    await releaseRequested;
+  });
+  void operation.catch(rejectAcquire);
+  await acquired;
+
+  let released = false;
+  return {
+    release: async () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      releaseOperation();
+      await operation;
+    },
+  };
 }
 
 export function canAdvanceOwnedSessionEntryCache(params: {

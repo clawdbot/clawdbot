@@ -3,7 +3,19 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { pruneContextMessages } from "./pruner.js";
-import { DEFAULT_CONTEXT_PRUNING_SETTINGS } from "./settings.js";
+import { computeEffectiveSettings } from "./settings.js";
+
+function resolveDefaultContextPruningSettings(): NonNullable<
+  ReturnType<typeof computeEffectiveSettings>
+> {
+  const settings = computeEffectiveSettings({ mode: "cache-ttl" });
+  if (!settings) {
+    throw new Error("expected default context-pruning settings");
+  }
+  return settings;
+}
+
+const DEFAULT_CONTEXT_PRUNING_SETTINGS = resolveDefaultContextPruningSettings();
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AssistantContentBlock = AssistantMessage["content"][number];
