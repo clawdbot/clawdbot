@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
 import {
   normalizeInitialApplicationLocation,
@@ -129,6 +130,173 @@ describe("normalizeInitialApplicationLocation", () => {
       }),
     ).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
     expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      location: {
+        pathname: "/chat",
+        search: "?session=agent%3Aresearch%3Atelegram%3A12345",
+        hash: "",
+      },
+      expected: { pathname: "/chat/research/telegram/12345", search: "", hash: "" },
+      namespace: "chat",
+      sessionKey: "agent:research:telegram:12345",
+    },
+    {
+      location: {
+        pathname: "/chat",
+        search: "?session=agent%3Aresearch%3Atelegram%3A12345&face=dashboard",
+        hash: "",
+      },
+      expected: { pathname: "/dashboard/research/telegram/12345", search: "", hash: "" },
+      namespace: "dashboard",
+      sessionKey: "agent:research:telegram:12345",
+    },
+    {
+      location: {
+        pathname: "/chat",
+        search: "?session=agent%3Aresearch%3Arelease-deadbeef",
+        hash: "",
+      },
+      expected: { pathname: "/chat/research/~key/release-deadbeef", search: "", hash: "" },
+      namespace: "chat",
+      sessionKey: "agent:research:release-deadbeef",
+    },
+  ] as const)("rewrites released query links to $expected.pathname", async (testCase) => {
+    const subscribe = vi.fn(() => () => undefined);
+    const resolved = await resolveInitialApplicationLocation({
+      location: testCase.location,
+      basePath: "",
+      sessionKey: "agent:main:main",
+      gateway: {
+        snapshot: { phase: "connecting", client: null, hello: null },
+        subscribe,
+      } as unknown as ApplicationContext<RouteId>["gateway"],
+      agentsList: () => ({ defaultId: "main", mainKey: "main", agents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(resolved).toEqual(testCase.expected);
+    expect(sessionRefFromPath(resolved.pathname, "", "main")).toMatchObject({
+      namespace: testCase.namespace,
+      kind: "literal",
+      sessionKey: testCase.sessionKey,
+    });
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  it("does not consume Sessions list row-expansion state", async () => {
+    const location = { pathname: "/sessions", search: "?session=agent%3Amain%3Amain", hash: "" };
+    const subscribe = vi.fn(() => () => undefined);
+    await expect(
+      resolveInitialApplicationLocation({
+        location,
+        basePath: "",
+        sessionKey: "agent:main:main",
+        gateway: {
+          snapshot: { phase: "connecting", client: null, hello: null },
+          subscribe,
+        } as unknown as ApplicationContext<RouteId>["gateway"],
+        agentsList: () => null,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBe(location);
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  it("waits for cold custom-main defaults before rewriting a released query link", async () => {
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    let snapshot = {
+      phase: "connecting",
+      client: null,
+      hello: null,
+    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+    const pending = resolveInitialApplicationLocation({
+      location: {
+        pathname: "/chat",
+        search: "?session=agent%3Aresearch%3Aworkspace",
+        hash: "",
+      },
+      basePath: "",
+      sessionKey: "agent:main:main",
+      gateway: {
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agentsList: () => null,
+      signal: new AbortController().signal,
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    snapshot = {
+      phase: "connected",
+      client: {},
+      hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
+    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+    const connectedListener = listener as GatewayListener | null;
+    if (!connectedListener) {
+      throw new Error("expected gateway readiness subscription");
+    }
+    connectedListener(snapshot);
+
+    await expect(pending).resolves.toEqual({
+      pathname: "/chat/research",
+      search: "",
+      hash: "",
+    });
+  });
+
+  it("replaces a released dashboard query bookmark before router start", async () => {
+    const initialLocation = {
+      pathname: "/chat",
+      search: "?session=agent%3Aresearch%3Arelease-deadbeef&face=dashboard&draft=ship",
+      hash: "",
+    };
+    const gateway = {
+      snapshot: {
+        phase: "connected",
+        client: {},
+        hello: { snapshot: { sessionDefaults: { mainKey: "main" } } },
+      },
+      subscribe: vi.fn(() => () => undefined),
+    } as unknown as ApplicationContext<RouteId>["gateway"];
+    const canonicalLocation = await resolveInitialApplicationLocation({
+      location: initialLocation,
+      basePath: "",
+      sessionKey: "agent:main:main",
+      gateway,
+      agentsList: () => ({ defaultId: "main", mainKey: "main", agents: [] }),
+      signal: new AbortController().signal,
+    });
+    let currentLocation: RouteLocation = initialLocation;
+    const replace = vi.fn((location: RouteLocation) => {
+      currentLocation = location;
+    });
+
+    await startModelSetupFirstRunRedirectAfterLocation({
+      context: { gateway } as unknown as ApplicationContext<RouteId>,
+      enabled: false,
+      history: { location: () => currentLocation, replace },
+      initialLocationReady: Promise.resolve(canonicalLocation),
+    });
+
+    expect(replace).toHaveBeenCalledWith({
+      pathname: "/dashboard/research/~key/release-deadbeef",
+      search: "?draft=ship",
+      hash: "",
+    });
   });
 
   it("starts the first-run redirect after installing the persisted session location", async () => {

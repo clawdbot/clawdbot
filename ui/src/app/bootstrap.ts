@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -274,8 +275,14 @@ export function bootstrapApplication(
   );
   const agents = createAgentCapability(gateway);
   const initialLocationAbort = new AbortController();
+  const startupRouteId = routeIdFromPath(startup.location.pathname, basePath);
+  const releasedSessionQuery =
+    (startupRouteId === "chat" || startupRouteId === "dashboard") &&
+    sessionRouteNamespaceFromPath(startup.location.pathname, basePath) === null &&
+    new URLSearchParams(startup.location.search).has("session");
   const deferInitialLocationUntilGateway =
     documentMode === null &&
+    !releasedSessionQuery &&
     firstRunDefaultLanding &&
     settings.sessionKey.trim() !== "" &&
     !parseAgentSessionKey(settings.sessionKey);

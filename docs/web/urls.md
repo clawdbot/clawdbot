@@ -64,6 +64,11 @@ Exactly one segment after the agent id is literal when it is reserved or does
 not contain a valid short id; otherwise it is a short reference. Two or more
 segments after the agent id are always literal.
 
+Only the configured `session.mainKey` collapses to the agent-only main-session
+path. With `session.mainKey: "workspace"`, `agent:research:workspace` becomes
+`/chat/research`, while the distinct key `agent:research:main` remains the
+literal path `/chat/research/main`.
+
 ### Stability contract
 
 The following parts are stable URL contracts:
@@ -88,11 +93,15 @@ prefixes. Use a longer prefix to make the URL unique. Resolution examines at
 most five pages of search results; if more remain, the view says that the search
 was incomplete instead of guessing.
 
-As of this release, `?session=` and `?face=` are removed. There is no redirect,
-fallback reader, or dual URL format. The Sessions list keeps its own `?session=`
-parameter because that parameter expands a row; it is not a session deep link.
-The one-shot composer value `?draft=` remains supported on chat and dashboard
-session paths.
+Canonical links do not use `?session=` or `?face=`. Released links such as
+`/chat?session=<sessionKey>` are accepted only at the application boundary as a
+migration aid and immediately rewritten, without adding browser history, to the
+canonical path. The released `?face=dashboard` companion selects the
+`/dashboard` namespace during that rewrite. Loaders and page code never read the
+query-form identity, and new links must not emit it. The Sessions list keeps its
+own `?session=` parameter because that parameter expands a row; it is not a
+session deep link. The one-shot composer value `?draft=` remains supported on
+chat and dashboard session paths.
 
 ## Route table
 
