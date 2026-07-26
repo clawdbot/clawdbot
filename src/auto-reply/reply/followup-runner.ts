@@ -724,11 +724,7 @@ export function createFollowupRunner(params: {
           return false;
         }
         const operationalPolicy = resolveOperationalReplyPolicy(runtimeConfig).policy;
-        return (
-          operationalPolicy === "redirect" ||
-          operationalPolicy === "silent" ||
-          operationalPolicy === "once"
-        );
+        return operationalPolicy === "redirect" || operationalPolicy === "silent";
       };
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
@@ -2102,8 +2098,7 @@ export function createFollowupRunner(params: {
           operationalDeliveryPayloads.length > 0 &&
           (!isRoomEventFollowup() ||
             operationalPolicy === "redirect" ||
-            operationalPolicy === "silent" ||
-            operationalPolicy === "once");
+            operationalPolicy === "silent");
         const suppressionDeliverablePayloads = deliveryPayloads.filter((payload) => {
           const operational = isOperationalReplyPayload({
             payload,

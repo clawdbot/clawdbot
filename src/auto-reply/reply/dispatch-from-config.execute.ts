@@ -109,6 +109,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     suppressDelivery,
     suppressHookReplyLifecycle,
     suppressHookUserDelivery,
+    suppressUserDeliveryBySourceReplyPolicy,
     suppressToolErrorWarnings,
     traceReplyPhase,
     trackDispatchLifecycleWork,
@@ -237,7 +238,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       }) &&
                       isExplicitOperationalToolProgress &&
                       (ctx.InboundEventKind !== "room_event" ||
-                        state.operationalReplyPolicy.policy !== "always");
+                        state.operationalReplyPolicy.policy === "redirect" ||
+                        state.operationalReplyPolicy.policy === "silent");
                     const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                       payload,
                       isFastModeAutoProgress,
@@ -549,8 +551,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     const canBypassSourceSuppression =
                       suppressAutomaticSourceDelivery &&
                       isOperationalPayload &&
-                      (ctx.InboundEventKind !== "room_event" ||
-                        state.operationalReplyPolicy.policy !== "always");
+                      ctx.InboundEventKind !== "room_event";
                     if (suppressDelivery && (sendPolicyDenied || !canBypassSourceSuppression)) {
                       return;
                     }
@@ -661,6 +662,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   ttsChannel: deliveryChannel,
                   suppressUserDelivery: suppressHookUserDelivery,
                   suppressReplyLifecycle: suppressHookReplyLifecycle,
+                  suppressUserDeliveryBySourceReplyPolicy,
                   sourceReplyDeliveryMode,
                   shouldRouteToOriginating,
                   originatingChannel: routeReplyChannel,

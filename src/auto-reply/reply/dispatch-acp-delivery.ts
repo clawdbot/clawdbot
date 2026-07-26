@@ -27,7 +27,6 @@ import {
   applyOperationalReplyPolicy,
   isOperationalReplyPayload,
   markOperationalReplyPolicyDelivered,
-  resolveOperationalReplyPolicy,
 } from "./operational-reply-policy.js";
 import {
   captureReplyDispatchDeliveryOutcome,
@@ -501,8 +500,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         !params.sendPolicyDenied &&
         params.sourceReplyDeliveryMode === "message_tool_only" &&
         params.suppressUserDeliveryBySourceReplyPolicy === true &&
-        (params.ctx.InboundEventKind !== "room_event" ||
-          resolveOperationalReplyPolicy(params.cfg).policy !== "always");
+        params.ctx.InboundEventKind !== "room_event";
       if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
         return false;
       }

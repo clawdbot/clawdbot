@@ -80,6 +80,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     suppressDelivery,
     suppressHookReplyLifecycle,
     suppressHookUserDelivery,
+    suppressUserDeliveryBySourceReplyPolicy,
     traceReplyPhase,
     trackDispatchLifecycleWork,
   } = state;
@@ -456,6 +457,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   ttsChannel: deliveryChannel,
                   suppressUserDelivery: suppressHookUserDelivery,
                   suppressReplyLifecycle: suppressHookReplyLifecycle,
+                  suppressUserDeliveryBySourceReplyPolicy,
                   sourceReplyDeliveryMode,
                   shouldRouteToOriginating,
                   originatingChannel: routeReplyChannel,

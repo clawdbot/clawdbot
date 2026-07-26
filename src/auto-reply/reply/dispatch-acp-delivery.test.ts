@@ -827,6 +827,34 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
+  it("does not bypass independent ACP user-delivery suppression for operational notices", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig({
+        messages: { operationalReplies: { policy: "once" } },
+      }),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      suppressUserDelivery: true,
+      suppressUserDeliveryBySourceReplyPolicy: false,
+      shouldRouteToOriginating: false,
+    });
+
+    const delivered = await coordinator.deliver("final", {
+      text: "private operational notice",
+      isStatusNotice: true,
+    });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("does not silence visible bare ACP tool errors with operational reply policy", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({

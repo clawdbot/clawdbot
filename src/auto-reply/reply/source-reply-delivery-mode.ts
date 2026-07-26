@@ -123,6 +123,7 @@ type SourceReplyVisibilityPolicy = {
   suppressAutomaticSourceDelivery: boolean;
   suppressDelivery: boolean;
   suppressHookUserDelivery: boolean;
+  suppressUserDeliveryBySourceReplyPolicy: boolean;
   suppressHookReplyLifecycle: boolean;
   suppressTyping: boolean;
   deliverySuppressionReason: string;
@@ -175,6 +176,10 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     suppressHookUserDelivery: params.suppressAcpChildUserDelivery === true || suppressDelivery,
+    suppressUserDeliveryBySourceReplyPolicy:
+      suppressAutomaticSourceDelivery &&
+      !sendPolicyDenied &&
+      params.suppressAcpChildUserDelivery !== true,
     suppressHookReplyLifecycle:
       sendPolicyDenied ||
       params.suppressAcpChildUserDelivery === true ||

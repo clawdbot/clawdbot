@@ -122,9 +122,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !sendPolicyDenied &&
       (getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true ||
         operationalReply) &&
-      (ctx.InboundEventKind !== "room_event" ||
-        explicitCommandTurnCtx ||
-        (operationalReply && operationalReplyPolicy.policy !== "always"))
+      (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx)
     );
   };
   const sentFinalPayloadDedupeKeys = new Set<string>();

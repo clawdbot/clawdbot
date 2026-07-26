@@ -355,6 +355,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     sendPolicyDenied,
     deliverySuppressionReason,
     suppressHookUserDelivery,
+    suppressUserDeliveryBySourceReplyPolicy,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
   const reasoningPayloadsEnabled = params.replyOptions?.reasoningPayloadsEnabled === true;
@@ -556,6 +557,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       applyDispatchOperationalReplyPolicy,
       deliverySuppressionReason,
       suppressHookUserDelivery,
+      suppressUserDeliveryBySourceReplyPolicy,
       suppressHookReplyLifecycle,
       reasoningPayloadsEnabled,
       commentaryPayloadsEnabled,

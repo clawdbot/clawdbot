@@ -29,42 +29,48 @@ beforeAll(globalBeforeAll0);
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
   beforeEach(describe2BeforeEach0);
 
-  it("suppresses marked runtime failure notices for room events", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const failureNotice = setReplyPayloadMetadata(
-      { text: "⚠️ You've reached your Codex subscription usage limit." },
-      { deliverDespiteSourceReplySuppression: true },
-    );
-    const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      InboundEventKind: "room_event",
-      SessionKey: "test:session",
-    });
+  it.each(["always", "once"] as const)(
+    "suppresses marked runtime failure notices for room events under %s policy",
+    async (policy) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+      };
+      const dispatcher = createDispatcher();
+      const failureNotice = setReplyPayloadMetadata(
+        { text: "⚠️ You've reached your Codex subscription usage limit." },
+        { deliverDespiteSourceReplySuppression: true },
+      );
+      const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
+      const ctx = buildTestCtx({
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        SessionKey: "test:session",
+      });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+      const result = await dispatchReplyFromConfig({
+        ctx,
+        cfg: {
+          ...emptyConfig,
+          messages: { operationalReplies: { policy } },
+        },
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      });
 
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-  });
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(result.queuedFinal).toBe(false);
+      expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    },
+  );
 
   it("delivers marked explicit command terminal replies in room events (#87107)", async () => {
     setNoAbort();

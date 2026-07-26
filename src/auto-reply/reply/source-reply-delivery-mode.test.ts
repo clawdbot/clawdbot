@@ -449,6 +449,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         suppressAutomaticSourceDelivery: true,
         suppressDelivery: true,
         suppressHookUserDelivery: true,
+        suppressUserDeliveryBySourceReplyPolicy: true,
         suppressHookReplyLifecycle: false,
         suppressTyping: false,
         deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
@@ -534,6 +535,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         sendPolicyDenied: true,
         suppressDelivery: true,
         suppressHookUserDelivery: true,
+        suppressUserDeliveryBySourceReplyPolicy: false,
         suppressHookReplyLifecycle: true,
         suppressTyping: true,
         deliverySuppressionReason: "sendPolicy: deny",
@@ -571,11 +573,30 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         sourceReplyDeliveryMode: "automatic",
         suppressDelivery: false,
         suppressHookUserDelivery: true,
+        suppressUserDeliveryBySourceReplyPolicy: false,
         suppressHookReplyLifecycle: true,
         suppressTyping: false,
       },
     );
   });
+
+  it("does not call source policy the sole suppression for a message-tool-only ACP child", () => {
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        sendPolicy: "allow",
+        suppressAcpChildUserDelivery: true,
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressAutomaticSourceDelivery: true,
+        suppressHookUserDelivery: true,
+        suppressUserDeliveryBySourceReplyPolicy: false,
+      },
+    );
+  });
+
   it("falls back to automatic when message-tool-only delivery cannot use the message tool", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
