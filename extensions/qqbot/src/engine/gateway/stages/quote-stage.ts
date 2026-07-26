@@ -59,7 +59,6 @@ export async function resolveQuote(
       );
       return {
         id: event.refMsgIdx,
-        sender: refEntry.senderName ?? refEntry.senderId,
         isQuote: true,
       };
     }

@@ -344,7 +344,6 @@ describe("buildInboundContext bot self-echo suppression", () => {
 
     expect(inbound.replyTo).toStrictEqual({
       id: "REF_OTHER_BOT",
-      sender: "qq-other",
       isQuote: true,
     });
     expect(inbound.agentBody).toContain("Original content unavailable");
@@ -479,7 +478,6 @@ describe("buildInboundContext bot self-echo suppression", () => {
 
     expect(inbound.replyTo).toStrictEqual({
       id: "REF_NARROWED",
-      sender: "outsider-openid",
       isQuote: true,
     });
     expect(inbound.agentBody).toContain("Original content unavailable");
@@ -526,7 +524,6 @@ describe("buildInboundContext bot self-echo suppression", () => {
     );
     expect(inbound.replyTo).toStrictEqual({
       id: "REF_GROUP_NARROWED",
-      sender: "outsider-openid",
       isQuote: true,
     });
     expect(inbound.agentBody).toContain("Original content unavailable");
@@ -558,7 +555,6 @@ describe("buildInboundContext bot self-echo suppression", () => {
 
     expect(inbound.replyTo).toStrictEqual({
       id: "REF_OTHER",
-      sender: "outsider-openid",
       isQuote: true,
     });
     expect(inbound.agentBody).toContain("Original content unavailable");
