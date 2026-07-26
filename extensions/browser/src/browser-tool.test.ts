@@ -532,6 +532,7 @@ function nodeInvokeCall(callIndex: number): {
     nodeId?: string;
     command?: string;
     timeoutMs?: number;
+    idempotencyKey?: string;
     params?: {
       method?: string;
       path?: string;
@@ -542,7 +543,7 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   };
-  extra?: { scopes?: string[] };
+  extra?: { scopes?: string[]; signal?: AbortSignal };
 } {
   const toolName = mockCallArg<string>(gatewayMocks.callGatewayTool, callIndex, 0);
   const options = mockCallArg<{ timeoutMs?: number }>(gatewayMocks.callGatewayTool, callIndex, 1);
@@ -550,6 +551,7 @@ function nodeInvokeCall(callIndex: number): {
     nodeId?: string;
     command?: string;
     timeoutMs?: number;
+    idempotencyKey?: string;
     params?: {
       method?: string;
       path?: string;
@@ -559,7 +561,7 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   }>(gatewayMocks.callGatewayTool, callIndex, 2);
-  const extra = mockCallArg<{ scopes?: string[] } | undefined>(
+  const extra = mockCallArg<{ scopes?: string[]; signal?: AbortSignal } | undefined>(
     gatewayMocks.callGatewayTool,
     callIndex,
     3,
@@ -570,6 +572,50 @@ function nodeInvokeCall(callIndex: number): {
 
 function lastNodeInvokeCall(): ReturnType<typeof nodeInvokeCall> {
   return nodeInvokeCall(-1);
+}
+
+function blockBrowserNodeGateway(count = 1): () => void {
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  for (let index = 0; index < count; index += 1) {
+    gatewayMocks.callGatewayTool.mockImplementationOnce(
+      () =>
+        new Promise<Record<string, unknown>>((resolve, reject) => {
+          const { request, extra } = lastNodeInvokeCall();
+          const signal = extra?.signal;
+          const onAbort = () => {
+            const reason = signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("Browser tool cancelled"));
+          };
+          if (signal?.aborted) {
+            onAbort();
+            return;
+          }
+          signal?.addEventListener("abort", onAbort, { once: true });
+          void barrier.then(() => {
+            signal?.removeEventListener("abort", onAbort);
+            if (!signal?.aborted) {
+              resolve({
+                ok: true,
+                payload: {
+                  result: {
+                    ok: true,
+                    running: true,
+                    profile: request.params?.profile,
+                    path: "/tmp/test.png",
+                  },
+                },
+              });
+            }
+          });
+        }),
+    );
+  }
+
+  return release;
 }
 
 describe("browser tool output schema", () => {
@@ -673,7 +719,7 @@ describe("browser tool download actions", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(40_000);
+    expect(options.timeoutMs).toBe(45_000);
     expect(request.params?.path).toBe("/wait/download");
     expect(request.params?.timeoutMs).toBe(35_000);
     expect(request.params?.body).toEqual({
@@ -705,7 +751,7 @@ describe("browser tool download actions", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(130_000);
+    expect(options.timeoutMs).toBe(135_000);
     expect(request.params?.timeoutMs).toBe(125_000);
     expect(request.params?.path).toBe("/download");
     expect(request.params?.body).toMatchObject({ ref: "e12", path: "report.pdf" });
@@ -819,7 +865,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(50_000);
+    expect(options.timeoutMs).toBe(55_000);
     expect(request.params?.method).toBe("GET");
     expect(request.params?.path).toBe("/");
     expect(request.params?.profile).toBe("user");
@@ -980,8 +1026,8 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      // proxy adds a 5_000 ms slack on top of the per-request timeout.
-      expect.objectContaining({ timeoutMs: 7777 + 5_000 }),
+      // The Gateway watchdog must also outlive the separate node watchdog.
+      expect.objectContaining({ timeoutMs: 7777 + 10_000 }),
       expect.objectContaining({
         command: "browser.proxy",
         params: expect.objectContaining({
@@ -1102,13 +1148,106 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "status", target: "node" });
 
     const { options, request, extra } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(25_000);
+    expect(options.timeoutMs).toBe(30_000);
     expect(extra?.scopes).toEqual(["operator.admin"]);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.timeoutMs).toBe(20_000);
     expect(request.params?.errorEnvelope).toBe("browser-v1");
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: "status", path: "/" },
+    { action: "screenshot", path: "/screenshot" },
+  ])("cancels an actual blocked node-backed $action tool execution", async ({ action, path }) => {
+    mockSingleBrowserProxyNode();
+    const release = blockBrowserNodeGateway();
+    const controller = new AbortController();
+    const abortError = new Error(`${action} tool execution cancelled`);
+    const pending = createBrowserTool().execute!(
+      `cancel-node-${action}`,
+      { action, target: "node" },
+      controller.signal,
+    );
+
+    try {
+      await vi.waitFor(() => expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1));
+      const { request, extra } = lastNodeInvokeCall();
+      expect(request.params?.path).toBe(path);
+      expect(extra?.signal).toBe(controller.signal);
+      controller.abort(abortError);
+      await expect(pending).rejects.toBe(abortError);
+      expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
+  it("isolates one cancelled real Browser tool execution from nine blocked node sessions", async () => {
+    mockSingleBrowserProxyNode();
+    const release = blockBrowserNodeGateway(10);
+    const sessions = Array.from({ length: 10 }, (_, index) => ({
+      profile: `session-${index}`,
+      controller: new AbortController(),
+      tool: createBrowserTool(),
+    }));
+    const completed = new Set<string>();
+    const pending = sessions.map(({ profile, controller, tool }) =>
+      tool.execute!(
+        `browser-tool-${profile}`,
+        { action: "status", target: "node", profile },
+        controller.signal,
+      ).then((result) => {
+        completed.add(profile);
+        return result;
+      }),
+    );
+    const completion = Promise.allSettled(pending);
+    const cancelledSession = sessions.at(3);
+    const cancelledRun = pending.at(3);
+    if (!cancelledSession || !cancelledRun) {
+      release();
+      throw new Error("Expected a dedicated Browser tool cancellation session");
+    }
+    const abortError = new Error("Browser tool session-3 cancelled");
+
+    try {
+      await vi.waitFor(() => expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(10));
+      expect(completed.size).toBe(0);
+      const invocationIds = new Set<string>();
+      sessions.forEach(({ profile, controller }, index) => {
+        const { request, extra } = nodeInvokeCall(index);
+        expect(request.params?.path).toBe("/");
+        expect(request.params?.profile).toBe(profile);
+        expect(extra?.signal).toBe(controller.signal);
+        if (request.idempotencyKey) {
+          invocationIds.add(request.idempotencyKey);
+        }
+      });
+      expect(invocationIds.size).toBe(10);
+      cancelledSession.controller.abort(abortError);
+      await expect(cancelledRun).rejects.toBe(abortError);
+      expect(completed.size).toBe(0);
+      expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+
+    await expect(completion).resolves.toEqual(
+      sessions.map(({ profile }, index) =>
+        index === 3
+          ? { status: "rejected", reason: abortError }
+          : {
+              status: "fulfilled",
+              value: expect.objectContaining({
+                details: expect.objectContaining({ ok: true, profile }),
+              }),
+            },
+      ),
+    );
+    expect(completed.size).toBe(9);
+    expect(toolCommonMocks.fetchBrowserJson).not.toHaveBeenCalled();
   });
 
   it("falls back to the Gateway host when an auto-selected node has no browser host", async () => {
@@ -1420,7 +1559,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "doctor", target: "node" });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(25_000);
+    expect(options.timeoutMs).toBe(30_000);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.method).toBe("GET");
@@ -1667,7 +1806,7 @@ describe("browser tool snapshot maxChars", () => {
 
     const { options, request } = lastNodeInvokeCall();
     const body = request.params?.body as { targetId?: string; timeoutMs?: number } | undefined;
-    expect(options.timeoutMs).toBe(17_345);
+    expect(options.timeoutMs).toBe(22_345);
     expect(request.params?.method).toBe("POST");
     expect(request.params?.path).toBe("/screenshot");
     expect(request.params?.timeoutMs).toBe(12_345);
@@ -1692,7 +1831,7 @@ describe("browser tool snapshot maxChars", () => {
 
     const { options, request } = lastNodeInvokeCall();
     const body = request.params?.body as { timeoutMs?: number } | undefined;
-    expect(options.timeoutMs).toBe(25_000);
+    expect(options.timeoutMs).toBe(30_000);
     expect(request.params?.timeoutMs).toBe(20_000);
     expect(body?.timeoutMs).toBe(20_000);
   });
@@ -1728,11 +1867,11 @@ describe("browser tool snapshot maxChars", () => {
 
     expect((result?.details as { refsFallback?: string } | undefined)?.refsFallback).toBe("role");
     const firstCall = nodeInvokeCall(0);
-    expect(firstCall.options.timeoutMs).toBe(25_000);
+    expect(firstCall.options.timeoutMs).toBe(30_000);
     expect(firstCall.request.params?.path).toBe("/snapshot");
     expect(firstCall.request.params?.query?.refs).toBe("aria");
     const secondCall = nodeInvokeCall(1);
-    expect(secondCall.options.timeoutMs).toBe(25_000);
+    expect(secondCall.options.timeoutMs).toBe(30_000);
     expect(secondCall.request.params?.path).toBe("/snapshot");
     expect(secondCall.request.params?.query?.refs).toBe("role");
   });
@@ -1753,7 +1892,7 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(25_000);
+    expect(options.timeoutMs).toBe(30_000);
     expect(request.params?.timeoutMs).toBe(20_000);
   });
 
@@ -1778,7 +1917,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "status", profile: "user" });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(50_000);
+    expect(options.timeoutMs).toBe(55_000);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.profile).toBe("user");
@@ -1829,7 +1968,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(50_000);
+    expect(options.timeoutMs).toBe(55_000);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.profile).toBe("user");
@@ -1848,7 +1987,7 @@ describe("browser tool snapshot maxChars", () => {
     await tool.execute?.("call-1", { action: "status", profile: "user", node: "node-1" });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(50_000);
+    expect(options.timeoutMs).toBe(55_000);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.profile).toBe("user");
@@ -2515,7 +2654,7 @@ describe("browser tool act compatibility", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(75_000);
+    expect(options.timeoutMs).toBe(80_000);
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({
       kind: "wait",
@@ -2551,7 +2690,7 @@ describe("browser tool act compatibility", () => {
     const { options, request } = lastNodeInvokeCall();
     expect(request.params?.timeoutMs).toBe(95_000);
     expect(request.timeoutMs).toBe(100_000);
-    expect(options.timeoutMs).toBe(100_000);
+    expect(options.timeoutMs).toBe(105_000);
   });
 
   it("rejects fractional act request timeouts before node proxy calls", async () => {
