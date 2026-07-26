@@ -176,6 +176,37 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     }
   });
 
+  it("strips the pill to move + menu on widgets too narrow for the reservation", async () => {
+    const view = await mount();
+    view.snapshot = {
+      ...structuredClone(source),
+      widgets: [
+        {
+          ...source.widgets[0]!,
+          sizeW: 3,
+          title: "An extremely long widget title that wants the whole bar",
+          grantState: "granted",
+        },
+      ],
+    };
+    await view.updateComplete;
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    await cell?.updateComplete;
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+    // Below the 184px container threshold the display-only pieces disappear so
+    // the pill is the irreducible move + menu pair and the rest of the card
+    // stays widget-owned.
+    expect(widget!.getBoundingClientRect().width).toBeLessThan(184);
+    const title = bar!.querySelector<HTMLElement>(".board-widget__title");
+    const kind = bar!.querySelector<HTMLElement>(".board-widget__kind");
+    expect(getComputedStyle(title!).display).toBe("none");
+    expect(getComputedStyle(kind!).display).toBe("none");
+    expect(bar!.getBoundingClientRect().width).toBeLessThanOrEqual(76);
+  });
+
   it("keeps widget chrome visible while its menu is open", async () => {
     const view = await mount();
     const sink = focusSink();

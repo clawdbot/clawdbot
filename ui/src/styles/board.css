@@ -743,8 +743,11 @@ openclaw-workboard-mini-widget {
 
 @media (hover: hover) and (pointer: fine) {
   /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
-     pinned when interaction leaves the card bounds. */
+     pinned when interaction leaves the card bounds. Inline-size containment
+     lets the pill drop to its minimal form on narrow cards; grid tracks set
+     the card's width, so containment changes no layout. */
   .board-widget {
+    container-type: inline-size;
     grid-template-rows: minmax(0, 1fr);
   }
 
@@ -764,7 +767,8 @@ openclaw-workboard-mini-widget {
     /* Reserve a widget-owned top-right action region: the interactive pill may
        never stretch across the card, or it re-intercepts the exact corner this
        chrome exists to keep clickable. The 88px floor keeps the drag handle and
-       menu usable on very narrow widgets, trading reservation width there. */
+       menu usable on very narrow widgets; below 184px the container query strips
+       the pill to that irreducible pair so the reservation stays maximal. */
     max-width: max(88px, calc(100% - 96px));
     opacity: 0;
     padding: 0 5px;
@@ -792,6 +796,18 @@ openclaw-workboard-mini-widget {
   .board-widget__bar > .board-widget__capabilities {
     min-width: 0;
     overflow: hidden;
+  }
+
+  /* Below 184px the 96px reservation and the 88px pill cannot coexist, so the
+     pill sheds its display-only pieces and keeps just move + menu — the two
+     controls without which a widget cannot be managed. The card's aria-label
+     and the drag handle tooltip still carry the title. */
+  @container (max-width: 184px) {
+    .board-widget__bar > .board-widget__title,
+    .board-widget__bar > .board-widget__kind,
+    .board-widget__bar > .board-widget__capabilities {
+      display: none;
+    }
   }
 
   .board-widget__resize-handle {
