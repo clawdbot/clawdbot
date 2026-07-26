@@ -7,9 +7,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const { canonicalizeBase64 } = await import("@openclaw/media-core/base64");
+  return {
+    canonicalizeBase64,
+    transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
+  };
+});
 
 const {
   assertOkOrThrowProviderErrorMock,
@@ -345,6 +349,48 @@ describe("Google speech provider", () => {
 
     expect(requestSequence).toHaveBeenCalledTimes(2);
     expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+  });
+
+  it("rejects malformed base64 audio payloads instead of decoding corrupted PCM", async () => {
+    const malformedResponse = {
+      response: {
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "audio/L16;codec=pcm;rate=24000",
+                      data: "%%%not-base64!!",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    };
+    const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Hello from OpenClaw.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Google TTS response returned malformed base64 audio data");
+    // Payload decode failures reuse the existing retry-once framework.
+    expect(requestSequence).toHaveBeenCalledTimes(2);
   });
 
   it("retries once when Gemini TTS fetch aborts", async () => {
