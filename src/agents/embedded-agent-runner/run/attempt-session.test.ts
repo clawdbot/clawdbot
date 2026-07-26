@@ -202,6 +202,15 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
+    expect(hoisted.buildEmbeddedExtensionFactories).toHaveBeenCalledWith({
+      cfg: attempt.config,
+      sessionManager: fixture.input.sessionManager,
+      agentId: "agent-1",
+      provider: attempt.provider,
+      modelId: attempt.modelId,
+      model: attempt.model,
+      runId: attempt.runId,
+    });
     expect(hoisted.createAgentSessionForEmbeddedRunner).toHaveBeenCalledWith(
       expect.objectContaining({
         resourceLoader: fixture.resourceLoader,

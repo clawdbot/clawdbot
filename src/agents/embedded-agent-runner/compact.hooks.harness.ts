@@ -189,7 +189,7 @@ function createMockToolDefinitions(tools: unknown[] = []) {
   });
 }
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
-const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+export const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const guardSessionManagerMock = vi.fn(() => ({
   flushPendingToolResults: vi.fn(),
 }));

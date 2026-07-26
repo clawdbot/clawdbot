@@ -20,6 +20,7 @@ import {
   type PluginTypedHookPolicy,
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
@@ -209,9 +210,22 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
       try {
+        // Middleware can call agent-scoped runtime APIs. Bind the host-owned agent here and
+        // clear any ambient agent when absent so one run cannot read another agent's state.
         // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
         return await withTimeout(
-          Promise.resolve(handler(event, ctx)),
+          Promise.resolve(
+            withPluginRuntimePluginScope(
+              {
+                pluginId: record.id,
+                agentId: ctx.agentId ?? null,
+                pluginSource: record.source,
+                pluginOrigin: record.origin,
+                pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+              },
+              () => handler(event, ctx),
+            ),
+          ),
           timeoutMs ?? 0,
           `agent tool result middleware for ${record.id}`,
         );

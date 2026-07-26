@@ -174,6 +174,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        agentId: sessionAgentId,
         provider,
         modelId,
         model: effectiveModel,

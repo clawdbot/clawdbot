@@ -52,9 +52,13 @@ function snapshotToolSendReceipt(details: unknown): unknown {
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
+  agentId?: string,
   runId?: string,
 ): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
+  const runner = createAgentToolResultMiddlewareRunner({
+    runtime: "openclaw",
+    ...(agentId ? { agentId } : {}),
+  });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
       const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
@@ -174,6 +178,7 @@ function buildContextPruningFactory(params: {
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
+  agentId?: string;
   workspaceDir?: string;
   provider: string;
   modelId: string;
@@ -209,6 +214,8 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory(params.sessionManager, params.agentId, params.runId),
+  );
   return factories;
 }

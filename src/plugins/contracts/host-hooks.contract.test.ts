@@ -318,6 +318,55 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("runs tool-result middleware with the owning plugin and active agent scopes", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let observedScope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "usage-middleware",
+        name: "Usage Middleware",
+        origin: "bundled",
+        contracts: { agentToolResultMiddleware: ["openclaw"] },
+      }),
+      register(api) {
+        api.registerAgentToolResultMiddleware(
+          async (event) => {
+            await Promise.resolve();
+            observedScope = getPluginRuntimeGatewayRequestScope();
+            return { result: event.result };
+          },
+          { runtimes: ["openclaw"] },
+        );
+      },
+    });
+    const registration = registry.registry.agentToolResultMiddlewares[0];
+    expect(registration).toBeDefined();
+    if (!registration) {
+      throw new Error("expected tool-result middleware registration");
+    }
+
+    await withPluginRuntimePluginScope(
+      { pluginId: "ambient-plugin", agentId: "ambient-agent" },
+      async () =>
+        await registration.handler(
+          {
+            toolCallId: "call-1",
+            toolName: "read",
+            args: {},
+            result: { content: [{ type: "text", text: "ok" }], details: {} },
+          },
+          { runtime: "openclaw", agentId: "work" },
+        ),
+    );
+
+    expect(observedScope).toMatchObject({
+      pluginId: "usage-middleware",
+      agentId: "work",
+    });
+  });
+
   it("diagnoses malformed trusted policy registrations", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

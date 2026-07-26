@@ -92,6 +92,48 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(seenToolCallIds[0]).not.toBe(seenToolCallIds[1]);
   });
 
+  it("passes the embedded run agent identity to tool-result middleware", async () => {
+    let observedAgentId: string | undefined;
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "usage-reader",
+      pluginName: "usage-reader",
+      rawHandler: () => undefined,
+      handler: (_event, ctx) => {
+        observedAgentId = ctx.agentId;
+      },
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      agentId: "work",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    await handlers.get("tool_result")?.(
+      {
+        toolName: "read",
+        toolCallId: "call-1",
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(observedAgentId).toBe("work");
+  });
+
   it("finalizes terminal presentation from the post-middleware result", async () => {
     const registry = createEmptyPluginRegistry();
     const seenMiddlewareArgs: unknown[] = [];

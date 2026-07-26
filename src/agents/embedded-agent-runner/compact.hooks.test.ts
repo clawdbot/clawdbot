@@ -9,6 +9,7 @@ import {
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildAgentRuntimePlanMock,
+  buildEmbeddedExtensionFactoriesMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
   compactWithSafetyTimeoutMock,
@@ -813,6 +814,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           sessionKey: "agent:marketing-agent:session-1",
         }),
       }),
+    );
+    expect(buildEmbeddedExtensionFactoriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "marketing-agent" }),
     );
   });
 

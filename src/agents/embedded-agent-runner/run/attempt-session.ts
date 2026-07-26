@@ -76,6 +76,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const extensionFactories = buildEmbeddedExtensionFactories({
     cfg: attempt.config,
     sessionManager: input.sessionManager,
+    agentId: input.sessionAgentId,
     provider: attempt.provider,
     modelId: attempt.modelId,
     model: attempt.model,
