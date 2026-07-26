@@ -17,6 +17,7 @@ import { decodeBuzzPrivateKey, resolveBuzzAccount, resolveBuzzPublicKey } from "
 
 const channel = "buzz" as const;
 type BuzzSetupResult = Awaited<ReturnType<ChannelSetupWizardAdapter["configure"]>>;
+type BuzzSetupPrompter = Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
 
 type BuzzSetupDependencies = {
   discoverRooms?: typeof discoverBuzzRooms;
@@ -121,9 +122,10 @@ function resolvedCurrentKey(cfg: OpenClawConfig): string | undefined {
 
 async function promptPrivateKey(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
+  prompter: BuzzSetupPrompter;
   secretInputMode?: "plaintext" | "ref";
   generate: typeof generateSecretKey;
+  generatedPrivateKeys: WeakMap<BuzzSetupPrompter, string>;
   runSecretStep: typeof runSingleChannelSecretStep;
 }): Promise<{ cfg: OpenClawConfig; resolvedPrivateKey?: string }> {
   const hasExistingIdentity =
@@ -168,7 +170,13 @@ async function promptPrivateKey(params: {
     return { cfg: params.cfg, resolvedPrivateKey };
   }
   if (identityMode === "generate") {
-    const privateKey = nip19.nsecEncode(params.generate());
+    // Back navigation replays the full channel setup function. Keep one generated
+    // identity per wizard session so replay cannot invalidate already granted access.
+    let privateKey = params.generatedPrivateKeys.get(params.prompter);
+    if (!privateKey) {
+      privateKey = nip19.nsecEncode(params.generate());
+      params.generatedPrivateKeys.set(params.prompter, privateKey);
+    }
     return {
       cfg: patchBuzzConfig(params.cfg, { enabled: true, privateKey, authTag: undefined }),
       resolvedPrivateKey: privateKey,
@@ -280,6 +288,7 @@ export function createBuzzSetupWizard(
   const generate = dependencies.generateSecretKey ?? generateSecretKey;
   const runSecretStep = dependencies.runSecretStep ?? runSingleChannelSecretStep;
   const verifyAfterWrite = dependencies.verifyAfterWrite ?? verifyBuzzAfterSetup;
+  const generatedPrivateKeys = new WeakMap<BuzzSetupPrompter, string>();
 
   return {
     channel,
@@ -320,6 +329,7 @@ export function createBuzzSetupWizard(
         prompter,
         secretInputMode: options?.secretInputMode,
         generate,
+        generatedPrivateKeys,
         runSecretStep,
       });
       next = identity.cfg;
