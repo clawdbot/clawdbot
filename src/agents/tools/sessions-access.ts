@@ -28,8 +28,9 @@ export {
 } from "../../plugin-sdk/session-visibility.js";
 
 type GatewayCaller = typeof callGateway;
+type DescribedSessionVisibilityRow = SessionVisibilityRow & { sessionId?: string };
 
-function readSessionVisibilityRow(value: unknown): SessionVisibilityRow | undefined {
+function readSessionVisibilityRow(value: unknown): DescribedSessionVisibilityRow | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -40,6 +41,7 @@ function readSessionVisibilityRow(value: unknown): SessionVisibilityRow | undefi
   }
   return {
     key,
+    sessionId: normalizeOptionalString(row.sessionId),
     agentId: normalizeOptionalString(row.agentId),
     ownerSessionKey: normalizeOptionalString(row.ownerSessionKey),
     spawnedBy: normalizeOptionalString(row.spawnedBy),
@@ -93,7 +95,10 @@ export async function resolveDirectSessionVisibility(params: {
       });
       const row = readSessionVisibilityRow(result?.session);
       if (row?.key === params.targetSessionKey) {
-        return rowChecker.check(row);
+        const access = rowChecker.check(row);
+        return access.allowed && row.sessionId
+          ? { allowed: true, expectedSessionId: row.sessionId }
+          : access;
       }
     } catch {
       // Preserve compatibility with older or temporarily unavailable gateways.

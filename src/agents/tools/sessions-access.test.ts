@@ -551,6 +551,7 @@ describe("resolveDirectSessionVisibility", () => {
         return {
           session: {
             key: "agent:main:dashboard:old-child",
+            sessionId: "old-child-session",
             parentSessionKey: "agent:main:main",
             status: "done",
             endedAt: 1,
@@ -569,7 +570,10 @@ describe("resolveDirectSessionVisibility", () => {
       callGateway: callGateway as never,
     });
 
-    expect(access).toEqual({ allowed: true });
+    expect(access).toEqual({
+      allowed: true,
+      expectedSessionId: "old-child-session",
+    });
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.describe",
