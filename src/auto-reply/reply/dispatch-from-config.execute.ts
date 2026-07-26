@@ -334,7 +334,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    const policyResult = await applyDispatchOperationalReplyPolicy(deliveryPayload);
+                    const policyResult = shouldEvaluateOperationalPayload
+                      ? await applyDispatchOperationalReplyPolicy(deliveryPayload)
+                      : ({ shouldDeliver: true } as const);
                     if (!policyResult.shouldDeliver) {
                       return;
                     }

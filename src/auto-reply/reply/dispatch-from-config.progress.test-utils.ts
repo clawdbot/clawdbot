@@ -1281,7 +1281,10 @@ describe("dispatchReplyFromConfig", () => {
       sendPolicy: "allow",
       verboseLevel: "full",
     };
-    const cfg = emptyConfig;
+    const cfg = {
+      ...emptyConfig,
+      messages: { operationalReplies: { policy: "silent" } },
+    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
