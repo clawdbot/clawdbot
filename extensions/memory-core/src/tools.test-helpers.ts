@@ -52,12 +52,36 @@ export function createAutoCitationsMemorySearchTool(agentSessionKey: string) {
   });
 }
 
+export const MEMORY_SEARCH_TIMEOUT_WARNING =
+  "Memory search is unavailable because it timed out before completing; this can be local index maintenance rather than an embedding provider fault.";
+export const MEMORY_SEARCH_TIMEOUT_ACTION =
+  "Check memory index status (openclaw memory status --index) before retrying memory_search.";
+
+/**
+ * Diagnostics the memory_search tool attaches when it fails inside a run.
+ * Payloads built outside a run carry none of these.
+ */
+export function memorySearchFailureDebug(params?: {
+  timedOut?: boolean;
+  phase?: "memory" | "supplement";
+}): Record<string, unknown> {
+  return {
+    elapsedMs: expect.any(Number),
+    timedOut: params?.timedOut ?? false,
+    ...(params?.phase ? { phase: params.phase } : {}),
+  };
+}
+
 export function expectUnavailableMemorySearchDetails(
   details: unknown,
   params: {
     error: string;
     warning: string;
     action: string;
+    /** Failure diagnostics merged into `debug`; see `memorySearchFailureDebug`. */
+    debug?: Record<string, unknown>;
+    cached?: boolean;
+    cooldownRemainingMs?: number;
   },
 ) {
   expect(details).toEqual({
@@ -67,10 +91,15 @@ export function expectUnavailableMemorySearchDetails(
     error: params.error,
     warning: params.warning,
     action: params.action,
+    ...(params.cached === undefined ? {} : { cached: params.cached }),
+    ...(params.cooldownRemainingMs === undefined
+      ? {}
+      : { cooldownRemainingMs: params.cooldownRemainingMs }),
     debug: {
       warning: params.warning,
       action: params.action,
       error: params.error,
+      ...params.debug,
     },
   });
 }

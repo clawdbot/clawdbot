@@ -118,7 +118,7 @@ function resolveMemorySearchToolCooldownKey(options: {
   return options.agentId ?? options.agentSessionKey ?? "default";
 }
 
-function readMemorySearchToolCooldown(key: string): { error: string } | undefined {
+function readMemorySearchToolCooldown(key: string): { until: number; error: string } | undefined {
   const entry = memorySearchToolCooldowns.get(key);
   if (!entry) {
     return undefined;
@@ -127,7 +127,7 @@ function readMemorySearchToolCooldown(key: string): { error: string } | undefine
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
-  return { error: entry.error };
+  return { until: entry.until, error: entry.error };
 }
 
 function recordMemorySearchToolCooldown(key: string, error: string): void {
@@ -520,12 +520,21 @@ export function createMemorySearchTool(options: {
             parentSignal: callerSignal,
             run: task,
           });
+        const toolStartedAt = Date.now();
         const runMemorySearchTool = async () => {
-          const toolStartedAt = Date.now();
           const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
           const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
           if (cooldown && !shouldQuerySupplements) {
-            return jsonResult(buildMemorySearchUnavailableResult(cooldown.error));
+            const cooldownRemainingMs = Math.max(0, cooldown.until - Date.now());
+            return jsonResult(
+              buildMemorySearchUnavailableResult(cooldown.error, {
+                action: `Memory search is in a ${Math.ceil(cooldownRemainingMs / 1000)}s cooldown after a recent failure; do not retry memory_search until it expires.`,
+                diagnostics: {
+                  elapsedMs: Math.max(0, Date.now() - toolStartedAt),
+                  cooldownRemainingMs,
+                },
+              }),
+            );
           }
           const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
           const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
@@ -852,7 +861,14 @@ export function createMemorySearchTool(options: {
           if (shouldRecordCooldown) {
             recordMemorySearchToolCooldown(cooldownKey, message);
           }
-          return jsonResult(buildMemorySearchUnavailableResult(message));
+          return jsonResult(
+            buildMemorySearchUnavailableResult(message, {
+              diagnostics: {
+                elapsedMs: Math.max(0, Date.now() - toolStartedAt),
+                ...(unavailablePhase ? { phase: unavailablePhase } : {}),
+              },
+            }),
+          );
         }
       },
   });

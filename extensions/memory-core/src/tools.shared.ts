@@ -123,6 +123,18 @@ export function buildMemorySearchUnavailableResult(
   overrides?: {
     warning?: string;
     action?: string;
+    /**
+     * Measurements only the caller knows. Omitted when the payload is built
+     * outside a tool run, where no timing is knowable.
+     */
+    diagnostics?: {
+      /** Wall-clock ms this tool call spent before giving up. */
+      elapsedMs: number;
+      /** Tool stage the failure was attributed to, when one was active. */
+      phase?: "memory" | "supplement";
+      /** Time left on the cooldown window when this payload replays it. */
+      cooldownRemainingMs?: number;
+    };
   },
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
@@ -131,20 +143,29 @@ export function buildMemorySearchUnavailableResult(
   const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
     normalizedReason,
   );
+  // The search deadline also fires on local index maintenance, so a timeout is
+  // not evidence that the embedding provider misbehaved.
+  const isTimeout = normalizedReason.includes("timed out");
   const warning =
     overrides?.warning ??
     (isQuotaError
       ? "Memory search is unavailable because the embedding provider quota is exhausted."
       : isMissingNodeSqlite
         ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
-        : "Memory search is unavailable due to an embedding/provider error.");
+        : isTimeout
+          ? "Memory search is unavailable because it timed out before completing; this can be local index maintenance rather than an embedding provider fault."
+          : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
     (isQuotaError
       ? "Top up or switch embedding provider, then retry memory_search."
       : isMissingNodeSqlite
         ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
-        : "Check embedding provider configuration and retry memory_search.");
+        : isTimeout
+          ? "Check memory index status (openclaw memory status --index) before retrying memory_search."
+          : "Check embedding provider configuration and retry memory_search.");
+  const diagnostics = overrides?.diagnostics;
+  const cooldownRemainingMs = diagnostics?.cooldownRemainingMs;
   return {
     results: [],
     disabled: true,
@@ -152,10 +173,20 @@ export function buildMemorySearchUnavailableResult(
     error: reason,
     warning,
     action,
+    // A cooldown replay never reaches the index or the provider; without this
+    // marker it is indistinguishable from a fresh attempt.
+    ...(cooldownRemainingMs === undefined ? {} : { cached: true, cooldownRemainingMs }),
     debug: {
       warning,
       action,
       error: reason,
+      ...(diagnostics
+        ? {
+            elapsedMs: diagnostics.elapsedMs,
+            timedOut: isTimeout,
+            ...(diagnostics.phase ? { phase: diagnostics.phase } : {}),
+          }
+        : {}),
     },
   };
 }

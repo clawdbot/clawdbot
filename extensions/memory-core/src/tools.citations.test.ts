@@ -34,6 +34,9 @@ import {
   createMemoryGetToolOrThrow,
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
+  MEMORY_SEARCH_TIMEOUT_ACTION,
+  MEMORY_SEARCH_TIMEOUT_WARNING,
+  memorySearchFailureDebug,
 } from "./tools.test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
@@ -177,6 +180,7 @@ describe("memory tools", () => {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
+      debug: memorySearchFailureDebug({ phase: "memory" }),
     });
   });
 
@@ -644,8 +648,9 @@ describe("memory tools", () => {
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: MEMORY_SEARCH_TIMEOUT_WARNING,
+        action: MEMORY_SEARCH_TIMEOUT_ACTION,
+        debug: memorySearchFailureDebug({ timedOut: true, phase: "supplement" }),
       });
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
@@ -692,8 +697,9 @@ describe("memory tools", () => {
       const stalledAllResult = await stalledAllResultPromise;
       expectUnavailableMemorySearchDetails(stalledAllResult.details, {
         error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+        warning: MEMORY_SEARCH_TIMEOUT_WARNING,
+        action: MEMORY_SEARCH_TIMEOUT_ACTION,
+        debug: memorySearchFailureDebug({ timedOut: true, phase: "memory" }),
       });
 
       const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {
