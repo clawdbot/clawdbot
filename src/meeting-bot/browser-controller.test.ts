@@ -177,6 +177,80 @@ describe("meeting browser recovery", () => {
     expect(calls).toEqual(["GET /tabs"]);
   });
 
+  it("refuses untargeted recovery when the tracked target is stale and only an unrelated tab remains", async () => {
+    const calls: string[] = [];
+    const result = await recoverMeetingBrowserTab({
+      adapter: {
+        browserLabel: "Test meeting",
+        urls: {
+          accountHint: () => undefined,
+          buildJoinUrl: (session) => session.url,
+          isPreferredJoinUrl: () => true,
+          isRecoverableTab: () => true,
+          isSameMeeting: () => true,
+          localeAction: () => undefined,
+          normalizeForReuse: () => "test-meeting",
+          validateAndNormalize: (input) => String(input),
+        },
+        browser: {
+          allowsMicrophone: () => true,
+          browserControlUnavailable: () => ({
+            category: "browser-control-unavailable",
+            reason: "browser-unavailable",
+            message: "Browser unavailable.",
+          }),
+          buildLeaveScript: () => "",
+          buildStatusJoinScript: () => "() => '{}'",
+          captions: {
+            buildTranscriptScript: () => "",
+            enabled: () => true,
+            parseTranscript: () => ({ droppedLines: 0, lines: [] }),
+          },
+          classifyManualAction: () => undefined,
+          parseLeaveResult: () => ({ departed: false }),
+          parseStatus: () => ({ status: "browser-control", inCall: true }),
+          permissions: () => undefined,
+          permissionNotes: () => [],
+        },
+      },
+      callBrowser: async (request) => {
+        calls.push(`${request.method} ${request.path}`);
+        if (request.path === "/tabs") {
+          // The tracked target ("owned-meet-tab") is gone — only an unrelated
+          // meeting tab remains open in the shared profile.
+          return {
+            tabs: [
+              {
+                targetId: "unrelated-meet-tab",
+                url: "https://meet.google.com/hum-anpr-ivt",
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected browser call: ${request.method} ${request.path}`);
+      },
+      config: {
+        launch: true,
+        reuseExistingTab: true,
+        autoJoin: true,
+        guestName: "OpenClaw QA",
+        joinTimeoutMs: 2_000,
+        waitForInCallMs: 2_000,
+      },
+      locationLabel: "in local Chrome",
+      mode: "bidi",
+      requestedMeetingUrl: undefined,
+      trackedMeetingUrl: undefined,
+      trackedTargetId: "owned-meet-tab",
+    });
+
+    expect(result.found).toBe(false);
+    expect(result.message).toContain("No existing Test meeting tab found");
+    // Only tabs are listed — no focus, permission grant, or script dispatch on
+    // the unrelated tab.
+    expect(calls).toEqual(["GET /tabs"]);
+  });
+
   it("retries status inspection when auto-join navigation destroys the page context", async () => {
     const adoptionAttempts: boolean[] = [];
     let evaluationAttempts = 0;

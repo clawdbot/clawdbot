@@ -563,10 +563,13 @@ export async function recoverMeetingBrowserTab<
     (!trackedUrlHasMeetingIdentity || trackedUrlMatches)
       ? trackedCandidate
       : undefined;
-  // Untargeted recovery without a tracked target must not attach to a random
-  // meeting tab in a shared browser profile (mic + captions would arm on it).
-  const allowUntargetedEnumeration =
-    Boolean(params.requestedMeetingUrl) || Boolean(params.trackedTargetId);
+  // Untargeted recovery must not attach to a random meeting tab in a shared
+  // browser profile (mic + captions would arm on it). A tracked target is a
+  // constraint, not blanket authorization: when it resolves it is used above
+  // via `trackedTab`. A stale/absent tracked target (or one that now points at
+  // a different meeting) must NOT fall through to generic enumeration — only a
+  // requested meeting URL can license discovery of an untracked tab.
+  const allowUntargetedEnumeration = Boolean(params.requestedMeetingUrl);
   const tab =
     trackedTab ??
     (allowUntargetedEnumeration
