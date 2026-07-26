@@ -273,6 +273,27 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       expect(await page.locator(".chat-tasks-status__link").textContent()).toContain(
         "1 running task",
       );
+      const statusLink = page.locator(".chat-tasks-status__link");
+      await statusLink.hover();
+      const previewBody = page.locator(
+        "openclaw-tooltip.chat-tasks-status__preview wa-tooltip[open] .body",
+      );
+      await previewBody.waitFor({ state: "visible" });
+      const linkBox = await statusLink.boundingBox();
+      const previewBox = await previewBody.boundingBox();
+      expect(linkBox).not.toBeNull();
+      expect(previewBox).not.toBeNull();
+      if (!linkBox || !previewBox) {
+        throw new Error("expected running-task link and preview geometry");
+      }
+      const linkCenter = linkBox.x + linkBox.width / 2;
+      const previewCenter = previewBox.x + previewBox.width / 2;
+      expect(Math.abs(previewCenter - linkCenter)).toBeLessThanOrEqual(2);
+      expect(previewBox.y + previewBox.height).toBeLessThanOrEqual(linkBox.y);
+      await page.screenshot({
+        path: path.join(artifactDir, "05-running-task-popover-centered.png"),
+        fullPage: true,
+      });
 
       await page.getByRole("button", { name: "Show background tasks" }).click();
       const row = page.locator('[data-task-id="task-exec"]');
@@ -280,7 +301,7 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       expect(await row.textContent()).toContain("CLI command");
       expect(await row.textContent()).toContain("Command running");
       await page.screenshot({
-        path: path.join(artifactDir, "05-one-background-exec.png"),
+        path: path.join(artifactDir, "06-one-background-exec.png"),
         fullPage: true,
       });
     } finally {
