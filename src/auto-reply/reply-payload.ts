@@ -244,6 +244,8 @@ export type ReplyPayloadMetadata = {
    * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
+  /** Host-authored operational notice governed by messages.operationalReplies. */
+  operationalNotice?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for
@@ -306,7 +308,8 @@ export function isReplyPayloadOperationalNotice(
     payload.isFallbackNotice === true ||
     payload.isStatusNotice === true ||
     isFastModeAutoProgressPayload(payload) ||
-    isReplyPayloadNonTerminalToolErrorWarning(payload)
+    isReplyPayloadNonTerminalToolErrorWarning(payload) ||
+    getReplyPayloadMetadata(payload)?.operationalNotice === true
   );
 }
 
@@ -320,6 +323,16 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
+  });
+}
+
+/** Marks an internal notice for source-suppression bypass and operational policy. */
+export function markOperationalReplyPayloadForSourceSuppressionDelivery<T extends object>(
+  payload: T,
+): T {
+  return setReplyPayloadMetadata(payload, {
+    deliverDespiteSourceReplySuppression: true,
+    operationalNotice: true,
   });
 }
 

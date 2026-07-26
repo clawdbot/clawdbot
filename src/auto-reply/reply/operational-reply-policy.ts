@@ -78,11 +78,7 @@ export function isOperationalReplyPayload(params: {
   if (isReplyPayloadOperationalNotice(params.payload)) {
     return true;
   }
-  return (
-    metadata?.deliverDespiteSourceReplySuppression === true &&
-    !metadata.sourceReplyTranscriptMirror &&
-    !params.explicitCommandTurn
-  );
+  return false;
 }
 
 function resolveOperationalReplyKind(payload: ReplyPayload): string {
@@ -102,7 +98,7 @@ function resolveOperationalReplyKind(payload: ReplyPayload): string {
   if (metadata?.nonTerminalToolErrorWarning === true) {
     return "tool-warning";
   }
-  if (metadata?.deliverDespiteSourceReplySuppression === true) {
+  if (metadata?.operationalNotice === true) {
     return "runtime-notice";
   }
   return "notice";

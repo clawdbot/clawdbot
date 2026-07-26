@@ -112,6 +112,23 @@ describe("operational reply policy", () => {
     ).resolves.toMatchObject({ intentionalSilence: true, shouldDeliver: false });
   });
 
+  it("does not classify a generic source-suppression bypass as operational", async () => {
+    const payload = markReplyPayloadForSourceSuppressionDelivery({
+      text: "ordinary marked assistant reply",
+    });
+
+    expect(isOperationalReplyPayload({ payload, explicitCommandTurn: false })).toBe(false);
+    await expect(
+      applyOperationalReplyPolicy({
+        cfg: { messages: { operationalReplies: { policy: "silent" } } } as OpenClawConfig,
+        payload,
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceEventKey: "event-1",
+      }),
+    ).resolves.toMatchObject({ shouldDeliver: true });
+  });
+
   it("fails redirect before source suppression when no target is available", async () => {
     await expect(
       applyOperationalReplyPolicy({

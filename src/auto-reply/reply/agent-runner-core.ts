@@ -27,6 +27,7 @@ import { resolveFallbackTransition } from "../fallback-state.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   isReplyPayloadStatusNotice,
+  markOperationalReplyPayloadForSourceSuppressionDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -408,7 +409,7 @@ export async function handleReplyAgentRunError(
       return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
+      markOperationalReplyPayloadForSourceSuppressionDelivery({
         text: RESTART_LIFECYCLE_REPLY_TEXT,
       }),
     );
@@ -416,7 +417,7 @@ export async function handleReplyAgentRunError(
   if (error instanceof GatewayDrainingError) {
     replyOperation.fail("gateway_draining", error);
     return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
+      markOperationalReplyPayloadForSourceSuppressionDelivery({
         text: RESTART_LIFECYCLE_REPLY_TEXT,
       }),
     );
@@ -424,7 +425,7 @@ export async function handleReplyAgentRunError(
   if (error instanceof CommandLaneClearedError) {
     replyOperation.fail("command_lane_cleared", error);
     return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
+      markOperationalReplyPayloadForSourceSuppressionDelivery({
         text: RESTART_LIFECYCLE_REPLY_TEXT,
       }),
     );

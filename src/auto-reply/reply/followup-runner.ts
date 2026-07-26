@@ -58,6 +58,7 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  markOperationalReplyPayloadForSourceSuppressionDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -945,9 +946,10 @@ export function createFollowupRunner(params: {
           includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
         });
         if (preflightCompactionFailureText) {
-          const preflightCompactionFailurePayload = markReplyPayloadForSourceSuppressionDelivery({
-            text: preflightCompactionFailureText,
-          });
+          const preflightCompactionFailurePayload =
+            markOperationalReplyPayloadForSourceSuppressionDelivery({
+              text: preflightCompactionFailureText,
+            });
           if (!shouldEvaluateRoomEventOperationalPayload(preflightCompactionFailurePayload)) {
             logVerbose(
               "followup queue: preflight compaction failure notice suppressed for room_event",

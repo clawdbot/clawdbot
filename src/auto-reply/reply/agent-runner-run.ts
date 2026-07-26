@@ -18,7 +18,7 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import { markOperationalReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -513,7 +513,7 @@ export async function runReplyAgent(
       if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
         return undefined;
       }
-      return markReplyPayloadForSourceSuppressionDelivery({
+      return markOperationalReplyPayloadForSourceSuppressionDelivery({
         text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       });
     }
