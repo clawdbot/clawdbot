@@ -131,6 +131,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         enabled: account.enabled,
         baseUrl: account.relayUrl,
         publicKey: bus.publicKey,
+        lastError: null,
       });
       ctx.log?.info?.(
         `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${channelIds.length} channel(s)`,
