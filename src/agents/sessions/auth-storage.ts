@@ -25,10 +25,12 @@ import {
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
 import {
+  inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
 } from "../auth-profiles/sqlite.js";
+import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   saveAuthProfileStore,
@@ -141,19 +143,36 @@ function assertAuthStorageSecretRefsMaterialized(store: AuthProfileStore): void 
 
 function projectAuthoritativeAuthStorageData(
   store: AuthProfileStore,
-  runtimeStore: AuthProfileStore | undefined,
+  snapshots: readonly AuthProfileStore[],
 ): AuthStorageData {
-  if (!runtimeStore) {
+  if (snapshots.length === 0) {
     assertAuthStorageSecretRefsMaterialized(store);
     return projectAuthStorageData(store);
   }
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).map(([profileId, credential]) => {
-      const runtimeCredential = runtimeStore.profiles[profileId];
+      const runtimeCredential = snapshots
+        .map((snapshot) => snapshot.profiles[profileId])
+        .find((candidate) =>
+          credential.type === "api_key" && credential.keyRef
+            ? candidate?.type === "api_key" &&
+              Boolean(candidate.key) &&
+              candidate.provider === credential.provider &&
+              isDeepStrictEqual(candidate.keyRef, credential.keyRef)
+            : credential.type === "token" && credential.tokenRef
+              ? candidate?.type === "token" &&
+                Boolean(candidate.token) &&
+                candidate.provider === credential.provider &&
+                isDeepStrictEqual(candidate.tokenRef, credential.tokenRef)
+              : false,
+        );
       const needsMaterializedRef =
         (credential.type === "api_key" && Boolean(credential.keyRef)) ||
         (credential.type === "token" && Boolean(credential.tokenRef));
-      return [profileId, needsMaterializedRef ? (runtimeCredential ?? credential) : credential];
+      return [
+        profileId,
+        needsMaterializedRef && runtimeCredential ? runtimeCredential : credential,
+      ];
     }),
   );
   const materialized = { ...store, profiles };
@@ -211,13 +230,30 @@ function applyAuthStorageData(
   return { ...store, profiles };
 }
 
+function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
+  const referenced = new Set([
+    ...Object.values(store.order ?? {}).flat(),
+    ...Object.values(store.lastGood ?? {}),
+    ...Object.keys(store.usageStats ?? {}),
+  ]);
+  return [...referenced].filter((profileId) => !store.profiles[profileId]);
+}
+
 function loadSqliteAuthStorageStore(
   agentDir: string,
   database?: OpenClawAgentDatabase,
 ): AuthProfileStore {
   const inspection = inspectPersistedAuthProfileStoreRaw(agentDir, database);
   if (inspection.status === "missing") {
-    return { version: AUTH_STORE_VERSION, profiles: {} };
+    const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
+    if (stateInspection.status === "unreadable") {
+      throw new AuthProfileStoreUnreadableError(agentDir);
+    }
+    return {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+      ...loadPersistedAuthProfileState(agentDir, database),
+    };
   }
   const store = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
   if (inspection.status === "unreadable" || !store) {
@@ -229,8 +265,16 @@ function loadSqliteAuthStorageStore(
 class SqliteAuthStorageBackend implements AuthStorageBackend {
   constructor(
     private readonly agentDir: string,
-    private readonly preparedStore?: AuthProfileStore,
+    private preparedStore?: AuthProfileStore,
   ) {}
+
+  private resolveMaterializedRuntimeStores(): AuthProfileStore[] {
+    // A current lifecycle snapshot always wins. The prepared snapshot remains
+    // safe only while its SecretRefs still exactly match persisted rows.
+    return [getRuntimeAuthProfileStoreSnapshot(this.agentDir), this.preparedStore].filter(
+      (store): store is AuthProfileStore => store !== undefined,
+    );
+  }
 
   private readRaw(): AuthProfileStore {
     assertAuthProfileMigrationReady(this.agentDir);
@@ -239,10 +283,10 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     assertAuthProfileMigrationReady(this.agentDir);
-    const runtimeStore = this.preparedStore ?? getRuntimeAuthProfileStoreSnapshot(this.agentDir);
+    const snapshots = this.resolveMaterializedRuntimeStores();
     return runAuthProfileWriteTransaction(this.agentDir, (database) => {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
-      const materializedData = projectAuthoritativeAuthStorageData(store, runtimeStore);
+      const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
       const { result, next } = fn(JSON.stringify(materializedData));
       if (next !== undefined) {
         saveAuthProfileStore(
@@ -250,6 +294,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
           this.agentDir,
           {
             filterExternalAuthProfiles: false,
+            preserveStateProfileIds: collectStateOnlyAuthProfileIds(store),
             syncExternalCli: false,
           },
           database,
@@ -268,7 +313,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
         const initialRaw = this.readRaw();
         const initialData = projectAuthoritativeAuthStorageData(
           initialRaw,
-          this.preparedStore ?? getRuntimeAuthProfileStoreSnapshot(this.agentDir),
+          this.resolveMaterializedRuntimeStores(),
         );
         const { result, next } = await fn(JSON.stringify(initialData));
         if (next === undefined) {
@@ -285,7 +330,11 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
           saveAuthProfileStore(
             applyAuthStorageData(authoritative, JSON.parse(next) as AuthStorageData, initialData),
             this.agentDir,
-            { filterExternalAuthProfiles: false, syncExternalCli: false },
+            {
+              filterExternalAuthProfiles: false,
+              preserveStateProfileIds: collectStateOnlyAuthProfileIds(authoritative),
+              syncExternalCli: false,
+            },
             database,
           );
         });

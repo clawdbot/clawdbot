@@ -12,6 +12,7 @@ import {
 } from "../auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../auth-profiles/sqlite.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
@@ -247,6 +248,85 @@ describe("SQLite auth storage", () => {
       (readPersistedAuthProfileStoreRaw(agentDir) as { profiles: Record<string, unknown> })
         .profiles["openai:default"],
     ).toBeUndefined();
+  });
+
+  it("does not reuse a materialized value after its persisted SecretRef changes", async () => {
+    const agentDir = makeAgentDir();
+    const originalRef = { source: "env" as const, provider: "default", id: "QA_AUTH_REF_OLD" };
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", keyRef: originalRef },
+        },
+      },
+      agentDir,
+    );
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              keyRef: originalRef,
+              key: "not-a-real",
+            },
+          },
+        },
+      },
+    ]);
+    const storage = AuthStorage.forAgent(agentDir);
+    expect(await storage.getApiKey("openai")).toBe("not-a-real");
+
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "QA_AUTH_REF_NEW" },
+          },
+        },
+      },
+      agentDir,
+    );
+    clearRuntimeAuthProfileStoreSnapshots();
+    storage.reload();
+
+    await expect(storage.getApiKey("openai")).rejects.toThrow(
+      "requires the active secrets runtime to materialize SecretRef credentials",
+    );
+  });
+
+  it("preserves state-only SQLite rows when adding credentials", () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStateRaw(
+      {
+        version: 1,
+        order: { openai: ["openai:default"] },
+        lastGood: { openai: "openai:default" },
+        usageStats: { "openai:default": { cooldownUntil: 1_900_000_000_000 } },
+      },
+      agentDir,
+    );
+
+    AuthStorage.forAgent(agentDir).set("anthropic", {
+      type: "api_key",
+      key: "not-a-real",
+    });
+
+    expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject({
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic" },
+      },
+      order: { openai: ["openai:default"] },
+      lastGood: { openai: "openai:default" },
+      usageStats: { "openai:default": { cooldownUntil: 1_900_000_000_000 } },
+    });
   });
 
   it("fails closed before environment fallback when legacy credentials are pending", () => {
