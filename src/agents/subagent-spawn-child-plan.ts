@@ -45,7 +45,7 @@ type ResolvedSubagentChildPlan = {
   resolvedModelMetadata: ReturnType<typeof buildResolvedSubagentModelMetadata>;
 };
 
-export type ResolveSubagentChildPlanResult =
+type ResolveSubagentChildPlanResult =
   | { ok: false; result: SpawnSubagentResult }
   | { ok: true; resolved: ResolvedSubagentChildPlan };
 

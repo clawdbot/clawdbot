@@ -11,7 +11,7 @@ import {
   resolveContextEngine,
 } from "./subagent-spawn.runtime.js";
 
-export type SubagentSpawnDeps = {
+type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   forkSessionEntryFromParent: typeof forkSessionEntryFromParent;

@@ -13,9 +13,7 @@ import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveGatewaySessionStoreTarget, upsertSessionEntry } from "./subagent-spawn.runtime.js";
 
-export function buildDirectChildSessionPatch(
-  patch: Record<string, unknown>,
-): Partial<SessionEntry> {
+function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
   const entry: Partial<SessionEntry> = {};
   const spawnDepth = patch.spawnDepth;
   if (typeof spawnDepth === "number" && Number.isFinite(spawnDepth) && spawnDepth >= 0) {

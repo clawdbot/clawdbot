@@ -55,7 +55,7 @@ type ResolvedSubagentSpawnRequest = {
   childIdem: string;
 };
 
-export type ResolveSubagentSpawnRequestResult =
+type ResolveSubagentSpawnRequestResult =
   | { ok: false; result: SpawnSubagentResult }
   | { ok: true; resolved: ResolvedSubagentSpawnRequest };
 

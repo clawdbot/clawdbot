@@ -8,7 +8,7 @@ import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
 
-export type PreparedSpawnContext =
+type PreparedSpawnContext =
   | {
       status: "ok";
       mode: "isolated";
