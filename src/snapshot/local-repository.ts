@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   ensureDurableDirectory,
@@ -24,6 +23,11 @@ import {
   isPathInside,
 } from "../infra/fs-safe.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readOwnerAndDacl,
+  type OwnerAndDaclResult,
+  type WindowsAccessControlEntry,
+} from "../infra/permissions.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -89,46 +93,6 @@ const MACOS_REPLACEMENT_ACL_PERMISSIONS = new Set([
   "delete_child",
   "writesecurity",
 ]);
-const WINDOWS_STAGING_ACCESS_RIGHTS = new Set([
-  "F",
-  "M",
-  "RX",
-  "R",
-  "W",
-  "D",
-  "DE",
-  "RC",
-  "WDAC",
-  "WO",
-  "AS",
-  "MA",
-  "GR",
-  "GW",
-  "GE",
-  "GA",
-  "RD",
-  "WD",
-  "AD",
-  "REA",
-  "WEA",
-  "X",
-  "DC",
-  "RA",
-  "WA",
-  "UNKNOWN",
-]);
-const WINDOWS_STAGING_REPLACEMENT_RIGHTS = new Set([
-  "F",
-  "M",
-  "D",
-  "DE",
-  "WDAC",
-  "WO",
-  "MA",
-  "GA",
-  "DC",
-  "UNKNOWN",
-]);
 const WINDOWS_TRUSTED_OWNER_SIDS = new Set([
   "S-1-5-18", // LocalSystem
   "S-1-5-32-544", // Builtin Administrators
@@ -138,90 +102,10 @@ const WINDOWS_TRUSTED_ACCESS_SIDS = new Set([
   ...WINDOWS_TRUSTED_OWNER_SIDS,
   "S-1-3-0", // Creator Owner resolves to the trusted creator on inherited ACEs.
 ]);
-// Windows descriptors can approach 64 KiB each; batched JSON and base64 need
-// bounded aggregate headroom across every ancestor.
-const WINDOWS_ACL_METADATA_MAX_BUFFER = 16 * 1024 * 1024;
-const WINDOWS_SID_PATTERN = /^S-\d+-\d+(?:-\d+)+$/iu;
-const WINDOWS_SID_SCHEMA = z
-  .string()
-  .regex(WINDOWS_SID_PATTERN)
-  .transform((value) => value.toUpperCase());
-const WINDOWS_PRINCIPAL_SCHEMA = z
-  .string()
-  .min(1)
-  .transform((value) => value.toUpperCase());
-const WINDOWS_ACCESS_ENTRY_SCHEMA = z
-  .object({
-    principal: WINDOWS_PRINCIPAL_SCHEMA,
-    accessType: z.enum(["Allow", "Deny"]),
-    rightsMask: z.number().int().nonnegative().max(0xffffffff),
-    inheritanceFlags: z.string(),
-    propagationFlags: z.string(),
-  })
-  .strict();
-const WINDOWS_PATH_SECURITY_SCHEMA = z
-  .object({
-    currentUserSid: WINDOWS_SID_SCHEMA,
-    paths: z
-      .array(
-        z
-          .object({
-            path: z.string().min(1),
-            ownerSid: WINDOWS_SID_SCHEMA,
-            entries: z.array(WINDOWS_ACCESS_ENTRY_SCHEMA).min(1),
-          })
-          .strict(),
-      )
-      .min(1),
-  })
-  .strict();
-const WINDOWS_FILE_RIGHTS = [
-  [0x000001, "RD"],
-  [0x000002, "WD"],
-  [0x000004, "AD"],
-  [0x000008, "REA"],
-  [0x000010, "WEA"],
-  [0x000020, "X"],
-  [0x000040, "DC"],
-  [0x000080, "RA"],
-  [0x000100, "WA"],
-  [0x010000, "D"],
-  [0x020000, "RC"],
-  [0x040000, "WDAC"],
-  [0x080000, "WO"],
-  [0x100000, "S"],
-  [0x02000000, "MA"],
-  [0x10000000, "GA"],
-  [0x20000000, "GE"],
-  [0x40000000, "GW"],
-  [0x80000000, "GR"],
-] as const;
-const WINDOWS_KNOWN_FILE_RIGHTS_MASK = WINDOWS_FILE_RIGHTS.reduce(
-  (mask, [right]) => mask | right,
-  0,
-);
-const WINDOWS_READ_RIGHTS_MASK =
-  0x000001 | 0x000008 | 0x000020 | 0x000080 | 0x020000 | 0x10000000 | 0x20000000 | 0x80000000;
-const WINDOWS_WRITE_RIGHTS_MASK =
-  0x000002 |
-  0x000004 |
-  0x000010 |
-  0x000040 |
-  0x000100 |
-  0x010000 |
-  0x040000 |
-  0x080000 |
-  0x10000000 |
-  0x40000000;
+const WINDOWS_KNOWN_FILE_RIGHTS_MASK = 0xf21f01ff;
+const WINDOWS_SYNCHRONIZE_RIGHT = 0x00100000;
+const WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK = 0x120d0040;
 let macosTrustedAclPrincipalsPromise: Promise<ReadonlySet<string>> | undefined;
-
-type WindowsAclEntry = {
-  readonly principal: string;
-  readonly rights: string[];
-  readonly rawRights: string;
-  readonly canRead: boolean;
-  readonly canWrite: boolean;
-};
 
 type LocalSqliteSnapshotProviderOptions = {
   readonly allowedDatabaseRoles?: readonly SnapshotDatabaseIdentity["role"][];
@@ -1449,135 +1333,78 @@ async function assertTrustedWindowsStagingPath(rootPath: string): Promise<void> 
     }
     currentPath = parentPath;
   }
-  let security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>;
-  try {
-    security = await inspectWindowsPathSecurity(paths);
-  } catch {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
-  }
-  if (security.paths.length !== paths.length) {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
-  }
+  let expectedCurrentUserSid: string | undefined;
   for (const [index, pathname] of paths.entries()) {
-    const pathSecurity = security.paths[index];
-    if (!pathSecurity || path.resolve(pathSecurity.path) !== path.resolve(pathname)) {
+    let security: OwnerAndDaclResult;
+    try {
+      security = readOwnerAndDacl(pathname);
+    } catch {
       throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
     }
-    assertTrustedWindowsAcl(pathname, index === 0, security.currentUserSid, pathSecurity);
+    if (
+      security.status !== "supported" ||
+      !security.complete ||
+      security.unsupportedAceTypes.length > 0
+    ) {
+      throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
+    }
+    const currentUserSid = normalizeWindowsSid(security.currentUserSid);
+    if (expectedCurrentUserSid && currentUserSid !== expectedCurrentUserSid) {
+      throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
+    }
+    expectedCurrentUserSid = currentUserSid;
+    assertTrustedWindowsAcl(pathname, index === 0, currentUserSid, security);
   }
 }
 
-function assertTrustedWindowsAcl(
+type SupportedOwnerAndDaclResult = Extract<OwnerAndDaclResult, { status: "supported" }>;
+
+function normalizeWindowsSid(value: string): string {
+  return value.toUpperCase();
+}
+
+export function assertTrustedWindowsAcl(
   pathname: string,
   requirePrivate: boolean,
   currentUserSid: string,
-  security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>["paths"][number],
+  security: SupportedOwnerAndDaclResult,
 ): void {
-  if (security.ownerSid !== currentUserSid && !WINDOWS_TRUSTED_OWNER_SIDS.has(security.ownerSid)) {
+  const ownerSid = normalizeWindowsSid(security.ownerSid);
+  if (ownerSid !== currentUserSid && !WINDOWS_TRUSTED_OWNER_SIDS.has(ownerSid)) {
     throw new Error(`Windows staging path is owned by an untrusted principal: ${pathname}`);
   }
-  const allowedEntries = security.entries.filter((entry) => entry.accessType === "Allow");
+  const allowedEntries = security.aces.filter((entry) => entry.aceType === "allow");
   if (allowedEntries.length === 0) {
     throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
   }
   const unsafeEntries = allowedEntries
     .filter(
       (entry) =>
-        entry.principal !== currentUserSid && !WINDOWS_TRUSTED_ACCESS_SIDS.has(entry.principal),
+        normalizeWindowsSid(entry.sid) !== currentUserSid &&
+        !WINDOWS_TRUSTED_ACCESS_SIDS.has(normalizeWindowsSid(entry.sid)),
     )
-    .map(windowsSecurityEntryToAclEntry)
     .filter((entry) => windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate));
   if (unsafeEntries.length > 0) {
     throw new Error(`Windows ACL permits untrusted SQLite staging access: ${pathname}`);
   }
 }
 
-function windowsSecurityEntryToAclEntry(
-  entry: z.infer<typeof WINDOWS_ACCESS_ENTRY_SCHEMA>,
-): WindowsAclEntry {
-  const rights: string[] = WINDOWS_FILE_RIGHTS.filter(
-    ([right]) => (entry.rightsMask & right) !== 0,
-  ).map(([, name]) => name);
-  if ((entry.rightsMask & ~WINDOWS_KNOWN_FILE_RIGHTS_MASK) !== 0) {
-    rights.push("UNKNOWN");
-  }
-  const inheritanceFlags = new Set(entry.inheritanceFlags.split(",").map((flag) => flag.trim()));
-  const propagationFlags = new Set(entry.propagationFlags.split(",").map((flag) => flag.trim()));
-  const rawFlags = [
-    inheritanceFlags.has("ObjectInherit") ? "(OI)" : "",
-    inheritanceFlags.has("ContainerInherit") ? "(CI)" : "",
-    propagationFlags.has("NoPropagateInherit") ? "(NP)" : "",
-    propagationFlags.has("InheritOnly") ? "(IO)" : "",
-  ].join("");
-  return {
-    principal: entry.principal,
-    rights,
-    rawRights: `${rawFlags}(${rights.join(",")})`,
-    canRead: (entry.rightsMask & WINDOWS_READ_RIGHTS_MASK) !== 0,
-    canWrite: (entry.rightsMask & WINDOWS_WRITE_RIGHTS_MASK) !== 0,
-  };
-}
-
 function windowsAclEntryPermitsUnsafeStagingAccess(
-  entry: WindowsAclEntry,
+  entry: WindowsAccessControlEntry,
   requirePrivate: boolean,
 ): boolean {
   // Inherit-only ACEs on ordinary ancestors are covered when the protected
   // root is inspected. Private roots must also reject rights inherited by files.
-  if (!requirePrivate && /\(IO\)/iu.test(entry.rawRights)) {
+  if (!requirePrivate && entry.flags.inheritOnly) {
     return false;
   }
-  const rights = entry.rights.map((right) => right.toUpperCase());
-  const unsafeRights = requirePrivate
-    ? WINDOWS_STAGING_ACCESS_RIGHTS
-    : WINDOWS_STAGING_REPLACEMENT_RIGHTS;
+  if (requirePrivate) {
+    return (entry.mask & ~WINDOWS_SYNCHRONIZE_RIGHT) >>> 0 !== 0;
+  }
   return (
-    (requirePrivate && (entry.canWrite || entry.canRead)) ||
-    rights.some((right) => unsafeRights.has(right))
+    (entry.mask & WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK) !== 0 ||
+    (entry.mask & ~WINDOWS_KNOWN_FILE_RIGHTS_MASK) >>> 0 !== 0
   );
-}
-
-async function inspectWindowsPathSecurity(
-  pathnames: readonly string[],
-): Promise<z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>> {
-  const encodedPaths = Buffer.from(JSON.stringify(pathnames), "utf8").toString("base64");
-  const command = [
-    "$ErrorActionPreference = 'Stop'",
-    `$paths = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPaths}')))`,
-    "$pathSecurity = @($paths | ForEach-Object { $path = [string]$_; $acl = Get-Acl -LiteralPath $path; $entries = @($acl.Access | ForEach-Object { $identity = $_.IdentityReference; try { $principal = $identity.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $principal = [string]$identity.Value }; $rightsMask = ([int64][int32]$_.FileSystemRights) -band 0xffffffffL; [pscustomobject]@{ principal = $principal; accessType = [string]$_.AccessControlType; rightsMask = $rightsMask; inheritanceFlags = [string]$_.InheritanceFlags; propagationFlags = [string]$_.PropagationFlags } }); [pscustomobject]@{ path = $path; ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; entries = $entries } })",
-    "$payload = [pscustomobject]@{ currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; paths = $pathSecurity }",
-    "$json = ConvertTo-Json -InputObject $payload -Compress -Depth 4",
-    "[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))",
-  ].join("; ");
-  const stdout = await runEncodedWindowsPowerShell(command, WINDOWS_ACL_METADATA_MAX_BUFFER);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(stdout.trim(), "base64").toString("utf8"));
-  } catch (error) {
-    throw new Error("Unable to parse Windows ACL metadata.", { cause: error });
-  }
-  const result = WINDOWS_PATH_SECURITY_SCHEMA.safeParse(parsed);
-  if (!result.success) {
-    throw new Error("Invalid Windows ACL metadata.", { cause: result.error });
-  }
-  return result.data;
-}
-
-async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): Promise<string> {
-  const powershell = resolveSystemBin("powershell");
-  if (!powershell) {
-    throw new Error("Unable to resolve PowerShell for Windows SQLite path security.");
-  }
-  const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
-  const { stdout } = await runExec(
-    powershell,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
-    {
-      timeoutMs: 10_000,
-      maxBuffer,
-    },
-  );
-  return stdout;
 }
 
 async function removePublishedSnapshotDirectoryIfOwned(
