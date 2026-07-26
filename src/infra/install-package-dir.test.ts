@@ -57,10 +57,6 @@ function normalizeComparablePath(filePath: string): string {
   return path.join(comparableParent, basename);
 }
 
-function createFsError(code: string, message = code): NodeJS.ErrnoException {
-  return Object.assign(new Error(message), { code });
-}
-
 async function expectMissingPath(filePath: string): Promise<void> {
   try {
     await fs.stat(filePath);

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
