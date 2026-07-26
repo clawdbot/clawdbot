@@ -320,6 +320,89 @@ describe("gateway config methods", () => {
     requireConfigObject(res.payload?.config, "updated config");
   });
 
+  it("rejects config.set when a stale snapshot drops an agent entry without changing disk", async () => {
+    const { resetConfigRuntimeState } = await import("../config/config.js");
+    const original = await getCurrentConfigObject();
+    const rosterConfig = structuredClone(original.config);
+    const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
+    rosterConfig.agents = {
+      ...agents,
+      entries: {
+        main: { default: true },
+        worker: { workspace: "/srv/worker" },
+      },
+    };
+    delete (rosterConfig.agents as Record<string, unknown>).list;
+
+    try {
+      await writeJsonFile(original.path, rosterConfig);
+      resetConfigRuntimeState();
+      const current = await getCurrentConfigObject();
+      const staleConfig = structuredClone(current.config);
+      const staleAgents = requireConfigObject(staleConfig.agents, "stale agents config");
+      const staleEntries = requireConfigObject(staleAgents.entries, "stale agent entries");
+      delete staleEntries.worker;
+      const before = await fs.readFile(original.path, "utf-8");
+
+      const res = await sendConfigSet(configRawPayload(staleConfig, current.hash));
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("INVALID_REQUEST");
+      expect(res.error?.message ?? "").toContain("worker");
+      expect(res.error?.message ?? "").toContain("agents.delete RPC");
+      expect(res.error?.message ?? "").toContain("openclaw agents delete");
+      await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(before);
+    } finally {
+      await restoreConfigFileForTest(original);
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("accepts config.set when the submitted roster keeps every agent entry", async () => {
+    const { resetConfigRuntimeState } = await import("../config/config.js");
+    const original = await getCurrentConfigObject();
+    const rosterConfig = structuredClone(original.config);
+    const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
+    rosterConfig.agents = {
+      ...agents,
+      entries: {
+        main: { default: true },
+        Worker: { workspace: "/srv/worker" },
+      },
+    };
+    delete (rosterConfig.agents as Record<string, unknown>).list;
+
+    try {
+      await writeJsonFile(original.path, rosterConfig);
+      resetConfigRuntimeState();
+      const current = await getCurrentConfigObject();
+      const submittedConfig = structuredClone(current.config);
+      const submittedAgents = requireConfigObject(
+        submittedConfig.agents,
+        "submitted agents config",
+      );
+      const submittedEntries = requireConfigObject(
+        submittedAgents.entries,
+        "submitted agent entries",
+      );
+      const worker = submittedEntries.Worker ?? submittedEntries.worker;
+      delete submittedEntries.Worker;
+      submittedEntries.worker = worker;
+
+      const res = await sendConfigSet(configRawPayload(submittedConfig, current.hash));
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = JSON.parse(await fs.readFile(original.path, "utf-8")) as {
+        agents?: { entries?: Record<string, unknown> };
+      };
+      expect(Object.keys(persisted.agents?.entries ?? {}).toSorted()).toEqual(["main", "worker"]);
+    } finally {
+      await restoreConfigFileForTest(original);
+      resetConfigRuntimeState();
+    }
+  });
+
   it("returns the persisted config from config.set responses", async () => {
     const current = await getCurrentConfigObject();
     const nextConfig = structuredClone(current.config);

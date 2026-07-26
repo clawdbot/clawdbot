@@ -332,7 +332,7 @@ export type AgentDefaultsConfig = {
   systemAgent?: {
     agentId?: string;
   };
-  /** Max concurrent agent runs across all conversations. Default: 4. */
+  /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {

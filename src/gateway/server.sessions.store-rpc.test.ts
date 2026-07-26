@@ -753,29 +753,34 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(organized.payload?.entry.category).toBe("Travel");
 
     // Patched categories are absorbed into the gateway group catalog.
-    const groupsAfterPatch = await rpcReq<{ groups: Array<{ name: string; position: number }> }>(
-      ws,
-      "sessions.groups.list",
-      {},
-    );
+    const groupsAfterPatch = await rpcReq<{
+      groups: Array<{ name: string; position: number }>;
+      sectionOrder: string[];
+    }>(ws, "sessions.groups.list", {});
     expect(groupsAfterPatch.ok).toBe(true);
     expect(groupsAfterPatch.payload?.groups).toContainEqual({ name: "Travel", position: 0 });
+    expect(groupsAfterPatch.payload?.sectionOrder).toEqual([]);
 
-    const reordered = await rpcReq<{ ok: true; groups: Array<{ name: string }> }>(
-      ws,
-      "sessions.groups.put",
-      { names: ["Someday", "Travel"] },
-    );
+    const reordered = await rpcReq<{
+      ok: true;
+      groups: Array<{ name: string }>;
+      sectionOrder: string[];
+    }>(ws, "sessions.groups.put", {
+      names: ["Someday", "Travel"],
+      sectionOrder: ["work", "category:Travel", "category:Missing", "ungrouped"],
+    });
     expect(reordered.ok).toBe(true);
     expect(reordered.payload?.groups.map((group) => group.name)).toEqual(["Someday", "Travel"]);
+    expect(reordered.payload?.sectionOrder).toEqual(["work", "category:Travel", "ungrouped"]);
 
-    const renamedGroup = await rpcReq<{ ok: true; updatedSessions?: number }>(
-      ws,
-      "sessions.groups.rename",
-      { name: "Travel", to: "Trips" },
-    );
+    const renamedGroup = await rpcReq<{
+      ok: true;
+      sectionOrder: string[];
+      updatedSessions?: number;
+    }>(ws, "sessions.groups.rename", { name: "Travel", to: "Trips" });
     expect(renamedGroup.ok).toBe(true);
     expect(renamedGroup.payload?.updatedSessions).toBe(1);
+    expect(renamedGroup.payload?.sectionOrder).toEqual(["work", "category:Trips", "ungrouped"]);
     const describedAfterRename = await rpcReq<{ session?: { category?: string } }>(
       ws,
       "sessions.describe",
@@ -784,13 +789,14 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(describedAfterRename.ok).toBe(true);
     expect(describedAfterRename.payload?.session?.category).toBe("Trips");
 
-    const deletedGroup = await rpcReq<{ ok: true; updatedSessions?: number }>(
-      ws,
-      "sessions.groups.delete",
-      { name: "Trips" },
-    );
+    const deletedGroup = await rpcReq<{
+      ok: true;
+      sectionOrder: string[];
+      updatedSessions?: number;
+    }>(ws, "sessions.groups.delete", { name: "Trips" });
     expect(deletedGroup.ok).toBe(true);
     expect(deletedGroup.payload?.updatedSessions).toBe(1);
+    expect(deletedGroup.payload?.sectionOrder).toEqual(["work", "ungrouped"]);
 
     const archived = await rpcReq<{ ok: true; entry: { archivedAt?: number } }>(
       ws,

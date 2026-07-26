@@ -572,14 +572,18 @@ export const SessionGroupSchema = closedObject({
   position: Type.Integer({ minimum: 0 }),
 });
 
+const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
+
 /** Custom session group catalog in display order. */
 export const SessionsGroupsListResultSchema = closedObject({
   groups: Type.Array(SessionGroupSchema),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
 });
 
 /** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
 export const SessionsGroupsPutParamsSchema = closedObject({
   names: Type.Array(SessionLabelString, { maxItems: 200 }),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
 });
 
 /** Renames a group and repoints every member session's category. */
@@ -595,6 +599,7 @@ export const SessionsGroupsDeleteParamsSchema = closedObject({ name: SessionLabe
 export const SessionsGroupsMutationResultSchema = closedObject({
   ok: Type.Literal(true),
   groups: Type.Array(SessionGroupSchema),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
   updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
