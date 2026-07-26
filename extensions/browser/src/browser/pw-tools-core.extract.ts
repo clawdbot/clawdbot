@@ -10,7 +10,7 @@ type BrowserPageContentCapture =
     };
 
 /** Runs in the page so scoped extraction never serializes unrelated DOM. */
-export function capturePageHtmlForExtract(params: {
+function capturePageHtmlForExtract(params: {
   selector?: string;
   ignoreSelectors: string[];
 }): BrowserPageContentCapture {
