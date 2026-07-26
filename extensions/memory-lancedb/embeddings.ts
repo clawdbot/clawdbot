@@ -197,6 +197,8 @@ class ProviderAdapterEmbeddings implements Embeddings {
   private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
   private closePromise: Promise<void> | null = null;
   private closed = false;
+  private activeUses = 0;
+  private idleWaiters = new Set<() => void>();
 
   constructor(
     private api: OpenClawPluginApi,
@@ -204,9 +206,6 @@ class ProviderAdapterEmbeddings implements Embeddings {
   ) {}
 
   private getProvider(): Promise<MemoryEmbeddingProvider> {
-    if (this.closed) {
-      throw new Error("memory-lancedb embeddings are closed");
-    }
     // Auth profiles and local providers can be repaired while the Gateway stays up.
     // Cache successful setup, but retry after failed provider discovery/auth.
     this.providerPromise ??= this.createProvider().catch((err: unknown) => {
@@ -214,6 +213,37 @@ class ProviderAdapterEmbeddings implements Embeddings {
       throw err;
     });
     return this.providerPromise;
+  }
+
+  private acquireUse(): () => void {
+    if (this.closed) {
+      throw new Error("memory-lancedb embeddings are closed");
+    }
+    this.activeUses += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.activeUses -= 1;
+      if (this.activeUses === 0) {
+        const waiters = Array.from(this.idleWaiters);
+        this.idleWaiters.clear();
+        for (const resolve of waiters) {
+          resolve();
+        }
+      }
+    };
+  }
+
+  private async awaitIdle(): Promise<void> {
+    if (this.activeUses === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.idleWaiters.add(resolve);
+    });
   }
 
   private async createProvider(): Promise<MemoryEmbeddingProvider> {
@@ -259,23 +289,28 @@ class ProviderAdapterEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    const provider = await this.getProvider();
-    if (!options?.timeoutMs) {
-      return await provider.embedQuery(text);
-    }
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const releaseUse = this.acquireUse();
     try {
-      timer = setTimeout(
-        () => controller.abort(new Error("memory-lancedb embedding timed out")),
-        resolveTimerTimeoutMs(options.timeoutMs, 1),
-      );
-      timer.unref?.();
-      return await provider.embedQuery(text, { signal: controller.signal });
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
+      const provider = await this.getProvider();
+      if (!options?.timeoutMs) {
+        return await provider.embedQuery(text);
       }
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        timer = setTimeout(
+          () => controller.abort(new Error("memory-lancedb embedding timed out")),
+          resolveTimerTimeoutMs(options.timeoutMs, 1),
+        );
+        timer.unref?.();
+        return await provider.embedQuery(text, { signal: controller.signal });
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+    } finally {
+      releaseUse();
     }
   }
 
@@ -301,6 +336,9 @@ class ProviderAdapterEmbeddings implements Embeddings {
     this.closed = true;
     const providerPromise = this.providerPromise;
     await runProviderAdapterLifecycle(async () => {
+      // Close intent is queued before waiting. Replacement instances therefore remain
+      // behind this owner while already-admitted embeddings drain to completion.
+      await this.awaitIdle();
       const provider = await providerPromise?.catch(() => null);
       if (provider) {
         PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.add(provider);

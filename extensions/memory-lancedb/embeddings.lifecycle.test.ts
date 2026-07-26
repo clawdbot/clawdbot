@@ -132,4 +132,48 @@ describe("memory-lancedb provider lifecycle", () => {
     expect(closeOlder).toHaveBeenCalledTimes(3);
     expect(closeCurrent).toHaveBeenCalledTimes(1);
   });
+
+  it("drains an admitted embedding before provider close", async () => {
+    let markEmbedStarted: () => void = () => {};
+    const embedStarted = new Promise<void>((resolve) => {
+      markEmbedStarted = resolve;
+    });
+    let releaseEmbed: () => void = () => {};
+    const embedGate = new Promise<void>((resolve) => {
+      releaseEmbed = resolve;
+    });
+    const closeProvider = vi.fn(async () => {});
+    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
+      id: "openai",
+      create: vi.fn(async () => ({
+        provider: {
+          id: "openai",
+          model: "text-embedding-3-small",
+          embedQuery: vi.fn(async () => {
+            markEmbedStarted();
+            await embedGate;
+            return [0.1, 0.2, 0.3];
+          }),
+          embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
+          close: closeProvider,
+        },
+      })),
+    });
+
+    const embeddings = createEmbeddings(createApi(), {
+      embedding: embeddingConfig,
+    } as MemoryConfig);
+    const embedPromise = embeddings.embed("active");
+    await embedStarted;
+    const closePromise = embeddings.close?.();
+    await Promise.resolve();
+
+    expect(closeProvider).not.toHaveBeenCalled();
+    await expect(embeddings.embed("late")).rejects.toThrow("memory-lancedb embeddings are closed");
+
+    releaseEmbed();
+    await expect(embedPromise).resolves.toEqual([0.1, 0.2, 0.3]);
+    await closePromise;
+    expect(closeProvider).toHaveBeenCalledTimes(1);
+  });
 });
