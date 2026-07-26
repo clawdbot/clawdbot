@@ -85,7 +85,7 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
     const date = (meta.date ?? "").trim();
     // Parallels lists snapshots oldest-first. Prefer the newest reusable baseline when fuzzy
     // names tie, while preserving the original order when date metadata is unavailable.
-    if (score > bestScore || (score === bestScore && date > bestDate)) {
+    if (score > bestScore || (score === bestScore && bestDate && date && date > bestDate)) {
       bestScore = score;
       bestDate = date;
       best = { id, name, state: (meta.state ?? "").trim() };

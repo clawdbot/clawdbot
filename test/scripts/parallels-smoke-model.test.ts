@@ -767,6 +767,8 @@ if [[ "$1" == "snapshot-list" ]]; then
   "{wanted}": {"name": "fresh-poweroff-2026-04-01", "state": "poweroff"},
   "{old-e2e}": {"name": "pre-openclaw-native-e2e-2026-03-12", "state": "poweroff", "date": "2026-03-12 22:32:24"},
   "{new-e2e}": {"name": "pre-openclaw-native-e2e-2026-07-26", "state": "poweroff", "date": "2026-07-26 11:52:02"},
+  "{undated-first}": {"name": "undated-family-1", "state": "poweroff"},
+  "{dated-later}": {"name": "undated-family-2", "state": "poweroff", "date": "2026-07-26 11:52:02"},
   "{other}": {"name": "unrelated", "state": "poweroff"}
 }
 JSON
@@ -785,6 +787,8 @@ if (isPrlctl) {
       "{wanted}": { name: "fresh-poweroff-2026-04-01", state: "poweroff" },
       "{old-e2e}": { name: "pre-openclaw-native-e2e-2026-03-12", state: "poweroff", date: "2026-03-12 22:32:24" },
       "{new-e2e}": { name: "pre-openclaw-native-e2e-2026-07-26", state: "poweroff", date: "2026-07-26 11:52:02" },
+      "{undated-first}": { name: "undated-family-1", state: "poweroff" },
+      "{dated-later}": { name: "undated-family-2", state: "poweroff", date: "2026-07-26 11:52:02" },
       "{other}": { name: "unrelated", state: "poweroff" },
     }));
     process.exit(0);
@@ -798,16 +802,19 @@ if (isPrlctl) {
       const output = withEnv(fakePrlctlEnv(tempDir), () => {
         const snapshot = resolveSnapshot("vm", "fresh");
         const latestE2e = resolveSnapshot("vm", "pre-openclaw-native-e2e-");
+        const missingDate = resolveSnapshot("vm", "undated-family-");
         return [
           shellQuote("it's ok"),
           [snapshot.id, snapshot.state, snapshot.name].join("\t"),
           [latestE2e.id, latestE2e.state, latestE2e.name].join("\t"),
+          [missingDate.id, missingDate.state, missingDate.name].join("\t"),
         ].join("\n");
       });
 
       expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
       expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
       expect(output).toContain("{new-e2e}\tpoweroff\tpre-openclaw-native-e2e-2026-07-26");
+      expect(output).toContain("{undated-first}\tpoweroff\tundated-family-1");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
