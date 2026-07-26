@@ -158,7 +158,6 @@ export function buildHostingProfileSubjects(
       ref: CORE_READINESS_SUBJECT_REFS.hostingProfile,
       kind: "openclaw.hosting-profile",
       id: selection.profile,
-      generation: String(HOSTING_PROFILE_CONTRACT_VERSION),
       parentRef: CORE_READINESS_SUBJECT_REFS.gateway,
     },
   ];
