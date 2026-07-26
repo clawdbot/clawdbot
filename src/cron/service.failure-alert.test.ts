@@ -733,7 +733,14 @@ describe("CronService failure alerts", () => {
       },
     });
 
-    await cron.run(job.id, "force");
+    // Skip alerts run off the scheduler-owned skip counter, so drive a scheduled
+    // skip: an operator force run is non-consuming and leaves consecutiveSkipped
+    // untouched (#83538/#83933). The owned failure destination suppresses error
+    // alerts only, so the global skip alert must still fire here.
+    simulateScheduledRun(cron, job.id, {
+      status: "skipped",
+      error: "requests-in-flight",
+    });
 
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
     expectAlertFields(sendCronFailureAlert, {
