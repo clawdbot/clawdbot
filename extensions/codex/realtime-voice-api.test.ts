@@ -21,6 +21,9 @@ describe("Codex realtime voice runtime artifact", () => {
   });
 
   it("keeps the owner runtime until every registration lease is released", async () => {
+    // Extension shards are non-isolated, so another plugin registration may
+    // already own the process-global runtime when this test starts.
+    const initialFallback = getCodexRealtimeBrowserSessionFallback();
     const first = createRuntime();
     const second = createRuntime();
 
@@ -34,7 +37,10 @@ describe("Codex realtime voice runtime artifact", () => {
 
     await second.cleanup();
 
-    expect(getCodexRealtimeBrowserSessionFallback()).toBeUndefined();
+    expect(getCodexRealtimeBrowserSessionFallback()).toBe(initialFallback);
+    if (initialFallback) {
+      return;
+    }
     const replacement = createRuntime();
     expect(replacement.broker).not.toBe(first.broker);
   });
