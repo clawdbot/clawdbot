@@ -7,7 +7,12 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import {
+  AcpRuntimeError,
+  formatAcpErrorChain,
+  toAcpRuntimeError,
+  withAcpRuntimeErrorBoundary,
+} from "../runtime/errors.js";
 import type { SessionAcpMeta } from "./manager.types.js";
 import { createUnsupportedControlError } from "./manager.utils.js";
 import type { CachedRuntimeState } from "./runtime-cache.js";
@@ -20,6 +25,19 @@ import {
 
 const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 const THINKING_CONFIG_KEYS = new Set(["thinking", "effort", "reasoning_effort", "thought_level"]);
+const UNSUPPORTED_CONFIG_CONTROL_SIGNALS = [
+  "-32602",
+  "invalid params",
+  "unsupported",
+  "not supported",
+  "not implement",
+];
+const REJECTED_CONFIG_VALUE_SIGNALS = [
+  "invalid value",
+  "unknown value",
+  "not a valid value",
+  "must be one of",
+];
 
 function extractConfigOptionKeys(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -57,6 +75,19 @@ function isUnsupportedControlRejection(error: unknown): boolean {
   return errorCode === "ACP_BACKEND_UNSUPPORTED_CONTROL";
 }
 
+function describeConfigOptionRejection(error: unknown): string {
+  const described = toAcpRuntimeError({
+    error,
+    fallbackCode: "ACP_TURN_FAILED",
+    fallbackMessage: "",
+  });
+  return normalizeLowercaseStringOrEmpty(`${formatAcpErrorChain(error)} ${described.message}`);
+}
+
+function hasRejectionSignal(description: string, signals: readonly string[]): boolean {
+  return signals.some((signal) => description.includes(signal));
+}
+
 function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown): boolean {
   if (!isOptionalTimeoutConfigKey(key)) {
     return false;
@@ -64,17 +95,24 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   if (isUnsupportedControlRejection(error)) {
     return true;
   }
-  const message =
-    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
-  const normalized = normalizeLowercaseStringOrEmpty(message);
+  const description = describeConfigOptionRejection(error);
   return (
-    normalized.includes("session/set_config_option") &&
-    (normalized.includes("-32602") ||
-      normalized.includes("invalid params") ||
-      normalized.includes("unsupported") ||
-      normalized.includes("not supported") ||
-      normalized.includes("not implement"))
+    description.includes("session/set_config_option") &&
+    hasRejectionSignal(description, UNSUPPORTED_CONFIG_CONTROL_SIGNALS)
   );
+}
+
+function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
+  if (!isThinkingConfigKey(key)) {
+    return false;
+  }
+  if (isUnsupportedControlRejection(error)) {
+    return true;
+  }
+  return hasRejectionSignal(describeConfigOptionRejection(error), [
+    ...UNSUPPORTED_CONFIG_CONTROL_SIGNALS,
+    ...REJECTED_CONFIG_VALUE_SIGNALS,
+  ]);
 }
 
 /** Resolves backend-advertised controls plus locally inferred runtime control support. */
@@ -202,7 +240,7 @@ export async function applyManagerRuntimeControls(params: {
           } catch (error) {
             if (
               isUnsupportedOptionalTimeoutConfigRejection(key, error) ||
-              (isThinkingConfigKey(key) && isUnsupportedControlRejection(error))
+              isRejectedThinkingConfigOption(key, error)
             ) {
               continue;
             }
