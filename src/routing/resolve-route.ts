@@ -160,15 +160,15 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     return lookup.fallbackDefaultAgentId;
   }
   const normalized = normalizeAgentId(trimmed);
-  if (normalized === DEFAULT_AGENT_ID) {
+  const resolved = lookup.byNormalizedId.get(normalized);
+  if (resolved) {
+    return resolved;
+  }
+  if (trimmed === DEFAULT_AGENT_ID) {
     return DEFAULT_AGENT_ID;
   }
   if (lookup.byNormalizedId.size === 0) {
     return sanitizeAgentId(trimmed);
-  }
-  const resolved = lookup.byNormalizedId.get(normalized);
-  if (resolved) {
-    return resolved;
   }
   return lookup.fallbackDefaultAgentId;
 }
