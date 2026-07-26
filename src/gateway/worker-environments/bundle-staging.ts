@@ -198,12 +198,6 @@ async function collectVendoredPackageFiles(
   vendorRealRoot: string,
 ): Promise<string[]> {
   const files = ["package.json"];
-  const shrinkwrapStats = await fs
-    .lstat(path.join(vendorRealRoot, "npm-shrinkwrap.json"))
-    .catch(() => undefined);
-  if (shrinkwrapStats?.isFile()) {
-    files.push("npm-shrinkwrap.json");
-  }
   const walk = async (relativeDir: string): Promise<void> => {
     const dirents = await fs.readdir(path.join(vendorRealRoot, ...relativeDir.split("/")), {
       withFileTypes: true,

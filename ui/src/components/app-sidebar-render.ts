@@ -7,6 +7,7 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
+import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
@@ -20,6 +21,7 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
+import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -30,6 +32,33 @@ type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
 };
+
+type SidebarNativeGateway = {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+  health: "ok" | "error" | "unknown";
+};
+
+type SidebarNativeGatewaysSnapshot = {
+  gateways: SidebarNativeGateway[];
+  currentId: string;
+};
+
+// Display-only: read the injected global directly; the capability module must stay
+// chat-chunk-owned to protect the QA smoke startup budget.
+function readSidebarNativeGateway(): SidebarNativeGateway | null {
+  if (!isNativeWebChromeHost()) {
+    return null;
+  }
+  const snapshot = (
+    window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewaysSnapshot }
+  )["__OPENCLAW_NATIVE_GATEWAYS__"];
+  if (!snapshot || !Array.isArray(snapshot.gateways) || snapshot.gateways.length < 2) {
+    return null;
+  }
+  return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
+}
 
 export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = host.activeChipAgent();
@@ -90,21 +119,15 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const outboxCount = host.outboxCountForSessionKey(mainKey);
   const active =
     host.activeRouteId === "chat" && areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const stateBadge = mainRow?.hasActiveRun
-    ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}>
-        <span
-          class="session-run-spinner"
-          role="img"
-          aria-label=${t("sessionsView.activeRun")}
-        ></span>
-      </openclaw-tooltip>`
-    : mainRow?.unread === true && !active
-      ? html`<span
-          class="session-unread-dot"
-          role="img"
-          aria-label=${t("sessionsView.unread")}
-        ></span>`
-      : nothing;
+  const running = mainRow?.hasActiveRun === true;
+  const unread = mainRow?.unread === true && !active;
+  // Home shares the sidebar's leading-slot contract: run state rings its icon
+  // instead of drifting to the row edge, which stays reserved for counts.
+  const homeGlyph = renderSessionGlyph({
+    content: html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`,
+    running,
+    badge: unread ? renderSessionUnreadBadge() : nothing,
+  });
   return html`
     <a
       href=${`${pathForRoute("chat", host.basePath)}${searchForSession(mainKey)}`}
@@ -118,7 +141,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         host.openMainSession(agentId);
       }}
     >
-      <span class="nav-item__icon" aria-hidden="true">${icons.home}</span>
+      ${running
+        ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}
+            >${homeGlyph}</openclaw-tooltip
+          >`
+        : homeGlyph}
       <span class="nav-item__text">${t("nav.home")}</span>
       ${sessionHasBoard(mainKey)
         ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
@@ -130,9 +157,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${stateBadge !== nothing || approvalNeeded || outboxCount > 0
+      ${approvalNeeded || outboxCount > 0
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${stateBadge}
             ${approvalNeeded
               ? html`<openclaw-tooltip .content=${t("sessionsView.approvalNeeded")}>
                   <span
@@ -181,6 +207,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     ...(selfUser ?? { id: "account", name: selfLabel }),
     watchedSessions: [],
   };
+  const gateway = host.offline ? null : readSidebarNativeGateway();
+  // Health is visual-only here by budget decision; the header picker owns health accessibility.
+  const gatewayPrimaryTag = gateway?.isPrimary
+    ? t("chat.sessionHeader.gatewayPicker.primaryTag")
+    : null;
+  const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
   return html`
     <div class="sidebar-footer-bar">
       <openclaw-tooltip .content=${selfLabel}>
@@ -189,7 +221,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           class="sidebar-identity-card"
           aria-haspopup="menu"
           aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${t("profilePage.identity.menuButtonLabel", { name: selfLabel })}
+          aria-label=${gateway
+            ? `${identityMenuLabel}: ${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+            : identityMenuLabel}
           @click=${(event: MouseEvent) =>
             host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
         >
@@ -200,7 +234,23 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
               ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
                   >${t("connection.reconnecting")}</span
                 >`
-              : nothing}
+              : gateway
+                ? html`<span
+                    class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway"
+                    aria-hidden="true"
+                  >
+                    <span
+                      class="sidebar-identity-card__gateway-health"
+                      data-health=${gateway.health}
+                    ></span>
+                    <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
+                    ${gatewayPrimaryTag
+                      ? html`<span class="sidebar-identity-card__gateway-primary"
+                          >· ${gatewayPrimaryTag}</span
+                        >`
+                      : nothing}
+                  </span>`
+                : nothing}
           </span>
           <span class="sidebar-identity-card__chevron" aria-hidden="true"
             >${icons.chevronDown}</span

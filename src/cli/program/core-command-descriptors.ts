@@ -89,7 +89,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "agent",
     description: "Run an agent turn via the Gateway (use --local for embedded)",
-    hasSubcommands: false,
+    hasSubcommands: true,
   },
   {
     name: "agents",

@@ -267,9 +267,15 @@ export type ClawHubPackageSearchResult = {
   package: ClawHubPackageListItem;
 };
 
+export const CLAWHUB_SKILLS_SH_TRUST_STATE = "not-scanned-by-clawhub" as const;
+export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
+export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
+
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  installRef?: string;
+  trustState?: ClawHubSkillsShTrustState;
   // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
   displayName: string;
@@ -328,6 +334,9 @@ export type ClawHubSkillInstallResolutionResponse =
       channel?: string | null;
       isOfficial?: boolean | null;
       installKind: "github";
+      trust?: {
+        state: ClawHubSkillsShTrustState;
+      };
       /** Commit-pinned source approved by ClawHub's install resolver policy. */
       github: {
         repo: string;
@@ -1234,6 +1243,7 @@ export async function fetchClawHubSkillDetail(params: {
 export async function fetchClawHubSkillInstallResolution(params: {
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -1248,6 +1258,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
     fetchImpl: params.fetchImpl,
     search: {
       ownerHandle: params.ownerHandle,
+      reference: params.requestedReference,
       forceInstall: params.forceInstall ? "1" : undefined,
     },
   });
@@ -1265,6 +1276,7 @@ export async function fetchClawHubSkillInstallResolution(params: {
 export async function fetchClawHubSkillVerification(params: {
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1278,7 +1290,10 @@ export async function fetchClawHubSkillVerification(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
-    search: buildVersionOrTagSearch(params),
+    search: {
+      ...buildVersionOrTagSearch(params),
+      reference: params.requestedReference,
+    },
   });
 }
 
@@ -1599,6 +1614,8 @@ export async function reportClawHubSkillInstallTelemetry(params: {
   token?: string;
   slug: string;
   ownerHandle?: string;
+  requestedReference?: string;
+  trustState?: ClawHubSkillsShTrustState;
   version?: string | null;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
@@ -1623,6 +1640,8 @@ export async function reportClawHubSkillInstallTelemetry(params: {
       event: "install",
       slug,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+      ...(params.requestedReference ? { reference: params.requestedReference } : {}),
+      ...(params.trustState ? { trustState: params.trustState } : {}),
       version: params.version ?? undefined,
     },
   });

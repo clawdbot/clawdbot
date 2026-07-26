@@ -477,7 +477,11 @@ describe("append-only late media (issue #99495)", () => {
     const normalized = normalizeMessagesForLlmBoundary([merged], { timezone: TZ });
 
     expect(normalized).toHaveLength(1);
-    expect(merged).toMatchObject({ MediaPath: "media://inbound/image.jpg" });
+    expect(merged).toMatchObject({
+      __openclaw: {
+        media: [expect.objectContaining({ path: "media://inbound/image.jpg" })],
+      },
+    });
   });
 });
 
@@ -640,7 +644,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     const historicalContent = (asHistorical[0] as { content?: unknown } | undefined)?.content;
     expect(JSON.stringify(currentContent)).toBe(JSON.stringify(historicalContent));
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain('"name": "Alice"');
+    expect(currentContent).toContain('"name":"Alice"');
     expect(
       normalizeMessagesForLlmBoundary(asCurrent, {
         timezone: TZ,

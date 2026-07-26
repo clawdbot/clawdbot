@@ -533,12 +533,30 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           ) => {
             const sessionId = "plugin-runtime-mock-session";
             const key = params.key;
+            const sessionInitialEntry =
+              "acpSessionBinding" in params.initialEntry
+                ? {
+                    acpSessionBinding: {
+                      acpBackendId: params.initialEntry.acpBackendId,
+                      ...params.initialEntry.acpSessionBinding,
+                    },
+                    ...(params.initialEntry.modelSelectionLocked
+                      ? { modelSelectionLocked: true as const }
+                      : {}),
+                    ...(params.initialEntry.pluginExtensions
+                      ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
+                      : {}),
+                    ...(params.initialEntry.pluginOwnerId
+                      ? { pluginOwnerId: params.initialEntry.pluginOwnerId }
+                      : {}),
+                  }
+                : structuredClone(params.initialEntry);
             const initialEntry = {
               sessionId,
               updatedAt: Date.now(),
               ...(params.label !== undefined ? { label: params.label } : {}),
               ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
-              ...structuredClone(params.initialEntry),
+              ...sessionInitialEntry,
               ...(params.afterCreate ? { initializationPending: true as const } : {}),
             };
             const initialized = {

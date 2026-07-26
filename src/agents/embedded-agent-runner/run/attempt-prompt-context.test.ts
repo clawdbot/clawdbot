@@ -170,7 +170,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
-    expect(result.llmBoundaryPromptForPrecheck).toContain('"name": "Alice"');
+    expect(result.llmBoundaryPromptForPrecheck).toContain('"name":"Alice"');
     expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
   });
 

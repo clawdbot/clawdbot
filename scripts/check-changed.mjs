@@ -29,8 +29,8 @@ import {
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
-const SHRINKWRAP_POLICY_PATH_RE =
-  /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+const NPM_LOCK_POLICY_PATH_RE =
+  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-package-lock\.mjs|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
@@ -73,13 +73,13 @@ const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
-let shrinkwrapPackageDirsForChangedPaths;
+let npmLockPackageDirsForChangedPaths;
 
 async function ensureChangedCheckRuntimeDependencies(paths) {
-  if (!shouldRunShrinkwrapGuard(paths) || shrinkwrapPackageDirsForChangedPaths) {
+  if (!shouldRunNpmLockGuard(paths) || npmLockPackageDirsForChangedPaths) {
     return;
   }
-  ({ shrinkwrapPackageDirsForChangedPaths } = await import("./generate-npm-shrinkwrap.mjs"));
+  ({ npmLockPackageDirsForChangedPaths } = await import("./generate-npm-package-lock.mjs"));
 }
 
 // Imported consumers expect the synchronous planning API. Direct CLI execution
@@ -260,8 +260,8 @@ function buildDelegatedChangedCheckArgv(argv, options = {}) {
   return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
 }
 
-export function shouldRunShrinkwrapGuard(paths) {
-  return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
+export function shouldRunNpmLockGuard(paths) {
+  return paths.some((changedPath) => NPM_LOCK_POLICY_PATH_RE.test(changedPath));
 }
 
 export function shouldRunPromptSnapshotCheck(paths) {
@@ -330,26 +330,25 @@ export function shouldRunTestTempCreationReport(paths) {
   );
 }
 
-export function createShrinkwrapGuardCommand(paths) {
-  if (!shouldRunShrinkwrapGuard(paths)) {
+export function createNpmLockGuardCommand(paths) {
+  if (!shouldRunNpmLockGuard(paths)) {
     return null;
   }
-  if (!shrinkwrapPackageDirsForChangedPaths) {
-    throw new Error("changed-check shrinkwrap runtime dependencies were not loaded");
+  if (!npmLockPackageDirsForChangedPaths) {
+    throw new Error("changed-check npm-lock runtime dependencies were not loaded");
   }
-  const packageDirs = shrinkwrapPackageDirsForChangedPaths(paths);
+  const packageDirs = npmLockPackageDirsForChangedPaths(paths);
   if (packageDirs.length === 0) {
     return null;
   }
   return {
     name:
       packageDirs.length === 1
-        ? "npm shrinkwrap guard"
-        : `npm shrinkwrap guard (${packageDirs.length} packages)`,
+        ? "npm package-lock guard"
+        : `npm package-lock guard (${packageDirs.length} packages)`,
     bin: "node",
     args: [
-      "scripts/generate-npm-shrinkwrap.mjs",
-      "--check",
+      "scripts/generate-npm-package-lock.mjs",
       ...packageDirs.flatMap((packageDir) => ["--package-dir", packageDir]),
     ],
   };
@@ -442,12 +441,12 @@ export function createChangedCheckPlan(result, options = {}) {
       ...result.paths,
     ]);
   }
-  const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
-  if (shrinkwrapGuardCommand) {
+  const npmLockGuardCommand = createNpmLockGuardCommand(result.paths);
+  if (npmLockGuardCommand) {
     addCommand(
-      shrinkwrapGuardCommand.name,
-      shrinkwrapGuardCommand.bin,
-      shrinkwrapGuardCommand.args,
+      npmLockGuardCommand.name,
+      npmLockGuardCommand.bin,
+      npmLockGuardCommand.args,
       baseEnv,
     );
   }

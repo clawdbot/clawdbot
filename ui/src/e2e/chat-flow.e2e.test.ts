@@ -950,6 +950,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
   });
 
   it("renders a canonical inbound image through the ticketed media route", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -989,8 +990,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           id: "user-inbound-media-ref",
           role: "user",
           content: [{ type: "text", text: "🖼️ Attached image" }],
-          MediaPath: "media://inbound/telegram-photo.png",
-          MediaType: "image/png",
+          __openclaw: {
+            media: [{ path: "media://inbound/telegram-photo.png", contentType: "image/png" }],
+          },
           timestamp: Date.now(),
         },
       ],
@@ -999,7 +1001,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
-      const image = page.getByAltText("Attached image");
+      const image = page.locator("img.chat-message-image");
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() =>
@@ -1008,6 +1010,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           ),
         )
         .toBe(1);
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: `${artifactDir}/canonical-inbound-image.png`,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { SessionsListResult } from "../../api/types.ts";
+import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { applySelectedSessionProjection, SessionParticipationTracker } from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
@@ -39,6 +42,41 @@ describe("applySelectedSessionProjection", () => {
       chatQueueModeOverride: "followup",
       selectedChatSessionArchived: false,
     });
+  });
+
+  it("adopts an archived routed row published after the active list omitted it", () => {
+    const routedKey = "agent:main:dashboard:cold-archive";
+    const activeResult: SessionsListResult = {
+      count: 1,
+      defaults: { contextTokens: null, model: null, modelProvider: null },
+      path: "",
+      sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 2 }],
+      ts: 2,
+    };
+    const published = reconcileSessionHistory(
+      activeResult,
+      {
+        archived: true,
+        key: routedKey,
+        kind: "direct",
+        label: "Archived planning",
+        updatedAt: 1,
+      },
+      undefined,
+      { archivedFilter: "all" },
+    );
+    const state = { ...projectionState(), selectedChatSessionArchived: false };
+    const selected = published?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, routedKey),
+    );
+
+    expect(applySelectedSessionProjection(state, selected)).toBe(true);
+    expect(state.selectedChatSessionArchived).toBe(true);
+
+    const afterNavigation = reconcileSessionHistory(published, selected, undefined, {
+      archivedFilter: "active",
+    });
+    expect(afterNavigation?.sessions.map((row) => row.key)).toEqual(["agent:main:main"]);
   });
 });
 

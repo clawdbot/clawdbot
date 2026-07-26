@@ -266,6 +266,7 @@ struct OnboardingAISetupView: View {
         }
 
         if !self.model.connected, self.model.providerCatalogLoaded {
+            self.providerPrepareSection
             self.providerAuthSection
             self.manualSection
         }
@@ -504,6 +505,54 @@ struct OnboardingAISetupView: View {
     }
 
     @ViewBuilder
+    private var providerPrepareSection: some View {
+        if !self.model.prepareOptions.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Set up a local model")
+                    .font(.headline)
+                Text("Download or prepare a local model on this Gateway.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(self.model.prepareOptions) { option in
+                    Button {
+                        self.openedProviderAuthURL = nil
+                        self.model.startProviderPrepare(option)
+                    } label: {
+                        HStack(spacing: 10) {
+                            OnboardingProviderArtwork(
+                                icon: option.icon,
+                                fallbackKind: option.id,
+                                fallbackSymbol: "arrow.down.circle")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.label)
+                                    .font(.callout.weight(.semibold))
+                                if let hint = option.hint, !hint.isEmpty {
+                                    Text(hint)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Text("Set up / Download model")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.model.isBusy)
+                    .openClawSelectableRowChrome(selected: false)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+
+    @ViewBuilder
     private var providerAuthSection: some View {
         if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -608,9 +657,11 @@ struct OnboardingAISetupView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.model.activeAuthOption?.label ?? "Provider sign-in")
+                    Text(self.model.activeAuthOption?.label ?? "Provider setup")
                         .font(.title3.weight(.semibold))
-                    Text("Credentials stay on this Gateway and are saved only after the live test succeeds.")
+                    Text(self.model.isPreparingModel
+                        ? "The model is downloaded and prepared on this Gateway."
+                        : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -646,13 +697,17 @@ struct OnboardingAISetupView: View {
             } else if self.model.authBusy {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
-                    Text("Starting secure sign-in…")
+                    Text(self.model.isPreparingModel
+                        ? "Starting local model setup…"
+                        : "Starting secure sign-in…")
                 }
             }
 
             if let error = self.model.authError {
                 OnboardingErrorCard(
-                    title: "Sign-in didn’t complete",
+                    title: self.model.isPreparingModel
+                        ? "Model setup didn’t complete"
+                        : "Sign-in didn’t complete",
                     message: error.summary,
                     details: error.detail,
                     docsSlug: "concepts/model-providers",

@@ -354,22 +354,19 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `assistant image attachment builds after asynchronous load`() async throws {
         let png = try #require(Data(base64Encoded:
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        let imagePath =
+            "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full"
+        var resolvedPaths: [String] = []
         let message = OpenClawChatMessage(
             role: "assistant",
             content: [
-                OpenClawChatMessageContent(
-                    type: "text",
-                    text: "Generated image",
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil),
                 OpenClawChatMessageContent(
                     type: "image",
                     text: nil,
                     mimeType: "image/png",
                     fileName: nil,
-                    url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full",
-                    openUrl: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full",
+                    url: imagePath,
+                    openUrl: imagePath,
                     alt: "Generated image 1",
                     content: nil),
             ],
@@ -392,11 +389,15 @@ struct SwiftUIRenderSmokeTests {
             inlineWidgetResolverReady: true,
             inlineWidgetResourceResolver: { _, _ in nil },
             mediaResolverReady: true,
-            mediaResolver: { _ in png })
+            mediaResolver: { path in
+                resolvedPaths.append(path)
+                return png
+            })
 
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
         try await Task.sleep(for: .milliseconds(100))
         window.rootViewController?.view.layoutIfNeeded()
+        #expect(resolvedPaths.contains(imagePath))
     }
 
     @Test @MainActor func `root tabs builds device orientation shell matrix`() {

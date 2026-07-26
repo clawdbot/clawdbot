@@ -13,6 +13,7 @@ import {
   renderChatAttachmentMenu,
 } from "../chat/components/chat-attachments.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
@@ -26,13 +27,38 @@ type NewSessionComposerOptions = {
   requiresModifier: boolean;
   submitting: boolean;
   messageLocked?: boolean;
-  incognito?: boolean;
+  visibility?: NewSessionVisibility;
+  draftAvailable?: boolean;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
-  onToggleIncognito?: () => void;
+  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 };
+
+/** Mutually exclusive visibility pills: selecting one clears the other, re-click returns to normal. */
+function renderVisibilityPill(params: {
+  mode: Exclude<NewSessionVisibility, "normal">;
+  icon: unknown;
+  label: string;
+  description: string;
+  options: NewSessionComposerOptions;
+}) {
+  const active = params.options.visibility === params.mode;
+  return html`
+    <button
+      type="button"
+      class="new-session-page__visibility ${active ? "new-session-page__visibility--active" : ""}"
+      role="switch"
+      aria-checked=${String(active)}
+      ?disabled=${params.options.submitting || params.options.messageLocked}
+      title=${params.description}
+      @click=${() => params.options.onVisibilityChange?.(active ? "normal" : params.mode)}
+    >
+      <span aria-hidden="true">${params.icon}</span>${params.label}
+    </button>
+  `;
+}
 
 export function renderDraftError(message: string) {
   return html`
@@ -176,19 +202,22 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
             ${options.modelControl && options.modelControl !== nothing
               ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
               : nothing}
-            <button
-              type="button"
-              class="new-session-page__incognito ${options.incognito
-                ? "new-session-page__incognito--active"
-                : ""}"
-              role="switch"
-              aria-checked=${String(options.incognito === true)}
-              ?disabled=${options.submitting || options.messageLocked}
-              title=${t("newSession.incognitoDescription")}
-              @click=${() => options.onToggleIncognito?.()}
-            >
-              <span aria-hidden="true">${icons.lock}</span>${t("newSession.incognito")}
-            </button>
+            ${options.draftAvailable
+              ? renderVisibilityPill({
+                  mode: "draft",
+                  icon: "👻",
+                  label: t("newSession.draft"),
+                  description: t("newSession.draftDescription"),
+                  options,
+                })
+              : nothing}
+            ${renderVisibilityPill({
+              mode: "incognito",
+              icon: icons.lock,
+              label: t("newSession.incognito"),
+              description: t("newSession.incognitoDescription"),
+              options,
+            })}
           </div>
         </div>
         ${options.pendingAttachmentReads > 0
@@ -209,13 +238,14 @@ export function renderNewSessionDraftComposer(options: {
   context: import("../../app/context.ts").ApplicationContext | undefined;
   isCatalogTarget: boolean;
   message: string;
-  incognito?: boolean;
+  visibility?: NewSessionVisibility;
+  draftAvailable?: boolean;
   modelControl: NewSessionModelControl;
   requiresModifier: boolean;
   submitting: boolean;
   messageLocked?: boolean;
   onInput: (message: string) => void;
-  onToggleIncognito?: () => void;
+  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
@@ -224,7 +254,8 @@ export function renderNewSessionDraftComposer(options: {
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
     message: options.message,
-    incognito: options.incognito,
+    visibility: options.visibility,
+    draftAvailable: options.draftAvailable,
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({
@@ -245,7 +276,7 @@ export function renderNewSessionDraftComposer(options: {
     },
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
     onInput: options.onInput,
-    onToggleIncognito: options.onToggleIncognito,
+    onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
   });
 }

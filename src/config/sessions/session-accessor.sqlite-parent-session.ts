@@ -247,6 +247,7 @@ export async function forkSqliteSessionEntryFromParentTarget(
           activeSessionKey: sessionTarget.canonicalKey,
           archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
           skipMaintenance: true,
+          storePath: params.storePath,
         }),
       );
       currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
@@ -304,6 +305,7 @@ async function persistSqliteParentForkSkipPatch(params: {
         activeSessionKey: params.sessionTarget.canonicalKey,
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(params.resolved),
         skipMaintenance: true,
+        storePath: params.params.storePath,
       }),
     );
     currentIdentity = readSqliteSessionIdentitySnapshot(database, params.sessionTarget.storeKeys);

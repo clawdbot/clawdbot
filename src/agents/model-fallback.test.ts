@@ -4489,6 +4489,34 @@ describe("runWithImageModelFallback", () => {
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
   });
+
+  it("preserves caller cancellation without starting an image fallback", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled image fallback");
+    const run = vi.fn(async () => {
+      controller.abort(reason);
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    });
+
+    await expect(
+      runWithImageModelFallback({
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "openai/gpt-5.4-mini",
+                fallbacks: ["google/gemini-2.5-flash"],
+              },
+            },
+          },
+        }),
+        abortSignal: controller.signal,
+        run,
+      }),
+    ).rejects.toBe(reason);
+
+    expect(run).toHaveBeenCalledOnce();
+  });
 });
 
 describe("runWithModelFallback preserved prompt errors", () => {

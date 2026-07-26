@@ -6,6 +6,7 @@ import {
   formatValidationErrors,
   validateAgentParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
@@ -91,7 +92,7 @@ export function prepareAgentRequestPreflight(
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
       ? loadSessionEntry({
           storePath: resolveStorePath(cfg.session?.store, {
-            agentId: resolveAgentIdFromSessionKey(requestSessionKey),
+            agentId: resolveAgentIdFromSessionKey(requestSessionKey, resolveDefaultAgentId(cfg)),
           }),
           sessionKey: requestSessionKey,
         })?.swarmCollector === true
@@ -131,7 +132,7 @@ export function prepareAgentRequestPreflight(
       cfg,
       registeredCollector?.requesterAgentId ??
         (swarmRequesterSessionKey
-          ? resolveAgentIdFromSessionKey(swarmRequesterSessionKey)
+          ? resolveAgentIdFromSessionKey(swarmRequesterSessionKey, resolveDefaultAgentId(cfg))
           : undefined),
     ).enabled;
     const pendingCollectorLaunch =

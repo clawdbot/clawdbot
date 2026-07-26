@@ -45,11 +45,19 @@ describe("ClickClack discussion service", () => {
     });
   });
 
-  it("pins an owning agent for an unqualified global session key", async () => {
-    const harness = createHarness({ label: "Global session" });
+  it("pins the configured default for global keys and preserves qualified owners", async () => {
+    const globalHarness = createHarness({ label: "Global session" });
+    globalHarness.config.agents = { list: [{ id: "ops", default: true }] };
 
-    expect(await harness.service.open("global")).toMatchObject({ state: "open" });
-    expect(harness.store.lookup("global")).toMatchObject({ agentId: "main" });
+    expect(await globalHarness.service.open("global")).toMatchObject({ state: "open" });
+    expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
+
+    const qualifiedHarness = createHarness({ label: "Qualified session" });
+    qualifiedHarness.config.agents = { list: [{ id: "ops", default: true }] };
+    const qualifiedKey = "agent:worker:qualified";
+
+    expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
+    expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
   });
 
   it("builds control links from URL path and query components", async () => {

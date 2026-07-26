@@ -86,21 +86,45 @@
   background: var(--accent-subtle);
 }
 
-.config-advanced-fields {
-  margin-top: var(--space-3);
-  border-top: 1px solid var(--border);
-}
-
-.config-advanced-fields__summary {
-  padding: var(--space-3) 0;
+.config-advanced-divider {
+  margin-top: var(--space-5);
+  padding: 0 var(--space-4) var(--space-2);
   color: var(--muted);
-  cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 650;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.config-advanced-fields__content {
-  margin-top: 0;
+.config-advanced-ghost {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  text-align: left;
+  transition: background var(--duration-fast) ease;
+}
+
+.config-advanced-ghost:hover {
+  background: var(--bg-hover);
+}
+
+.config-advanced-ghost__count {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.config-advanced-ghost__action {
+  color: var(--accent);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  flex: 0 0 auto;
 }
 
 /* Restart affordance shown after a successful save until apply */
@@ -258,6 +282,26 @@
 
 .config-content > .settings-page {
   padding-top: 0;
+}
+
+.config-content-callout {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.config-content-callout .callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.config-content-callout__text {
+  min-width: 0;
+  flex: 1 1 420px;
 }
 
 /* ===========================================

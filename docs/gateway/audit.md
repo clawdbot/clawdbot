@@ -38,7 +38,7 @@ field reference and query filters.
 
 ## Message lifecycle events
 
-Set [`audit.messages`](/gateway/configuration-reference#audit) to choose what
+Set [`logging.audit.messages`](/gateway/configuration-reference#audit) to choose what
 is recorded, then restart the Gateway:
 
 - `off` (default): no message records.

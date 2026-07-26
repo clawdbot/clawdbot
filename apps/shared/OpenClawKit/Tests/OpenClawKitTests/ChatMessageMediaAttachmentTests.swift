@@ -38,7 +38,6 @@ final class ChatMessageMediaAttachmentTests: XCTestCase {
               "messages": [{
                 "role": "assistant",
                 "content": [
-                  {"type": "text", "text": "Generated image"},
                   {
                     "type": "image",
                     "url": "\(Self.managedImagePath)",
@@ -58,6 +57,8 @@ final class ChatMessageMediaAttachmentTests: XCTestCase {
         let image = try XCTUnwrap(message.content.last)
 
         XCTAssertEqual(message.role, "assistant")
+        XCTAssertEqual(message.content.count, 1)
+        XCTAssertTrue(image.isInlineAttachment)
         XCTAssertEqual(image.type, "image")
         XCTAssertEqual(image.url, Self.managedImagePath)
         XCTAssertEqual(image.openUrl, Self.managedImagePath)

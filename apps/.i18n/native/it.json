@@ -21479,6 +21479,16 @@
       "translated": "Avanti"
     },
     {
+      "id": "native.apple.3db546546fbaf38e",
+      "source": "OpenClaw is preparing a local model.",
+      "translated": "OpenClaw sta preparando un modello locale."
+    },
+    {
+      "id": "native.apple.c5992a23c991f948",
+      "source": "OpenClaw is completing provider sign-in.",
+      "translated": "OpenClaw sta completando l'accesso al provider."
+    },
+    {
       "id": "native.apple.0f3c1c6f0672bed7",
       "source": "The Gateway setup request failed.",
       "translated": "La richiesta di configurazione del Gateway non è riuscita."
@@ -21614,6 +21624,21 @@
       "translated": "Controlla di nuovo"
     },
     {
+      "id": "native.apple.82148c7c60e4fb74",
+      "source": "Set up a local model",
+      "translated": "Configura un modello locale"
+    },
+    {
+      "id": "native.apple.506a932536c642c2",
+      "source": "Download or prepare a local model on this Gateway.",
+      "translated": "Scarica o prepara un modello locale su questo Gateway."
+    },
+    {
+      "id": "native.apple.d31411a9f3c68c33",
+      "source": "Set up / Download model",
+      "translated": "Configura / Scarica modello"
+    },
+    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "Accedi con un provider"
@@ -21644,6 +21669,11 @@
       "translated": "Accedi"
     },
     {
+      "id": "native.apple.b62dfd708d5cfb14",
+      "source": "The model is downloaded and prepared on this Gateway.",
+      "translated": "Il modello è scaricato e preparato su questo Gateway."
+    },
+    {
       "id": "native.apple.869fe436119bb8a6",
       "source": "Credentials stay on this Gateway and are saved only after the live test succeeds.",
       "translated": "Le credenziali rimangono su questo Gateway e vengono salvate solo dopo che il test in tempo reale ha esito positivo."
@@ -21654,9 +21684,19 @@
       "translated": "Apri pagina di accesso…"
     },
     {
+      "id": "native.apple.91cd595c858a6ea7",
+      "source": "Starting local model setup…",
+      "translated": "Avvio della configurazione del modello locale…"
+    },
+    {
       "id": "native.apple.bb3352787887c424",
       "source": "Starting secure sign-in…",
       "translated": "Avvio accesso sicuro…"
+    },
+    {
+      "id": "native.apple.ba9a46f1e6c4d477",
+      "source": "Model setup didn’t complete",
+      "translated": "Configurazione del modello non completata"
     },
     {
       "id": "native.apple.d7519516740bfc93",

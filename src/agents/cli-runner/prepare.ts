@@ -5,6 +5,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
@@ -34,13 +35,18 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID,
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
@@ -325,7 +331,25 @@ function shouldRefreshAuthProfileForExecution(params: {
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
-  let params = inputParams;
+  let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
+  const runConfig = params.config!;
+  const selectedOwner = normalizeAgentId(
+    params.agentId?.trim() ||
+      parseAgentSessionKey(params.sessionKey)?.agentId ||
+      LEGACY_IMPLICIT_AGENT_ID,
+  );
+  // Direct CLI-runner callers predate roster-aware ownership. Adapt that SDK
+  // input only for strict workspace admission; keep the original config object
+  // for backend hooks, sandboxing, and context-engine identity contracts.
+  const workspaceConfig = hasAgentRosterProperty(runConfig)
+    ? runConfig
+    : ({
+        ...runConfig,
+        agents: {
+          ...runConfig.agents,
+          entries: { [selectedOwner]: { default: true } },
+        },
+      } satisfies OpenClawConfig);
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
@@ -333,7 +357,7 @@ export async function prepareCliRunContext(
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
-    config: params.config,
+    config: workspaceConfig,
   });
   const resolvedWorkspace = workspaceResolution.workspaceDir;
   const redactedSessionId = redactRunIdentifier(params.sessionId);

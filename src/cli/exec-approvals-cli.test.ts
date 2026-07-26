@@ -786,7 +786,7 @@ describe("exec approvals CLI", () => {
         },
       },
       agents: {
-        list: [{ id: "runner" }],
+        list: [{ id: "main", default: true }, { id: "runner" }],
       },
     });
 

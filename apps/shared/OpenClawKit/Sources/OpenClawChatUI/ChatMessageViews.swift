@@ -521,14 +521,7 @@ private struct ChatMessageBody: View {
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            switch content.type ?? "text" {
-            case "file", "attachment", "image":
-                true
-            default:
-                false
-            }
-        }
+        self.message.content.filter(\.isInlineAttachment)
     }
 
     private var inlineWidgets: [OpenClawChatCanvasPreview] {
@@ -697,7 +690,7 @@ private struct AttachmentRow: View {
     private var fallbackRow: some View {
         HStack(spacing: 8) {
             Image(systemName: self.isAudio ? "waveform" : "paperclip")
-            Text(self.isAudio ? "Voice note" : self.attachmentLabel)
+            Text(self.isAudio ? String(localized: "Voice note") : self.attachmentLabel)
                 .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
                 .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
@@ -733,7 +726,7 @@ private struct AttachmentRow: View {
                 return value
             }
         }
-        return self.isImage ? "Image attachment" : "Attachment"
+        return self.isImage ? String(localized: "Image attachment") : String(localized: "Attachment")
     }
 
     private var imagePath: String? {
