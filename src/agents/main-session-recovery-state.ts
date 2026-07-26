@@ -167,15 +167,13 @@ function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: s
       isMainRestartRecoveryCandidate(entry, sessionKey)) ||
     // Terminal sessions with recovery residue were permanently unadmittable,
     // returning "changed while starting work" forever (production incident 2026-07-26).
-    // A terminal run owns no pending delivery either, so a stale delivery id is
-    // residue here rather than a fence, unlike the running case above.
+    // A pending delivery claim may coexist with the residue, so it must not gate
+    // the cleanup here the way it does for the running case above.
     (entry.status !== undefined &&
       entry.status !== "running" &&
       entry.mainRestartRecovery === undefined &&
       isMainRestartRecoveryCandidate(entry, sessionKey) &&
-      (entry.restartRecoveryRuns !== undefined ||
-        entry.abortedLastRun === true ||
-        entry.restartRecoveryDeliveryRunId !== undefined))
+      (entry.restartRecoveryRuns !== undefined || entry.abortedLastRun === true))
   );
 }
 

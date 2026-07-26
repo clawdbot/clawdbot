@@ -2,14 +2,16 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 
 type MainRecoveryStateFields = Pick<
   SessionEntry,
-  "abortedLastRun" | "restartRecoveryRuns" | "mainRestartRecovery" | "restartRecoveryDeliveryRunId"
+  "abortedLastRun" | "restartRecoveryRuns" | "mainRestartRecovery"
 >;
 
+// restartRecoveryDeliveryRunId stays out of this patch: it keys delivery-claim
+// adoption (agent-command-restart-recovery.ts), not recovery ownership, and
+// clearing it here strands the paired delivery context on the successor entry.
 export const MAIN_SESSION_RECOVERY_CLEAR_PATCH: Partial<MainRecoveryStateFields> = {
   abortedLastRun: false,
   restartRecoveryRuns: undefined,
   mainRestartRecovery: undefined,
-  restartRecoveryDeliveryRunId: undefined,
 };
 
 export function buildMainSessionRecoveryClearPatch(
@@ -18,8 +20,7 @@ export function buildMainSessionRecoveryClearPatch(
   if (
     entry?.abortedLastRun !== true &&
     entry?.restartRecoveryRuns === undefined &&
-    entry?.mainRestartRecovery === undefined &&
-    entry?.restartRecoveryDeliveryRunId === undefined
+    entry?.mainRestartRecovery === undefined
   ) {
     return {};
   }

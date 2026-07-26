@@ -252,13 +252,13 @@ describe("main session recovery state", () => {
     expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
-  it("clears terminal residue that only retains a stale delivery run id", () => {
+  it("clears terminal residue while a delivery claim is still recorded", () => {
     const entry = interruptedEntry({
       status: "failed",
-      abortedLastRun: false,
+      abortedLastRun: true,
       mainRestartRecovery: undefined,
       restartRecoveryRuns: undefined,
-      restartRecoveryDeliveryRunId: "dead-delivery",
+      restartRecoveryDeliveryRunId: "pending-delivery",
     });
 
     expect(
@@ -271,8 +271,10 @@ describe("main session recovery state", () => {
         claimId: "foreground-1",
       }),
     ).toEqual({ kind: "applied" });
-    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(entry.abortedLastRun).toBe(false);
     expect(entry.mainRestartRecovery).toBeUndefined();
+    // The delivery claim is owned by the delivery path, not recovery cleanup.
+    expect(entry.restartRecoveryDeliveryRunId).toBe("pending-delivery");
   });
 
   it("keeps interrupted running recovery residue authoritative", () => {
@@ -1042,13 +1044,11 @@ describe("main session recovery state", () => {
         abortedLastRun: true,
         restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
         mainRestartRecovery: recoveryState(),
-        restartRecoveryDeliveryRunId: "delivery-run",
       }),
-    ).toEqual({
+    ).toStrictEqual({
       abortedLastRun: false,
       restartRecoveryRuns: undefined,
       mainRestartRecovery: undefined,
-      restartRecoveryDeliveryRunId: undefined,
     });
   });
 });
