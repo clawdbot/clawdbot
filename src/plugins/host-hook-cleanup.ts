@@ -8,6 +8,7 @@ import {
   type SessionStoreTarget,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   cleanupPluginSessionSchedulerJobs,
@@ -17,6 +18,7 @@ import {
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 /** Failure captured while running plugin cleanup hooks. */
@@ -186,6 +188,22 @@ function collectAgentHarnessIds(
   return harnessIds;
 }
 
+function withPluginCleanupScope<T>(
+  pluginId: string,
+  sessionKey: string | undefined,
+  run: () => T,
+): T {
+  // Cleanup can run inside an unrelated Gateway request. Bind the registration owner and
+  // derive the agent only from the host-validated session key instead of inheriting ambient scope.
+  return withPluginRuntimePluginScope(
+    {
+      pluginId,
+      agentId: parseAgentSessionKey(sessionKey)?.agentId ?? null,
+    },
+    run,
+  );
+}
+
 /** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
 /** Runs cleanup callbacks for one plugin and returns failures instead of throwing. */
 export async function runPluginHostCleanup(params: {
@@ -268,10 +286,12 @@ export async function runPluginHostCleanup(params: {
       const hookId = `session:${registration.extension.namespace}`;
       try {
         await withPluginHostCleanupTimeout(hookId, () =>
-          cleanup({
-            reason: params.reason,
-            sessionKey: params.sessionKey,
-          }),
+          withPluginCleanupScope(registration.pluginId, params.sessionKey, () =>
+            cleanup({
+              reason: params.reason,
+              sessionKey: params.sessionKey,
+            }),
+          ),
         );
         cleanupCount += 1;
       } catch (error) {
@@ -296,11 +316,13 @@ export async function runPluginHostCleanup(params: {
       const hookId = `runtime:${registration.lifecycle.id}`;
       try {
         await withPluginHostCleanupTimeout(hookId, () =>
-          cleanup({
-            reason: params.reason,
-            sessionKey: params.sessionKey,
-            runId: params.runId,
-          }),
+          withPluginCleanupScope(registration.pluginId, params.sessionKey, () =>
+            cleanup({
+              reason: params.reason,
+              sessionKey: params.sessionKey,
+              runId: params.runId,
+            }),
+          ),
         );
         cleanupCount += 1;
       } catch (error) {

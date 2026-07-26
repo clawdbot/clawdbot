@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
@@ -458,6 +459,18 @@ export function makePluginSessionSchedulerJobKey(pluginId: string, jobId: string
   return JSON.stringify([pluginId, jobId]);
 }
 
+function withPluginSchedulerCleanupScope<T>(pluginId: string, sessionKey: string, run: () => T): T {
+  // Scheduler cleanup may run under an unrelated request. The registered session key is the
+  // host-owned authority for agent scope; missing identity clears ambient agent state.
+  return withPluginRuntimePluginScope(
+    {
+      pluginId,
+      agentId: parseAgentSessionKey(sessionKey)?.agentId ?? null,
+    },
+    run,
+  );
+}
+
 export async function cleanupPluginSessionSchedulerJobs(params: {
   pluginId?: string;
   reason: PluginHostCleanupReason;
@@ -533,11 +546,13 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       const hookId = `scheduler:${jobId}`;
       try {
         await withPluginHostCleanupTimeout(hookId, () =>
-          record.job.cleanup?.({
-            reason: params.reason,
-            sessionKey,
-            jobId,
-          }),
+          withPluginSchedulerCleanupScope(record.pluginId, sessionKey, () =>
+            record.job.cleanup?.({
+              reason: params.reason,
+              sessionKey,
+              jobId,
+            }),
+          ),
         );
       } catch (error) {
         failures.push({
@@ -600,11 +615,13 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       const hookId = `scheduler:${jobId}`;
       try {
         await withPluginHostCleanupTimeout(hookId, () =>
-          record.job.cleanup?.({
-            reason: params.reason,
-            sessionKey: record.job.sessionKey,
-            jobId,
-          }),
+          withPluginSchedulerCleanupScope(pluginId, record.job.sessionKey, () =>
+            record.job.cleanup?.({
+              reason: params.reason,
+              sessionKey: record.job.sessionKey,
+              jobId,
+            }),
+          ),
         );
       } catch (error) {
         failures.push({

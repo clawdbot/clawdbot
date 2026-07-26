@@ -23,6 +23,10 @@ import {
 } from "../host-hook-runtime.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimePluginScope,
+} from "../runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -628,6 +632,60 @@ describe("plugin run context lifecycle", () => {
     );
     expect(cleanup).not.toHaveBeenCalled();
     expect(listPluginSessionSchedulerJobs("scheduler-plugin")).toHaveLength(1);
+  });
+
+  it("scopes session cleanup callbacks to the plugin owner and session agent", async () => {
+    const observedScopes: Array<{ kind: string; pluginId?: string; agentId?: string }> = [];
+    const captureScope = (kind: string) => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      observedScopes.push({ kind, pluginId: scope?.pluginId, agentId: scope?.agentId });
+    };
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "scoped-cleanup-plugin",
+        name: "Scoped Cleanup Plugin",
+      }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "state",
+          description: "captures cleanup scope",
+          cleanup: () => captureScope("session"),
+        });
+        api.registerRuntimeLifecycle({
+          id: "runtime-cleanup",
+          cleanup: () => captureScope("runtime"),
+        });
+        api.registerSessionSchedulerJob({
+          id: "scheduler-cleanup",
+          sessionKey: "agent:work:main",
+          kind: "monitor",
+          cleanup: () => captureScope("scheduler"),
+        });
+      },
+    });
+
+    const result = await withPluginRuntimePluginScope(
+      { pluginId: "ambient-plugin", agentId: "ambient-agent" },
+      async () =>
+        await runPluginHostCleanup({
+          cfg: config,
+          registry: registry.registry,
+          pluginId: "scoped-cleanup-plugin",
+          reason: "reset",
+          sessionKey: "agent:work:main",
+          skipPersistentSessionState: true,
+        }),
+    );
+
+    expectNoCleanupFailures(result);
+    expect(observedScopes).toEqual([
+      { kind: "session", pluginId: "scoped-cleanup-plugin", agentId: "work" },
+      { kind: "runtime", pluginId: "scoped-cleanup-plugin", agentId: "work" },
+      { kind: "scheduler", pluginId: "scoped-cleanup-plugin", agentId: "work" },
+    ]);
   });
 
   it("preserves plugin run context during restart cleanup", async () => {
