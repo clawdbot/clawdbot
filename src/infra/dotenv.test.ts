@@ -305,12 +305,15 @@ describe("loadDotEnv", () => {
             "CLOUDSDK_PYTHON_SITEPACKAGES=1",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
+            "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
             "SLACK_FORWARDER_URL=http://evil-forwarder.example.com",
             "SLACK_API_URL=http://evil-slack.example.com/api/",
             "SMS_ALLOWED_USERS=*",
             "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION=true",
+            "SMS_PUBLIC_WEBHOOK_URL=https://evil-sms.example.com/webhook",
             "ZALO_API_URL=http://evil-zalo.example.com/",
             "AWS_BEDROCK_SKIP_AUTH=1",
+            "SYNOLOGY_ALLOWED_USER_IDS=*",
             "HTTP_PROXY=http://evil-proxy:8080",
             "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
             "HOMEBREW_PREFIX=./evil-brew",
@@ -337,12 +340,15 @@ describe("loadDotEnv", () => {
         delete process.env.CLOUDSDK_PYTHON_SITEPACKAGES;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
+        delete process.env.BUZZ_RELAY_URL;
         delete process.env.SLACK_FORWARDER_URL;
         delete process.env.SLACK_API_URL;
         delete process.env.SMS_ALLOWED_USERS;
         delete process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION;
+        delete process.env.SMS_PUBLIC_WEBHOOK_URL;
         delete process.env.ZALO_API_URL;
         delete process.env.AWS_BEDROCK_SKIP_AUTH;
+        delete process.env.SYNOLOGY_ALLOWED_USER_IDS;
         delete process.env.HTTP_PROXY;
         delete process.env.HOMEBREW_BREW_FILE;
         delete process.env.HOMEBREW_PREFIX;
@@ -369,12 +375,15 @@ describe("loadDotEnv", () => {
         expect(process.env.CLOUDSDK_PYTHON_SITEPACKAGES).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
+        expect(process.env.BUZZ_RELAY_URL).toBeUndefined();
         expect(process.env.SLACK_FORWARDER_URL).toBeUndefined();
         expect(process.env.SLACK_API_URL).toBeUndefined();
         expect(process.env.SMS_ALLOWED_USERS).toBeUndefined();
         expect(process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION).toBeUndefined();
+        expect(process.env.SMS_PUBLIC_WEBHOOK_URL).toBeUndefined();
         expect(process.env.ZALO_API_URL).toBeUndefined();
         expect(process.env.AWS_BEDROCK_SKIP_AUTH).toBeUndefined();
+        expect(process.env.SYNOLOGY_ALLOWED_USER_IDS).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
         expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
@@ -992,10 +1001,15 @@ describe("workspace .env blocklist completeness", () => {
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
+          "BUZZ_RELAY_URL",
           "SLACK_FORWARDER_URL",
           "SMS_ALLOWED_USERS",
           "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
+          "SMS_PUBLIC_WEBHOOK_URL",
           "AWS_BEDROCK_SKIP_AUTH",
+          "SYNOLOGY_ALLOWED_USER_IDS",
+          "FUTURE_CHANNEL_ALLOWED_USERS",
+          "FUTURE_CHANNEL_ALLOWED_USER_IDS",
           "FUTURE_CHANNEL_DISABLE_SIGNATURE_VALIDATION",
           "FUTURE_PLUGIN_DANGEROUSLY_ALLOW_UNTRUSTED",
           "FUTURE_PROVIDER_SKIP_AUTH",
@@ -1082,6 +1096,7 @@ describe("workspace .env blocklist completeness", () => {
             "MATRIX_HOMESERVER=https://evil-matrix.example.com",
             "MATTERMOST_URL=https://evil-mattermost.example.com",
             "IRC_HOST=evil-irc.example.com",
+            "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
             "SYNOLOGY_NAS_HOST=evil-synology.example.com",
             "AZURE_SPEECH_ENDPOINT=https://evil-speech.example.com",
@@ -1092,6 +1107,7 @@ describe("workspace .env blocklist completeness", () => {
         delete process.env.MATRIX_HOMESERVER;
         delete process.env.MATTERMOST_URL;
         delete process.env.IRC_HOST;
+        delete process.env.BUZZ_RELAY_URL;
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
         delete process.env.SYNOLOGY_NAS_HOST;
         delete process.env.AZURE_SPEECH_ENDPOINT;
@@ -1102,6 +1118,7 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.MATRIX_HOMESERVER).toBeUndefined();
         expect(process.env.MATTERMOST_URL).toBeUndefined();
         expect(process.env.IRC_HOST).toBeUndefined();
+        expect(process.env.BUZZ_RELAY_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_NAS_HOST).toBeUndefined();
         expect(process.env.AZURE_SPEECH_ENDPOINT).toBeUndefined();
@@ -1141,7 +1158,7 @@ describe("workspace .env blocklist completeness", () => {
             "FUTURE_PROVIDER_API_HOST=https://evil.example.com",
             "FUTURE_PROVIDER_BASE_URL=https://evil.example.com/v1",
             "FUTURE_PROVIDER_ENDPOINT=https://evil.example.com/api",
-            "FUTURE_PROVIDER_URL=https://evil.example.com/root",
+            "APP_URL=https://project.example.com",
             "SAFE_PROVIDER_DSN=postgres://localhost",
           ].join("\n"),
         );
@@ -1149,7 +1166,7 @@ describe("workspace .env blocklist completeness", () => {
         delete process.env.FUTURE_PROVIDER_API_HOST;
         delete process.env.FUTURE_PROVIDER_BASE_URL;
         delete process.env.FUTURE_PROVIDER_ENDPOINT;
-        delete process.env.FUTURE_PROVIDER_URL;
+        delete process.env.APP_URL;
         delete process.env.SAFE_PROVIDER_DSN;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
@@ -1157,7 +1174,7 @@ describe("workspace .env blocklist completeness", () => {
         expect(process.env.FUTURE_PROVIDER_API_HOST).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_BASE_URL).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_ENDPOINT).toBeUndefined();
-        expect(process.env.FUTURE_PROVIDER_URL).toBeUndefined();
+        expect(process.env.APP_URL).toBe("https://project.example.com");
         expect(process.env.SAFE_PROVIDER_DSN).toBe("postgres://localhost");
       });
     });

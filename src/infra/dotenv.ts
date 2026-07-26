@@ -170,11 +170,14 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "PROGRAMW6432",
   "STATE_DIRECTORY",
   "AWS_BEDROCK_SKIP_AUTH",
+  "BUZZ_RELAY_URL",
   "SLACK_FORWARDER_URL",
   "SMS_ALLOWED_USERS",
   "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
+  "SMS_PUBLIC_WEBHOOK_URL",
   "SLACK_API_URL",
   "SYNOLOGY_CHAT_INCOMING_URL",
+  "SYNOLOGY_ALLOWED_USER_IDS",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
   "ZALO_API_URL",
@@ -183,21 +186,24 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 // Block endpoint redirection for any service without overfitting per-provider names.
 // `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
 // in addition to the bare MATRIX_HOMESERVER listed above.
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = [
-  "_API_HOST",
-  "_BASE_URL",
-  "_ENDPOINT",
-  "_HOMESERVER",
-  "_URL",
-];
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_ENDPOINT", "_HOMESERVER"];
 const BLOCKED_WORKSPACE_DOTENV_NAME_FRAGMENTS = [
   "_DANGEROUSLY_",
-  "_DISABLE_",
+  "_DISABLE_AUTH",
+  "_DISABLE_CERT",
+  "_DISABLE_SIGNATURE",
+  "_DISABLE_SSL",
+  "_DISABLE_TLS",
   "_SKIP_AUTH",
   "DANGEROUSLY_",
-  "DISABLE_",
+  "DISABLE_AUTH",
+  "DISABLE_CERT",
+  "DISABLE_SIGNATURE",
+  "DISABLE_SSL",
+  "DISABLE_TLS",
   "SKIP_AUTH",
 ];
+const BLOCKED_WORKSPACE_DOTENV_ACCESS_CONTROL_SUFFIXES = ["_ALLOWED_USER_IDS", "_ALLOWED_USERS"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
@@ -242,6 +248,7 @@ function shouldBlockWorkspaceDotEnvKey(
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
     BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
     BLOCKED_WORKSPACE_DOTENV_NAME_FRAGMENTS.some((fragment) => upper.includes(fragment)) ||
+    BLOCKED_WORKSPACE_DOTENV_ACCESS_CONTROL_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
     getProviderAuthBlockedKeys().has(upper)
   );
 }
