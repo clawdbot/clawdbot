@@ -1071,7 +1071,9 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running reply_payload_sending (${hooks.length} handlers, sequential)`);
 
-    const agentId = resolvePluginHookAgentId(ctx);
+    // Live reply delivery carries host-owned agent identity on the per-turn usage event;
+    // durable/replay paths may omit it and therefore remain intentionally unscoped.
+    const agentId = resolvePluginHookAgentId(ctx) ?? resolvePluginHookAgentId(event.usageState);
     let currentPayload: ReplyPayload = event.payload;
     let result: PluginHookReplyPayloadSendingResult | undefined;
 

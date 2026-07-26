@@ -248,13 +248,9 @@ describe("phase hooks merger", () => {
       { content: "test", channel: "test", isGroup: false },
       { channelId: "test", agentId: "codex" },
     );
-    await withPluginRuntimeGatewayRequestScope(
-      { agentId: "codex", isWebchatConnect: () => false },
-      () =>
-        runner.runReplyPayloadSending(
-          { payload: { text: "test" }, kind: "final" },
-          { channelId: "test" },
-        ),
+    await runner.runReplyPayloadSending(
+      { payload: { text: "test" }, kind: "final", usageState: { agentId: "codex" } },
+      { channelId: "test" },
     );
     runner.runBeforeMessageWrite(
       { message: { role: "user", content: "test", timestamp: 1 } },
@@ -266,5 +262,30 @@ describe("phase hooks merger", () => {
       reply_payload_sending: { pluginId: "payload-plugin", agentId: "codex" },
       before_message_write: { pluginId: "sync-plugin", agentId: "codex" },
     });
+  });
+
+  it("preserves ambient agent scope for replay reply payload hooks", async () => {
+    let captured: { pluginId?: string; agentId?: string } | undefined;
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "reply_payload_sending",
+        pluginId: "payload-plugin",
+        handler: () => {
+          const scope = getPluginRuntimeGatewayRequestScope();
+          captured = scope ? { pluginId: scope.pluginId, agentId: scope.agentId } : undefined;
+        },
+      },
+    ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      { agentId: "replay-agent", isWebchatConnect: () => false },
+      () =>
+        runner.runReplyPayloadSending(
+          { payload: { text: "test" }, kind: "final" },
+          { channelId: "test" },
+        ),
+    );
+
+    expect(captured).toEqual({ pluginId: "payload-plugin", agentId: "replay-agent" });
   });
 });
