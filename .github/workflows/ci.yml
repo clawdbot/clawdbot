@@ -2199,7 +2199,14 @@ jobs:
               pnpm check:import-cycles
               ;;
             npm-lock)
-              pnpm deps:npm-lock:check
+              if has_package_script "deps:npm-lock:check"; then
+                pnpm deps:npm-lock:check
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the deps:npm-lock:check package script." >&2
+                exit 1
+              else
+                echo "[skip] historical target predates the transient npm lock contract"
+              fi
               ;;
             bundled-channel-config-metadata)
               pnpm check:bundled-channel-config-metadata
