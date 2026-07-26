@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
+import {
+  buildEmptyInteractiveReplyPayload,
+  markAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 
 const EMPTY_INTERACTIVE_REPLY_TEXT =
   "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
@@ -24,6 +28,13 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 
     expect(payload?.text).toBe(SILENT_REPLY_TOKEN);
     expect(payload?.isError).toBeUndefined();
+  });
+
+  it("does not mark silent failure sentinels as operational notices", () => {
+    const payload = markAgentRunFailureReplyPayload({ text: SILENT_REPLY_TOKEN });
+
+    expect(payload.isError).toBeUndefined();
+    expect(getReplyPayloadMetadata(payload)).toBeUndefined();
   });
 
   it("surfaces the fallback when group silence is explicitly disallowed", () => {

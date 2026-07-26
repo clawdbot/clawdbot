@@ -469,10 +469,11 @@ export function buildExternalRunFailureReply(
 }
 
 export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
-  const marked = markOperationalReplyPayloadForSourceSuppressionDelivery(payload);
-  if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
-    marked.isError = true;
+  if (isSilentReplyText(payload.text, SILENT_REPLY_TOKEN)) {
+    return payload;
   }
+  const marked = markOperationalReplyPayloadForSourceSuppressionDelivery(payload);
+  marked.isError = true;
   return marked;
 }
 
