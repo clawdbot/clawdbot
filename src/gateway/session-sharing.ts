@@ -27,9 +27,9 @@ import {
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
+import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
 import {
   resolveFreshestSessionStoreMatchFromStoreKeys,
-  type GatewaySessionStoreCache,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
