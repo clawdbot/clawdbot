@@ -312,8 +312,12 @@ describe("loadDotEnv", () => {
             "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION=true",
             "SMS_PUBLIC_WEBHOOK_URL=https://evil-sms.example.com/webhook",
             "ZALO_API_URL=http://evil-zalo.example.com/",
+            "AWS_ACCESS_KEY_ID=workspace-access-key",
             "AWS_BEARER_TOKEN_BEDROCK=workspace-bearer",
             "AWS_BEDROCK_SKIP_AUTH=1",
+            "AWS_PROFILE=workspace-profile",
+            "AWS_SECRET_ACCESS_KEY=workspace-secret-key",
+            "AWS_SESSION_TOKEN=workspace-session-token",
             "SYNOLOGY_ALLOWED_USER_IDS=*",
             "HTTP_PROXY=http://evil-proxy:8080",
             "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
@@ -348,8 +352,12 @@ describe("loadDotEnv", () => {
         delete process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION;
         delete process.env.SMS_PUBLIC_WEBHOOK_URL;
         delete process.env.ZALO_API_URL;
+        delete process.env.AWS_ACCESS_KEY_ID;
         delete process.env.AWS_BEARER_TOKEN_BEDROCK;
         delete process.env.AWS_BEDROCK_SKIP_AUTH;
+        delete process.env.AWS_PROFILE;
+        delete process.env.AWS_SECRET_ACCESS_KEY;
+        delete process.env.AWS_SESSION_TOKEN;
         delete process.env.SYNOLOGY_ALLOWED_USER_IDS;
         delete process.env.HTTP_PROXY;
         delete process.env.HOMEBREW_BREW_FILE;
@@ -384,8 +392,12 @@ describe("loadDotEnv", () => {
         expect(process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION).toBeUndefined();
         expect(process.env.SMS_PUBLIC_WEBHOOK_URL).toBeUndefined();
         expect(process.env.ZALO_API_URL).toBeUndefined();
+        expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
         expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
         expect(process.env.AWS_BEDROCK_SKIP_AUTH).toBeUndefined();
+        expect(process.env.AWS_PROFILE).toBeUndefined();
+        expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+        expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
         expect(process.env.SYNOLOGY_ALLOWED_USER_IDS).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
@@ -1009,8 +1021,12 @@ describe("workspace .env blocklist completeness", () => {
           "SMS_ALLOWED_USERS",
           "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
           "SMS_PUBLIC_WEBHOOK_URL",
+          "AWS_ACCESS_KEY_ID",
           "AWS_BEARER_TOKEN_BEDROCK",
           "AWS_BEDROCK_SKIP_AUTH",
+          "AWS_PROFILE",
+          "AWS_SECRET_ACCESS_KEY",
+          "AWS_SESSION_TOKEN",
           "SYNOLOGY_ALLOWED_USER_IDS",
           "FUTURE_CHANNEL_DISABLE_SIGNATURE_VALIDATION",
           "FUTURE_PLUGIN_DANGEROUSLY_ALLOW_UNTRUSTED",
