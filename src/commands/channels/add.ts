@@ -50,16 +50,6 @@ export type ChannelsAddOptions = {
   account?: string;
 } & Record<string, unknown>;
 
-export type ChannelsAddCommandParams = {
-  hasFlags?: boolean;
-  beforePersistentEffect?: () => Promise<void>;
-  /**
-   * The CLI owns direct entry for an explicit selection. Other guided callers
-   * retain picker-first navigation with the same channel highlighted.
-   */
-  directEntry?: boolean;
-};
-
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
@@ -134,7 +124,7 @@ function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, u
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
-  params?: ChannelsAddCommandParams,
+  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   try {
     return await channelsAddCommandImpl(opts, runtime, params);
@@ -150,7 +140,7 @@ export async function channelsAddCommand(
 async function channelsAddCommandImpl(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv,
-  params?: ChannelsAddCommandParams,
+  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
@@ -172,7 +162,6 @@ async function channelsAddCommandImpl(
       runtime,
       prompter: createClackPrompter(),
       ...(initialChannel ? { initialChannel } : {}),
-      ...(initialChannel && params?.directEntry ? { directEntryChannel: initialChannel } : {}),
       ...(params?.beforePersistentEffect
         ? { beforePersistentEffect: params.beforePersistentEffect }
         : {}),

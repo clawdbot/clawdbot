@@ -520,16 +520,6 @@ describe("registerChannelsCli", () => {
     expect(channelsAddCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "telegram" }),
       runtimeMock,
-      { hasFlags: false, directEntry: true },
-    );
-  });
-
-  it("keeps selectionless channel adds picker-first", async () => {
-    await runChannelsAddCli(["channels", "add"]);
-
-    expect(channelsAddCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: undefined }),
-      runtimeMock,
       { hasFlags: false },
     );
   });

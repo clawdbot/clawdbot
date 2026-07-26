@@ -323,8 +323,6 @@ export type SetupChannelsOptions = {
   skipDmPolicyPrompt?: boolean;
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
-  /** Enter this channel's guided setup before showing the channel picker. */
-  directEntryChannel?: ChannelId;
   initialSelection?: ChannelId[];
   /** Finish after the explicitly targeted channel is configured or paused. */
   finishAfterInitialSelection?: boolean;
