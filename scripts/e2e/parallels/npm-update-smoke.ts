@@ -61,6 +61,7 @@ interface NpmUpdateOptions {
   registryPackageTarballs: string[];
   freshTargetSpec?: string;
   hostIp?: string;
+  macosSnapshotHint?: string;
   macosVm?: string;
   packageSpec: string;
   targetTarball?: string;
@@ -390,6 +391,8 @@ Options:
   --platform <list>           Comma-separated platforms to run: all, macos, windows, linux.
                              Default: all
   --macos-vm <name>           Explicit Parallels macOS VM name.
+  --macos-snapshot-hint <hint>
+                             Snapshot name substring/fuzzy match passed to macOS fresh lanes.
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for agent-turn smoke checks.
   --host-ip <ip>             Override Parallels host IP.
@@ -409,6 +412,7 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
     registryPackageTarballs: [],
     freshTargetSpec: undefined,
     json: false,
+    macosSnapshotHint: undefined,
     macosVm: undefined,
     modelId: undefined,
     packageSpec: "",
@@ -463,6 +467,10 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
         break;
       case "--macos-vm":
         options.macosVm = ensureValue(args, i, arg);
+        i++;
+        break;
+      case "--macos-snapshot-hint":
+        options.macosSnapshotHint = ensureValue(args, i, arg);
         i++;
         break;
       case "--provider":
@@ -691,7 +699,7 @@ export class NpmUpdateSmoke {
   private async runFreshBaselines(): Promise<void> {
     const jobs: Job[] = [];
     if (this.options.platforms.has("macos")) {
-      jobs.push(this.spawnFresh("macOS", "macos", ["--vm", this.macosVm]));
+      jobs.push(this.spawnFresh("macOS", "macos", this.macosFreshArgs()));
     }
     if (this.options.platforms.has("windows")) {
       jobs.push(this.spawnFresh("Windows", "windows", []));
@@ -713,7 +721,7 @@ export class NpmUpdateSmoke {
         this.spawnFresh(
           "macOS",
           "macos",
-          ["--vm", this.macosVm],
+          this.macosFreshArgs(),
           {},
           this.freshTargetSpec,
           "fresh-target",
@@ -740,6 +748,16 @@ export class NpmUpdateSmoke {
       );
     }
     await this.finishFreshJobs("fresh-target", "fresh target", jobs, this.freshTargetStatus);
+  }
+
+  private macosFreshArgs(): string[] {
+    return [
+      "--vm",
+      this.macosVm,
+      ...(this.options.macosSnapshotHint
+        ? ["--snapshot-hint", this.options.macosSnapshotHint]
+        : []),
+    ];
   }
 
   private async finishFreshJobs(
