@@ -34,7 +34,7 @@ struct IOSAssistantMediaLoader: Sendable {
             let session = GatewayTLSPinningSession(params: tls)
             return {
                 defer { session.finishTasksAndInvalidate() }
-                try await session.data(for: $0, maximumBytes: maximumBytes)
+                return try await session.data(for: $0, maximumBytes: maximumBytes)
             }
         }
     }
