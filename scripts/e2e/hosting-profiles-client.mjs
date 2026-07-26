@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
-const [scenario, url] = process.argv.slice(2);
+const [scenario, url, previousReadinessPath] = process.argv.slice(2);
 if (!scenario || !url) {
   throw new Error("usage: hosting-profiles-client.mjs <scenario> <ready-url>");
 }
@@ -185,5 +186,23 @@ if (scenario === "unprofiled") {
 
 assertCoreIdentity();
 await assertIdentityStableAcrossPolls();
+
+if (previousReadinessPath) {
+  const previous = JSON.parse(await readFile(previousReadinessPath, "utf8"));
+  const previousSubject = (ref) => subject(ref, previous);
+  const hostRef = "openclaw/host-instance/current";
+  const processRef = "openclaw/process/current";
+  const gatewayRef = "openclaw/gateway/current";
+  const profileRef = "openclaw/hosting-profile/selected";
+
+  assert.equal(previous.identity?.producerRef, body.identity?.producerRef);
+  assert.equal(previousSubject(hostRef)?.id, subject(hostRef)?.id);
+  assert.notEqual(previousSubject(processRef)?.id, subject(processRef)?.id);
+  assert.notEqual(previousSubject(gatewayRef)?.id, subject(gatewayRef)?.id);
+  assert.equal(previousSubject(profileRef)?.id, subject(profileRef)?.id);
+  for (const ref of [processRef, gatewayRef, profileRef]) {
+    assert.equal(previousSubject(ref)?.parentRef, subject(ref)?.parentRef);
+  }
+}
 
 console.log(JSON.stringify({ scenario, status: response.status, readiness: body }, null, 2));

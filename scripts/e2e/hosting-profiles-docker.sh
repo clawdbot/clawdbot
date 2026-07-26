@@ -95,7 +95,21 @@ run_scenario() {
   docker_e2e_docker_cmd exec "$container_name" \
     node scripts/e2e/hosting-profiles-client.mjs "$scenario" "http://127.0.0.1:$PORT/readyz"
 
-  if [ "$scenario" = "node-not-ready" ]; then
+  if [ "$scenario" = "local" ]; then
+    local before_restart_path="/tmp/hosting-profiles-before-restart.json"
+    docker_e2e_docker_cmd exec "$container_name" node --input-type=module -e \
+      "import fs from 'node:fs'; const response = await fetch('http://127.0.0.1:$PORT/readyz'); fs.writeFileSync('$before_restart_path', await response.text());"
+    docker_e2e_docker_cmd restart "$container_name" >/dev/null
+    if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
+      "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_http http://127.0.0.1:$PORT/readyz 200 1000"; then
+      dump_readiness_response "$container_name"
+      dump_scenario_log "$container_name" /tmp/hosting-profiles.log
+      exit 1
+    fi
+    docker_e2e_docker_cmd exec "$container_name" \
+      node scripts/e2e/hosting-profiles-client.mjs local \
+      "http://127.0.0.1:$PORT/readyz" "$before_restart_path"
+  elif [ "$scenario" = "node-not-ready" ]; then
     docker_e2e_docker_cmd exec -d "$container_name" bash -lc \
       'set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry="$(openclaw_e2e_resolve_entrypoint)"; exec node "$entry" node run --host 127.0.0.1 --port 18789 --node-id hosting-profile-node --display-name "Hosting Profile Node" >/tmp/hosting-profiles-node.log 2>&1'
     if ! docker_e2e_wait_container_bash "$container_name" 180 0.5 \
