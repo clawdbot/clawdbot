@@ -859,7 +859,9 @@ function collectPnpmLockViolations(
       violations.push({ path: lockPath, packageKey });
       continue;
     }
-    const expectedIntegrities = [...(pnpmLockIntegrities.get(packageKey) ?? [])].toSorted();
+    const expectedIntegrities = [...(pnpmLockIntegrities.get(packageKey) ?? [])].toSorted(
+      (left, right) => left.localeCompare(right),
+    );
     if (
       expectedIntegrities.length > 0 &&
       (typeof metadata.integrity !== "string" || !expectedIntegrities.includes(metadata.integrity))

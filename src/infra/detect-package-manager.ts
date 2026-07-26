@@ -15,7 +15,7 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-export function resolveBunGlobalNodeModules(): string {
+function resolveBunGlobalNodeModules(): string {
   return path.join(
     process.env.BUN_INSTALL || path.join(os.homedir(), ".bun"),
     "install",

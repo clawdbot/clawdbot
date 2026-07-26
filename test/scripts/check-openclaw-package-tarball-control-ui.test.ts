@@ -106,15 +106,11 @@ function withPackedPackage(
       { cwd: packageRoot, encoding: "utf8", timeout: 30_000 },
     );
     expect(packed.status, packed.stderr || packed.error?.message).toBe(0);
+    // npm <=11 `pack --json` emits an array; npm 12 emits an object keyed by package name.
     const parsed = JSON.parse(packed.stdout) as
-      | { filename: string }
       | { filename: string }[]
       | Record<string, { filename: string }>;
-    const packResult = Array.isArray(parsed)
-      ? parsed[0]
-      : "filename" in parsed
-        ? parsed
-        : Object.values(parsed)[0];
+    const packResult = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
     const filename = packResult?.filename ?? "";
     const tarball = join(root, filename);
     expect(existsSync(tarball)).toBe(true);

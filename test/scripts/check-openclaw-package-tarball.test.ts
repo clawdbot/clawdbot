@@ -45,7 +45,7 @@ function usesLegacyShrinkwrapByDefault(version: string): boolean {
   if (!match) {
     return false;
   }
-  const [year, month, patch] = match.slice(1).map(Number);
+  const [year = 0, month = 0, patch = 0] = match.slice(1).map(Number);
   return year < 2026 || (year === 2026 && (month < 7 || (month === 7 && patch < 2)));
 }
 
