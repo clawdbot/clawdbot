@@ -169,7 +169,7 @@ describe("workboard status_changed notification", () => {
     await store.update(other.id, { status: "ready" });
     const { events } = await store.notificationEvents({ subscriptionId: sub.id });
     const cardIds = events
-      .map((event) => event.cardId)
+      .flatMap((event) => (event.cardId ? [event.cardId] : []))
       .toSorted((left, right) => left.localeCompare(right));
     expect(cardIds).toEqual([a.id, b.id].toSorted((left, right) => left.localeCompare(right)));
     expect(cardIds).not.toContain(other.id);
