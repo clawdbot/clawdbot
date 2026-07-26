@@ -1361,6 +1361,7 @@ export function candidateParallelsArgs(
   dependencyTarballPaths = [],
   toolingRoot = TOOLING_ROOT,
   registryPackageTarballPaths = [],
+  macosSnapshotHint = "",
 ) {
   return [
     "exec",
@@ -1373,6 +1374,7 @@ export function candidateParallelsArgs(
       "--registry-package-tarball",
       registryPackage,
     ]),
+    ...(macosSnapshotHint ? ["--macos-snapshot-hint", macosSnapshotHint] : []),
     "--json",
   ];
 }
@@ -1382,6 +1384,7 @@ export function candidateParallelsShellCommand(
   timeoutBin,
   dependencyTarballPaths = [],
   registryPackageTarballPaths = [],
+  macosSnapshotHint = "",
 ) {
   // Login shells can replace the candidate's supported Node with ambient host Node.
   // Keep the invoking Node first so pnpm and npm use the validated runtime.
@@ -1399,6 +1402,7 @@ export function candidateParallelsShellCommand(
       dependencyTarballPaths,
       TOOLING_ROOT,
       registryPackageTarballPaths,
+      macosSnapshotHint,
     ).map(shellQuote),
   ].join(" ");
 }
@@ -1425,6 +1429,7 @@ async function runParallelsIfNeeded(
     timeoutBin,
     dependencyTarballPaths,
     registryPackageTarballPaths,
+    process.env.OPENCLAW_PARALLELS_MACOS_SNAPSHOT_HINT?.trim() ?? "",
   );
   run("bash", ["-lc", command], {
     env: {

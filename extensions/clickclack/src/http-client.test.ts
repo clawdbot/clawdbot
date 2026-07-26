@@ -152,7 +152,7 @@ describe("ClickClack HTTP client", () => {
       kind: "public",
       external_managed: true,
       external_ref: "agent:main:main",
-      external_url: "https://control.example/chat?session=agent%3Amain%3Amain",
+      external_url: "https://control.example/chat/main",
       sidebar_section: "Sessions",
     });
     await client.updateChannel("chn_discussion", {
@@ -172,7 +172,7 @@ describe("ClickClack HTTP client", () => {
       kind: "public",
       external_managed: true,
       external_ref: "agent:main:main",
-      external_url: "https://control.example/chat?session=agent%3Amain%3Amain",
+      external_url: "https://control.example/chat/main",
       sidebar_section: "Sessions",
     });
     expect(fetchMock).toHaveBeenNthCalledWith(

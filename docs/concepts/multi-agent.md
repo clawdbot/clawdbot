@@ -21,7 +21,7 @@ Each agent has its own:
 Auth profiles are per-agent, read from:
 
 ```text
-~/.openclaw/agents/<agentId>/agent/auth-profiles.json
+~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
 ```
 
 <Note>

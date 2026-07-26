@@ -3795,6 +3795,11 @@ export const en: TranslationMap = {
     },
     outputTokens: "{count} output tokens",
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
+    sessionRoute: {
+      chooseTitle: "Choose a session",
+      multipleMatches: "More than one session matches {shortId}.",
+      additionalMatches: "Search results remain. Use a longer id prefix.",
+    },
     sessionSharing: {
       menu: "Thread sharing",
       current: "Thread visibility: {visibility}",

@@ -15,6 +15,7 @@ function runtimeApiPluginFile(pluginId: string): string {
 const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "acpx",
   "browser",
+  "buzz",
   "canvas",
   "clickclack",
   "copilot-proxy",
