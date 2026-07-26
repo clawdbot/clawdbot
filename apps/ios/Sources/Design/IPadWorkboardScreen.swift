@@ -859,7 +859,7 @@ struct IPadWorkboardScreen: View {
     private func fetchCards() async throws -> IPadWorkboardCardsResponse {
         let data = try await request(
             method: "workboard.cards.list",
-            params: IPadWorkboardListParams(boardId: selectedBoardParam),
+            params: IPadWorkboardCardsListParams(boardId: selectedBoardParam),
             timeoutSeconds: 20)
         return try JSONDecoder().decode(IPadWorkboardCardsResponse.self, from: data)
     }
@@ -1457,6 +1457,11 @@ struct IPadWorkboardAutomationMetadata: Decodable {
 
 private struct IPadWorkboardListParams: Encodable {
     let boardId: String?
+}
+
+private struct IPadWorkboardCardsListParams: Encodable {
+    let boardId: String?
+    let proofView = "bounded"
 }
 
 private struct IPadWorkboardCreateParams: Encodable {

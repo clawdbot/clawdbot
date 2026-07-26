@@ -561,8 +561,14 @@ struct RootTabsSourceGuardTests {
 extension RootTabsSourceGuardTests {
     @Test func `workboard uses real gateway methods`() throws {
         let source = try String(contentsOf: Self.iPadWorkboardScreenSourceURL(), encoding: .utf8)
+        let fetchCards = try Self.extract(
+            source,
+            from: "private func fetchCards() async throws -> IPadWorkboardCardsResponse",
+            to: "private func applyCardsResponse")
 
         #expect(source.contains("workboard.cards.list"))
+        #expect(fetchCards.contains("params: IPadWorkboardCardsListParams("))
+        #expect(source.contains("let proofView = \"bounded\""))
         #expect(source.contains("workboard.cards.create"))
         #expect(source.contains("workboard.cards.move"))
         #expect(source.contains("workboard.cards.archive"))
