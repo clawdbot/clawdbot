@@ -3,6 +3,7 @@ import type { Model } from "../llm/types.js";
 import { MICRO_USD_PER_USD } from "../utils/micro-usd.js";
 import {
   estimateUsageCost,
+  type ModelCostRates,
   resolveModelCostConfig,
   resolveUsageCostRates,
 } from "../utils/usage-format.js";
@@ -58,7 +59,7 @@ export function resolveModelSpendCostMicroUsd(params: {
     : undefined;
   const cost = resolvedCost ?? params.model.cost;
   const usd = estimateUsageCost({ usage, cost });
-  const rates = resolveUsageCostRates({ usage, cost });
+  const rates: ModelCostRates | undefined = resolveUsageCostRates({ usage, cost });
   const pricingComplete =
     rates !== undefined &&
     usd !== undefined &&
