@@ -243,11 +243,10 @@ function getSilentLeadingAttachedRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token where the final token
-  // is glued directly to visible word-start content (for example
-  // `NO_REPLYhello`), without treating punctuation-start text like
-  // `NO_REPLY: explanation` as a silent prefix.
-  const regex = new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=[\\p{L}\\p{N}])`, "iu");
+  // Match one or more leading occurrences of the token before word-start content,
+  // including newline-separated model output, without treating punctuation-start
+  // text like `NO_REPLY: explanation` as a silent prefix.
+  const regex = new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=\\s*[\\p{L}\\p{N}])`, "iu");
   silentLeadingAttachedRegexByToken.set(token, regex);
   return regex;
 }

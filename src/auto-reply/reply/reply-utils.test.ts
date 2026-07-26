@@ -207,6 +207,21 @@ describe("normalizeReplyPayload", () => {
     expect(expectNormalizedReply(result).text).toBe("The user is saying hello");
   });
 
+  it("strips newline-separated leading NO_REPLY text without leaking the token", () => {
+    const result = normalizeReplyPayload({
+      text: [
+        "NO_REPLY",
+        "",
+        "Wait - the user mentioned me directly. I should respond.",
+        "",
+        "Hi! How can I help?",
+      ].join("\n"),
+    });
+    expect(expectNormalizedReply(result).text).toBe(
+      "Wait - the user mentioned me directly. I should respond.\n\nHi! How can I help?",
+    );
+  });
+
   it("strips glued leading NO_REPLY text case-insensitively", () => {
     const result = normalizeReplyPayload({
       text: "no_replyThe user is saying hello",

@@ -39,6 +39,9 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText("NO_REPLYThe user is saying hello")).toBe(
       "The user is saying hello",
     );
+    expect(sanitizePendingFinalDeliveryText("NO_REPLY\n\nThe user is saying hello")).toBe(
+      "The user is saying hello",
+    );
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK NO_REPLY")).toBe("HEARTBEAT_OK");
   });
 
