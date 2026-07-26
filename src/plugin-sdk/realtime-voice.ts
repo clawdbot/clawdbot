@@ -121,6 +121,7 @@ export {
 export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
+  REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   type RealtimeVoiceAgentConsultResult,
   type RealtimeVoiceAgentConsultRuntime,
 } from "../talk/agent-consult-runtime.js";

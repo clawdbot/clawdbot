@@ -8,7 +8,10 @@ import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import {
+  consultRealtimeVoiceAgent,
+  REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
+} from "./agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
 import {
   resolveRealtimeVoiceAgentConsultTools,
@@ -189,6 +192,7 @@ describe("realtime voice agent consult runtime", () => {
   });
 
   it("exposes the shared consult tool based on policy", () => {
+    expect(REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION).toBe(1);
     expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toStrictEqual([
       REALTIME_VOICE_AGENT_CONSULT_TOOL,
     ]);
@@ -221,6 +225,8 @@ describe("realtime voice agent consult runtime", () => {
       surface: "a live phone call",
       userLabel: "Caller",
       questionSourceLabel: "caller",
+      senderId: "+15550001234",
+      senderIsOwner: true,
       toolsAllow: ["read"],
       provider: "openai",
       model: "gpt-5.4",
@@ -249,6 +255,8 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.sessionKey).toBe("voice:15550001234");
     expect(call.sandboxSessionKey).toBe("agent:operator:voice:15550001234");
     expect(call.agentId).toBe("operator");
+    expect(call.senderId).toBe("+15550001234");
+    expect(call.senderIsOwner).toBe(true);
     expect(call.messageProvider).toBe("voice");
     expect(call.lane).toBe("voice");
     expect(call.toolsAllow).toStrictEqual(["read"]);

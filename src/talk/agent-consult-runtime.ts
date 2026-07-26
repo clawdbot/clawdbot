@@ -34,6 +34,9 @@ export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
  */
 export type RealtimeVoiceAgentConsultResult = { text: string };
 
+/** Capability version for forwarding authenticated sender identity into embedded consult runs. */
+export const REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION = 1;
+
 /**
  * Controls whether voice consults run in a fresh session or fork context from the requester.
  */
@@ -253,6 +256,9 @@ export async function consultRealtimeVoiceAgent(params: {
   questionSourceLabel?: string;
   agentId?: string;
   spawnedBy?: string | null;
+  senderId?: string | null;
+  /** Trusted owner bit established by the caller's ingress authorization boundary. */
+  senderIsOwner?: boolean;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
   provider?: RunEmbeddedAgentParams["provider"];
   model?: RunEmbeddedAgentParams["model"];
@@ -353,6 +359,8 @@ export async function consultRealtimeVoiceAgent(params: {
         sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
         agentId,
         spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderIsOwner: params.senderIsOwner,
         messageProvider: consultDeliveryContext?.channel ?? params.messageProvider,
         agentAccountId: consultDeliveryContext?.accountId,
         messageTo: consultDeliveryContext?.to,
