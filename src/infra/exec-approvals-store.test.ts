@@ -823,6 +823,65 @@ describe("exec approvals store helpers", () => {
     expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
   });
 
+  it("returns the persisted policy when the sync lock is held by this process", () => {
+    // A same-process async lock holder makes the sync lock fail instantly;
+    // that contention must not degrade a valid yolo policy to deny.
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"defaults":{"security":"full","ask":"off"},"agents":{}}\n',
+      "utf8",
+    );
+    const lockPath = `${approvalsPath}.lock`;
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid })}\n`, { mode: 0o600 });
+    try {
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "full", ask: "off" });
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+    }
+  });
+
+  it("stays fail-closed when the sync lock is held by another process", async () => {
+    // A foreign holder may be mid-revocation; deny is the only assertable state.
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"defaults":{"security":"full","ask":"off"},"agents":{}}\n',
+      "utf8",
+    );
+    const lockPath = `${approvalsPath}.lock`;
+    // A live child guarantees a foreign pid even when the runner is PID 1.
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], {
+      stdio: "ignore",
+    });
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: child.pid })}\n`, { mode: 0o600 });
+    try {
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+      child.kill("SIGKILL");
+      await once(child, "exit");
+    }
+  });
+
+  it("stays fail-closed for malformed persisted policy while the sync lock is held", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, "{invalid", "utf8");
+    const lockPath = `${approvalsPath}.lock`;
+    fs.writeFileSync(lockPath, `${JSON.stringify({ pid: process.pid })}\n`, { mode: 0o600 });
+    try {
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+    } finally {
+      fs.rmSync(lockPath, { force: true });
+    }
+  });
+
   it("keeps synchronous and locked resolution fail-closed for malformed persisted policy", async () => {
     const dir = createHomeDir();
     const approvalsPath = approvalsFilePath(dir);
