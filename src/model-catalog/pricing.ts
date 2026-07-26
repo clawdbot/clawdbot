@@ -6,11 +6,6 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type {
-  PluginManifestModelPricingModelIdTransform,
-  PluginManifestModelPricingProvider,
-  PluginManifestModelPricingSource,
-} from "../plugins/manifest.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -20,15 +15,8 @@ import { getRemoteModelCatalogPricing } from "./remote-overlay.js";
 
 type PricingValue = RemoteModelCatalogPricing | ModelCatalogCost;
 type ManifestPlugins = readonly PluginManifestRegistry["plugins"][number][];
-type ExternalPricingSourcePolicy = {
-  provider?: string;
-  passthroughProviderModel?: boolean;
-  modelIdTransforms: readonly PluginManifestModelPricingModelIdTransform[];
-};
 type ExternalPricingPolicy = {
   external: boolean;
-  openRouter?: ExternalPricingSourcePolicy;
-  liteLLM?: ExternalPricingSourcePolicy;
 };
 type PricingContext = {
   snapshot?: PluginMetadataSnapshot;
@@ -42,38 +30,13 @@ type PricingContext = {
 const EMPTY_CONFIG: OpenClawConfig = {};
 const pricingContextByConfig = new WeakMap<OpenClawConfig, PricingContext>();
 
-function normalizeSource(
-  source: PluginManifestModelPricingSource | false | undefined,
-  manifestPlugins?: ManifestPlugins,
-): ExternalPricingSourcePolicy | undefined {
-  if (!source) {
-    return undefined;
-  }
-  return {
-    ...(source.provider
-      ? {
-          provider: normalizeModelRef(source.provider, "placeholder", { manifestPlugins }).provider,
-        }
-      : {}),
-    ...(source.passthroughProviderModel ? { passthroughProviderModel: true } : {}),
-    modelIdTransforms: source.modelIdTransforms ?? [],
-  };
-}
-
 function normalizePolicy(
-  policy: PluginManifestModelPricingProvider | undefined,
-  manifestPlugins?: ManifestPlugins,
+  policy: { external?: boolean } | undefined,
 ): ExternalPricingPolicy | undefined {
   if (!policy) {
     return undefined;
   }
-  const openRouter = normalizeSource(policy.openRouter, manifestPlugins);
-  const liteLLM = normalizeSource(policy.liteLLM, manifestPlugins);
-  return {
-    external: policy.external !== false,
-    ...(openRouter ? { openRouter } : {}),
-    ...(liteLLM ? { liteLLM } : {}),
-  };
+  return { external: policy.external !== false };
 }
 
 function activeManifestRegistry(
@@ -125,7 +88,7 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
   const policies = new Map<string, ExternalPricingPolicy>();
   for (const plugin of registry.plugins) {
     for (const [provider, rawPolicy] of Object.entries(plugin.modelPricing?.providers ?? {})) {
-      const policy = normalizePolicy(rawPolicy, snapshot?.plugins);
+      const policy = normalizePolicy(rawPolicy);
       if (policy) {
         policies.set(provider, policy);
       }
@@ -165,73 +128,6 @@ function hasKnownPricing(pricing: PricingValue): boolean {
     (pricing.cacheRead ?? 0) > 0 ||
     (pricing.cacheWrite ?? 0) > 0
   );
-}
-
-function applyModelIdTransforms(
-  model: string,
-  transforms: readonly PluginManifestModelPricingModelIdTransform[],
-): string[] {
-  const variants = new Set([model]);
-  for (const transform of transforms) {
-    if (transform !== "version-dots") {
-      continue;
-    }
-    for (const variant of [...variants]) {
-      variants.add(
-        variant
-          .replace(/^claude-(\d+)-(\d+)-/u, "claude-$1.$2-")
-          .replace(/^claude-([a-z]+)-(\d+)-(\d+)$/u, "claude-$1-$2.$3"),
-      );
-    }
-  }
-  return [...variants];
-}
-
-function buildHostedPricingCandidates(params: {
-  provider: string;
-  model: string;
-  source: "openRouter" | "liteLLM";
-  policies: ReadonlyMap<string, ExternalPricingPolicy>;
-  manifestPlugins?: ManifestPlugins;
-  seen?: Set<string>;
-}): string[] {
-  const key = modelKey(params.provider, params.model);
-  const seen = params.seen ?? new Set<string>();
-  if (seen.has(key)) {
-    return [];
-  }
-  const nextSeen = new Set(seen).add(key);
-  const policy = params.policies.get(params.provider);
-  if (policy?.external === false) {
-    return [];
-  }
-  const sourcePolicy = policy?.[params.source];
-  if (policy && !sourcePolicy) {
-    return [];
-  }
-  const externalProvider = sourcePolicy?.provider ?? params.provider;
-  const candidates = new Set(
-    applyModelIdTransforms(params.model, sourcePolicy?.modelIdTransforms ?? []).map((model) =>
-      modelKey(externalProvider, model),
-    ),
-  );
-  if (sourcePolicy?.passthroughProviderModel && params.model.includes("/")) {
-    const slash = params.model.indexOf("/");
-    const nested = normalizeModelRef(params.model.slice(0, slash), params.model.slice(slash + 1), {
-      manifestPlugins: params.manifestPlugins,
-    });
-    for (const candidate of buildHostedPricingCandidates({
-      provider: nested.provider,
-      model: nested.model,
-      source: params.source,
-      policies: params.policies,
-      manifestPlugins: params.manifestPlugins,
-      seen: nextSeen,
-    })) {
-      candidates.add(candidate);
-    }
-  }
-  return [...candidates];
 }
 
 function isPrivateOrLoopbackHost(hostname: string): boolean {
@@ -336,51 +232,13 @@ export function resolveHostedModelPricing(params: {
     manifestPlugins: context.snapshot?.plugins,
   });
   if (
+    context.policies.get(normalized.provider)?.external === false ||
     !allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot?.plugins)
   ) {
     return undefined;
   }
-  const candidates = [
-    ...buildHostedPricingCandidates({
-      provider: normalized.provider,
-      model: normalized.model,
-      source: "openRouter",
-      policies: context.policies,
-      manifestPlugins: context.snapshot?.plugins,
-    }),
-    ...buildHostedPricingCandidates({
-      provider: normalized.provider,
-      model: normalized.model,
-      source: "liteLLM",
-      policies: context.policies,
-      manifestPlugins: context.snapshot?.plugins,
-    }),
-  ];
-  for (const candidate of new Set(candidates)) {
-    const normalizedCandidate = normalizedHostedKey(candidate, context.snapshot?.plugins);
-    const catalogPricing =
-      context.catalog.get(candidate) ??
-      (normalizedCandidate ? context.catalog.get(normalizedCandidate) : undefined);
-    if (catalogPricing && hasKnownPricing(catalogPricing)) {
-      return catalogPricing;
-    }
-  }
-  for (const candidate of new Set(candidates)) {
-    const exact = context.hosted[candidate];
-    if (exact) {
-      return exact;
-    }
-  }
-  for (const candidate of new Set(candidates)) {
-    const normalizedCandidate = normalizedHostedKey(candidate, context.snapshot?.plugins);
-    const matched = normalizedCandidate
-      ? context.normalizedHosted.get(normalizedCandidate)
-      : undefined;
-    if (matched) {
-      return matched;
-    }
-  }
-  return undefined;
+  const key = modelKey(normalized.provider, normalized.model);
+  return context.hosted[key] ?? context.normalizedHosted.get(key);
 }
 
 export function modelCatalogPricingFingerprint(config?: OpenClawConfig): string {

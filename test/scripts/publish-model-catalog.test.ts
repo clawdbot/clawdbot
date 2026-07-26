@@ -145,6 +145,20 @@ describe("publish model catalog", () => {
         manifestPath: "openai.json",
         manifest: { modelCatalog: { providers: { openai } } },
       },
+      {
+        pluginId: "openrouter",
+        manifestPath: "openrouter.json",
+        manifest: {
+          modelPricing: {
+            providers: {
+              openrouter: {
+                openRouter: { passthroughProviderModel: true },
+                liteLLM: false,
+              },
+            },
+          },
+        },
+      },
     ];
     const bundle = await assembleModelCatalogBundle({
       manifests,
@@ -190,12 +204,17 @@ describe("publish model catalog", () => {
           input_cost_per_token: 0.000007,
           output_cost_per_token: 0.000008,
         },
+        "forbidden-model": {
+          litellm_provider: "openrouter",
+          input_cost_per_token: 0.000009,
+          output_cost_per_token: 0.00001,
+        },
       });
     };
 
     await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).resolves.toEqual({
       modelsEnriched: 2,
-      pricingEntries: 3,
+      pricingEntries: 8,
     });
     expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
     expect(bundle.providers.openai?.models[0]?.cost).toMatchObject({
@@ -205,16 +224,22 @@ describe("publish model catalog", () => {
     });
     expect(bundle.providers.openai?.models[2]?.cost).toBeUndefined();
     expect(bundle.pricing).toEqual({
+      "anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
       "custom/external-model": { input: 7, output: 8 },
       "external-model": { input: 7, output: 8 },
+      "forbidden-model": { input: 9, output: 10 },
+      "openrouter/anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
+      "openrouter/openai/gpt-special": { input: 3, output: 4 },
+      "openrouter/unknown/new-model": { input: 1_000_000, output: 1_000_000 },
       "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
     });
+    expect(bundle.pricing).not.toHaveProperty("openrouter/forbidden-model");
     expect(bundle.pricing).not.toHaveProperty("gpt-special");
     expect(bundle.pricing).not.toHaveProperty("openai/gpt-special");
     expect(summarizeModelCatalogBundle(bundle)).toMatchObject({
       models: 200,
       costModels: 2,
-      pricingEntries: 3,
+      pricingEntries: 8,
     });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });

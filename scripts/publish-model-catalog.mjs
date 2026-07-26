@@ -287,6 +287,101 @@ function buildPricingCandidates({ providerId, modelId, source, policies, seen = 
   return [...candidates];
 }
 
+function reverseModelIdTransforms(modelId, transforms) {
+  const variants = new Set([modelId]);
+  for (const transform of transforms ?? []) {
+    if (transform !== "version-dots") {
+      continue;
+    }
+    for (const variant of Array.from(variants)) {
+      variants.add(
+        variant
+          .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
+          .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3"),
+      );
+    }
+  }
+  return [...variants];
+}
+
+function setRuntimePricingSource(entries, key, source, pricing) {
+  const entry = entries.get(key) ?? {};
+  entry[source] = pricing;
+  entries.set(key, entry);
+}
+
+function collectPolicyRuntimePricingAliases({ providerId, policy, source, catalog, entries }) {
+  const rawSourcePolicy = policy?.[source];
+  const sourceEnabled = Boolean(rawSourcePolicy);
+  const sourcePolicy = sourceEnabled ? rawSourcePolicy : {};
+  const sourceProvider = sourcePolicy.provider ?? providerId;
+  for (const [sourceKey, pricing] of catalog) {
+    const slash = sourceKey.indexOf("/");
+    if (slash <= 0 || slash === sourceKey.length - 1) {
+      continue;
+    }
+    const keyProvider = sourceKey.slice(0, slash);
+    const sourceModel = sourceKey.slice(slash + 1);
+    if (keyProvider === sourceProvider) {
+      for (const runtimeModel of reverseModelIdTransforms(
+        sourceModel,
+        sourcePolicy.modelIdTransforms,
+      )) {
+        setRuntimePricingSource(
+          entries,
+          `${providerId}/${runtimeModel}`,
+          source,
+          sourceEnabled ? pricing : undefined,
+        );
+      }
+    }
+    if (sourceEnabled && sourcePolicy.passthroughProviderModel) {
+      setRuntimePricingSource(entries, `${providerId}/${sourceKey}`, source, pricing);
+    }
+  }
+}
+
+function materializePolicyRuntimePricing({
+  hostedPricing,
+  policies,
+  openRouterCatalog,
+  liteLlmCatalog,
+  pricedProviderModelKeys,
+}) {
+  for (const [providerId, policy] of policies) {
+    if (policy?.external === false) {
+      continue;
+    }
+    const entries = new Map();
+    collectPolicyRuntimePricingAliases({
+      providerId,
+      policy,
+      source: "openRouter",
+      catalog: openRouterCatalog,
+      entries,
+    });
+    collectPolicyRuntimePricingAliases({
+      providerId,
+      policy,
+      source: "liteLLM",
+      catalog: liteLlmCatalog,
+      entries,
+    });
+    for (const [key, entry] of entries) {
+      if (pricedProviderModelKeys.has(key)) {
+        hostedPricing.delete(key);
+        continue;
+      }
+      const pricing = mergePricing(entry.openRouter, entry.liteLLM);
+      if (pricing) {
+        hostedPricing.set(key, pricing);
+      } else {
+        hostedPricing.delete(key);
+      }
+    }
+  }
+}
+
 function readPricingPolicies(manifests) {
   const policies = new Map();
   for (const entry of manifests) {
@@ -400,6 +495,7 @@ export async function enrichModelCatalogPricing(options) {
 
   let enriched = 0;
   const coveredPricingKeys = new Set();
+  const pricedProviderModelKeys = new Set();
   for (const [providerId, provider] of Object.entries(options.bundle.providers)) {
     for (const model of provider.models) {
       const openRouterCandidates = buildPricingCandidates({
@@ -426,7 +522,9 @@ export async function enrichModelCatalogPricing(options) {
         enriched += 1;
       }
       if (model.cost) {
-        coveredPricingKeys.add(`${providerId}/${model.id}`);
+        const providerModelKey = `${providerId}/${model.id}`;
+        coveredPricingKeys.add(providerModelKey);
+        pricedProviderModelKeys.add(providerModelKey);
         for (const candidate of [...openRouterCandidates, ...liteLlmCandidates]) {
           coveredPricingKeys.add(candidate);
         }
@@ -451,6 +549,13 @@ export async function enrichModelCatalogPricing(options) {
   for (const key of coveredPricingKeys) {
     hostedPricing.delete(key);
   }
+  materializePolicyRuntimePricing({
+    hostedPricing,
+    policies,
+    openRouterCatalog,
+    liteLlmCatalog,
+    pricedProviderModelKeys,
+  });
   options.bundle.pricing = Object.fromEntries(
     [...hostedPricing.entries()]
       .toSorted(([left], [right]) => left.localeCompare(right))

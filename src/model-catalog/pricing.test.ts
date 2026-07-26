@@ -23,7 +23,10 @@ beforeEach(() => {
       minVersion: "2026.7.0",
       sourceCommit: "pricing-test",
       providers: { openai: { models: [{ id: "gpt-catalog", cost: { input: 1, output: 2 } }] } },
-      pricing: { "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 } },
+      pricing: {
+        "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 },
+        "openrouter/openai/gpt-catalog": { input: 1, output: 2 },
+      },
     }),
   });
   setRemoteModelCatalogOverlaySourcesForTest({
