@@ -1675,6 +1675,7 @@ export async function spawnSubagentDirect(
               childSessionKey,
               requesterSessionKey: requesterInternalKey,
             },
+            { agentId: targetAgentId },
           );
         } catch {
           // Presentation hooks are best-effort after durable registration.

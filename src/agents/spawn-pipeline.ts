@@ -89,6 +89,7 @@ export async function runSpawnPipeline<TState>(params: {
           childSessionKey: registration.childSessionKey,
           requesterSessionKey: params.progressSessionKey,
         },
+        { agentId: registration.agentId },
       );
     } catch {
       // Presentation hooks are best-effort after the run is durably registered.

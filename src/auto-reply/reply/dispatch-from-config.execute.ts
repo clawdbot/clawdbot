@@ -623,6 +623,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   recordProcessed,
                   markIdle,
                 },
+                { agentId: sessionAgentId },
               ),
             trackDispatchLifecycleWork,
           ),

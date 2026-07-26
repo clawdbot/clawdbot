@@ -53,6 +53,9 @@ function firstReplyDispatchCall() {
         {
           cfg?: unknown;
         },
+        {
+          agentId?: string;
+        },
       ]
     | undefined;
 }
@@ -173,12 +176,14 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(String(runtimeLoadCall?.workspaceDir).length).toBeGreaterThan(0);
 
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledOnce();
-    const [replyDispatchEvent, replyDispatchRuntime] = firstReplyDispatchCall() ?? [];
+    const [replyDispatchEvent, replyDispatchRuntime, replyDispatchScope] =
+      firstReplyDispatchCall() ?? [];
     expect(replyDispatchEvent?.sessionKey).toBe("agent:test:session");
     expect(replyDispatchEvent?.toolsAllow).toEqual(["message"]);
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
     expect(replyDispatchEvent?.inboundAudio).toBe(false);
     expect(replyDispatchRuntime?.cfg).toBe(emptyConfig);
+    expect(replyDispatchScope).toEqual({ agentId: "test" });
     expect(result).toEqual({
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },

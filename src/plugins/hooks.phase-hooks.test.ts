@@ -313,6 +313,50 @@ describe("phase hooks merger", () => {
     });
   });
 
+  it("uses host invocation scope for nested reply and subagent identities", async () => {
+    const scopes: Record<string, { pluginId?: string; agentId?: string } | undefined> = {};
+    const captureScope = (hookName: string) => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      scopes[hookName] = scope ? { pluginId: scope.pluginId, agentId: scope.agentId } : undefined;
+    };
+    const { runner } = createHookRunnerWithRegistry([
+      {
+        hookName: "reply_dispatch",
+        pluginId: "reply-plugin",
+        handler: () => {
+          captureScope("reply_dispatch");
+          return { handled: false };
+        },
+      },
+      {
+        hookName: "subagent_progress",
+        pluginId: "progress-plugin",
+        handler: () => {
+          captureScope("subagent_progress");
+        },
+      },
+    ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      { agentId: "ambient-agent", isWebchatConnect: () => false },
+      async () => {
+        await runner.runReplyDispatch({ ctx: { AgentId: "nested-agent" } } as never, {} as never, {
+          agentId: "reply-agent",
+        });
+        await runner.runSubagentProgress(
+          { phase: "started", runId: "run-1", childSessionKey: "agent:child:run:1" },
+          { childSessionKey: "agent:child:run:1" },
+          { agentId: "child-agent" },
+        );
+      },
+    );
+
+    expect(scopes).toEqual({
+      reply_dispatch: { pluginId: "reply-plugin", agentId: "reply-agent" },
+      subagent_progress: { pluginId: "progress-plugin", agentId: "child-agent" },
+    });
+  });
+
   it("preserves ambient agent scope for replay reply payload hooks", async () => {
     let captured: { pluginId?: string; agentId?: string } | undefined;
     const { runner } = createHookRunnerWithRegistry([

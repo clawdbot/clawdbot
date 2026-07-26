@@ -397,6 +397,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         },
       },
       ctx,
+      { agentId: "main" },
     );
     expect(
       hookRunnerMocks.runSubagentProgress.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

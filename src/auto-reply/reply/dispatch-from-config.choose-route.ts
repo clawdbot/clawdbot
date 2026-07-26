@@ -474,6 +474,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   recordProcessed,
                   markIdle,
                 },
+                { agentId: sessionAgentId },
               ),
             trackDispatchLifecycleWork,
           ),

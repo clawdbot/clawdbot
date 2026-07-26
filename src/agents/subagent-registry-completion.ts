@@ -5,6 +5,7 @@
  */
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
   type DetachedTaskTerminalState,
@@ -175,6 +176,7 @@ export async function emitSubagentProgressEndedHook(entry: SubagentRunRecord): P
         childSessionKey: entry.childSessionKey,
         requesterSessionKey: entry.requesterSessionKey,
       },
+      { agentId: parseAgentSessionKey(entry.childSessionKey)?.agentId },
     );
   } catch (err) {
     log.warn(

@@ -107,6 +107,12 @@ export type VoidHookRunOptions = {
   unrefTimeout?: boolean;
 };
 
+// Some host identities stay nested or encoded in public hook payloads. Callers pass the
+// already-resolved agent so plugin runtime scope never inherits an unrelated ambient agent.
+type PluginHookInvocationScope = {
+  agentId?: string;
+};
+
 type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
 type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinalizeResult & {
   retryCandidates?: BeforeAgentFinalizeRetry[];
@@ -571,13 +577,14 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     optionsValue: VoidHookRunOptions = {},
+    invocationScope?: PluginHookInvocationScope,
   ): Promise<void> {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
       return;
     }
 
-    const agentId = resolvePluginHookAgentId(ctx, event);
+    const agentId = resolvePluginHookAgentId(invocationScope, ctx, event);
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
     const promises = hooks.map(async (hook) => {
@@ -663,6 +670,7 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    invocationScope?: PluginHookInvocationScope,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
@@ -671,7 +679,7 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
 
-    return await runClaimingHooksList(hooks, hookName, event, ctx);
+    return await runClaimingHooksList(hooks, hookName, event, ctx, invocationScope);
   }
 
   async function runClaimingHookForPlugin<
@@ -703,8 +711,9 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    invocationScope?: PluginHookInvocationScope,
   ): Promise<TResult | undefined> {
-    const agentId = resolvePluginHookAgentId(ctx, event);
+    const agentId = resolvePluginHookAgentId(invocationScope, ctx, event);
     for (const hook of hooks) {
       try {
         const promise = Promise.resolve(
@@ -1052,11 +1061,13 @@ export function createHookRunner(
   async function runReplyDispatch(
     event: PluginHookReplyDispatchEvent,
     ctx: PluginHookReplyDispatchContext,
+    invocationScope?: PluginHookInvocationScope,
   ): Promise<PluginHookReplyDispatchResult | undefined> {
     return runClaimingHook<"reply_dispatch", PluginHookReplyDispatchResult>(
       "reply_dispatch",
       event,
       ctx,
+      invocationScope,
     );
   }
 
@@ -1474,8 +1485,9 @@ export function createHookRunner(
   async function runSubagentProgress(
     event: PluginHookSubagentProgressEvent,
     ctx: PluginHookSubagentContext,
+    invocationScope?: PluginHookInvocationScope,
   ): Promise<void> {
-    return runVoidHook("subagent_progress", event, ctx);
+    return runVoidHook("subagent_progress", event, ctx, {}, invocationScope);
   }
 
   /**
