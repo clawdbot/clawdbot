@@ -32,7 +32,7 @@ import {
   truncateLine,
 } from "./truncate.js";
 
-export const grepSchema = Type.Object({
+const grepSchema = Type.Object({
   pattern: Type.String({ description: "Regex/literal pattern." }),
   path: Type.Optional(Type.String({ description: "File/dir; default cwd." })),
   glob: Type.Optional(Type.String({ description: "File glob, e.g. *.ts." })),
