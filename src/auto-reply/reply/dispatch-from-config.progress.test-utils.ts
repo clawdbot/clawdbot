@@ -1,7 +1,10 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -23,6 +26,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { clearOperationalReplyPolicyStateForTest } from "./operational-reply-policy.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -764,6 +768,51 @@ describe("dispatchReplyFromConfig", () => {
       queuedFinal: false,
       noVisibleReplyFallbackEligible: true,
     });
+  });
+
+  it("releases once reservations when visible final deduplication skips delivery", async () => {
+    clearOperationalReplyPolicyStateForTest();
+    const cfg = {
+      ...emptyConfig,
+      messages: {
+        operationalReplies: { policy: "once" },
+      },
+    } satisfies OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+    const firstDispatcher = createDispatcher();
+    const firstPayloads = [
+      setReplyPayloadMetadata({ text: "same visible notice" }, { operationalNotice: true }),
+      setReplyPayloadMetadata(
+        { text: "same visible notice" },
+        { nonTerminalToolErrorWarning: true },
+      ),
+    ] satisfies ReplyPayload[];
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: firstDispatcher,
+      replyResolver: async () => firstPayloads,
+    });
+    expect(firstDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+
+    const retryDispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: retryDispatcher,
+      replyResolver: async () =>
+        setReplyPayloadMetadata(
+          { text: "same visible notice" },
+          { nonTerminalToolErrorWarning: true },
+        ),
+    });
+
+    expect(retryDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    clearOperationalReplyPolicyStateForTest();
   });
 
   it("sends only one plan status notice per reply run", async () => {

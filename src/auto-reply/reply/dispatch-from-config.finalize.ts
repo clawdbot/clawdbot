@@ -162,6 +162,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }
     const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
     if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
       continue;
     }
     sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
