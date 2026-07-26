@@ -135,8 +135,12 @@ export function canRevealSessionWorkspace(params: {
 }
 
 function gatewayHealthLabel(gateway: NativeGateway): string {
-  if (gateway.health === "ok") return t("chat.sessionHeader.gatewayPicker.connected");
-  if (gateway.health === "error") return t("chat.sessionHeader.gatewayPicker.unreachable");
+  if (gateway.health === "ok") {
+    return t("chat.sessionHeader.gatewayPicker.connected");
+  }
+  if (gateway.health === "error") {
+    return t("chat.sessionHeader.gatewayPicker.unreachable");
+  }
   return t("chat.sessionHeader.gatewayPicker.unknown");
 }
 
@@ -153,7 +157,9 @@ function renderGatewayPicker(props: ChatPaneHeaderProps) {
     return nothing;
   }
   const current = snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId);
-  if (!current) return nothing;
+  if (!current) {
+    return nothing;
+  }
   const setPrimaryDisabled = current.isPrimary || !current.canPromote;
   return html`
     <wa-dropdown class="chat-pane__gateway-menu" placement="bottom-start">

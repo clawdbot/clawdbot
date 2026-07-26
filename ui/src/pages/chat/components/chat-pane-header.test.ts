@@ -128,28 +128,32 @@ describe("chat pane header", () => {
 
   it("selects normally and opens a new window on alt-click", () => {
     Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    const capability = nativeGateways(gatewaySnapshot);
+    const select = vi.fn();
+    const openWindow = vi.fn();
+    const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
     const first = mount({ nativeGateways: capability }).container.querySelectorAll(
       ".chat-pane__gateway-item",
     )[1];
     first?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(capability.select).toHaveBeenCalledWith("profile:studio");
+    expect(select).toHaveBeenCalledWith("profile:studio");
     const second = mount({ nativeGateways: capability }).container.querySelectorAll(
       ".chat-pane__gateway-item",
     )[1];
     second?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
-    expect(capability.openWindow).toHaveBeenCalledWith("profile:studio");
+    expect(openWindow).toHaveBeenCalledWith("profile:studio");
   });
 
   it("opens a new window when alt-clicking the current gateway", () => {
     Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    const capability = nativeGateways(gatewaySnapshot);
+    const select = vi.fn();
+    const openWindow = vi.fn();
+    const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
     const current = mount({ nativeGateways: capability }).container.querySelector(
       ".chat-pane__gateway-item",
     );
     current?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
-    expect(capability.openWindow).toHaveBeenCalledWith("primary");
-    expect(capability.select).not.toHaveBeenCalled();
+    expect(openWindow).toHaveBeenCalledWith("primary");
+    expect(select).not.toHaveBeenCalled();
   });
 
   it("re-renders gateway rows from a changed snapshot property", () => {
@@ -190,7 +194,9 @@ describe("chat pane header", () => {
     Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
     const snapshot = {
       ...gatewaySnapshot,
-      gateways: gatewaySnapshot.gateways.map((gateway) => ({ ...gateway, canPromote: false })),
+      gateways: gatewaySnapshot.gateways.map((gateway) =>
+        Object.assign({}, gateway, { canPromote: false }),
+      ),
       currentId: "profile:studio",
     };
     const { container } = mount({ nativeGateways: nativeGateways(snapshot) });

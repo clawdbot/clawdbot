@@ -35,7 +35,9 @@ function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
     return null;
   }
   const { gateways, currentId } = value as { gateways: unknown; currentId: unknown };
-  if (!Array.isArray(gateways) || typeof currentId !== "string") return null;
+  if (!Array.isArray(gateways) || typeof currentId !== "string") {
+    return null;
+  }
   const valid = gateways.every(
     (gateway) =>
       gateway &&
@@ -51,16 +53,22 @@ function snapshotFrom(value: unknown): NativeGatewaysSnapshot | null {
 }
 
 export function createNativeGatewaysCapability(): NativeGatewaysCapability | null {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined") {
+    return null;
+  }
   const nativeWindow = window as NativeGatewaysWindow;
   const handler = nativeWindow.webkit?.messageHandlers?.openclawGateways;
-  if (!handler?.postMessage) return null;
+  if (!handler?.postMessage) {
+    return null;
+  }
   const post = handler.postMessage.bind(handler);
-  let snapshot = snapshotFrom(nativeWindow.__OPENCLAW_NATIVE_GATEWAYS__);
+  let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"]);
   const listeners = new Set<(snapshot: NativeGatewaysSnapshot) => void>();
   const onChange = (event: Event) => {
     const next = snapshotFrom((event as CustomEvent<unknown>).detail);
-    if (!next) return;
+    if (!next) {
+      return;
+    }
     snapshot = next;
     listeners.forEach((listener) => listener(next));
   };
