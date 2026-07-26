@@ -357,7 +357,7 @@ async function resolveCollectorOutputModelError(params: {
       workspaceDir: params.workspaceDir,
     });
   } catch (error) {
-    return `sessions_spawn could not verify outputSchema model capabilities: ${summarizeError(error)}`;
+    return `sessions_spawn could not verify outputSchema model capabilities: ${summarizeSpawnError(error)}`;
   }
   const entry = findModelCatalogEntry(catalog, { provider, modelId: model });
   if (!entry || supportsModelTools(entry)) {
@@ -713,7 +713,7 @@ async function prepareSubagentSessionContext(params: {
       ...(forkFallbackNote ? { forkFallbackNote } : {}),
     };
   } catch (err) {
-    return { status: "error", error: summarizeError(err) };
+    return { status: "error", error: summarizeSpawnError(err) };
   }
 }
 
@@ -751,7 +751,7 @@ async function prepareContextEngineSubagentSpawn(params: {
   } catch (err) {
     return {
       status: "error",
-      error: `Context engine subagent preparation failed: ${summarizeError(err)}`,
+      error: `Context engine subagent preparation failed: ${summarizeSpawnError(err)}`,
     };
   }
 }
@@ -914,16 +914,6 @@ function resolveSubagentContextMode(params: {
   }).defaultSpawnContext;
 }
 
-function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
-}
-
 async function bindThreadForSubagentSpawn(params: {
   cfg: OpenClawConfig;
   childSessionKey: string;
@@ -1014,7 +1004,7 @@ async function bindThreadForSubagentSpawn(params: {
   } catch (err) {
     return {
       status: "error",
-      error: `Thread bind failed: ${summarizeError(err)}`,
+      error: `Thread bind failed: ${summarizeSpawnError(err)}`,
     };
   }
 }
@@ -1892,7 +1882,7 @@ export async function spawnSubagentDirect(
           if (error instanceof GatewayDrainingError) {
             return false;
           }
-          const launchError = summarizeError(error);
+          const launchError = summarizeSpawnError(error);
           const [contextRollback, sessionCleanup] = await Promise.allSettled([
             rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
             cleanupFailedSpawnBeforeAgentStart({
