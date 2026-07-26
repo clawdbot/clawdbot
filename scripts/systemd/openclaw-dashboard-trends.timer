@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect OpenClaw development dashboard trends hourly
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=openclaw-dashboard-trends.service
+
+[Install]
+WantedBy=timers.target

@@ -104,15 +104,35 @@ def run_command(cmd, timeout=20):
 
 
 def get_disk_info(path, label):
+    if not Path(path).exists():
+        return {
+            "label": label,
+            "path": path,
+            "total": "not mounted",
+            "used": "not mounted",
+            "free": "not mounted",
+            "pct": "—",
+            "pct_num": None,
+            "color": "#64748b",
+            "status": "Not mounted on this host",
+            "available": False,
+        }
+
     try:
         out = subprocess.check_output(
-            f"df -P -h {path} | awk 'NR==2 {{print $2 \"|\" $3 \"|\" $4 \"|\" $5}}'",
-            shell=True,
+            ["df", "-P", "-h", "--", path],
             text=True,
-            timeout=10
+            timeout=10,
+            stderr=subprocess.STDOUT,
         ).strip()
 
-        total, used, free, pct = out.split("|")
+        lines = out.splitlines()
+        if len(lines) < 2:
+            raise ValueError("disk usage command returned no data row")
+        fields = lines[-1].split()
+        if len(fields) < 6:
+            raise ValueError("disk usage command returned an incomplete data row")
+        total, used, free, pct = fields[1:5]
         pct_num = int(pct.replace("%", ""))
 
         if pct_num >= 90:
@@ -135,18 +155,20 @@ def get_disk_info(path, label):
             "pct_num": pct_num,
             "color": color,
             "status": status,
+            "available": True,
         }
-    except Exception as e:
+    except Exception:
         return {
             "label": label,
             "path": path,
             "total": "unknown",
             "used": "unknown",
             "free": "unknown",
-            "pct": "0%",
-            "pct_num": 0,
-            "color": "#ef4444",
-            "status": f"Error: {e}",
+            "pct": "—",
+            "pct_num": None,
+            "color": "#64748b",
+            "status": "Storage status unavailable",
+            "available": False,
         }
 
 
@@ -179,7 +201,18 @@ def storage_chart_html():
                 rows = list(csv.DictReader(f))
 
             time_col = find_column(rows, ["timestamp", "time", "datetime", "date"])
-            disk_col = find_column(rows, ["disk_used_percent", "disk_used_pct", "disk_pct", "disk"])
+            disk_col = find_column(
+                rows,
+                ["disk_used_percent", "disk_used_pct", "disk_pct", "disk"],
+            )
+            external_disk_col = find_column(
+                rows,
+                [
+                    "external_disk_used_percent",
+                    "external_disk_used_pct",
+                    "external_disk_pct",
+                ],
+            )
 
             for row in rows[-24:]:
                 raw_time = row.get(time_col, "") if time_col else ""
@@ -191,10 +224,15 @@ def storage_chart_html():
                     label = raw_time or datetime.now().strftime("%m/%d %H:%M")
 
                 disk_pct = parse_number(row.get(disk_col)) if disk_col else None
+                external_disk_pct = (
+                    parse_number(row.get(external_disk_col))
+                    if external_disk_col
+                    else None
+                )
 
                 labels.append(label)
-                internal_values.append(disk_pct if disk_pct is not None else (internal_now or 0))
-                external_values.append(external_now if external_now is not None else 0)
+                internal_values.append(disk_pct)
+                external_values.append(external_disk_pct)
         except Exception:
             labels = []
             internal_values = []
@@ -202,8 +240,8 @@ def storage_chart_html():
 
     if not labels:
         labels = [datetime.now().strftime("%m/%d %H:%M")]
-        internal_values = [internal_now if internal_now is not None else 0]
-        external_values = [external_now if external_now is not None else 0]
+        internal_values = [internal_now]
+        external_values = [external_now]
 
     GRAPH_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -211,8 +249,22 @@ def storage_chart_html():
     ax = plt.gca()
     ax.set_facecolor("#0f172a")
 
-    ax.plot(labels, internal_values, marker="o", linewidth=2, label="Internal Ubuntu Disk (/)")
-    ax.plot(labels, external_values, marker="o", linewidth=2, label="External AI Storage (/mnt/ai-storage)")
+    if any(value is not None for value in internal_values):
+        ax.plot(
+            labels,
+            internal_values,
+            marker="o",
+            linewidth=2,
+            label="Internal Ubuntu Disk (/)",
+        )
+    if any(value is not None for value in external_values):
+        ax.plot(
+            labels,
+            external_values,
+            marker="o",
+            linewidth=2,
+            label="External AI Storage (/mnt/ai-storage)",
+        )
 
     ax.set_title("Internal and External Disk Space Used", color="white", pad=15)
     ax.set_xlabel("Date/Time (MM/DD HH:MM)", color="white")
@@ -226,11 +278,13 @@ def storage_chart_html():
     for spine in ax.spines.values():
         spine.set_color("#94a3b8")
 
-    legend = ax.legend()
-    for t in legend.get_texts():
-        t.set_color("white")
-    legend.get_frame().set_facecolor("#0f172a")
-    legend.get_frame().set_edgecolor("#334155")
+    handles, legend_labels = ax.get_legend_handles_labels()
+    if handles:
+        legend = ax.legend()
+        for t in legend.get_texts():
+            t.set_color("white")
+        legend.get_frame().set_facecolor("#0f172a")
+        legend.get_frame().set_edgecolor("#334155")
 
     plt.tight_layout()
     plt.savefig(chart_file, facecolor="#0f172a")
@@ -259,6 +313,22 @@ def storage_panel_html():
 
     for d in disks:
         pct = d["pct_num"]
+        usage_bar = ""
+        if d["available"]:
+            usage_bar = f"""
+    <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;overflow:hidden;height:26px;margin-top:12px;">
+        <div style="width:{pct}%;background:{d['color']};height:26px;text-align:center;color:black;font-weight:bold;line-height:26px;">
+            {d['pct']}
+        </div>
+    </div>
+"""
+        else:
+            usage_bar = """
+    <div style="background:#1e293b;border:1px dashed #64748b;border-radius:10px;
+                padding:12px;margin-top:12px;color:#cbd5e1;">
+        No usage percentage is plotted until this storage path is mounted.
+    </div>
+"""
 
         html += f"""
 <div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:15px;margin-top:12px;">
@@ -269,14 +339,12 @@ def storage_panel_html():
                 {d['status']}
             </span>
         </div>
-        <div style="color:#cbd5e1;font-weight:bold;">{d['pct']} used</div>
-    </div>
-
-    <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;overflow:hidden;height:26px;margin-top:12px;">
-        <div style="width:{pct}%;background:{d['color']};height:26px;text-align:center;color:black;font-weight:bold;line-height:26px;">
-            {d['pct']}
+        <div style="color:#cbd5e1;font-weight:bold;">
+            {d['pct'] + ' used' if d['available'] else 'Unavailable'}
         </div>
     </div>
+
+    {usage_bar}
 
     <div style="display:flex;justify-content:space-between;color:#e5e7eb;margin-top:10px;font-size:15px;">
         <div><b>Used:</b> {d['used']}</div>

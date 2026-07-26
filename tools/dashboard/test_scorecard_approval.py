@@ -493,6 +493,36 @@ class ScorecardDashboardTests(unittest.TestCase):
         self.assertIn("Updated:", rendered)
         self.assertIn("healthy", rendered)
 
+    def test_missing_external_storage_is_not_reported_as_zero_percent(self):
+        missing_path = Path(self.temp.name) / "not-mounted"
+
+        disk = dashboard.get_disk_info(
+            str(missing_path),
+            "External AI Storage",
+        )
+
+        self.assertFalse(disk["available"])
+        self.assertIsNone(disk["pct_num"])
+        self.assertEqual(disk["pct"], "—")
+        self.assertEqual(disk["status"], "Not mounted on this host")
+
+    def test_disk_info_parses_portable_df_output(self):
+        with mock.patch.object(
+            dashboard.subprocess,
+            "check_output",
+            return_value=(
+                "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
+                "/dev/test 100G 38G 62G 38% /"
+            ),
+        ):
+            disk = dashboard.get_disk_info("/", "Internal Disk")
+
+        self.assertTrue(disk["available"])
+        self.assertEqual(disk["total"], "100G")
+        self.assertEqual(disk["used"], "38G")
+        self.assertEqual(disk["free"], "62G")
+        self.assertEqual(disk["pct_num"], 38)
+
     def test_queue_selects_an_older_undecided_archived_evaluation(self):
         archived = dashboard.AI_EVALUATION_PATH.parent / (
             "evaluation-lab-pipeline-0.json"

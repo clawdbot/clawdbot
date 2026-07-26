@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect OpenClaw development dashboard trend sample
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/ai/projects/openclaw
+Environment=OPENCLAW_OLLAMA_BASE_URL=http://192.168.50.117:11434
+Environment=OPENCLAW_M4_SSH_HOST=192.168.50.117
+ExecStart=%h/ai/projects/openclaw/tools/home_manager/collect_trends.sh
+

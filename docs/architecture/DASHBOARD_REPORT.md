@@ -120,6 +120,8 @@ Browser → Flask (0.0.0.0:5051)
 ### Trend Charts
 
 - Button: **Collect Fresh Sample + Refresh Charts** → runs `collect_trends.sh`.
+- `openclaw-dashboard-trends.timer` collects a development sample hourly.
+- The collector uses the canonical Ollama and optional model-host SSH settings.
 - Charts from last 24 `trends.csv` rows:
   - Intel Mini Ollama latency
   - Intel + M4 memory usage
@@ -129,6 +131,10 @@ Browser → Flask (0.0.0.0:5051)
 ### Storage Health
 
 - Live `df` for `/` and `/mnt/ai-storage`.
+- Missing or unmounted storage is shown as **Not mounted on this host**, not as
+  `0%` usage or a parser failure.
+- Internal and external disk percentages have separate trend columns. Missing
+  external samples remain blank and are not plotted as zero.
 - Thresholds: Healthy &lt;80%, Warning 80–90%, Critical &gt;90%.
 - Disk usage over time chart from `trends.csv`.
 

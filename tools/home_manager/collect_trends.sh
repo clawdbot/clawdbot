@@ -6,7 +6,7 @@ TREND_FILE="$REPORT_DIR/trends.csv"
 
 mkdir -p "$REPORT_DIR"
 
-HEADER="timestamp,ollama_latency_ms,mem_used_gib,mem_total_gib,disk_used_pct,m4_mem_used_gib,m4_mem_total_gib,m4_cpu_used_pct,m4_disk_used_pct,m4_ollama_response_ms,homeassistant_uptime,redis_uptime,portainer_uptime,postgres_uptime,scrypted_uptime"
+HEADER="timestamp,ollama_latency_ms,mem_used_gib,mem_total_gib,disk_used_pct,external_disk_used_pct,m4_mem_used_gib,m4_mem_total_gib,m4_cpu_used_pct,m4_disk_used_pct,m4_ollama_response_ms,homeassistant_uptime,redis_uptime,portainer_uptime,postgres_uptime,scrypted_uptime"
 
 if [ ! -f "$TREND_FILE" ]; then
   echo "$HEADER" > "$TREND_FILE"
@@ -29,6 +29,7 @@ header = [
     "mem_used_gib",
     "mem_total_gib",
     "disk_used_pct",
+    "external_disk_used_pct",
     "m4_mem_used_gib",
     "m4_mem_total_gib",
     "m4_cpu_used_pct",
@@ -60,20 +61,35 @@ fi
 
 TS="$(date '+%Y-%m-%d %H:%M:%S')"
 
-LATENCY="$(
-  curl -s -w '%{time_total}' -o /dev/null http://127.0.0.1:11434/api/tags 2>/dev/null \
-  | awk '{printf "%.0f", $1 * 1000}' || echo 0
-)"
+OLLAMA_BASE_URL="${OPENCLAW_OLLAMA_BASE_URL:-http://192.168.50.117:11434}"
+if LATENCY_SECONDS="$(
+  curl -fsS -w '%{time_total}' -o /dev/null \
+    "$OLLAMA_BASE_URL/api/tags" 2>/dev/null
+)"; then
+  LATENCY="$(awk -v value="$LATENCY_SECONDS" 'BEGIN {printf "%.0f", value * 1000}')"
+else
+  LATENCY=""
+fi
 
 MEM_USED="$(free -g | awk '/Mem:/ {print $3}')"
 MEM_TOTAL="$(free -g | awk '/Mem:/ {print $2}')"
 DISK_USED="$(df -P / | awk 'NR==2 {gsub("%","",$5); print $5}')"
+EXTERNAL_DISK_USED=""
+EXTERNAL_MOUNT_TARGET="$(
+  findmnt -n -T /mnt/ai-storage -o TARGET 2>/dev/null || true
+)"
+if [ "$EXTERNAL_MOUNT_TARGET" = "/mnt/ai-storage" ]; then
+  EXTERNAL_DISK_USED="$(
+    df -P /mnt/ai-storage |
+      awk 'NR==2 {gsub("%","",$5); print $5}'
+  )"
+fi
 
 M4_JSON="$(
 ssh -i "$HOME/.ssh/id_ed25519_openclaw_m4" \
   -o BatchMode=yes \
   -o ConnectTimeout=5 \
-  andrewgraves@100.104.100.96 \
+  "${OPENCLAW_M4_SSH_USER:-andrewgraves}@${OPENCLAW_M4_SSH_HOST:-192.168.50.117}" \
   "~/openclaw-m4-monitor/m4-health.sh" 2>/dev/null || true
 )"
 
@@ -114,4 +130,4 @@ PORTAINER_UP="$(container_uptime portainer)"
 POSTGRES_UP="$(container_uptime postgres)"
 SCRYPTED_UP="$(container_uptime scrypted)"
 
-echo "\"$TS\",$LATENCY,$MEM_USED,$MEM_TOTAL,$DISK_USED,$M4_MEM_USED,$M4_MEM_TOTAL,$M4_CPU_USED,$M4_DISK_USED,$M4_OLLAMA_MS,\"$HA_UP\",\"$REDIS_UP\",\"$PORTAINER_UP\",\"$POSTGRES_UP\",\"$SCRYPTED_UP\"" >> "$TREND_FILE"
+echo "\"$TS\",$LATENCY,$MEM_USED,$MEM_TOTAL,$DISK_USED,$EXTERNAL_DISK_USED,$M4_MEM_USED,$M4_MEM_TOTAL,$M4_CPU_USED,$M4_DISK_USED,$M4_OLLAMA_MS,\"$HA_UP\",\"$REDIS_UP\",\"$PORTAINER_UP\",\"$POSTGRES_UP\",\"$SCRYPTED_UP\"" >> "$TREND_FILE"
