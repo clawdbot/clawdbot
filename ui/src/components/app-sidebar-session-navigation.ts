@@ -293,10 +293,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       rows,
       grouping: this.sessionsGrouping,
       knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : [],
-      // Raw stored order: the grouping layer normalizes it against the full
-      // discovered category set, so a catalog-lagging category cannot drop
-      // its persisted slot here.
-      sectionOrder: this.sessionSectionOrder,
+      // Raw gateway-owned order: grouping normalizes it against the full
+      // discovered category set without dropping catalog-lagging categories.
+      sectionOrder: this.knownSectionOrder(),
       collapsedSections: this.collapsedSessionSections,
       hideEmptyCreatorFilteredGroup: (category, rowCount) =>
         this.hideEmptyCreatorFilteredGroup(category, rowCount),
@@ -520,6 +519,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       this.context?.sessions.state.groups ?? [],
       this.sessionData.sessionsResult?.sessions ?? [],
     );
+  }
+
+  knownSectionOrder(): string[] {
+    return [...(this.context?.sessions.state.sectionOrder ?? [])];
   }
 
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
