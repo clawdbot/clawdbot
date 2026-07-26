@@ -4,7 +4,7 @@ import { html, nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
-import { loadChatRoute, type ChatRouteData } from "./route-loader.ts";
+import type { ChatRouteData } from "./route-loader.ts";
 
 function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   return html`
@@ -36,8 +36,10 @@ function sessionPage(face: BoardFace) {
     path: `/${face}`,
     loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
       `${location.pathname}\u0000${location.search}`,
-    loader: (context: ApplicationContext, { location, signal }) =>
-      loadChatRoute(context, location, face, signal),
+    loader: async (context: ApplicationContext, { location, signal }) => {
+      const { loadChatRoute } = await import("./route-loader.ts");
+      return await loadChatRoute(context, location, face, signal);
+    },
     component: () =>
       import("./chat-page.ts").then(() => ({
         header: true,
