@@ -47,6 +47,8 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+const RECOVERABLE_TOOL_ERROR_RETRY_PROMPT_PREFIX =
+  "The previous tool call failed, but that failure is evidence to recover from rather than a final answer. Continue from the persisted transcript. Inspect the exact error, change the approach, and finish the original request. Do not repeat an unchanged failing command and do not replay completed side effects.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -137,6 +139,67 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       tools: ["bash"],
       failures: 2,
     });
+  });
+
+  it("continues after a failed tool and lets the model change approach", async () => {
+    const failedAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec", meta: "exit=1", isError: true }],
+      lastToolError: { toolName: "exec", error: "command exited with code 1" },
+    });
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(failedAttempt);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered with a different command."],
+      }),
+    );
+    mockedBuildEmbeddedRunPayloads
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ text: "Recovered with a different command." }]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-error-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toBe("Recovered with a different command.");
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toBe(
+      `${RECOVERABLE_TOOL_ERROR_RETRY_PROMPT_PREFIX}\n\nTool error: command exited with code 1`,
+    );
+    expect(secondCall.disableTools).not.toBe(true);
+    expect(secondCall.suppressNextUserMessagePersistence).toBe(true);
+    expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
+    expectWarnMessageWith("recoverable tool error requested one more pass");
+  });
+
+  it("bounds repeated failed-tool continuations to two", async () => {
+    const failedAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec", meta: "exit=1", isError: true }],
+      lastToolError: { toolName: "exec", error: "command exited with code 1" },
+    });
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(failedAttempt);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-error-continuation-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(result.payloads?.[0]).toMatchObject({ isError: true });
+    expect(result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
+    expectWarnMessageWith("attempt=2/2");
   });
 
   it("emits the before_agent_run hook block message as the agent payload", async () => {

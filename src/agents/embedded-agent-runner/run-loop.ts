@@ -26,7 +26,10 @@ import {
 } from "./post-compaction-loop-guard.js";
 import { clearProviderPromptState } from "./provider-prompt-state.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
-import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
+import {
+  handleEmbeddedAssistantFailure,
+  TRANSIENT_TRANSPORT_CONTINUATION_INSTRUCTION,
+} from "./run/assistant-failure.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
@@ -477,6 +480,7 @@ export async function runPreparedEmbeddedLoop(
         rateLimitProfileRotations: failoverRetryController.rateLimitProfileRotations,
         rateLimitProfileRotationLimit: failoverRetryController.rateLimitProfileRotationLimit,
         sameModelIdleTimeoutRetries,
+        terminalRetryState,
         previousRetryFailoverReason: lastRetryFailoverReason,
         maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
         maybeEscalateRateLimitProfileFallback:
@@ -502,6 +506,12 @@ export async function runPreparedEmbeddedLoop(
         failoverRetryController.resetSameModelRateLimitRetries();
       }
       if (assistantFailureOutcome.action === "retry") {
+        if (assistantFailureOutcome.continueFromPersistedTranscript) {
+          sessionPromptState.activateInternalPrompt(
+            TRANSIENT_TRANSPORT_CONTINUATION_INSTRUCTION,
+            true,
+          );
+        }
         continue;
       }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;

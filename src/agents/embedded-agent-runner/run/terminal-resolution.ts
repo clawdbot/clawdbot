@@ -40,10 +40,18 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
+const MAX_RECOVERABLE_TOOL_ERROR_CONTINUATIONS = 2;
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
+const RECOVERABLE_TOOL_ERROR_RETRY_PROMPT_PREFIX =
+  "The previous tool call failed, but that failure is evidence to recover from rather than a final answer. Continue from the persisted transcript. Inspect the exact error, change the approach, and finish the original request. Do not repeat an unchanged failing command and do not replay completed side effects.";
+
+function isExternallyConsequentialToolError(toolName?: string): boolean {
+  const normalized = toolName?.trim().toLowerCase().replaceAll("-", "_") ?? "";
+  return /^(?:message|sessions_send|email|mail|cron|whatsapp|signal)$/.test(normalized);
+}
 
 type TerminalRunParams = RunEmbeddedAgentParams & {
   authProfileStateMode?: "read-write" | "read-only";
@@ -277,6 +285,36 @@ export async function resolveEmbeddedRunTerminal(input: {
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
         `with visible-answer continuation`,
+    );
+    return { action: "retry" };
+  }
+  if (
+    !emptyAssistantReplyIsSilent &&
+    !settledTurnFinalizationAttempted &&
+    attempt.lastToolError &&
+    attempt.toolMetas.at(-1)?.isError === true &&
+    !input.finalAssistantVisibleText?.trim() &&
+    !isExternallyConsequentialToolError(attempt.lastToolError.toolName) &&
+    !input.terminalAborted &&
+    !input.terminalTimedOut &&
+    !input.terminalInterrupted &&
+    !input.promptError &&
+    !attempt.clientToolCalls &&
+    !attempt.yieldDetected &&
+    !attempt.didSendDeterministicApprovalPrompt &&
+    retryState.recoverableToolErrorContinuationAttempts < MAX_RECOVERABLE_TOOL_ERROR_CONTINUATIONS
+  ) {
+    retryState.recoverableToolErrorContinuationAttempts += 1;
+    const detail = attempt.lastToolError.error
+      ? `\n\nTool error: ${attempt.lastToolError.error}`
+      : "";
+    input.activateInternalPrompt(`${RECOVERABLE_TOOL_ERROR_RETRY_PROMPT_PREFIX}${detail}`, true);
+    retryState.compactionContinuationInstruction = null;
+    log.warn(
+      `recoverable tool error requested one more pass: ` +
+        `runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+        `tool=${attempt.lastToolError.toolName || "unknown"} ` +
+        `attempt=${retryState.recoverableToolErrorContinuationAttempts}/${MAX_RECOVERABLE_TOOL_ERROR_CONTINUATIONS}`,
     );
     return { action: "retry" };
   }

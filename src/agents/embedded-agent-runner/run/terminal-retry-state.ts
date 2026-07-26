@@ -7,6 +7,8 @@ export type EmbeddedRunTerminalRetryState = {
   compactionContinuationAttempts: number;
   compactionContinuationInstruction: string | null;
   beforeFinalizeRevisionAttempts: number;
+  recoverableToolErrorContinuationAttempts: number;
+  transientTransportContinuationAttempts: number;
 };
 
 export function createEmbeddedRunTerminalRetryState(): EmbeddedRunTerminalRetryState {
@@ -17,5 +19,7 @@ export function createEmbeddedRunTerminalRetryState(): EmbeddedRunTerminalRetryS
     compactionContinuationAttempts: 0,
     compactionContinuationInstruction: null,
     beforeFinalizeRevisionAttempts: 0,
+    recoverableToolErrorContinuationAttempts: 0,
+    transientTransportContinuationAttempts: 0,
   };
 }

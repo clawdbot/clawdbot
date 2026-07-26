@@ -204,7 +204,6 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
     attempt.yieldDetected ||
     attempt.didSendDeterministicApprovalPrompt ||
     attempt.heartbeatToolResponse ||
-    attempt.lastToolError ||
     attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
     attempt.toolAudioAsVoice ||
     attempt.toolTrustedLocalMedia ||
@@ -261,8 +260,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
+    params.attempt.didSendDeterministicApprovalPrompt
   ) {
     return null;
   }
@@ -570,6 +568,12 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return false;
+  }
+  // A tool failure needs the dedicated transcript-continuation path. It is
+  // not evidence of completed delivery and must not replay the original
+  // provider prompt through the silent-error retry family.
+  if (params.attempt.lastToolError) {
     return false;
   }
   if (hasAttemptTerminalState(params.attempt)) {

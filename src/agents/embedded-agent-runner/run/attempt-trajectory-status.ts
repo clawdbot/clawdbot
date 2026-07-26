@@ -107,7 +107,6 @@ export function resolveAttemptTrajectoryTerminal(
   if (params.failed) {
     return { status: "error" };
   }
-
   // Messaging/tool-use attempts may not have assistant text; only committed
   // delivery evidence or durable side effects can make those terminal turns
   // successful.
@@ -120,8 +119,18 @@ export function resolveAttemptTrajectoryTerminal(
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
-    params.lastToolError !== undefined ||
     hasAsyncStartedToolActivity(params.toolMetas);
+
+  // Fail closed when the provider's final assistant event is explicitly an
+  // error. Earlier progress fragments and synthesized streaming payloads are
+  // not proof that the user received a completed answer, but a separately
+  // committed delivery remains valid.
+  if (params.lastAssistantStopReason === "error" && !hasExplicitTerminalDelivery) {
+    return {
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    };
+  }
 
   if (params.lastAssistantStopReason === "toolUse" && !hasExplicitTerminalDelivery) {
     return {

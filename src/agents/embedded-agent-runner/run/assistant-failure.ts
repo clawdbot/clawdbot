@@ -22,12 +22,16 @@ import type { TraceAttempt } from "../types.js";
 import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
-import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn.js";
+import { hasAttemptTerminalState, shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const MAX_TRANSIENT_TRANSPORT_CONTINUATIONS = 2;
+export const TRANSIENT_TRANSPORT_CONTINUATION_INSTRUCTION =
+  "The previous model stream ended unexpectedly after partial progress. Continue from the persisted transcript and finish the original request. Do not repeat completed tool calls or side effects. Inspect prior results, verify current state as needed, change approach if necessary, and produce the final user-visible answer. A transient transport failure is not a reason to stop.";
 
 type EmbeddedRunAssistantFailureOutcome = {
   action: "retry" | "proceed";
@@ -39,7 +43,48 @@ type EmbeddedRunAssistantFailureOutcome = {
   lastRetryFailoverReason: FailoverReason | null;
   preserveSameModelRateLimitRetryCount: boolean;
   assistantProfileFailureReason: AuthProfileFailureReason | null;
+  continueFromPersistedTranscript: boolean;
 };
+
+export function shouldContinueTransientAssistantError(params: {
+  attempt: EmbeddedRunAttemptResult;
+  assistant?: AssistantMessage;
+  failoverReason: FailoverReason | null;
+  authFailure: boolean;
+  rateLimitFailure: boolean;
+  billingFailure: boolean;
+  cloudCodeAssistFormatError: boolean;
+  imageDimensionError: boolean;
+  terminalInterrupted: boolean;
+  promptError: unknown;
+  timedOut: boolean;
+  externalAbort: boolean;
+  signalOwnedInterruption: boolean;
+}): boolean {
+  const transientReason =
+    params.failoverReason === "timeout" ||
+    params.failoverReason === "server_error" ||
+    params.failoverReason === "unknown" ||
+    params.failoverReason === "no_error_details" ||
+    params.failoverReason === "unclassified" ||
+    params.failoverReason === null;
+  return (
+    params.assistant?.stopReason === "error" &&
+    params.attempt.assistantTexts.some((text) => text.trim().length > 0) &&
+    !hasAttemptTerminalState(params.attempt) &&
+    transientReason &&
+    !params.authFailure &&
+    !params.rateLimitFailure &&
+    !params.billingFailure &&
+    !params.cloudCodeAssistFormatError &&
+    !params.imageDimensionError &&
+    !params.terminalInterrupted &&
+    !params.promptError &&
+    !params.timedOut &&
+    !params.externalAbort &&
+    !params.signalOwnedInterruption
+  );
+}
 
 export async function handleEmbeddedAssistantFailure(input: {
   runParams: RunEmbeddedAgentParams;
@@ -82,6 +127,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   rateLimitProfileRotations: number;
   rateLimitProfileRotationLimit: number;
   sameModelIdleTimeoutRetries: number;
+  terminalRetryState: EmbeddedRunTerminalRetryState;
   previousRetryFailoverReason: FailoverReason | null;
   maybeMarkAuthProfileFailure: (failure: {
     profileId?: string;
@@ -174,6 +220,49 @@ export async function handleEmbeddedAssistantFailure(input: {
     return buildOutcome(input, {
       action: "retry",
       emptyErrorRetries,
+      preserveSameModelRateLimitRetryCount: true,
+      assistantProfileFailureReason,
+    });
+  }
+
+  if (
+    shouldContinueTransientAssistantError({
+      attempt: input.attempt,
+      assistant: input.attemptAssistant,
+      failoverReason: assistantFailoverReason,
+      authFailure,
+      rateLimitFailure,
+      billingFailure,
+      cloudCodeAssistFormatError,
+      imageDimensionError: Boolean(imageDimensionError),
+      terminalInterrupted: input.terminalInterrupted,
+      promptError: input.promptError,
+      timedOut: input.timedOut,
+      externalAbort: input.externalAbort,
+      signalOwnedInterruption: input.signalOwnedInterruption,
+    }) &&
+    input.terminalRetryState.transientTransportContinuationAttempts <
+      MAX_TRANSIENT_TRANSPORT_CONTINUATIONS
+  ) {
+    input.terminalRetryState.transientTransportContinuationAttempts += 1;
+    const continuationAttempt = input.terminalRetryState.transientTransportContinuationAttempts;
+    log.warn(
+      `[transient-transport-continuation] stopReason=error after partial progress; ` +
+        `continuing persisted turn attempt=${continuationAttempt}/${MAX_TRANSIENT_TRANSPORT_CONTINUATIONS} ` +
+        `provider=${input.attemptAssistant?.provider ?? input.provider} ` +
+        `model=${input.attemptAssistant?.model ?? input.model} ` +
+        `sessionKey=${input.runParams.sessionKey ?? input.runParams.sessionId}`,
+    );
+    input.traceAttempts.push({
+      provider: input.activeErrorContext.provider,
+      model: input.activeErrorContext.model,
+      result: assistantFailoverReason === "timeout" ? "timeout" : "error",
+      ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
+      stage: "assistant",
+    });
+    return buildOutcome(input, {
+      action: "retry",
+      continueFromPersistedTranscript: true,
       preserveSameModelRateLimitRetryCount: true,
       assistantProfileFailureReason,
     });
@@ -369,5 +458,6 @@ function buildOutcome(
     lastRetryFailoverReason: override.lastRetryFailoverReason ?? input.previousRetryFailoverReason,
     preserveSameModelRateLimitRetryCount: override.preserveSameModelRateLimitRetryCount ?? false,
     assistantProfileFailureReason: override.assistantProfileFailureReason,
+    continueFromPersistedTranscript: override.continueFromPersistedTranscript ?? false,
   };
 }

@@ -75,6 +75,32 @@ describe("attempt trajectory status", () => {
     });
   });
 
+  it("does not treat progress fragments as success after a provider stream error", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          assistantTexts: ["Working on it.", "I found the likely cause."],
+          synthesizedPayloadCount: 2,
+          lastAssistantStopReason: "error",
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("keeps committed delivery successful when the provider errors afterward", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          messagingToolSentTexts: ["Already delivered."],
+          lastAssistantStopReason: "error",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
   it("keeps length-limited turns successful when terminal output was delivered", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
@@ -143,6 +169,20 @@ describe("attempt trajectory status", () => {
       resolveAttemptTrajectoryTerminal(
         baseParams({
           toolMetas: [{ toolName: "read" }],
+        }),
+      ),
+    ).toEqual({
+      status: "error",
+      terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
+    });
+  });
+
+  it("does not treat a failed tool as terminal delivery", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          toolMetas: [{ toolName: "exec", isError: true }],
+          lastToolError: { toolName: "exec", error: "command failed" },
         }),
       ),
     ).toEqual({
