@@ -4034,6 +4034,7 @@ export const en: TranslationMap = {
       coding: "Coding",
       catalogViewOptions: "View options",
       catalogGroupByProject: "Project",
+      catalogGroupByPerson: "Person",
       openSessionMenu: "Open thread menu",
       sortBy: "Sort by",
       sortCreated: "Created",

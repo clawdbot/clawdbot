@@ -333,6 +333,7 @@ function renderSessionCatalogs(params: {
       ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute("data-session-catalog-view-menu") ??
         null)
       : null,
+    creatorFilterActive: host.sessionCreatorFilterActive,
     onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
     onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
     onOpenNewSession: host.onOpenNewSession,

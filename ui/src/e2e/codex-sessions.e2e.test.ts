@@ -292,6 +292,7 @@ suite("Codex native session catalog", () => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
+                      createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                     },
                     {
                       threadId: "thread-worktree",
@@ -301,6 +302,7 @@ suite("Codex native session catalog", () => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
+                      createdActor: { type: "human", id: "profile-zoe", label: "Zoe" },
                     },
                     {
                       threadId: "thread-other",
@@ -406,6 +408,30 @@ suite("Codex native session catalog", () => {
           path: path.join(uiProofArtifactDir, "04-flat-session-hosts.png"),
         });
       }
+
+      // Person mode groups adopted (attributed) sessions and leaves native
+      // threads without a creator in the flat tail.
+      await catalogHead.hover();
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "Person" })
+        .evaluate((element) => (element as HTMLElement).click());
+      await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await section
+          .locator('[data-session-catalog-project="person:profile-ada"]')
+          .locator(".sidebar-session-catalog-project__label")
+          .textContent(),
+      ).toBe("Ada");
+      expect(
+        await section
+          .locator('[data-session-catalog-project="person:profile-zoe"]')
+          .locator(".sidebar-session-catalog-project__label")
+          .textContent(),
+      ).toBe("Zoe");
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
+      ).toBe("person");
 
       await catalogHead.hover();
       await viewMenuButton.click();
