@@ -37,7 +37,13 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   api.lifecycle.registerRuntimeLifecycle({
     id: "clickclack-discussions",
     description: "Stops the lifecycle reconciler for managed ClickClack discussions.",
-    cleanup: () => {
+    cleanup: ({ reason }) => {
+      // Session reset/delete runs every plugin's runtime cleanup, so scoping this
+      // to plugin-wide reasons keeps one session's reset from unregistering the
+      // process-stable access provider for every other discussion session.
+      if (reason === "reset" || reason === "delete") {
+        return;
+      }
       unregisterSessionAccess();
       service.cleanup();
     },
