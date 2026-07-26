@@ -44,7 +44,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     flushPendingCommentaryProgress,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
-    getOperationalReplyPolicyIntentionalSilence,
     isRoutedReplyDelivered,
     markIdle,
     markInboundDedupeReplayUnsafe,
@@ -348,7 +347,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ...(!queuedFinal &&
       !getObservedReplyDelivery() &&
       !emptyFinalAllowedAsSilent &&
-      !(getOperationalReplyPolicyIntentionalSilence() && !attemptedFinalDelivery)
+      !(suppressedFinalByOperationalPolicy && !attemptedFinalDelivery)
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

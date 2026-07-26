@@ -50,6 +50,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   buildModelAliasIndex,
@@ -571,8 +572,10 @@ export function createSessionStatusTool(opts?: {
         sandboxed: opts?.sandboxed,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const configuredDefaultAgentId = resolveDefaultAgentId(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? effectiveRequesterKey,
+        configuredDefaultAgentId,
       );
       const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
       const usesLegacyMainAlias = alias === mainKey;
@@ -583,7 +586,8 @@ export function createSessionStatusTool(opts?: {
       const resolveVisibilityMainSessionKey = (sessionAgentId: string) => {
         const requesterParsed = parseAgentSessionKey(visibilityRequesterKey);
         if (
-          resolveAgentIdFromSessionKey(visibilityRequesterKey) === sessionAgentId &&
+          resolveAgentIdFromSessionKey(visibilityRequesterKey, configuredDefaultAgentId) ===
+            sessionAgentId &&
           (requesterParsed?.rest === mainKey || isLegacyMainVisibilityKey(visibilityRequesterKey))
         ) {
           return visibilityRequesterKey;
@@ -613,6 +617,7 @@ export function createSessionStatusTool(opts?: {
       };
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "status",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: visibilityRequesterKey,
         visibility: resolveEffectiveSessionToolsVisibility({
           cfg,
@@ -683,7 +688,10 @@ export function createSessionStatusTool(opts?: {
       };
 
       if (requestedKeyInput.startsWith("agent:") && !isSemanticCurrentRequest) {
-        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyInput);
+        const requestedAgentId = resolveAgentIdFromSessionKey(
+          requestedKeyInput,
+          configuredDefaultAgentId,
+        );
         ensureAgentAccess(requestedAgentId);
         const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(requestedKeyInput, requestedAgentId),
@@ -695,7 +703,7 @@ export function createSessionStatusTool(opts?: {
 
       const isExplicitAgentKey = requestedKeyInput.startsWith("agent:");
       let agentId = isExplicitAgentKey
-        ? resolveAgentIdFromSessionKey(requestedKeyInput)
+        ? resolveAgentIdFromSessionKey(requestedKeyInput, configuredDefaultAgentId)
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
@@ -738,11 +746,13 @@ export function createSessionStatusTool(opts?: {
             throw new Error("Session status visibility is restricted to the current session tree.");
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
-          ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
+          ensureAgentAccess(
+            resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId),
+          );
           resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           requestedKeyInput = requestedKeyRaw.trim();
-          agentId = resolveAgentIdFromSessionKey(visibleSession.key);
+          agentId = resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,

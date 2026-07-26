@@ -91,6 +91,20 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     }
     return true;
   };
+  const settleRoutedOperationalPolicyAfterDispatch = async (
+    payload: ReplyPayload,
+    policyResult: Awaited<ReturnType<typeof applyDispatchOperationalReplyPolicy>>,
+  ): Promise<boolean> => {
+    let delivered: boolean;
+    try {
+      delivered = await sendPayloadAsync(payload, undefined, false);
+    } catch (error) {
+      await markOperationalReplyPolicyDelivered(policyResult, false);
+      throw error;
+    }
+    await markOperationalReplyPolicyDelivered(policyResult, delivered);
+    return delivered;
+  };
   // When automatic source delivery is suppressed, still let the agent process
   // the inbound message (context, memory, tool calls) but suppress automatic
   // outbound source delivery.
@@ -148,8 +162,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     if (shouldRouteToOriginating) {
-      const delivered = await sendPayloadAsync(payload, undefined, false);
-      await markOperationalReplyPolicyDelivered(policyResult, delivered);
+      await settleRoutedOperationalPolicyAfterDispatch(payload, policyResult);
       return;
     }
     markInboundDedupeReplayUnsafe();
@@ -178,8 +191,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     if (shouldRouteToOriginating) {
-      const delivered = await sendPayloadAsync(replyPayload, undefined, false);
-      await markOperationalReplyPolicyDelivered(policyResult, delivered);
+      await settleRoutedOperationalPolicyAfterDispatch(replyPayload, policyResult);
       return;
     }
     markInboundDedupeReplayUnsafe();

@@ -170,6 +170,19 @@ describe("session transcript inbound context", () => {
     });
   });
 
+  it("fails closed for an unscoped session key without a routed agent owner", async () => {
+    const ctx = context({ AgentId: undefined, SessionKey: "slack:channel:c1" });
+
+    await expect(
+      mergeSessionTranscriptContext({
+        ctx,
+        sessionKey: ctx.SessionKey!,
+        storePath: "/tmp/sessions.json",
+      }),
+    ).rejects.toThrow("Session transcript context requires an agent owner.");
+    expect(readRecent).not.toHaveBeenCalled();
+  });
+
   it("skips canonical history for session-boundary commands", async () => {
     const ctx = context({ CommandBody: "/new summarize this workspace" });
 

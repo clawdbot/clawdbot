@@ -17,7 +17,7 @@ onboarding, on the agent's first real turn.
 On the first run against a brand-new workspace (default `~/.openclaw/workspace`),
 OpenClaw:
 
-- Seeds `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`.
+- Seeds `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - Has the agent follow a capped three-beat birth sequence: it asks what you want
   to call it, shares one short soul/vibe line, and asks whether you want the
   minimal recommended plugin set or maximum convenience.

@@ -171,6 +171,7 @@ describe("secrets runtime provider and media surfaces", () => {
     };
     try {
       const config = asConfig({
+        agents: { list: [{ id: "main", default: true }] },
         secrets: {
           providers: {
             default: { source: "file", path: secretsPath, mode: "json" },
@@ -247,6 +248,7 @@ describe("secrets runtime provider and media surfaces", () => {
 
   it("patches env shorthand model refs into the pinned runtime config", async () => {
     const config = asConfig({
+      agents: { list: [{ id: "main", default: true }] },
       models: {
         providers: {
           openai: {
@@ -299,7 +301,10 @@ describe("secrets runtime provider and media surfaces", () => {
   });
 
   it("retries provider auth publication after a queued runtime config mutation", async () => {
-    const initialConfig = asConfig({ gateway: { port: 19_040 } });
+    const initialConfig = asConfig({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: { port: 19_040 },
+    });
     const initial = await prepareSecretsRuntimeSnapshot({
       config: initialConfig,
       agentDirs: ["/tmp/openclaw-agent-main"],

@@ -21,7 +21,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
 - Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-  `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus
+  `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` when new, plus
   `MEMORY.md` when present). Large injected files are truncated by
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
   injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default:

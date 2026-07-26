@@ -33,6 +33,8 @@ export function repairCanonicalSqliteIndexes(
      * canonical index. No other repair failure is deferred.
      */
     allowMissingColumns?: boolean;
+    /** Keep index repair atomic with the caller's whole-schema validation. */
+    validateAfterRepair?: () => void;
     verifyPhysicalIntegrity?: boolean;
   } = {},
 ): string[] {
@@ -107,6 +109,7 @@ export function repairCanonicalSqliteIndexes(
       assertSqliteTableIntegrity(db, databaseLabel, tableName);
     }
     assertSqliteIntegrity(db, databaseLabel);
+    options.validateAfterRepair?.();
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {
     try {

@@ -357,6 +357,66 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects leaked private QA Docker chunks that import an omitted QA runtime", () => {
+    withTarball(
+      ["dist/docker-runtime-BVdgRgxA.js"],
+      {
+        "dist/docker-runtime-BVdgRgxA.js":
+          'import { createQaDockerRuntime } from "./qa-runtime-Bi1S3plf.js";\n' +
+          "export { createQaDockerRuntime };\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "dist/docker-runtime-BVdgRgxA.js imports missing dist/qa-runtime-Bi1S3plf.js",
+        );
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "named imports",
+      source: 'import { value } from "./missing.js";\n',
+    },
+    {
+      name: "multiline named imports",
+      source: 'import {\n  value,\n} from "./missing.js";\n',
+    },
+    {
+      name: "named re-exports",
+      source: 'export { value } from "./missing.js";\n',
+    },
+  ])("rejects missing packaged chunks in $name", ({ source }) => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": source },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("dist/index.js imports missing dist/missing.js");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("does not reject import-like text inside packaged template literals", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": 'const example = `\nimport "./phantom.js"\n`;\n' },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.4.27",
+    );
+  });
+
   it("accepts dist files whose relative chunks are present", () => {
     withTarball(
       ["dist/cli/run-main.js", "dist/memory-state-current.js"],
@@ -388,6 +448,23 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.stderr).toContain(
           "inventory omits imported dist file dist/memory-state-current.js",
         );
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects named imported chunks omitted from the postinstall inventory", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": 'import { value } from "./chunk.js";\nexport { value };\n',
+        "dist/chunk.js": "export const value = 42;\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory omits imported dist file dist/chunk.js");
       },
       "2026.4.27",
     );
@@ -467,6 +544,27 @@ describe("check-openclaw-package-tarball", () => {
     withTarball(
       ["dist/index.js"],
       { "dist/index.js": 'const root = new URL("../..", import.meta.url);\n' },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it.each([
+    "../../openclaw.mjs",
+    "../../scripts/run-node.mjs",
+    "../../dist/entry.js",
+    "../../dist/entry.mjs",
+  ])("allows import.meta.url JavaScript probes outside packaged dist (%s)", (specifier) => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": `const candidate = new URL(${JSON.stringify(specifier)}, import.meta.url);\n`,
+      },
       (tarball) => {
         const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 

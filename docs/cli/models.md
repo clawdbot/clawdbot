@@ -21,6 +21,7 @@ Related:
 ```bash
 openclaw models status
 openclaw models list
+openclaw models refresh
 openclaw models set <model-or-alias>
 openclaw models set-image <model-or-alias>
 openclaw models scan
@@ -63,6 +64,13 @@ For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openc
 ### List
 
 `openclaw models list` is read-only: it reads config, auth profiles, existing catalog state, and provider-owned catalog rows, but never rewrites `models.json`.
+
+`openclaw models refresh [--json]` forces an immediate hosted catalog check.
+Updated rows apply to a running Gateway after its next restart. The command
+prints a clear disabled result when `models.catalogRefresh.enabled` is `false`.
+The catalog's public change history lives in
+[`openclaw/catalog`](https://github.com/openclaw/catalog), where each content
+update is committed by the scheduled publisher.
 
 Options: `--all` (full catalog), `--local` (filter to local models), `--provider <id>`, `--json`, `--plain`.
 

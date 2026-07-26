@@ -25,7 +25,7 @@ import {
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import { resolveDefaultAgentDir } from "../agent-scope-config.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 
 type AuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -37,7 +37,10 @@ type AuthProfileDatabase = Pick<
 const PRIMARY_ROW_KEY = "primary";
 
 function resolveAgentDir(agentDir?: string): string {
-  return resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
+  if (agentDir) {
+    return resolveUserPath(agentDir);
+  }
+  return resolveSharedMainAuthAgentDir();
 }
 
 function inferAgentIdFromDir(agentDir: string): string {

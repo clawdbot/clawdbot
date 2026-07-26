@@ -181,10 +181,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testSidebarEdgeDragPreservesPushedScreenBackGesture() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "settings",
-            initialDestination: "settings",
-            name: "sidebar-pushed-screen-back-gesture"), appearance: nil, screenshotMode: false)
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "settings",
+                initialDestination: "settings",
+                name: "sidebar-pushed-screen-back-gesture"),
+            appearance: nil,
+            screenshotMode: false)
 
         if self.app?.buttons["Close"].waitForExistence(timeout: 2) == true {
             self.app?.buttons["Close"].tap()
@@ -473,12 +476,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(dictationButton.frame.maxX, composerSurface.frame.maxX)
         XCTAssertGreaterThanOrEqual(talkButton.frame.minX, composerSurface.frame.minX)
         XCTAssertLessThanOrEqual(talkButton.frame.maxX, composerSurface.frame.maxX)
-        XCTAssertGreaterThanOrEqual(attachmentButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(attachmentButton.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(dictationButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(dictationButton.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(talkButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(talkButton.frame.height, 44)
+        self.assertMinimumTouchTarget(attachmentButton)
+        self.assertMinimumTouchTarget(dictationButton)
+        self.assertMinimumTouchTarget(talkButton)
         let compactHeight = textField.frame.height
         XCTAssertLessThanOrEqual(compactHeight, 44)
         XCTAssertLessThanOrEqual(abs(attachmentButton.frame.midY - dictationButton.frame.midY), 1)
@@ -499,8 +499,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         wait(for: [composerGrew], timeout: 4)
         XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
         XCTAssertTrue(talkButton.waitForNonExistence(timeout: 3))
-        XCTAssertGreaterThanOrEqual(sendButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(sendButton.frame.height, 44)
+        self.assertMinimumTouchTarget(sendButton)
         self.attachScreenshot(named: "chat-composer-expanded")
 
         self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
@@ -939,7 +938,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(self.app?.staticTexts["Apple Health"].exists == true)
         self.attachScreenshot(named: "apple-health-disclosure")
     }
+}
 
+extension OpenClawSnapshotUITests {
     private func launchApp(
         for target: ScreenshotTarget,
         appearance: String? = "dark",
@@ -1037,6 +1038,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         timeout: TimeInterval = 3)
     {
         XCTAssertTrue(self.element(element, hasValue: value, timeout: timeout))
+    }
+
+    private func assertMinimumTouchTarget(
+        _ element: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        let minimum: CGFloat = 44
+        // XCUI converts screen coordinates through floating-point transforms.
+        // Permit rounding noise without accepting a genuinely undersized target.
+        let tolerance = minimum.ulp * 16
+        XCTAssertGreaterThanOrEqual(element.frame.width + tolerance, minimum, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(element.frame.height + tolerance, minimum, file: file, line: line)
     }
 
     private func element(_ element: XCUIElement, hasValue value: String, timeout: TimeInterval) -> Bool {

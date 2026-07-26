@@ -76,7 +76,7 @@ function normalizeInitialApplicationLocation(
   };
 }
 
-function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): void {
+function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
   if (typeof document === "undefined") {
     return;
   }
@@ -84,6 +84,9 @@ function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): vo
   const resolvedTheme = resolveTheme(settings.theme, settings.themeMode);
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  // Carapace CSS (openclaw/carapace) selects on [data-theme-resolved]; keep it
+  // in lockstep with data-theme-mode so its stylesheets work unmodified here.
+  root.dataset.themeResolved = root.dataset.themeMode;
   root.classList.toggle("wa-light", root.dataset.themeMode === "light");
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
@@ -99,7 +102,7 @@ function createApplicationTheme(
   const listeners = new Set<() => void>();
 
   const publish = () => {
-    applyStartupPresentation(settings);
+    applyThemePresentation(settings);
     for (const listener of listeners) {
       listener();
     }
@@ -176,6 +179,7 @@ function createApplicationNavigationPreferences(
     navCollapsed: settings.navCollapsed,
     navWidth: settings.navWidth,
     sidebarEntries: settings.sidebarEntries,
+    sessionSectionOrder: settings.sessionSectionOrder,
     pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -190,6 +194,7 @@ function createApplicationNavigationPreferences(
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.navWidth === snapshot.navWidth &&
         nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
+        nextSnapshot.sessionSectionOrder === snapshot.sessionSectionOrder &&
         nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
@@ -198,6 +203,7 @@ function createApplicationNavigationPreferences(
         navCollapsed: nextSnapshot.navCollapsed,
         navWidth: nextSnapshot.navWidth,
         sidebarEntries: [...nextSnapshot.sidebarEntries],
+        sessionSectionOrder: [...nextSnapshot.sessionSectionOrder],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;
@@ -328,7 +334,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   const initialUserMessage = createInitialUserMessageHandoff();
-  applyStartupPresentation(settings);
+  applyThemePresentation(settings);
   const router = createApplicationRouter();
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null

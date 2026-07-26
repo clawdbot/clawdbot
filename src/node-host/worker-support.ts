@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayClientRequestOptions } from "../gateway/client.js";
 import type { NodeHostClient } from "./client.js";
 import type { NodeInvokeRequestPayload } from "./invoke.js";
@@ -12,12 +13,6 @@ type NodeHostWorkerInput =
   | { type: "invoke-cancel"; invokeId: string }
   | NodeHostWorkerGatewayResponse
   | { type: "stop" };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | null {
   try {

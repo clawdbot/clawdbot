@@ -2105,17 +2105,18 @@ export function createFollowupRunner(params: {
             operationalPolicy === "silent" ||
             operationalPolicy === "once");
         const suppressionDeliverablePayloads = deliveryPayloads.filter((payload) => {
-          if (getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression !== true) {
-            return false;
+          const operational = isOperationalReplyPayload({
+            payload,
+            explicitCommandTurn: false,
+          });
+          if (operational) {
+            return shouldEvaluateOperationalPayloads;
           }
-          return (
-            !isOperationalReplyPayload({ payload, explicitCommandTurn: false }) ||
-            shouldEvaluateOperationalPayloads
-          );
+          return getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true;
         });
         if (suppressionDeliverablePayloads.length > 0) {
-          // Marked runtime output bypasses source-reply suppression, not the
-          // admission-time send policy or ambient room-event silence.
+          // Marked runtime output and policy-owned notices bypass source-reply
+          // suppression, not the admission-time send policy or ambient room-event silence.
           if (isRoomEventFollowup() && !shouldEvaluateOperationalPayloads) {
             return;
           }
@@ -2128,9 +2129,10 @@ export function createFollowupRunner(params: {
             },
             { runId },
           );
-          return;
-        }
-        if (shouldEvaluateOperationalPayloads) {
+          if (!hasNonOperationalDeliveryPayloads) {
+            return;
+          }
+        } else if (shouldEvaluateOperationalPayloads) {
           await sendRunPayloads(
             operationalDeliveryPayloads,
             effectiveQueued,

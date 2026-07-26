@@ -32,6 +32,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    sessionCompanion: {} as never,
     sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
       ok: false as const,

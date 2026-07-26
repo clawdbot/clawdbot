@@ -216,14 +216,28 @@ export function createOrResumeClientVoiceSession(params: {
   return voiceSessionId;
 }
 
+/** Read the canonical agent-session id without creating state during provider startup. */
+export function resolveClientVoiceAgentSessionId(params: {
+  agentId: string;
+  sessionKey: string;
+}): string | undefined {
+  return loadSessionEntryReadOnly(params)?.sessionId?.trim() || undefined;
+}
+
 /** Ensure Talk has the same canonical agent-session row that chat turns append to. */
 export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
-}): Promise<void> {
+  deadlineAt?: number;
+}): Promise<string> {
   const created = await patchSessionEntry(
     params,
     (_entry, context) => {
+      // Browser credentials can be short-lived. Check at the authoritative
+      // write boundary so a queued write cannot create an unusable empty chat.
+      if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
+        throw new Error("Realtime browser session expired during startup; try again");
+      }
       if (context.existingEntry?.sessionId) {
         return null;
       }
@@ -237,6 +251,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   if (!created?.sessionId) {
     throw new Error(`agent session could not be initialized (${params.sessionKey})`);
   }
+  return created.sessionId;
 }
 
 /** Correlate a consult run with its open call for confirmation and mutation evidence. */

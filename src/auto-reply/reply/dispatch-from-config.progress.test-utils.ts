@@ -693,6 +693,45 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
+  it("keeps missing-final recovery eligible when silent policy hides only progress", async () => {
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      messages: {
+        operationalReplies: { policy: "silent" },
+      },
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+      }),
+      cfg,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Inspect code", status: "in_progress" }],
+        });
+        return undefined;
+      },
+    });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      noVisibleReplyFallbackEligible: true,
+    });
+  });
+
   it("sends only one plan status notice per reply run", async () => {
     setNoAbort();
     const cfg = {

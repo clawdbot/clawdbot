@@ -22,13 +22,13 @@ read_when:
 
 ## Built-in catalog
 
-| Model ref                            | Input       | Context | Max output | Notes                                         |
-| ------------------------------------ | ----------- | ------- | ---------- | --------------------------------------------- |
-| `cohere/command-a-plus-05-2026`      | text, image | 128,000 | 64,000     | Default; flagship agentic and reasoning model |
-| `cohere/command-a-03-2025`           | text        | 256,000 | 8,000      | Previous Command A model                      |
-| `cohere/command-a-reasoning-08-2025` | text        | 256,000 | 32,000     | Agentic reasoning and tool use                |
-| `cohere/command-a-vision-07-2025`    | text, image | 128,000 | 8,000      | Vision and document analysis; no tool use     |
-| `cohere/north-mini-code-1-0`         | text, image | 256,000 | 64,000     | Agentic coding; reasoning; free limits        |
+| Model ref                            | Visibility | Input       | Context | Max output | Notes                                         |
+| ------------------------------------ | ---------- | ----------- | ------- | ---------- | --------------------------------------------- |
+| `cohere/command-a-plus-05-2026`      | visible    | text, image | 128,000 | 64,000     | Default; flagship agentic and reasoning model |
+| `cohere/command-a-03-2025`           | hidden     | text        | 256,000 | 8,000      | Previous generation; replaced by Command A+   |
+| `cohere/command-a-reasoning-08-2025` | hidden     | text        | 256,000 | 32,000     | Previous generation; replaced by Command A+   |
+| `cohere/command-a-vision-07-2025`    | hidden     | text, image | 128,000 | 8,000      | Previous generation; replaced by Command A+   |
+| `cohere/north-mini-code-1-0`         | visible    | text, image | 256,000 | 64,000     | Agentic coding; reasoning; free limits        |
 
 Reasoning-capable Cohere models support two Compatibility API reasoning modes. OpenClaw maps **off** to `none` and every enabled thinking level to `high`. Command A Vision does not support tool use, so OpenClaw keeps agent tools disabled for that model.
 

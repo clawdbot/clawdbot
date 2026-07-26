@@ -18,9 +18,10 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   collectKnownSessionRows,
+  evictArchivedSessionLineage,
   fetchChildSessionRows,
   fetchSessionLineage,
-  mergeChildSessionRows,
+  publishActiveSessionLineage,
 } from "./app-sidebar-child-session-data.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
 import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
@@ -605,6 +606,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   async loadActiveSessionLineage(sessionKey: string): Promise<void> {
     const normalizedKey = sessionKey.trim();
     if (normalizedKey !== this.activeSessionLineageRouteKey) {
+      evictArchivedSessionLineage(this, this.activeSessionLineageRouteKey);
       this.activeSessionLineageRouteKey = normalizedKey;
       this.activeSessionLineageLoaded = false;
       this.activeSessionLineageRequestToken = null;
@@ -649,11 +651,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     if (!lineage || !isCurrent()) {
       return;
     }
-    this.childSessionRowsByParent = mergeChildSessionRows(
-      this.childSessionRowsByParent,
-      lineage.rowsByParent,
-    );
-    this.activeSessionLineageRoot = lineage.topmostRow;
+    publishActiveSessionLineage(this, normalizedKey, lineage);
     this.notify();
     this.activeSessionLineageRequestToken = null;
     if (lineage.lookupFailed) {

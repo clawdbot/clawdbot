@@ -17,7 +17,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan } from "../config-reload-plan.js";
+import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { parseRestartRequestParams } from "./restart-request.js";
@@ -131,29 +131,13 @@ function queueSharedGatewayAuthGenerationRefresh(
   });
 }
 
-function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>): boolean {
-  return (
-    !plan.restartGateway &&
-    plan.hotReasons.length === 0 &&
-    !plan.reloadHooks &&
-    !plan.restartGmailWatcher &&
-    !plan.restartCron &&
-    !plan.restartHeartbeat &&
-    !plan.restartHealthMonitor &&
-    !plan.reloadPlugins &&
-    !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0 &&
-    (plan.restartChannelAccounts?.size ?? 0) === 0
-  );
-}
-
 function resolveConfigRestartRequirement(params: {
   changedPaths: string[];
   nextConfig: OpenClawConfig;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
   const plan = buildGatewayReloadPlan(params.changedPaths, { candidateConfig: params.nextConfig });
-  if (isNoopConfigReloadPlan(plan)) {
+  if (isNoopGatewayReloadPlan(plan)) {
     return { requiresRestart: false, scheduleDirectRestart: false };
   }
   if (reloadSettings.mode === "off") {

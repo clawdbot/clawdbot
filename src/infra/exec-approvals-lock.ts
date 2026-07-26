@@ -144,6 +144,10 @@ function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
       throw Object.assign(new Error(`Exec approvals are locked: ${lockPath}`), {
         code: "file_lock_timeout",
         lockPath,
+        // A same-process async holder can never release while sync code spins
+        // (single event loop), so callers may safely read the committed file
+        // instead of failing: the holder is suspended and cannot be mid-write.
+        heldByCurrentProcess: state.ownerPid === process.pid,
       });
     }
     let stat: fs.Stats;

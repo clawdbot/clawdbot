@@ -20,12 +20,11 @@ import {
   dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
+import { testing, deliverSubagentAnnouncement } from "./subagent-announce-delivery.test-support.js";
 import {
-  testing,
-  deliverSubagentAnnouncement,
+  resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
-} from "./subagent-announce-delivery.test-support.js";
-import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+} from "./subagent-announce-origin.js";
 import {
   createTaskCompletionEvent,
   expectDeliveryPath,

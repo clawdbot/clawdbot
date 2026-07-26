@@ -123,9 +123,6 @@
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
       ],
-      "openclaw/plugin-sdk/codex-native-task-runtime": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-native-task-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/agent-harness-task-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-task-runtime.d.ts"
       ],
@@ -206,6 +203,9 @@
       ],
       "openclaw/plugin-sdk/test-node-mocks": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/test-node-mocks.d.ts"
+      ],
+      "openclaw/plugin-sdk/test-state": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/test-state.d.ts"
       ],
       "openclaw/plugin-sdk/time-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/time-runtime.d.ts"

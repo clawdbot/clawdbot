@@ -70,6 +70,17 @@ export function readSessionArchiveContentSync(filePath: string): string {
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
 }
 
+/** Decodes staged archive bytes using the source archive's codec. */
+export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
+  if (!compressed) {
+    return Buffer.from(bytes).toString("utf8");
+  }
+  if (!zstdCodec) {
+    throw new Error("Cannot decode compressed transcript archive: this runtime lacks zstd support");
+  }
+  return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
+}
+
 /**
  * Materializes a compressed archive as a plain JSONL cache file and returns
  * the readable path; plain archives pass through untouched. Archives are

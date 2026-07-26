@@ -1,6 +1,7 @@
 import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  supportsClaude1MContext,
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,16 +38,6 @@ export type ContextTokenResolutionParams = {
   allowUnscopedModelLookup?: boolean;
 };
 
-const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
-  "claude-opus-4-8",
-  "claude-opus-4.8",
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-opus-4-7",
-  "claude-opus-4.7",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
@@ -210,17 +201,15 @@ export function resolveAnthropicFixedContextWindow(
   ) {
     return ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS;
   }
+  // Opus 5 is natively 1M on every runtime, including Claude CLI. Keep this
+  // ahead of the legacy CLI opt-in gate used by older 1M variants below.
   if (resolveClaudeOpus5ModelIdentity({ id: modelId })) {
     return ANTHROPIC_OPUS_5_CONTEXT_TOKENS;
   }
   if (resolveClaudeSonnet5ModelIdentity({ id: modelId })) {
     return ANTHROPIC_SONNET_5_CONTEXT_TOKENS;
   }
-  // Opus 5 ships 1M as the model default (not a [1m] opt-in like Opus 4.x).
-  if (resolveClaudeOpus5ModelIdentity({ id: modelId })) {
-    return ANTHROPIC_OPUS_5_CONTEXT_TOKENS;
-  }
-  if (!ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))) {
+  if (!supportsClaude1MContext({ id: modelId })) {
     return undefined;
   }
   if (provider === "claude-cli" && !modelId.endsWith("[1m]") && options?.claudeCli1M !== true) {

@@ -85,6 +85,7 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -913,10 +914,10 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
-  // The embedded terminal ships ghostty-web (WASM); relax the index CSP only
-  // for an explicitly enabled terminal so the default policy stays strict.
-  const terminalEnabled =
-    opts?.terminalEnabled ?? opts?.config?.gateway?.terminal?.enabled === true;
+  // The embedded terminal ships ghostty-web (WASM); the index CSP carries the
+  // WASM relaxation whenever the terminal is enabled (the default) and stays
+  // strict once operators opt out with gateway.terminal.enabled: false.
+  const terminalEnabled = opts?.terminalEnabled ?? isTerminalConfigEnabled(opts?.config);
   const route = classifyControlUiRequest({
     basePath,
     pathname,

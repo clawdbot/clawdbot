@@ -366,7 +366,7 @@ async function finalizeOperationalReplyOnceReservation(
 function formatOperationalReplyPayloadForLog(reply: ReplyPayload): string {
   const parts = [
     reply.text ? `text=${JSON.stringify(reply.text.slice(0, 160))}` : undefined,
-    reply.mediaUrl ? `mediaUrl=${JSON.stringify(reply.mediaUrl)}` : undefined,
+    reply.mediaUrl ? "mediaUrl=true" : undefined,
     reply.mediaUrls?.length ? `mediaUrls=${reply.mediaUrls.length}` : undefined,
     reply.isError ? "isError=true" : undefined,
     reply.isFallbackNotice ? "isFallbackNotice=true" : undefined,
@@ -405,7 +405,7 @@ async function redirectOperationalReply(params: {
   sourceChannel?: string;
   sourceEventKey: string;
   sourceSessionKey?: string;
-}): Promise<boolean> {
+}): Promise<void> {
   const idempotencyKey = createOperationalReplyRedirectKey({
     payload: params.payload,
     sourceEventKey: params.sourceEventKey,
@@ -430,13 +430,11 @@ async function redirectOperationalReply(params: {
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     });
     if (!result.ok) {
-      logVerbose(`operational-reply-policy: redirect skipped: ${result.reason}`);
-      return false;
+      throw new Error(`redirect skipped: ${result.reason}`);
     }
-    return true;
   } catch (error) {
     logVerbose(`operational-reply-policy: redirect failed: ${formatErrorMessage(error)}`);
-    return false;
+    throw error;
   }
 }
 
@@ -531,27 +529,24 @@ export async function applyOperationalReplyPolicy(params: {
     };
   }
   if (operationalReplyPolicy.policy === "redirect") {
-    let redirected = false;
-    if (operationalReplyPolicy.redirectSessionKey) {
-      redirected = await redirectOperationalReply({
-        cfg: params.cfg,
-        payload: params.payload,
-        redirectSessionKey: operationalReplyPolicy.redirectSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceEventKey: params.sourceEventKey,
-        sourceSessionKey: params.sourceSessionKey,
-      });
-      logOperationalReplyPolicySuppression({
-        ...params,
-        reason: "redirected by messages.operationalReplies",
-      });
-    } else {
-      logOperationalReplyPolicySuppression({
-        ...params,
-        reason: "suppressed because messages.operationalReplies redirectSessionKey is missing",
-      });
+    if (!operationalReplyPolicy.redirectSessionKey) {
+      throw new Error(
+        "messages.operationalReplies.redirectSessionKey is required for redirect policy",
+      );
     }
-    return { intentionalSilence: true, redirected, shouldDeliver: false };
+    await redirectOperationalReply({
+      cfg: params.cfg,
+      payload: params.payload,
+      redirectSessionKey: operationalReplyPolicy.redirectSessionKey,
+      sourceChannel: params.sourceChannel,
+      sourceEventKey: params.sourceEventKey,
+      sourceSessionKey: params.sourceSessionKey,
+    });
+    logOperationalReplyPolicySuppression({
+      ...params,
+      reason: "redirected by messages.operationalReplies",
+    });
+    return { intentionalSilence: true, redirected: true, shouldDeliver: false };
   }
   return { shouldDeliver: true };
 }

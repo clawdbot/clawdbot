@@ -5,6 +5,7 @@ import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { mobileNavLayoutMediaQuery, shouldMergeChatChrome } from "../../app/mobile-nav-layout.ts";
+import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import "../../components/resizable-divider.ts";
 import { McpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
@@ -74,10 +75,14 @@ export class ChatPage extends OpenClawLightDomElement {
   @state() private mergedChrome = false;
   @state() private dropIndicator: DropIndicator | null = null;
 
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.sessions,
-    (sessions, notify) => sessions.subscribe(notify),
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    )
+    .watch(nativeGatewaysCapability, (nativeGateways, notify) =>
+      nativeGateways.subscribe(() => notify()),
+    );
   private mediaQuery: MediaQueryList | null = null;
   private mobileNavMediaQuery: MediaQueryList | null = null;
   // Light-DOM enter/leave events bubble from every nested child, so only clear
@@ -550,8 +555,10 @@ export class ChatPage extends OpenClawLightDomElement {
     weight: number,
     splitMode: boolean,
     ownerKey: string,
+    showGatewayPicker: boolean,
   ) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
+    const nativeGateways = nativeGatewaysCapability();
     // Route keys can be unresolved aliases ("main"); resolve against the
     // hello defaults and match rows by equivalence like the pane itself
     // does, or renamed sessions fall back to the generic key-derived title.
@@ -579,6 +586,9 @@ export class ChatPage extends OpenClawLightDomElement {
           .paneTitle=${title}
           .narrow=${this.narrow}
           .mergedChrome=${this.mergedChrome && active}
+          .nativeGateways=${showGatewayPicker ? nativeGateways : null}
+          .gatewaysSnapshot=${showGatewayPicker ? (nativeGateways?.snapshot ?? null) : null}
+          .onboarding=${this.closest(".shell--onboarding") !== null}
           .onOpenSplitView=${splitMode || this.narrow ? undefined : this.openSplitView}
           .onSplitDown=${splitMode ? this.handleSplitDown : undefined}
           .onSplitRight=${splitMode ? this.handleSplitRight : undefined}
@@ -619,6 +629,7 @@ export class ChatPage extends OpenClawLightDomElement {
           ? []
           : layout.columns;
     const renderedColumnWeights = this.narrow ? [1] : layout.columnWeights;
+    const rightmostPane = renderedColumns.at(-1)?.panes.at(-1);
     return html`
       <div class="chat-split-view ${this.narrow ? "chat-split-view--narrow" : ""}">
         ${repeat(
@@ -643,6 +654,7 @@ export class ChatPage extends OpenClawLightDomElement {
                     splitWeight(column.paneWeights, paneIndex, "rendered split pane weight"),
                     splitMode,
                     JSON.stringify([column.id, pane.id, pane.sessionKey]),
+                    pane.id === rightmostPane?.id,
                   )}
                   ${paneIndex < column.panes.length - 1
                     ? html`

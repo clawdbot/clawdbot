@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-const OPENCLAW_RESPONSE_FORMAT_NAME = "openclaw_response";
+const JSON_SCHEMA_RESPONSE_FORMAT_NAME = "openclaw_response";
 const OLLAMA_CLOUD_ORIGIN = "https://ollama.com";
 
 export function isKnownOpenAIJsonSchemaModelId(modelId: string | undefined): boolean {
@@ -62,7 +62,7 @@ export function resolveOpenAICompletionsResponseFormat(
   return {
     type: "json_schema",
     json_schema: {
-      name: OPENCLAW_RESPONSE_FORMAT_NAME,
+      name: JSON_SCHEMA_RESPONSE_FORMAT_NAME,
       schema: responseFormat,
     },
   };

@@ -41,6 +41,7 @@ import {
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
@@ -93,19 +94,6 @@ import type {
   ProviderValidateReplayTurnsContext,
   PluginTextTransforms,
 } from "./types.js";
-
-function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized) {
-    return false;
-  }
-  if (normalizeProviderId(provider.id) === normalized) {
-    return true;
-  }
-  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
-    (alias) => normalizeProviderId(alias) === normalized,
-  );
-}
 
 function resolveProviderHookRefs(
   provider: string,

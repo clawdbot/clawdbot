@@ -141,6 +141,8 @@ type TransportErrorDetails = {
   errorBody?: string;
 };
 
+const MAX_TRANSPORT_ERROR_CAUSE_DEPTH = 8;
+
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -164,6 +166,24 @@ function readObjectProperty(value: unknown, key: string): Record<string, unknown
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
+}
+
+function readCauseChainErrorCode(value: unknown): string | undefined {
+  const seen = new Set<Record<string, unknown>>();
+  let cause = readObjectProperty(value, "cause");
+  for (
+    let depth = 0;
+    cause && depth < MAX_TRANSPORT_ERROR_CAUSE_DEPTH && !seen.has(cause);
+    depth += 1
+  ) {
+    seen.add(cause);
+    const code = readStringLikeProperty(cause, "code");
+    if (code) {
+      return code;
+    }
+    cause = readObjectProperty(cause, "cause");
+  }
+  return undefined;
 }
 
 function stringifyErrorBody(value: unknown): string | undefined {
@@ -210,7 +230,8 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
   const errorCode =
     readStringLikeProperty(errorObject, "errorCode") ??
     readStringLikeProperty(errorObject, "code") ??
-    readStringLikeProperty(nestedError, "code");
+    readStringLikeProperty(nestedError, "code") ??
+    readCauseChainErrorCode(errorObject);
   const errorType =
     readStringLikeProperty(errorObject, "errorType") ??
     readStringLikeProperty(errorObject, "type") ??

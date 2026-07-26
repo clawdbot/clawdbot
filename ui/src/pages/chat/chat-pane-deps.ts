@@ -85,7 +85,6 @@ export {
   hasSessionPresenceViewers,
 } from "../../components/viewer-facepile.ts";
 export { t } from "../../i18n/index.ts";
-export { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 export {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -100,14 +99,13 @@ export {
   type BoardFace,
   type BoardSessionView,
 } from "../../lib/board/settings.ts";
-export type { SwarmRosterHydrator } from "../../lib/board/swarm-dashboard.ts";
+export type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 export type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 export type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 export {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
-export { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 export { copyToClipboard } from "../../lib/clipboard.ts";
 export { clampText } from "../../lib/format.ts";
 export {
@@ -136,6 +134,7 @@ export {
 export {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canonicalUiSessionKeyForPersistence,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -157,6 +156,7 @@ export {
 } from "./board-session-surface.ts";
 export { catalogMessageId } from "./catalog-message-id.ts";
 export { refreshChatAvatar } from "./chat-avatar.ts";
+export { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 export type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 export {
   applyChatAgentsList,
@@ -168,7 +168,7 @@ export {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-export { requestSessionObserverAnswer, sendSessionObserverVisibility } from "./chat-observer.ts";
+export { sendSessionObserverVisibility } from "./chat-observer.ts";
 export {
   applySelectedSessionProjection,
   dismissChatError,
@@ -179,6 +179,12 @@ export { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 export { dismissRealtimeTalkError } from "./chat-realtime.ts";
 export { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 export { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+export {
+  ChatSessionCompanionThreads,
+  requestSessionCompanionAnswer,
+  requestSessionCompanionState,
+  resetSessionCompanion,
+} from "./chat-session-companion.ts";
 export {
   flushChatQueueAfterIdleSessionReconciliation,
   switchChatFastMode,
@@ -204,6 +210,22 @@ export {
 } from "./chat-state.ts";
 export { resetChatViewState } from "./chat-view-state.ts";
 export { renderChat, type ChatProps } from "./chat-view.ts";
+export {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  detachPanelToColumn,
+  fitSidebarLayout,
+  isSidebarRegionCollapsed,
+  mergePanelIntoColumn,
+  sidebarPrimaryWidth,
+  normalizeSidebarLayout,
+  openSlot,
+  resizeColumn,
+  type SidebarLayout,
+  type SidebarSide,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
 export { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 export { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 export {
@@ -227,6 +249,7 @@ export {
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
 export { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
+export type { SessionRailMode } from "./components/chat-session-rail.ts";
 export {
   renderChatSessionSharing,
   type ChatSessionSharingState,
@@ -240,12 +263,7 @@ export {
   toggleSessionWorkspace,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-export {
-  CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-  type DetailFullMessageResult,
-  type SidebarContent,
-  type SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
+export type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 export {
   ChatTranscriptController,
   resetChatThreadPresentationState,

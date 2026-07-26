@@ -388,9 +388,6 @@ describe("subagent announce formatting", () => {
       if (typed.method === "chat.history") {
         return await chatHistoryMock(typed.params?.sessionKey);
       }
-      if (typed.method === "sessions.patch") {
-        return {};
-      }
       if (typed.method === "sessions.delete") {
         sessionsDeleteSpy(typed);
         return {};
@@ -601,7 +598,7 @@ describe("subagent announce formatting", () => {
           ],
         };
       }
-      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+      if (typed.method === "sessions.delete") {
         return {};
       }
       return {};

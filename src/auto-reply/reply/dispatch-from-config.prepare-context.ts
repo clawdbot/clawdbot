@@ -375,9 +375,8 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     normalizeOptionalString(ctx.MessageSidFirst) ??
     params.replyOptions?.runId ??
     crypto.randomUUID();
-  let operationalReplyPolicyIntentionalSilence = false;
   const applyDispatchOperationalReplyPolicy = async (payload: ReplyPayload) => {
-    const result = await applyOperationalReplyPolicyFromConfig({
+    return await applyOperationalReplyPolicyFromConfig({
       cfg,
       payload,
       explicitCommandTurn: explicitCommandTurnCtx,
@@ -393,10 +392,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       messageKey: ctx.MessageSidFull ?? ctx.MessageSid,
       logPrefix: "dispatch-from-config",
     });
-    if (!result.shouldDeliver) {
-      operationalReplyPolicyIntentionalSilence = true;
-    }
-    return result;
   };
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
@@ -553,7 +548,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       sendPolicyDenied,
       operationalReplyPolicy,
       applyDispatchOperationalReplyPolicy,
-      getOperationalReplyPolicyIntentionalSilence: () => operationalReplyPolicyIntentionalSilence,
       deliverySuppressionReason,
       suppressHookUserDelivery,
       suppressHookReplyLifecycle,

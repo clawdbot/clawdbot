@@ -232,6 +232,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       payloadMetadata?.nonTerminalToolErrorWarning === true;
                     const shouldEvaluateOperationalPayload =
                       !sendPolicyDenied &&
+                      (!suppressDelivery || suppressAutomaticSourceDelivery) &&
                       isOperationalReplyPayload({
                         payload,
                         explicitCommandTurn: false,
@@ -544,6 +545,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       explicitCommandTurn: false,
                     });
                     const canBypassSourceSuppression =
+                      suppressAutomaticSourceDelivery &&
                       isOperationalPayload &&
                       (ctx.InboundEventKind !== "room_event" ||
                         state.operationalReplyPolicy.policy !== "always");

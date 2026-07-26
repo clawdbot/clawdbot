@@ -109,6 +109,18 @@ describe("operational reply policy", () => {
     ).resolves.toMatchObject({ intentionalSilence: true, shouldDeliver: false });
   });
 
+  it("fails redirect before source suppression when no target is available", async () => {
+    await expect(
+      applyOperationalReplyPolicy({
+        cfg: { messages: { operationalReplies: { policy: "redirect" } } } as OpenClawConfig,
+        payload: { text: "provider failed", isError: true },
+        explicitCommandTurn: false,
+        sendPolicyDenied: false,
+        sourceEventKey: "event-1",
+      }),
+    ).rejects.toThrow("redirectSessionKey is required");
+  });
+
   it("reserves once keys before delivery and releases failed deliveries", async () => {
     const { sessionKey, storePath } = await createSessionStoreFixture();
     const cfg = onceConfig(storePath);
