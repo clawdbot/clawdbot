@@ -204,6 +204,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalled();
+    expect(firstReplyDispatchCall()?.[0]).toMatchObject({ sendPolicy: "deny" });
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },

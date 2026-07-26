@@ -9,6 +9,7 @@ import type {
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   getReplyPayloadMetadata,
+  markOperationalReplyPayloadForSourceSuppressionDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
 } from "../reply-payload.js";
 import { createCompactionNoticePayload } from "./compaction-notice.js";
@@ -101,10 +102,10 @@ describe("operational reply policy", () => {
     clearOperationalReplyPolicyStateForTest();
   });
 
-  it("classifies plain error payloads without delivery metadata as operational", async () => {
+  it("keeps plain error payloads outside host operational policy", async () => {
     const payload = { text: "provider failed", isError: true };
 
-    expect(isOperationalReplyPayload({ payload, explicitCommandTurn: false })).toBe(true);
+    expect(isOperationalReplyPayload({ payload, explicitCommandTurn: false })).toBe(false);
     await expect(
       applyOperationalReplyPolicy({
         cfg: { messages: { operationalReplies: { policy: "silent" } } } as OpenClawConfig,
@@ -113,7 +114,7 @@ describe("operational reply policy", () => {
         sendPolicyDenied: false,
         sourceEventKey: "event-1",
       }),
-    ).resolves.toMatchObject({ intentionalSilence: true, shouldDeliver: false });
+    ).resolves.toMatchObject({ shouldDeliver: true });
   });
 
   it("does not classify a generic source-suppression bypass as operational", async () => {
@@ -146,7 +147,10 @@ describe("operational reply policy", () => {
     await expect(
       applyOperationalReplyPolicy({
         cfg: { messages: { operationalReplies: { policy: "redirect" } } } as OpenClawConfig,
-        payload: { text: "provider failed", isError: true },
+        payload: markOperationalReplyPayloadForSourceSuppressionDelivery({
+          text: "provider failed",
+          isError: true,
+        }),
         explicitCommandTurn: false,
         sendPolicyDenied: false,
         sourceEventKey: "event-1",

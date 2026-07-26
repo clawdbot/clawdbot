@@ -10,6 +10,7 @@ import { EmbeddedBlockChunker } from "../../agents/embedded-agent-block-chunker.
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { markOperationalReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type AcpHiddenBoundarySeparator,
@@ -335,12 +336,22 @@ export function createAcpReplyProjector(params: {
     }
     if (settings.deliveryMode === "final_only") {
       pendingToolDeliveries.push({
-        payload: { text: formatted, isStatusNotice: true },
+        payload: markOperationalReplyPayloadForSourceSuppressionDelivery({
+          text: formatted,
+          isStatusNotice: true,
+        }),
         meta,
       });
     } else {
       await flush(true);
-      await params.deliver("tool", { text: formatted, isStatusNotice: true }, meta);
+      await params.deliver(
+        "tool",
+        markOperationalReplyPayloadForSourceSuppressionDelivery({
+          text: formatted,
+          isStatusNotice: true,
+        }),
+        meta,
+      );
     }
     lastStatusHash = hash;
   };

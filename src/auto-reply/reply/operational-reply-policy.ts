@@ -75,10 +75,12 @@ export function isOperationalReplyPayload(params: {
   if (params.explicitCommandTurn && metadata?.commandReply === true) {
     return false;
   }
-  if (isReplyPayloadOperationalNotice(params.payload)) {
-    return true;
-  }
-  return false;
+  return (
+    metadata?.operationalNotice === true ||
+    (metadata?.deliverDespiteSourceReplySuppression === true &&
+      !metadata.sourceReplyTranscriptMirror &&
+      isReplyPayloadOperationalNotice(params.payload))
+  );
 }
 
 function resolveOperationalReplyKind(payload: ReplyPayload): string {

@@ -15,7 +15,10 @@ import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import {
+  markOperationalReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
@@ -154,10 +157,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     }
     toolStartStatusesSent.add(normalizedLabel);
     toolStartStatusCount += 1;
-    const payload: ReplyPayload = {
+    const payload = markOperationalReplyPayloadForSourceSuppressionDelivery({
       text: `Working: ${normalizedLabel}`,
       isStatusNotice: true,
-    };
+    });
     const policyResult = await applyDispatchOperationalReplyPolicy(payload);
     if (!policyResult.shouldDeliver) {
       return;
@@ -183,10 +186,10 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return;
     }
     didSendPlanStatusNotice = true;
-    const replyPayload: ReplyPayload = {
+    const replyPayload = markOperationalReplyPayloadForSourceSuppressionDelivery({
       text: formatPlanUpdateText(payload),
       isStatusNotice: true,
-    };
+    });
     const policyResult = await applyDispatchOperationalReplyPolicy(replyPayload);
     if (!policyResult.shouldDeliver) {
       return;

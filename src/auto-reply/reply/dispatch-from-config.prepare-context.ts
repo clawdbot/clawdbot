@@ -33,7 +33,11 @@ import {
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  markOperationalReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
@@ -102,13 +106,14 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     mode: "additive" | "terminal",
     transcriptOwner?: PluginBindingTranscriptOwner,
   ): Promise<boolean> => {
-    const noticePayload =
+    const noticePayload = markOperationalReplyPayloadForSourceSuppressionDelivery(
       payload.isError ||
-      payload.isFallbackNotice ||
-      payload.isCompactionNotice ||
-      payload.isStatusNotice
+        payload.isFallbackNotice ||
+        payload.isCompactionNotice ||
+        payload.isStatusNotice
         ? payload
-        : copyReplyPayloadMetadata(payload, { ...payload, isStatusNotice: true });
+        : copyReplyPayloadMetadata(payload, { ...payload, isStatusNotice: true }),
+    );
     const policyResult = await applyDispatchOperationalReplyPolicy(noticePayload);
     if (!policyResult.shouldDeliver) {
       return policyResult.redirected === true;

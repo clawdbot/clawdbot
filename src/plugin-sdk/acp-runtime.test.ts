@@ -172,6 +172,8 @@ describe("tryDispatchAcpReplyHook", () => {
       cfg: ctx.cfg,
       dispatcher: ctx.dispatcher,
       bypassForCommand: true,
+      sendPolicy: "deny",
+      suppressReplyLifecycle: true,
     });
   });
 
