@@ -350,7 +350,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               shouldIncludeKnownAccountsForPluginReload(plan.changedPaths, channel);
             if (includeKnownAccounts) {
               await runOutsideGatewayRootWorkAdmission(() =>
-                params.startChannel(channel, undefined, { includeKnownAccounts: true }),
+                params.startChannel(channel, undefined, {
+                  includeKnownAccounts: true,
+                  preserveManualStop: true,
+                }),
               );
             } else {
               await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));

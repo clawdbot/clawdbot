@@ -232,7 +232,10 @@ export async function restartGatewayChannels(options: {
           }
           if (includeKnownAccounts) {
             await runOutsideGatewayRootWorkAdmission(() =>
-              params.startChannel(name, undefined, { includeKnownAccounts: true }),
+              params.startChannel(name, undefined, {
+                includeKnownAccounts: true,
+                preserveManualStop: true,
+              }),
             );
           } else {
             await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
