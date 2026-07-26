@@ -44,6 +44,25 @@ describe("qqbot config", () => {
     ).toMatchObject({ success: false });
   });
 
+  it("validates context visibility modes", () => {
+    expect(
+      requireRuntimeSchema().safeParse({ contextVisibility: "allowlist_quote" }),
+    ).toMatchObject({ success: true });
+    expect(
+      requireRuntimeSchema().safeParse({
+        accounts: { work: { contextVisibility: "allowlist" } },
+      }),
+    ).toMatchObject({ success: true });
+    expect(requireRuntimeSchema().safeParse({ contextVisibility: "allowlistt" })).toMatchObject({
+      success: false,
+    });
+    expect(
+      requireRuntimeSchema().safeParse({
+        accounts: { work: { contextVisibility: "allowlistt" } },
+      }),
+    ).toMatchObject({ success: false });
+  });
+
   it("accepts top-level speech overrides in the manifest schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),

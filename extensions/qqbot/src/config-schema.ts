@@ -1,6 +1,7 @@
 // Qqbot helper module supports config schema behavior.
 import {
   AllowFromListSchema,
+  ContextVisibilityModeSchema,
   GroupPolicySchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
@@ -76,6 +77,7 @@ const QQBotAccountSchema = z
     groupAllowFrom: AllowFromListSchema,
     dmPolicy: QQBotDmPolicySchema,
     groupPolicy: QQBotGroupPolicySchema,
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     systemPrompt: z.string().optional(),
     markdownSupport: z.boolean().optional(),
     voiceDirectUploadFormats: z.array(z.string()).optional(),
