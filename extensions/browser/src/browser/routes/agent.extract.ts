@@ -21,11 +21,27 @@ function resolveExtractTimeoutMs(value: unknown): number {
   );
 }
 
+function formatExtractCaptureError(params: {
+  error: "invalid_selector" | "selector_not_found";
+  selector?: string;
+}): string {
+  if (params.error === "invalid_selector") {
+    return "One or more CSS selectors are invalid; check selector and ignoreSelectors and try again.";
+  }
+  return params.selector
+    ? `CSS selector ${JSON.stringify(params.selector)} matched no usable elements; check selector and ignoreSelectors, or omit selector to extract the whole page.`
+    : "ignoreSelectors removed all captured page content; adjust ignoreSelectors and try again.";
+}
+
 /** Register the Playwright-only page-content capture endpoint. */
 export function registerBrowserExtractRoute(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   app.post("/extract", async (req, res) => {
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const selector = toStringOrEmpty(body.selector) || undefined;
+    const ignoreSelectors = Array.isArray(body.ignoreSelectors)
+      ? body.ignoreSelectors.filter((value): value is string => typeof value === "string")
+      : [];
     let timeoutMs: number;
     try {
       timeoutMs = resolveExtractTimeoutMs(body.timeoutMs);
@@ -50,12 +66,24 @@ export function registerBrowserExtractRoute(app: BrowserRouteRegistrar, ctx: Bro
       feature: "extract",
       enforceCurrentUrlAllowed: true,
       run: async ({ cdpUrl, tab, signal, resolveTabUrl, pw }) => {
-        const html = await pw.pageContentViaPlaywright({
+        const captured = await pw.pageContentViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           signal,
+          selector,
+          ignoreSelectors,
         });
+        const url = (await resolveTabUrl(tab.url)) ?? tab.url;
+        if (!captured.ok) {
+          return res.json({
+            ...captured,
+            message: formatExtractCaptureError({ error: captured.error, selector }),
+            targetId: tab.targetId,
+            url,
+          });
+        }
+        const { html } = captured;
         if (html.length > BROWSER_EXTRACT_MAX_HTML_CHARS) {
           return jsonError(
             res,
@@ -63,7 +91,6 @@ export function registerBrowserExtractRoute(app: BrowserRouteRegistrar, ctx: Bro
             `page HTML exceeds the ${BROWSER_EXTRACT_MAX_HTML_CHARS} character extraction limit; use snapshot instead.`,
           );
         }
-        const url = (await resolveTabUrl(tab.url)) ?? tab.url;
         res.json({ ok: true, targetId: tab.targetId, url, html });
       },
     });

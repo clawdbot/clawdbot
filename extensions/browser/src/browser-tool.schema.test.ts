@@ -70,12 +70,16 @@ describe("browser tool schema", () => {
       "extract",
     );
     expect(properties.query).toBeDefined();
+    expect(properties.selector).toBeDefined();
+    expect(properties.ignoreSelectors).toBeDefined();
+    expect(properties.schema).toBeDefined();
     expect(properties.targetId).toBeDefined();
     expect(properties.timeoutMs).toBeDefined();
     expect(output.url).toBeDefined();
     expect(output.chars).toBeDefined();
     expect(output.truncated).toBeDefined();
     expect(output.model).toBeDefined();
+    expect(output.json).toBeDefined();
   });
 
   it("exposes scrollIntoView on nested and flattened act params", () => {

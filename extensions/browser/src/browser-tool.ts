@@ -68,6 +68,7 @@ import {
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
+  validateJsonSchemaValue,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
@@ -110,6 +111,7 @@ const browserToolDeps = {
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
+  validateJsonSchemaValue,
 };
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {

@@ -49,6 +49,27 @@ For tab endpoints, `targetId` is the compatibility field name. Prefer passing
 handles such as `t1` are also accepted. Raw CDP target ids and unique raw
 target-id prefixes still work, but they are volatile diagnostic handles.
 
+### Page extraction
+
+The agent tool accepts `action="extract"` with required `query` and optional
+`targetId`, `timeoutMs`, `selector`, `ignoreSelectors`, and `schema`. `selector`
+is a CSS selector that limits capture to matching subtrees; a no-match response
+is an error and never falls back to the whole page. `ignoreSelectors` is an
+array of CSS selectors removed from the captured subtree before readable text
+conversion, so navigation, footers, ads, and banners do not consume the model
+context window. The reported `chars` count reflects the scoped, converted text.
+
+`schema` is a JSON Schema object for structured extraction. A successful result
+stores the validated value in `details.json` and shows compact JSON in the
+wrapped text block. Invalid JSON or a schema mismatch gets one correction retry;
+if that also fails, retry without `schema` or adjust the schema. Without
+`schema`, extraction keeps its free-text answer and `NOT_FOUND` behavior.
+
+The CLI mirrors these fields with `--selector <css>`, repeatable
+`--ignore-selector <css>`, and `--schema <json>`. The private `POST /extract`
+capture route accepts `targetId`, `timeoutMs`, `selector`, and
+`ignoreSelectors`; schema validation happens in the calling agent tool or CLI.
+
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
 - `Authorization: Bearer <gateway token>`
@@ -200,6 +221,7 @@ openclaw browser snapshot --selector "#main" --interactive
 openclaw browser snapshot --frame "iframe#main" --interactive
 openclaw browser snapshot --out snapshot.txt
 openclaw browser extract "What is the page's main conclusion?"
+openclaw browser extract "List the releases" --selector "main" --ignore-selector "nav" --schema '{"type":"array","items":{"type":"object"}}'
 openclaw browser console --level error
 openclaw browser errors --clear
 openclaw browser requests --filter api --clear

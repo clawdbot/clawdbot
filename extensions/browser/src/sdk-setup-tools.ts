@@ -38,6 +38,7 @@ export {
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "openclaw/plugin-sdk/simple-completion-runtime";
+export { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 export {
   htmlToMarkdown,
   normalizeWhitespace,
