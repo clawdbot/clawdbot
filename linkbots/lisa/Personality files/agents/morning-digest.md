@@ -37,13 +37,17 @@ If CLI force-run is unavailable, tell Carlos to wait for the next scheduled 08:3
 
 OpenClaw cron has **one** announce target (Telegram). Email is a separate `lisa-safe` side-effect.
 
+### Silent work (mandatory)
+
+Work and think with **tool calls only** until the very last assistant message. Emit **no** mid-run assistant text (“Now I have…”, “Let me build…”, rate recalculation scratch, Current state analysis). The announced Telegram body is **only** the **Morning Digest Output Format** below — if the final reply contains planning/analysis, that is a failure (2026-07-26: ~15k analysis leaked instead of the digest).
+
 1. **EMAIL path:** `write` the email body to `scratch/digest_email.txt`, then send with:
    ```bash
    tools/bin/lisa-safe email-send --to calusa@linktrend.media --subject "<subject>" --body-file scratch/digest_email.txt
    ```
    Never `gws gmail send`, never `--body "$(cat …)"`, never `2>&1`.
    From `lisa@linktrend.media`. Never put the email body into the final assistant reply.
-2. **TELEGRAM path:** The **final plain-text reply** is the Telegram digest only (cron announces it). Produce the **Morning Digest Output Format** below (sections A–D, plus Main Approve when required). Include Battery Monitoring in Telegram only.
+2. **TELEGRAM path:** The **final plain-text reply** is the Telegram digest only (cron announces it). Produce the **Morning Digest Output Format** below (sections A–D, plus Main Approve when required). Include Battery Monitoring in Telegram only. No preamble, no postscript, no scratch math.
 3. **Never concatenate.** Do **not** label sections `📧 EMAIL` / `💬 TELEGRAM` in the final reply. Do **not** paste a failed email draft into Telegram.
 4. **If email send fails** (including gws auth): put **one short line** in the Telegram digest (e.g. `Email digest not sent — gws auth needs Carlos to run \`gws auth login\`.`). Then continue with the normal Telegram digest. Do not dump email content.
 5. Battery Monitoring / battery / selfie / compliance / evening-out: **Telegram only**. Never in email.

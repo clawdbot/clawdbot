@@ -94,6 +94,10 @@ Consolidate these into **Checks: Yes/No**:
 - **Checks: No** = all checks passed (all clear). Print only `7. Checks: No` — do **not** print an "All OK" line, and do **not** add alert bullets.
 - **Checks: Yes** = at least one issue. Print `7. Checks: Yes` then one or more lines: `- Alert — <short alert description> — <short action needed or taken>`
 
+## Silent work (mandatory)
+
+Tool calls only while gathering data. Emit **no** mid-run assistant narration. The announced Telegram body is **only** the Heartbeat Output Format below — no preamble, scratch notes, or “checking…” lines.
+
 ## Heartbeat Output Format (exact structure — produce this every cycle)
 
 This is the **full** text Lisa must produce each cycle. Only real data changes. Condensation rules (do not violate):
