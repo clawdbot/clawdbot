@@ -226,7 +226,13 @@ export type ApplicationRuntime = {
   stop: () => void;
 };
 
-export function bootstrapApplication(): ApplicationRuntime {
+type BootstrapApplicationDependencies = {
+  sessionPathBuilderReady?: Promise<void>;
+};
+
+export function bootstrapApplication(
+  dependencies: BootstrapApplicationDependencies = {},
+): ApplicationRuntime {
   const history = createBrowserHistory();
   const startupLocation = history.location();
   const initialBasePath = resolveControlUiBasePath(
@@ -250,11 +256,13 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const firstRunDefaultLanding =
     documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
-  const sessionPathBuilderReady = documentMode
-    ? Promise.resolve()
-    : import("@openclaw/session-url-contract").then((contract) => {
-        setSessionPathBuilder(contract.buildControlUiSessionPath);
-      });
+  const sessionPathBuilderReady =
+    dependencies.sessionPathBuilderReady ??
+    (documentMode
+      ? Promise.resolve()
+      : import("@openclaw/session-url-contract").then((contract) => {
+          setSessionPathBuilder(contract.buildControlUiSessionPath);
+        }));
 
   const settings = startup.settings;
   const gateway = createApplicationGateway(
@@ -435,6 +443,12 @@ export function bootstrapApplication(): ApplicationRuntime {
     start: async () => {
       gateway.start();
       await sessionPathBuilderReady;
+      // stop() can win the race while the session-path chunk loads. Without this
+      // guard the redirect, config refresh, and router all attach to an app that
+      // has already been torn down.
+      if (stopped) {
+        return;
+      }
       if (!deferInitialLocationUntilGateway) {
         stopModelSetupRedirect = await startModelSetupFirstRunRedirectAfterLocation({
           context,
@@ -448,6 +462,9 @@ export function bootstrapApplication(): ApplicationRuntime {
         ? Promise.resolve()
         : startApplicationRouter(router, history, basePath, context);
       await routerStart;
+      if (stopped) {
+        return;
+      }
       if (deferInitialLocationUntilGateway) {
         // The bare /chat route remains not-found while disconnected. Its shell
         // fallback is gated on the same connected defaults, so both paths converge.

@@ -7,7 +7,17 @@ import {
   normalizeInitialApplicationLocation,
   resolveInitialApplicationLocation,
 } from "./bootstrap-location.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { loadSettings, saveSettings } from "./settings.ts";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 describe("normalizeInitialApplicationLocation", () => {
   it("routes an opaque persisted key without aborting bootstrap", () => {
@@ -164,5 +174,41 @@ describe("normalizeInitialApplicationLocation", () => {
     } as Parameters<GatewayListener>[0]);
     await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce());
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+  });
+
+  it("does not restart routing after stop wins the session-path loader race", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "agent:main:main",
+      lastActiveSessionKey: "agent:main:main",
+    });
+    window.history.replaceState({}, "", "/");
+    const sessionPathBuilder = deferred<void>();
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: sessionPathBuilder.promise });
+    const routerStart = vi.spyOn(runtime.router, "start");
+    const redirectSubscription = vi.spyOn(runtime.context.gateway, "subscribe");
+
+    try {
+      const start = runtime.start();
+      let settled = false;
+      void start.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      runtime.stop();
+      sessionPathBuilder.resolve();
+      await start;
+
+      expect(routerStart).not.toHaveBeenCalled();
+      expect(redirectSubscription).not.toHaveBeenCalled();
+    } finally {
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
   });
 });
