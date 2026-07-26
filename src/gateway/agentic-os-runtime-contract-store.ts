@@ -1,3 +1,5 @@
+import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -8,13 +10,6 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 
 const SNAPSHOT_KEY = "agentic-os-runtime-contract-v1";
 type RuntimeSnapshotDatabase = Pick<OpenClawStateKyselyDatabase, "agentic_os_runtime_snapshots">;
-const AGENTIC_OS_RUNTIME_SNAPSHOTS_TABLE_SQL = `
-CREATE TABLE IF NOT EXISTS agentic_os_runtime_snapshots (
-  key TEXT PRIMARY KEY,
-  payload_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT
-`;
 
 type AgenticOsRuntimeSnapshot = {
   leases: unknown[];
@@ -22,8 +17,17 @@ type AgenticOsRuntimeSnapshot = {
   sessions: unknown[];
 };
 
-function ensureAgenticOsRuntimeSnapshotsTable(database: { db: { exec(sql: string): void } }): void {
-  database.db.exec(AGENTIC_OS_RUNTIME_SNAPSHOTS_TABLE_SQL);
+function ensureAgenticOsRuntimeSnapshotsTable(database: { db: DatabaseSync }): void {
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)
+      .schema.createTable("agentic_os_runtime_snapshots")
+      .ifNotExists()
+      .addColumn("key", "text", (column) => column.primaryKey())
+      .addColumn("payload_json", "text", (column) => column.notNull())
+      .addColumn("updated_at_ms", "integer", (column) => column.notNull())
+      .modifyEnd(sql`strict`),
+  );
 }
 
 export function runtimeSnapshotPath(): string {
