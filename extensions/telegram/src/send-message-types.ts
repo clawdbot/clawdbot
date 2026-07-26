@@ -47,6 +47,19 @@ export type TelegramSendOpts = {
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
+  /**
+   * Telegram Business Connect connection id. When set, sends go out on behalf
+   * of the connected business account (`business_connection_id`) instead of
+   * the bot's own identity. Resolved from the per-chat business route store,
+   * not passed explicitly by callers.
+   */
+  businessConnectionId?: string;
+  /**
+   * Inbound business message id to mark read via `readBusinessMessage`,
+   * fired once immediately before the first concrete send for this turn so
+   * the read receipt lands practically in sync with the reply appearing.
+   */
+  markReadMessageId?: number;
 };
 
 export type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];

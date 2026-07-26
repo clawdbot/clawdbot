@@ -244,6 +244,7 @@ export const buildTelegramMessageContext = async ({
     replyThreadId,
     senderId,
     topicAgentId: topicConfig?.agentId,
+    businessConnectionId: msg.business_connection_id,
   });
   const { bindingMode } = conversationRoute;
   let { route } = conversationRoute;
@@ -398,6 +399,7 @@ export const buildTelegramMessageContext = async ({
     chatId,
     isGroup,
     senderId,
+    businessConnectionId: msg.business_connection_id,
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,

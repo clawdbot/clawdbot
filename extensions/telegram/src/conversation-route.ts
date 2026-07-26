@@ -51,12 +51,14 @@ export function resolveTelegramConversationRoute(params: {
   replyThreadId?: number;
   senderId?: string | number | null;
   topicAgentId?: string | null;
+  businessConnectionId?: string | null;
 }): TelegramConversationRouteResult {
   const peerId = params.isGroup
     ? buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId)
     : resolveTelegramDirectPeerId({
         chatId: params.chatId,
         senderId: params.senderId,
+        businessConnectionId: params.businessConnectionId,
       });
   const parentPeer = buildTelegramParentPeer({
     isGroup: params.isGroup,
@@ -167,6 +169,7 @@ export function resolveTelegramConversationBaseSessionKey(params: {
   chatId: number | string;
   isGroup: boolean;
   senderId?: string | number | null;
+  businessConnectionId?: string | null;
 }): string {
   const routeAccountId = normalizeAccountId(params.route.accountId);
   const defaultAccountId = normalizeAccountId(resolveDefaultTelegramAccountId(params.cfg));
@@ -185,6 +188,7 @@ export function resolveTelegramConversationBaseSessionKey(params: {
         id: resolveTelegramDirectPeerId({
           chatId: params.chatId,
           senderId: params.senderId,
+          businessConnectionId: params.businessConnectionId,
         }),
       },
       dmScope: "per-account-channel-peer",

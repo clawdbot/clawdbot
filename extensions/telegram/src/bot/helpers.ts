@@ -504,17 +504,27 @@ export function buildTelegramGroupPeerId(chatId: number | string, messageThreadI
  * In some Telegram DM deliveries (for example certain business/chat bridge flows),
  * `chat.id` can differ from the actual sender user id. Prefer sender id when present
  * so per-peer DM scopes isolate users correctly.
+ *
+ * When `businessConnectionId` is set (Telegram Business Connect messages), the
+ * peer id is namespaced under that connection regardless of the configured
+ * dmScope. A customer's business-chat session must never collide with a plain
+ * DM session for the same numeric sender id — the two are different
+ * conversations even though `buildAgentPeerSessionKey`'s "direct" branch is
+ * reused unchanged for both.
  */
 export function resolveTelegramDirectPeerId(params: {
   chatId: number | string;
   senderId?: number | string | null;
+  businessConnectionId?: string | null;
 }) {
   const senderId =
     params.senderId != null ? (normalizeOptionalString(String(params.senderId)) ?? "") : "";
-  if (senderId) {
-    return senderId;
+  const basePeerId = senderId || String(params.chatId);
+  const businessConnectionId = normalizeOptionalString(params.businessConnectionId ?? undefined);
+  if (businessConnectionId) {
+    return `business:${businessConnectionId}:${basePeerId}`;
   }
-  return String(params.chatId);
+  return basePeerId;
 }
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {

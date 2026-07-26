@@ -363,6 +363,10 @@ const grammySpies = vi.hoisted(() => ({
   sendAnimationSpy: vi.fn(async () => ({ message_id: 78 })) as AnyAsyncMock,
   sendPhotoSpy: vi.fn(async () => ({ message_id: 79 })) as AnyAsyncMock,
   getFileSpy: vi.fn(async () => ({ file_path: "media/file.jpg" })) as AnyAsyncMock,
+  getBusinessConnectionSpy: vi.fn(async () => {
+    throw new Error("getBusinessConnection not stubbed for this test");
+  }) as AnyAsyncMock,
+  readBusinessMessageSpy: vi.fn(async () => true) as AnyAsyncMock,
 }));
 
 export const useSpy: MockFn<(arg: unknown) => void> = grammySpies.useSpy;
@@ -385,6 +389,8 @@ export const sendMessageSpy: AnyAsyncMock = grammySpies.sendMessageSpy;
 export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
 export const sendPhotoSpy: AnyAsyncMock = grammySpies.sendPhotoSpy;
 export const getFileSpy: AnyAsyncMock = grammySpies.getFileSpy;
+export const getBusinessConnectionSpy: AnyAsyncMock = grammySpies.getBusinessConnectionSpy;
+export const readBusinessMessageSpy: AnyAsyncMock = grammySpies.readBusinessMessageSpy;
 
 type RichMessageParams = {
   chat_id?: string | number;
@@ -461,6 +467,8 @@ const telegramBotRuntimeForTest = {
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
       getFile: grammySpies.getFileSpy,
+      getBusinessConnection: grammySpies.getBusinessConnectionSpy,
+      readBusinessMessage: grammySpies.readBusinessMessageSpy,
       raw: {
         sendRichMessage: async (params: RichMessageParams) =>
           grammySpies.sendMessageSpy(
@@ -699,6 +707,12 @@ beforeEach(() => {
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
   getFileSpy.mockReset();
   getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
+  getBusinessConnectionSpy.mockReset();
+  getBusinessConnectionSpy.mockRejectedValue(
+    new Error("getBusinessConnection not stubbed for this test"),
+  );
+  readBusinessMessageSpy.mockReset();
+  readBusinessMessageSpy.mockResolvedValue(true);
 
   setMessageReactionSpy.mockReset();
   setMessageReactionSpy.mockResolvedValue(undefined);

@@ -3,6 +3,10 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  assertBusinessConnectionCanRead,
+  clearBusinessChatUnread,
+} from "./business-connection-store.js";
 import { splitTelegramCaption } from "./caption.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -78,6 +82,18 @@ async function sendMessageTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
+  if (opts.businessConnectionId && opts.markReadMessageId !== undefined) {
+    const businessConnectionId = opts.businessConnectionId;
+    const markReadMessageId = opts.markReadMessageId;
+    try {
+      await assertBusinessConnectionCanRead(businessConnectionId);
+      await api.readBusinessMessage(businessConnectionId, Number(chatId), markReadMessageId);
+      await clearBusinessChatUnread(chatId);
+    } catch (err) {
+      // Never let a failed read-receipt block the actual reply from sending.
+      logVerbose(`telegram: readBusinessMessage failed: ${formatErrorMessage(err)}`);
+    }
+  }
   const threadSpec = resolveTelegramSendThreadSpec({
     targetMessageThreadId: target.messageThreadId,
     messageThreadId: opts.messageThreadId,
@@ -274,6 +290,7 @@ async function sendMessageTelegramWithContext(
     const baseMediaParams = {
       ...mediaThreadParams,
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
+      ...(opts.businessConnectionId ? { business_connection_id: opts.businessConnectionId } : {}),
     };
     const videoDimensions =
       deliveryKind === "video" && !isVideoNote

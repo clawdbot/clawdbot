@@ -19,6 +19,11 @@ import {
 } from "./bot/helpers.js";
 import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import {
+  recordBusinessChatMessage,
+  resolveBusinessConnection,
+  upsertBusinessConnection,
+} from "./business-connection-store.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 export function registerTelegramMessageHandlers(
@@ -54,6 +59,8 @@ export function registerTelegramMessageHandlers(
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     errorMessage: string;
+    /** Set for Telegram Business messages; keeps the session isolated from a plain DM with the same sender. */
+    businessConnectionId?: string;
   };
 
   const normalizeChannelPostMessage = (post: Message): Message => {
@@ -161,6 +168,7 @@ export function registerTelegramMessageHandlers(
         resolvedThreadId,
         botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
         senderId: event.senderId,
+        businessConnectionId: event.businessConnectionId,
         runtimeCfg: gate.context.cfg,
       });
       const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
@@ -283,6 +291,79 @@ export function registerTelegramMessageHandlers(
       requireConfiguredGroup: false,
       botUserId: ctx.me?.id ?? opts.botInfo?.id,
     });
+  });
+
+  // Telegram Business Connect ("secretary mode"): the bot is linked to a
+  // personal/business account and sees that account's private-chat traffic.
+  // business_message mirrors BOTH directions of the linked chat — messages
+  // from the other party AND messages the connection owner sends manually
+  // from their own Telegram client — so the owner's own echoed messages must
+  // be filtered out before they ever reach handleInboundMessageLike, or the
+  // agent would generate a reply to the owner's own outgoing text.
+  bot.on("business_message", async (ctx) => {
+    const msg = ctx.businessMessage;
+    const businessConnectionId = msg?.business_connection_id;
+    if (!msg || !businessConnectionId) {
+      return;
+    }
+    const connection = await resolveBusinessConnection({
+      businessConnectionId,
+      fetchConnection: () => bot.api.getBusinessConnection(businessConnectionId),
+    });
+    if (msg.from?.id != null && connection?.userId === msg.from.id) {
+      return;
+    }
+    const isForum = await resolveTelegramForumFlag({
+      chatId: msg.chat.id,
+      chatType: msg.chat.type,
+      isGroup: false,
+      isForum: msg.chat.is_forum,
+      isTopicMessage: msg.is_topic_message,
+      getChat,
+    });
+    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    await recordBusinessChatMessage({
+      chatId: normalizedMsg.chat.id,
+      businessConnectionId,
+      messageId: normalizedMsg.message_id,
+    });
+    await handleInboundMessageLike({
+      ctxForDedupe: ctx,
+      ctx: buildSyntheticContext(ctx, normalizedMsg),
+      msg: normalizedMsg,
+      chatId: normalizedMsg.chat.id,
+      isGroup: false,
+      isForum,
+      messageThreadId: normalizedMsg.message_thread_id,
+      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
+      senderUsername: normalizedMsg.from?.username ?? "",
+      businessConnectionId,
+      requireConfiguredGroup: false,
+      sendOversizeWarning: true,
+      oversizeLogMessage: "media exceeds size limit",
+      errorMessage: "business_message handler failed",
+    });
+  });
+
+  bot.on("edited_business_message", async (ctx) => {
+    const msg = ctx.editedBusinessMessage;
+    if (!msg) {
+      return;
+    }
+    await recordEditedMessageForReplyChain({
+      ctxForDedupe: ctx,
+      msg,
+      requireConfiguredGroup: false,
+      botUserId: ctx.me?.id ?? opts.botInfo?.id,
+    });
+  });
+
+  bot.on("business_connection", async (ctx) => {
+    const connection = ctx.businessConnection;
+    if (!connection) {
+      return;
+    }
+    await upsertBusinessConnection(connection);
   });
 
   // Handle channel posts — enables bot-to-bot communication via Telegram channels.
