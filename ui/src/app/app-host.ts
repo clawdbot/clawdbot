@@ -921,12 +921,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (rosterDiff.changedIds.length > 0) {
       void context.agentIdentity.ensure(rosterDiff.changedIds);
     }
-    const previousIds = new Set(previous?.agents.map((agent) => agent.id) ?? []);
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (
       activeAgentId &&
       context.agentSelection.state.selectedId === activeAgentId &&
-      previousIds.has(activeAgentId) &&
+      next.agents.length > 0 &&
       !nextIds.has(activeAgentId)
     ) {
       context.agentSelection.set(next.defaultId);

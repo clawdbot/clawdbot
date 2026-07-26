@@ -327,6 +327,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
       catalogs: {
         catalogs: this.sessionData.sessionCatalogs,
+        refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
         basePath: this.basePath,
         routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
