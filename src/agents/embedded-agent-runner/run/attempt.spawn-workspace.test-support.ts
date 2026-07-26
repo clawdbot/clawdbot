@@ -78,6 +78,8 @@ type SessionManagerMocks = {
   flushPendingPersistence: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  mergePromptReleasedSessionEntries: UnknownMock;
+  reloadPersistedTranscript: UnknownMock;
   clearNextUserMessagePersistenceSuppression: UnknownMock;
   removeTrailingEntries: UnknownMock;
 };
@@ -247,6 +249,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     flushPendingPersistence: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    mergePromptReleasedSessionEntries: vi.fn(),
+    reloadPersistedTranscript: vi.fn(),
     clearNextUserMessagePersistenceSuppression: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
   };
@@ -1121,6 +1125,8 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.flushPendingPersistence.mockReset();
+  hoisted.sessionManager.mergePromptReleasedSessionEntries.mockReset();
+  hoisted.sessionManager.reloadPersistedTranscript.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }

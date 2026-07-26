@@ -73,12 +73,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   ) => Promise<PromptReleasedSessionMergeResult | void> | PromptReleasedSessionMergeResult | void;
   reloadPromptReleasedSessionFile?: () => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
-  void params.acquireSessionWriteLock;
-  void params.lockOptions;
-  if (params.initialAcquireSignal?.aborted) {
-    throw params.initialAcquireSignal.reason;
-  }
-  const noOpLock = { release: async () => {} } as SessionLock;
+  const noOpLock = await params.acquireSessionWriteLock({
+    ...params.lockOptions,
+    targetKind: "session-key",
+    ...(params.initialAcquireSignal ? { signal: params.initialAcquireSignal } : {}),
+  });
   let disposed = false;
   let promptAborted = false;
   let promptSubmissionBlocked = false;
