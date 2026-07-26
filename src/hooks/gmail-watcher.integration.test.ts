@@ -7,7 +7,7 @@
  * simulating the real bug. The test asserts that stopGmailWatcher removes
  * both the gog process and its descendant via the process-group signal.
  */
-import { execSync, execFileSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,12 +86,16 @@ describe.skipIf(!RUN)("gmail-watcher process-tree shutdown (integration)", () =>
 
     // Wait for both pid files
     for (let i = 0; i < 50; i++) {
-      if (existsSync(join(tmpDir, "helper.pid")) && existsSync(join(tmpDir, "gog.pid"))) break;
-      await new Promise((r) => setTimeout(r, 100));
+      if (existsSync(join(tmpDir, "helper.pid")) && existsSync(join(tmpDir, "gog.pid"))) {
+        break;
+      }
+      await new Promise<void>((r) => {
+        setTimeout(r, 100);
+      });
     }
 
-    const gogPid = parseInt(readFileSync(join(tmpDir, "gog.pid"), "utf8").trim());
-    const helperPid = parseInt(readFileSync(join(tmpDir, "helper.pid"), "utf8").trim());
+    const gogPid = Number.parseInt(readFileSync(join(tmpDir, "gog.pid"), "utf8").trim(), 10);
+    const helperPid = Number.parseInt(readFileSync(join(tmpDir, "helper.pid"), "utf8").trim(), 10);
 
     console.log(`\ngog pid=${gogPid}, credential-helper pid=${helperPid}`);
     expect(alive(gogPid)).toBe(true);
@@ -99,7 +103,9 @@ describe.skipIf(!RUN)("gmail-watcher process-tree shutdown (integration)", () =>
 
     console.log("calling stopGmailWatcher...");
     await stopGmailWatcher();
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise<void>((r) => {
+      setTimeout(r, 400);
+    });
 
     console.log(`gog alive after stop: ${alive(gogPid)}`);
     console.log(`credential-helper alive after stop: ${alive(helperPid)}`);
