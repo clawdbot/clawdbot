@@ -126,8 +126,13 @@ describe("workboard gateway methods", () => {
     } as never);
     expect(createRespond.mock.calls[0]?.[0]).toBe(true);
     expect(createRespond.mock.calls[0]?.[1]?.card).toMatchObject({
-      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+      title: "Investigate queue drift",
     });
+    // A create with no workspace no longer inherits the caller's authority:
+    // the card is born without workspaceAccess instead of `unrestricted`.
+    expect(
+      createRespond.mock.calls[0]?.[1]?.card?.metadata?.automation?.workspaceAccess,
+    ).toBeUndefined();
 
     const listRespond = vi.fn();
     await listHandler?.({ params: {}, respond: listRespond } as never);

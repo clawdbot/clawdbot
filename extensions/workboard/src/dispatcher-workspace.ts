@@ -67,7 +67,21 @@ export async function resolveDispatchWorkspaceAccess(params: {
     ? await canonicalizeWorkboardWorkspaceAccess(persistedAccess)
     : currentAccess.unrestricted
       ? !workspace || workspace.kind === "scratch"
-        ? currentAccess
+        ? // A hostless/scratch card does not need the caller's full authority:
+          // scope it down to the agent's own workspace so it is not persisted
+          // (and surfaced) as `unrestricted`. Without a resolvable target we
+          // cannot mint a safe scope, so fail closed rather than widening.
+          targetWorkspace
+          ? await canonicalizeWorkboardWorkspaceAccess({
+              unrestricted: false,
+              roots: [targetWorkspace],
+              writable: true,
+            })
+          : (() => {
+              throw new Error(
+                "card workspace authority is unknown; provide an agent workspace to scope a hostless card before dispatch.",
+              );
+            })()
         : (() => {
             throw new Error(
               "card workspace authority is unknown; re-save its workspace with current permissions before dispatch.",

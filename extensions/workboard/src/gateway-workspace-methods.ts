@@ -49,10 +49,20 @@ export function registerWorkboardWorkspaceCardMethods(params: WorkspaceGatewayMe
       const { params: requestParams, respond } = request;
       try {
         const input = withoutWorkboardWorkspaceAccess(requestParams);
-        const access = await resolveGatewayWorkspaceMutationAccess(request, input);
-        respond(true, {
-          card: redactCard(await store.create(withWorkboardWorkspaceAccess(input, access))),
-        });
+        // Bind host-derived workspace authority only when the create actually
+        // provisions a workspace. A plain card (no workspace) is born without
+        // access instead of inheriting the caller's session authority — which,
+        // for an operator/unrestricted session, otherwise stamped the card
+        // `unrestricted` and hid it from decision-review surfaces.
+        const created = containsWorkboardWorkspaceMutation(input)
+          ? await store.create(
+              withWorkboardWorkspaceAccess(
+                input,
+                await resolveGatewayWorkspaceMutationAccess(request, input),
+              ),
+            )
+          : await store.create(input);
+        respond(true, { card: redactCard(created) });
       } catch (error) {
         respondError(respond, error);
       }

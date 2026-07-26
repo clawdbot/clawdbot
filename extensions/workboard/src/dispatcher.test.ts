@@ -1,6 +1,9 @@
 // Workboard tests cover dispatcher plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { cleanupWorkboardRunWorktree } from "./dispatcher-workspace.js";
+import {
+  cleanupWorkboardRunWorktree,
+  resolveDispatchWorkspaceAccess,
+} from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
@@ -177,22 +180,41 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect((await store.get(card.id))?.metadata?.automation?.workspaceAccess).toBeUndefined();
   });
 
-  it("adopts current authority for a legacy card without a host workspace path", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({ title: "Legacy scratch worker", status: "ready" });
-    const run = vi.fn().mockResolvedValue({ runId: "run-legacy-scratch" });
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { maxStarts: 1 },
+  it("scopes a hostless card to the agent workspace instead of adopting unrestricted", async () => {
+    // Unrestricted caller + hostless/scratch card + no persisted access used to
+    // adopt the caller's `unrestricted` authority (hiding the card from
+    // decision review). It is now scoped down to the agent workspace.
+    const card = {
+      id: "c1",
+      title: "Legacy scratch worker",
+      status: "ready",
+      agentId: "main",
+      metadata: {},
+    } as never;
+    const resolved = await resolveDispatchWorkspaceAccess({
+      card,
+      currentAccess: { unrestricted: true },
+      resolveAgentWorkspace: () => "/workspace",
     });
-
-    expect(result.startFailures).toEqual([]);
-    expect(run).toHaveBeenCalledOnce();
-    expect((await store.get(card.id))?.metadata?.automation?.workspaceAccess).toEqual({
-      unrestricted: true,
+    expect(resolved.workspaceAccess).toEqual({
+      unrestricted: false,
+      roots: ["/workspace"],
+      writable: true,
     });
+    expect(resolved.persistWorkspaceAccess).toBe(true);
+  });
+
+  it("fails closed for a hostless card with no resolvable agent workspace", async () => {
+    const card = {
+      id: "c2",
+      title: "Legacy scratch worker",
+      status: "ready",
+      metadata: {},
+    } as never;
+    // No target to scope to: refuse rather than widen to unrestricted.
+    await expect(
+      resolveDispatchWorkspaceAccess({ card, currentAccess: { unrestricted: true } }),
+    ).rejects.toThrow(/agent workspace/);
   });
 
   it("does not claim a card whose workspace authority changed after preflight", async () => {
