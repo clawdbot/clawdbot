@@ -2,7 +2,7 @@
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
 
-const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+export const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
 
 type NostrProfileHttpResult<T> = {
   data: T | null;

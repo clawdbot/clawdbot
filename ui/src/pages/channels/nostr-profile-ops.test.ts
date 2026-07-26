@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importNostrProfile, putNostrProfile } from "./nostr-profile-ops.ts";
-
-const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+import {
+  importNostrProfile,
+  putNostrProfile,
+  NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
+} from "./nostr-profile-ops.ts";
 
 function requireRequestSignal(init: RequestInit | undefined): AbortSignal {
   const signal = init?.signal;
