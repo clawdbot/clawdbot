@@ -23,7 +23,7 @@ const TOOLS_CLAIM_INFIX = ".doctor-importing-";
 const ACTIVE_CLAIM_MAX_AGE_MS = 10 * 60 * 1000;
 const HARD_LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
 
-export const LEGACY_TOOLS_MD_TEMPLATE =
+const LEGACY_TOOLS_MD_TEMPLATE =
   [
     "# TOOLS.md - Local Notes",
     "",
@@ -231,7 +231,7 @@ function appendWithSpacing(before: string, addition: string, after = ""): string
   return `${before}${prefix}${addition}${suffix}${after}`;
 }
 
-export function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): string {
+function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): string {
   const hadLegacyGuidance = agentsContent.includes(LEGACY_AGENTS_TOOLS_GUIDANCE);
   let mergedAgentsContent = agentsContent.replace(
     LEGACY_AGENTS_TOOLS_GUIDANCE,
