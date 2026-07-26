@@ -672,9 +672,18 @@ describe("SessionManager.open", () => {
     expect(() =>
       sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),
     ).toThrow("leaf control was not persisted");
+    const entriesBeforeRejectedAppends = sessionManager.getEntries();
+    const leafBeforeRejectedAppends = sessionManager.getLeafId();
+    const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();
     expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
       "entry was not persisted",
     );
+    expect(() => sessionManager.appendMessage({ role: "user", content: "late message" })).toThrow(
+      "message was not persisted",
+    );
+    expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
+    expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
+    expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
   });
 
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {

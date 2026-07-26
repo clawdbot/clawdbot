@@ -178,7 +178,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
         idempotencyLookup: "caller-checked",
       });
     }
-    if (result && result.messageId !== entry.id) {
+    if (!result) {
+      throw new Error(`Session transcript message was not persisted: ${entry.id}`);
+    }
+    if (result.messageId !== entry.id) {
       throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
     }
     if (

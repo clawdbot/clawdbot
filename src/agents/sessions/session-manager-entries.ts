@@ -29,6 +29,7 @@ import type {
 
 export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+    this.persist(entry, options);
     if (
       !isSessionTranscriptSideAppendEntry(entry) &&
       entry.parentId === this.appendParentId &&
@@ -47,7 +48,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       this.appendMode = undefined;
       this.promptReleasedSideBranchParentId = undefined;
     }
-    this.persist(entry, options);
   }
 
   appendMessage(
