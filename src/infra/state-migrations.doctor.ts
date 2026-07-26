@@ -1076,7 +1076,12 @@ function buildLegacyStateMigrationSteps(
     ),
     sharedStep(() => migrateLegacyTaskStateSidecars({ stateDir })),
     sharedStep(() => migrateLegacyDeliveryQueues({ stateDir })),
-    sharedStep(() => migrateLegacyVoiceWakeSettings({ detected: detected.voiceWake, stateDir })),
+    sharedStep(
+      () => migrateLegacyVoiceWakeSettings({ detected: detected.voiceWake, stateDir }),
+      // The migration emits a user-facing notice when it keeps canonical shared
+      // SQLite voice wake state and retires a conflicting legacy JSON source.
+      true,
+    ),
     sharedStep(
       () => migrateLegacyUpdateCheckState({ detected: detected.updateCheck, stateDir }),
       true,

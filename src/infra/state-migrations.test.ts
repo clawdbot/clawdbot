@@ -38,6 +38,7 @@ import {
   runLegacyStateMigrations,
 } from "./state-migrations.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import { migrateLegacyVoiceWakeSettings } from "./state-migrations.runtime-state.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -1960,24 +1961,126 @@ describe("state migrations", () => {
       "utf8",
     );
 
+    const beforeTriggers = await loadVoiceWakeConfig(stateDir);
+    const beforeRouting = await loadVoiceWakeRoutingConfig(stateDir);
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     const result = await runLegacyStateMigrations({ detected, config: cfg });
 
     expect(result.warnings).toStrictEqual([]);
-    await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
-      triggers: ["sqlite-wake"],
-    });
-    await expect(loadVoiceWakeRoutingConfig(stateDir)).resolves.toMatchObject({
-      defaultTarget: { mode: "current" },
-      routes: [{ trigger: "sqlite route", target: { agentId: "sqlite-agent" } }],
-    });
+    expect(result.notices).toEqual([
+      expect.stringContaining("Kept canonical shared SQLite voice wake triggers"),
+      expect.stringContaining("Kept canonical shared SQLite voice wake routing"),
+    ]);
+    await expect(loadVoiceWakeConfig(stateDir)).resolves.toEqual(beforeTriggers);
+    await expect(loadVoiceWakeRoutingConfig(stateDir)).resolves.toEqual(beforeRouting);
     await expectMissingPath(triggersPath);
     await expectMissingPath(routingPath);
     await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("legacy-wake");
     await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("legacy route");
+    await expect(fs.stat(`${triggersPath}.migrated`)).resolves.toSatisfy(
+      (stat) => (stat.mode & 0o777) === 0o600,
+    );
+    await expect(fs.stat(`${routingPath}.migrated`)).resolves.toSatisfy(
+      (stat) => (stat.mode & 0o777) === 0o600,
+    );
 
     const after = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     expect(after.voiceWake.hasLegacy).toBe(false);
+    const secondResult = await runLegacyStateMigrations({ detected: after, config: cfg });
+    expect(secondResult.warnings).toStrictEqual([]);
+    expect(secondResult.notices).toBeUndefined();
+
+    await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["legacy-wake-again"] }), "utf8");
+    const collisionDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const collisionResult = await runLegacyStateMigrations({
+      detected: collisionDetected,
+      config: cfg,
+    });
+    expect(collisionResult.warnings).toStrictEqual([]);
+    expect(collisionResult.notices).toEqual([
+      expect.stringContaining("Kept canonical shared SQLite voice wake triggers"),
+    ]);
+    await expectMissingPath(triggersPath);
+    await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("legacy-wake");
+    await expect(fs.readFile(`${triggersPath}.migrated.2`, "utf8")).resolves.toContain(
+      "legacy-wake-again",
+    );
+  });
+
+  it("does not archive Voice Wake JSON when the SQLite commit fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const settingsDir = path.join(stateDir, "settings");
+    const triggersPath = path.join(settingsDir, "voicewake.json");
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["retry-wake"] }), "utf8");
+    await loadVoiceWakeConfig(stateDir);
+
+    const realExec = DatabaseSync.prototype.exec;
+    const execSpy = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (sql) {
+      if (sql === "COMMIT") {
+        execSpy.mockImplementation(realExec);
+        throw new Error("commit blocked");
+      }
+      return realExec.call(this, sql);
+    });
+    try {
+      const first = migrateLegacyVoiceWakeSettings({
+        detected: { triggersPath, routingPath: path.join(settingsDir, "missing-routing.json") },
+        stateDir,
+      });
+      expect(first.warnings).toContain(
+        "Failed migrating legacy voice wake triggers: Error: commit blocked",
+      );
+      await expect(fs.readFile(triggersPath, "utf8")).resolves.toContain("retry-wake");
+      await expectMissingPath(`${triggersPath}.migrated`);
+    } finally {
+      execSpy.mockRestore();
+    }
+
+    const retry = migrateLegacyVoiceWakeSettings({
+      detected: { triggersPath, routingPath: path.join(settingsDir, "missing-routing.json") },
+      stateDir,
+    });
+    expect(retry.warnings).toStrictEqual([]);
+    expect(retry.changes).toContain("Migrated 1 voice wake trigger → shared SQLite state");
+    await expectMissingPath(triggersPath);
+    await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("retry-wake");
+  });
+
+  it("keeps conflicting Voice Wake JSON when archiving fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const settingsDir = path.join(stateDir, "settings");
+    const triggersPath = path.join(settingsDir, "voicewake.json");
+    await setVoiceWakeTriggers(["sqlite-wake"], stateDir);
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["legacy-wake"] }), "utf8");
+
+    const realRenameSync = fsSync.renameSync.bind(fsSync);
+    const renameSpy = vi.spyOn(fsSync, "renameSync").mockImplementation((source, target) => {
+      if (String(source) === triggersPath && String(target) === `${triggersPath}.migrated`) {
+        throw new Error("archive blocked");
+      }
+      return realRenameSync(source, target);
+    });
+    try {
+      const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+      const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+      expect(result.warnings).toContain(
+        `Failed archiving voice wake triggers legacy source ${triggersPath}: Error: archive blocked`,
+      );
+      expect(result.notices).toBeUndefined();
+      await expect(fs.readFile(triggersPath, "utf8")).resolves.toContain("legacy-wake");
+      await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
+        triggers: ["sqlite-wake"],
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
   });
 
   it("auto-migrates standalone legacy JSON settings", async () => {

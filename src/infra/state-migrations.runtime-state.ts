@@ -14,7 +14,7 @@ import { normalizeConversationRef } from "./outbound/session-binding-normalizati
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { fileExists } from "./state-migrations.fs.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
-import type { LegacyStateDetection } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 
 type LegacyVoiceWakeImportDatabase = Pick<
@@ -74,12 +74,15 @@ function legacyVoiceWakeTargetColumns(target: {
   return { targetAgentId: null, targetMode: "current", targetSessionKey: null };
 }
 
+type VoiceWakeMigrationOutcome = { kind: "imported" } | { kind: "kept-sqlite" };
+
 export function migrateLegacyVoiceWakeSettings(params: {
   detected: LegacyStateDetection["voiceWake"];
   stateDir: string;
-}): { changes: string[]; warnings: string[] } {
+}): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   if (fileExists(params.detected.triggersPath)) {
     let triggers: string[];
@@ -94,10 +97,8 @@ export function migrateLegacyVoiceWakeSettings(params: {
       triggers = [];
     }
     if (triggers.length > 0) {
-      let imported = false;
-      let shouldArchive = false;
       try {
-        runOpenClawStateWriteTransaction(
+        const outcome = runOpenClawStateWriteTransaction<VoiceWakeMigrationOutcome>(
           ({ db }) => {
             const stateDb = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(db);
             const existing = executeSqliteQuerySync(
@@ -109,10 +110,7 @@ export function migrateLegacyVoiceWakeSettings(params: {
                 .orderBy("position", "asc"),
             ).rows;
             if (existing.length > 0) {
-              // SQLite is canonical after the first import. Retire the legacy source so
-              // a divergent snapshot cannot block every subsequent Gateway startup.
-              shouldArchive = true;
-              return;
+              return { kind: "kept-sqlite" };
             }
             const updatedAtMs = Date.now();
             executeSqliteQuerySync(
@@ -126,26 +124,31 @@ export function migrateLegacyVoiceWakeSettings(params: {
                 })),
               ),
             );
-            imported = true;
-            shouldArchive = true;
+            return { kind: "imported" };
           },
           { env },
         );
-      } catch (err) {
-        warnings.push(`Failed migrating legacy voice wake triggers: ${String(err)}`);
-      }
-      if (imported) {
-        changes.push(
-          `Migrated ${triggers.length} voice wake ${triggers.length === 1 ? "trigger" : "triggers"} → shared SQLite state`,
-        );
-      }
-      if (shouldArchive) {
+        if (outcome.kind === "imported") {
+          changes.push(
+            `Migrated ${triggers.length} voice wake ${triggers.length === 1 ? "trigger" : "triggers"} → shared SQLite state`,
+          );
+        }
+        // Archive only after the transaction returns: a commit failure must leave the
+        // source available for a later retry instead of retiring uncommitted state.
+        const warningCountBeforeArchive = warnings.length;
         archiveLegacyImportSource({
           sourcePath: params.detected.triggersPath,
           label: "voice wake triggers",
           changes,
           warnings,
         });
+        if (outcome.kind === "kept-sqlite" && warnings.length === warningCountBeforeArchive) {
+          notices.push(
+            `Kept canonical shared SQLite voice wake triggers and retired the legacy JSON source: ${params.detected.triggersPath}`,
+          );
+        }
+      } catch (err) {
+        warnings.push(`Failed migrating legacy voice wake triggers: ${String(err)}`);
       }
     }
   }
@@ -162,28 +165,19 @@ export function migrateLegacyVoiceWakeSettings(params: {
       );
     }
     if (routingConfig) {
-      let imported = false;
-      let shouldArchive = false;
       try {
-        runOpenClawStateWriteTransaction(
+        const outcome = runOpenClawStateWriteTransaction<VoiceWakeMigrationOutcome>(
           ({ db }) => {
             const stateDb = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(db);
             const existing = executeSqliteQueryTakeFirstSync(
               db,
               stateDb
                 .selectFrom("voicewake_routing_config")
-                .select([
-                  "default_target_agent_id",
-                  "default_target_mode",
-                  "default_target_session_key",
-                ])
+                .select(["config_key"])
                 .where("config_key", "=", VOICEWAKE_CONFIG_KEY),
             );
             if (existing) {
-              // SQLite is canonical after the first import. Retire the legacy source so
-              // a divergent snapshot cannot block every subsequent Gateway startup.
-              shouldArchive = true;
-              return;
+              return { kind: "kept-sqlite" };
             }
             const updatedAtMs = Date.now();
             const defaultTarget = legacyVoiceWakeTargetColumns(routingConfig.defaultTarget);
@@ -217,31 +211,35 @@ export function migrateLegacyVoiceWakeSettings(params: {
                 ),
               );
             }
-            imported = true;
-            shouldArchive = true;
+            return { kind: "imported" };
           },
           { env },
         );
-      } catch (err) {
-        warnings.push(`Failed migrating legacy voice wake routing: ${String(err)}`);
-      }
-      if (imported) {
-        changes.push(
-          `Migrated voice wake routing config with ${routingConfig.routes.length} ${routingConfig.routes.length === 1 ? "route" : "routes"} → shared SQLite state`,
-        );
-      }
-      if (shouldArchive) {
+        if (outcome.kind === "imported") {
+          changes.push(
+            `Migrated voice wake routing config with ${routingConfig.routes.length} ${routingConfig.routes.length === 1 ? "route" : "routes"} → shared SQLite state`,
+          );
+        }
+        // Keep archival outside the transaction so a failed commit leaves the source retryable.
+        const warningCountBeforeArchive = warnings.length;
         archiveLegacyImportSource({
           sourcePath: params.detected.routingPath,
           label: "voice wake routing",
           changes,
           warnings,
         });
+        if (outcome.kind === "kept-sqlite" && warnings.length === warningCountBeforeArchive) {
+          notices.push(
+            `Kept canonical shared SQLite voice wake routing and retired the legacy JSON source: ${params.detected.routingPath}`,
+          );
+        }
+      } catch (err) {
+        warnings.push(`Failed migrating legacy voice wake routing: ${String(err)}`);
       }
     }
   }
 
-  return { changes, warnings };
+  return { changes, warnings, ...(notices.length > 0 ? { notices } : {}) };
 }
 
 type LegacyConfigHealthFile = {
