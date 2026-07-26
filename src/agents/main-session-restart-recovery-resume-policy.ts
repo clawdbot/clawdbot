@@ -231,7 +231,9 @@ export function hasReplaySafeCodeModeCheckpointInCurrentTurn(
 
 // Generic fetch/undici abort strings plus the gateway's own restart abort
 // reason (run-termination.ts); which one lands depends on whether the provider
-// stream throws or surfaces the abort as an error event.
+// stream throws or surfaces the abort as an error event. Only "error" tails
+// need this allowlist, so a genuine provider failure is never replayed as
+// lifecycle noise.
 const RESTART_ABORT_ERROR_MESSAGES = new Set([
   "Request was aborted",
   "This operation was aborted",
@@ -243,7 +245,15 @@ function isRestartAbortAssistantMessage(message: unknown): boolean {
     return false;
   }
   const stopReason = normalizeOptionalString((message as { stopReason?: unknown }).stopReason);
-  if (stopReason !== "error" && stopReason !== "aborted") {
+  // Every row that reaches restart recovery was mid-run when the process went
+  // down, so an "aborted" tail is that interruption whatever string the
+  // transport persisted with it ("Worker inference aborted.", a provider cancel
+  // message, or nothing). Matching on the abort strings alone made ordinary
+  // restarts fall through to the unresumable notice.
+  if (stopReason === "aborted") {
+    return true;
+  }
+  if (stopReason !== "error") {
     return false;
   }
   const errorMessage = normalizeOptionalString(
