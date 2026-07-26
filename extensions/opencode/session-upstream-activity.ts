@@ -275,12 +275,16 @@ function directHumanText(message: OpenCodeExportMessage): string | undefined {
   return !text || text === OPENCODE_SHELL_SENTINEL ? undefined : text;
 }
 
+function latestMessageId(current: string | null, candidate: string): string {
+  return current === null || candidate > current ? candidate : current;
+}
+
 function latestBaselineHumanMessageId(messages: OpenCodeExportMessage[]): string | null {
   let latest: string | null = null;
   for (const message of messages) {
     const text = directHumanText(message);
     if (text !== undefined) {
-      latest = latest === null || message.id > latest ? message.id : latest;
+      latest = latestMessageId(latest, message.id);
     }
   }
   return latest;
@@ -307,10 +311,7 @@ function classifyExport(params: {
     if (text !== undefined && message.createdAt !== undefined && newerThanMarker) {
       // Consume complete user-shaped rows even when replay/self-echo filtering suppresses
       // them, so a later own-text window cannot turn an old row into new activity.
-      lastHumanMessageId =
-        lastHumanMessageId === null || message.id > lastHumanMessageId
-          ? message.id
-          : lastHumanMessageId;
+      lastHumanMessageId = latestMessageId(lastHumanMessageId, message.id);
     }
     if (
       text !== undefined &&

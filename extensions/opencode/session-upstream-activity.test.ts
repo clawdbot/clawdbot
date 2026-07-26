@@ -137,7 +137,9 @@ function probe(marker: Probe["marker"], ownRecentUserTexts: string[] = []): Prob
   };
 }
 
-function markerFrom(outcome: Awaited<ReturnType<typeof checkOpenCodeUpstreamActivity>>[number]) {
+function markerFrom(
+  outcome: Awaited<ReturnType<typeof checkOpenCodeUpstreamActivity>>[number] | undefined,
+) {
   if (outcome?.kind !== "activity") {
     throw new Error("expected activity marker");
   }
