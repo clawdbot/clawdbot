@@ -493,7 +493,7 @@ function extractEditorAttachments(
 function extractEditorMediaRefs(
   message: Record<string, unknown>,
 ): Array<{ path: string; contentType: string }> | undefined {
-  const media = asRecord(message.__openclaw)?.media;
+  const media = asRecord(message["__openclaw"])?.media;
   if (!Array.isArray(media)) {
     return undefined;
   }
