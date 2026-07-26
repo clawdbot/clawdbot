@@ -112,11 +112,17 @@ export async function syncBuzzProfile(params: {
 
   const current = await queryCurrentProfile(params);
   const content = parseProfileContent(current);
-  if (content.display_name === displayName && hasConfiguredAuthTag(current, params.authTag)) {
+  const currentDisplayName =
+    typeof content.display_name === "string" ? content.display_name.trim() : "";
+  const resolvedDisplayName = currentDisplayName || displayName;
+  if (
+    content.display_name === resolvedDisplayName &&
+    hasConfiguredAuthTag(current, params.authTag)
+  ) {
     return { status: "unchanged" };
   }
 
-  content.display_name = displayName;
+  content.display_name = resolvedDisplayName;
   const now = Math.floor(Date.now() / 1000);
   const event = finalizeEvent(
     {

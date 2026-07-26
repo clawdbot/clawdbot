@@ -6,7 +6,7 @@ import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
 import { getBuzzRuntime } from "./runtime.js";
-import { isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
+import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
 import {
   resolveBuzzAccount,
   resolveDefaultBuzzAccountId,
@@ -23,6 +23,36 @@ const RECONNECT_BACKOFF = {
 const RECONNECT_STABLE_MS = 60_000;
 const RECONNECT_LOOKBACK_SECONDS = 24 * 60 * 60;
 
+function resolveBuzzProfileName(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedBuzzAccount;
+  channelIds: string[];
+}): string {
+  const explicitName = params.account.config.name?.trim();
+  if (explicitName) {
+    return explicitName;
+  }
+  const runtime = getBuzzRuntime();
+  const agentIds = new Set(
+    params.channelIds.map(
+      (channelId) =>
+        runtime.channel.routing.resolveAgentRoute({
+          cfg: params.cfg,
+          channel: "buzz",
+          accountId: params.account.accountId,
+          peer: { kind: "group", id: buildBuzzTarget(channelId) },
+        }).agentId,
+    ),
+  );
+  if (agentIds.size !== 1) {
+    return "OpenClaw";
+  }
+  const agentId = agentIds.values().next().value;
+  return agentId
+    ? runtime.agent.resolveAgentIdentity(params.cfg, agentId)?.name?.trim() || "OpenClaw"
+    : "OpenClaw";
+}
+
 export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<ResolvedBuzzAccount>) {
   const account = resolveBuzzAccount({
     cfg: ctx.cfg,
@@ -38,7 +68,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     throw new Error("Buzz requires at least one channels.buzz.groups entry");
   }
   const configuredChannelIds = new Set(channelIds);
-  const profileName = account.name?.trim() || "OpenClaw";
+  const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });
 
   let hasAttemptedSession = false;
   let reconnectAttempt = 0;

@@ -13,6 +13,8 @@ const gatewayMocks = vi.hoisted(() => ({
     | undefined,
   onMessageError: undefined as ((error: Error) => void) | undefined,
   onFatalError: undefined as ((error: Error) => void) | undefined,
+  resolveAgentIdentity: vi.fn(),
+  resolveAgentRoute: vi.fn(),
   startBuzzBus: vi.fn(),
 }));
 
@@ -40,8 +42,16 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.onFatalError = undefined;
     gatewayMocks.busSendText.mockResolvedValue("event-id");
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
+    gatewayMocks.resolveAgentIdentity.mockReset().mockReturnValue(undefined);
+    gatewayMocks.resolveAgentRoute.mockReset().mockReturnValue({ agentId: "main" });
     setBuzzRuntime({
+      agent: {
+        resolveAgentIdentity: gatewayMocks.resolveAgentIdentity,
+      },
       channel: {
+        routing: {
+          resolveAgentRoute: gatewayMocks.resolveAgentRoute,
+        },
         text: {
           resolveMarkdownTableMode: () => "preserve",
           convertMarkdownTables: (text: string) => text,
@@ -70,6 +80,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("restarts the account lifecycle when the bus reports a failure", async () => {
+    gatewayMocks.resolveAgentIdentity.mockReturnValue({ name: "Molt" });
     const abortController = new AbortController();
     const cfg = {
       channels: {
@@ -95,6 +106,7 @@ describe("Buzz gateway lifecycle", () => {
     const lifecycle = startBuzzGatewayAccount(ctx);
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+    expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("Molt");
     gatewayMocks.onFatalError?.(new Error("relay failed"));
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
@@ -153,6 +165,7 @@ describe("Buzz gateway lifecycle", () => {
     const cfg = {
       channels: {
         buzz: {
+          name: "BuzzClaw",
           relayUrl: "wss://buzz.example.com",
           privateKey: PRIVATE_KEY,
           groups: { [CHANNEL_ID]: {} },
@@ -172,6 +185,8 @@ describe("Buzz gateway lifecycle", () => {
     } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
     const lifecycle = startBuzzGatewayAccount(ctx);
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+    expect(gatewayMocks.startBuzzBus.mock.calls[0]?.[0].profileName).toBe("BuzzClaw");
+    expect(gatewayMocks.resolveAgentRoute).not.toHaveBeenCalled();
 
     await buzzOutboundAdapter.sendText({
       cfg,

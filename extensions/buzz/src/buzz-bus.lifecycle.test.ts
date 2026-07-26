@@ -9,6 +9,7 @@ const relayMocks = vi.hoisted(() => ({
   subscriptionClose: vi.fn(),
   close: vi.fn(),
   membershipEvents: [] as Event[],
+  profileEvents: [] as Event[],
   subscriptions: [] as Array<{
     filter: Filter;
     handlers: {
@@ -47,6 +48,11 @@ vi.mock("nostr-tools", async (importOriginal) => {
           handlers.oneose?.();
         } else if (filter.kinds?.includes(40099)) {
           handlers.oneose?.();
+        } else if (filter.kinds?.includes(0)) {
+          for (const event of relayMocks.profileEvents) {
+            handlers.onevent(event);
+          }
+          handlers.oneose?.();
         }
         return { close: relayMocks.subscriptionClose };
       }
@@ -73,6 +79,7 @@ describe("Buzz bus lifecycle", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     vi.clearAllMocks();
     relayMocks.subscriptions.length = 0;
+    relayMocks.profileEvents = [];
     relayMocks.membershipEvents = [
       {
         id: "membership-1",
@@ -190,8 +197,20 @@ describe("Buzz bus lifecycle", () => {
 
   it("isolates message failures from fatal relay failures", async () => {
     relayMocks.auth.mockResolvedValue("ok");
+    relayMocks.profileEvents = [
+      finalizeEvent(
+        {
+          kind: 0,
+          created_at: 1_700_000_000,
+          content: JSON.stringify({ display_name: "Existing Buzz Name", about: "kept" }),
+          tags: [],
+        },
+        Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")),
+      ),
+    ];
     const onMessageError = vi.fn();
     const onFatalError = vi.fn();
+    const onProfilePublished = vi.fn();
     const bus = await startBuzzBus({
       accountId: ACCOUNT_ID,
       relayUrl: "wss://buzz.example.com",
@@ -200,8 +219,10 @@ describe("Buzz bus lifecycle", () => {
       onMessage: async () => {
         throw new Error("dispatch failed");
       },
+      profileName: "Configured Agent Name",
       onMessageError,
       onFatalError,
+      onProfilePublished,
     });
     const event = finalizeEvent(
       {
@@ -218,6 +239,9 @@ describe("Buzz bus lifecycle", () => {
       ?.handlers.onevent(event);
 
     await vi.waitFor(() => expect(onMessageError).toHaveBeenCalledWith(expect.any(Error)));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(relayMocks.publish.mock.calls.some(([event]) => event.kind === 0)).toBe(false);
+    expect(onProfilePublished).not.toHaveBeenCalled();
     expect(onFatalError).not.toHaveBeenCalled();
     await bus.close();
   });
