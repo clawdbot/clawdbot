@@ -38,6 +38,7 @@ import {
   type SessionCatalogHost,
   type SessionCatalogSession,
   type SessionDiscussionState,
+  type SessionDiscussionPanelConfig,
   type SessionRailMode,
   type SessionSharingRole,
   type SessionSuggestion,
@@ -219,6 +220,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   protected readonly sessionDiscussionProbes = new Set<string>();
+  protected readonly sessionDiscussionPanels = new Map<
+    string,
+    {
+      generation: number;
+      canOpen: boolean;
+      config: SessionDiscussionPanelConfig;
+    }
+  >();
   protected headerRenameInitialLabel: string | null = null;
   protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";

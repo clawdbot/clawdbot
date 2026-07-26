@@ -286,6 +286,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           cfg: runtimeConfig,
           cfgForResolve: runtimeConfig,
           defaultModel: realtimeConfig.model,
+          surface: "bridge",
           noRegisteredProviderMessage: "No realtime voice provider registered",
         });
         const launchOptions = buildRealtimeVoiceLaunchOptions({

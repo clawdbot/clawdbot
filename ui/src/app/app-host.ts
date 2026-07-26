@@ -824,6 +824,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           runtime.handleCriticalObserverDigest({
             payload,
             selectedSessionKey: this.activeSessionKey,
+            sessionHost: this.storedOutboxScopeHost(context),
             sessions: context.sessions.state.result?.sessions ?? [],
             onOpen: (sessionKey) => {
               context.gateway.setSessionKey(sessionKey);

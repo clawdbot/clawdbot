@@ -685,6 +685,10 @@ public actor GatewayNodeSession {
         return "\(host):\(port)"
     }
 
+    public func resolveGatewayHTTPURL(_ raw: String) -> URL? {
+        GatewayPluginSurfaceURL.resolveHTTPURL(raw: raw, against: self.activeURL)
+    }
+
     public func currentRoute(ifGatewayID expectedGatewayID: String? = nil) async -> GatewayNodeSessionRoute? {
         guard let channel = self.channel else { return nil }
         if let expectedGatewayID {

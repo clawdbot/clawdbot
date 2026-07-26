@@ -1,5 +1,5 @@
 import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
-import { patchSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -7,6 +7,7 @@ import {
   DEFAULT_MAIN_KEY,
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canonicalUiSessionKeyForPersistence,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
@@ -38,6 +39,7 @@ import {
   readChatSessionSnapshot,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { clearAuthoritativeTerminal } from "./terminal-message-identity.ts";
 
 let lastChatComposerMemoryFallbackSequence = 0;
@@ -241,9 +243,14 @@ export function resetChatStateForRouteSession(
   saveChatMessagesForSession(state, previousSessionKey);
   const snapshot = restoreChatMessagesForSession(state, sessionKey);
   state.sessionKey = sessionKey;
-  if (state.sidebarContent?.kind === "session-discussion") {
-    state.sidebarContent = { ...state.sidebarContent, sessionKey };
-  }
+  state.sidebarContent = null;
+  const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, sessionKey);
+  const sidebarSettings = loadSettings();
+  state.sidebarLayout = normalizeSidebarLayout(
+    sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey],
+  );
+  state.sidebarFocusPanelId = sidebarSettings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "";
+  state.sidebarFocusVersion += 1;
   invalidateImageLightbox(state);
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
