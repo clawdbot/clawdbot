@@ -237,7 +237,7 @@ export function canonicalUiSessionKeyForPersistence(
   return normalizeUiSessionEventKey(host, sessionKey) ?? "";
 }
 
-export function areUiSessionKeysEquivalentForHost(
+function areUiSessionKeysEquivalentForHost(
   host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
   left: string | undefined | null,
   right: string | undefined | null,

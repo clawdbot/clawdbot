@@ -204,6 +204,50 @@
   box-shadow: var(--focus-ring);
 }
 
+.clawhub-skill-result__button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.clawhub-skill-result__copy {
+  display: grid;
+  min-width: 0;
+}
+
+.clawhub-skill-result__copy:first-child {
+  grid-column: 1 / -1;
+}
+
+.clawhub-skill-icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fff;
+  object-fit: contain;
+}
+
+.clawhub-skill-detail__identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.clawhub-skill-icon--detail {
+  width: 56px;
+  height: 56px;
+  flex-basis: 56px;
+}
+
+.clawhub-skill-icon--profile {
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
 .plugins-version {
   margin-left: var(--space-1);
   color: var(--muted);

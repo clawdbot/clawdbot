@@ -88,6 +88,11 @@ function normalizeSidebarSectionOrder(
       if (name && groups.has(name)) {
         canonical = `category:${name}`;
       }
+    } else if (sectionId.startsWith("catalog:")) {
+      const catalogId = normalizeOptionalString(sectionId.slice("catalog:".length));
+      if (catalogId) {
+        canonical = `catalog:${catalogId}`;
+      }
     }
     if (!canonical || seen.has(canonical)) {
       continue;

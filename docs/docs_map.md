@@ -293,6 +293,27 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Limitations
   - H2: Related
 
+## channels/buzz.md
+
+- Route: /channels/buzz
+- Headings:
+  - H2: What it does
+  - H2: Buzz identity and room model
+  - H2: Before you start
+  - H2: Install
+  - H2: Guided setup
+  - H3: Bot approval
+  - H2: Agent tools and messaging
+  - H3: Route rooms to different agents
+  - H2: Access control
+  - H2: Manual configuration
+  - H3: Bot key storage
+  - H2: Verify the connection
+  - H2: Rotate the bot identity
+  - H2: Current limits and roadmap
+  - H2: Troubleshooting
+  - H2: Related
+
 ## channels/channel-routing.md
 
 - Route: /channels/channel-routing
@@ -3220,6 +3241,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: 9. Testing
   - H3: 9.1 Test strategy and terminology
   - H3: 9.2 Functional coverage
+  - H4: 9.2.1 Typed input attachment regression matrix
   - H3: 9.3 Blind enrichment methodology
   - H3: 9.4 Integration test session results
   - H4: Volitional-compaction canary cycle
@@ -3233,6 +3255,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: A.2 Compaction-triggered evacuation delegate
   - H3: A.3 Proposed `context_pressure` lifecycle hook
   - H3: A.4 Proposed configuration values not shipped in the current codebase
+  - H3: A.5 Proposed restoration: typed `continue_delegate()` on-dispatch input attachments (#1192)
+  - H4: A.5.1 Public typed-tool contract
+  - H4: A.5.2 Dispatch snapshot and lifecycle
+  - H4: A.5.3 Required regression proofs
+  - H3: A.6 Proposed managed delegate return claims and recipient arrival context (#666)
+  - H4: A.6.1 Scope and non-goals
+  - H4: A.6.2 Immutable claim record, lifecycle, and recovery
+  - H4: A.6.3 Recipient arrival context, including inter-session delivery
+  - H4: A.6.4 Authorization, v1 return-policy authority, and explicit resolution
+  - H4: A.6.5 Acceptance matrix
   - H2: Appendix B. Alternatives, prior art, and tool comparisons
   - H3: B.1 Alternatives considered
   - H3: B.2 Prior art
@@ -7685,6 +7717,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What changed
   - H3: Why
   - H2: Compatibility policy
+  - H3: AuthStorage SQLite migration
   - H3: Published channel setup compatibility
   - H3: Channel setup input field compatibility
   - H4: Verifying readers
@@ -10936,6 +10969,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Options
   - H2: Troubleshooting
   - H2: Connection troubleshooting
+  - H2: Related
+
+## web/urls.md
+
+- Route: /web/urls
+- Headings:
+  - H2: Session and dashboard URLs
+  - H3: Stability contract
+  - H2: Route table
+  - H2: Special documents and startup modes
+  - H2: Remote Gateway handoff
   - H2: Related
 
 ## web/webchat.md

@@ -4,6 +4,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -117,12 +119,10 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
         sessionKey: selectedSessionKey,
       });
 
-      const response = await page.goto(
-        `${server.baseUrl}chat?session=${encodeURIComponent(selectedSessionKey)}`,
-      );
+      const response = await page.goto(controlUiSessionUrl(server.baseUrl, selectedSessionKey));
       expect(response?.status()).toBe(200);
       await page.getByText("Selected session A is ready.").waitFor({ state: "visible" });
-      expect(new URL(page.url()).searchParams.get("session")).toBe(selectedSessionKey);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedSessionKey));
 
       const toast = page.locator(".app-toast");
       await gateway.emitGatewayEvent(
@@ -168,8 +168,8 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
 
       await toast.locator(".app-toast__action").click();
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe(backgroundSessionKey);
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(backgroundSessionKey));
       expect(await toast.count()).toBe(0);
       await page.screenshot({
         fullPage: true,
@@ -178,8 +178,8 @@ describeControlUiE2e("Control UI critical observer notice mocked Gateway E2E", (
 
       await page.locator("a.nav-item--home").click();
       await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe(selectedSessionKey);
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(selectedSessionKey));
 
       await gateway.emitGatewayEvent(
         "session.observer",

@@ -32411,7 +32411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 15,
+      "line": 16,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Allowlist",
       "surface": "apple",
@@ -32419,7 +32419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 42,
+      "line": 43,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Deny",
       "surface": "apple",
@@ -32427,7 +32427,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 44,
+      "line": 45,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Always Allow",
       "surface": "apple",
@@ -32435,7 +32435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 87,
+      "line": 80,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Never Ask",
       "surface": "apple",
@@ -32443,7 +32443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 88,
+      "line": 81,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Ask on Allowlist Miss",
       "surface": "apple",
@@ -32451,7 +32451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 89,
+      "line": 82,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Always Ask",
       "surface": "apple",
@@ -32459,7 +32459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 119,
+      "line": 112,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Pattern cannot be empty.",
       "surface": "apple",
@@ -32467,7 +32467,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 121,
+      "line": 114,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Path patterns only. Include '/', '~', or '\\'.",
       "surface": "apple",
@@ -32475,7 +32475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 283,
+      "line": 170,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "This allowlist entry is inherited. Edit its owning scope and retry.",
       "surface": "apple",
@@ -32483,7 +32483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 285,
+      "line": 172,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovals.swift",
       "source": "Could not save exec approvals. Last known settings are shown; retry the change.",
       "surface": "apple",
@@ -32491,7 +32491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 950,
+      "line": 802,
       "path": "apps/macos/Sources/OpenClaw/ExecApprovalsStore.swift",
       "source": "missing:\\(hash)",
       "surface": "apple",

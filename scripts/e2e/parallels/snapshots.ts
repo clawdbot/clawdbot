@@ -38,9 +38,13 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
       `prlctl snapshot-list ${vmName} --json returned no snapshots; create/restore a snapshot or set ${SKIP_SNAPSHOT_RESTORE_ENV}=1 for an already-started guest`,
     );
   }
-  const payload = JSON.parse(output) as Record<string, { name?: string; state?: string }>;
+  const payload = JSON.parse(output) as Record<
+    string,
+    { date?: string; name?: string; state?: string }
+  >;
   let best: SnapshotInfo | null = null;
   let bestScore = -1;
+  let bestDate = "";
   const aliases = (name: string): string[] => {
     const values = [name];
     for (const pattern of [/^(.*)-poweroff$/, /^(.*)-poweroff-\d{4}-\d{2}-\d{2}$/]) {
@@ -78,8 +82,12 @@ export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
     if ((meta.state ?? "").toLowerCase() === "poweroff") {
       score += 0.5;
     }
-    if (score > bestScore) {
+    const date = (meta.date ?? "").trim();
+    // Parallels lists snapshots oldest-first. Prefer the newest reusable baseline when fuzzy
+    // names tie, while preserving the original order when date metadata is unavailable.
+    if (score > bestScore || (score === bestScore && bestDate && date && date > bestDate)) {
       bestScore = score;
+      bestDate = date;
       best = { id, name, state: (meta.state ?? "").trim() };
     }
   }

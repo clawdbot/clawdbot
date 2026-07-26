@@ -519,6 +519,8 @@ export const en = {
         "{channel} plugin not available (continuing with setup). If the channel still doesn't work after setup, run `{listCommand}` and `{enableCommand}`, then restart the gateway.",
       pluginNotAvailable: "{channel} plugin not available.",
       removeTitle: "Remove channel",
+      resumeDisabledPluginSetup: "{channel} plugin is disabled. Enable it and continue setup now?",
+      resumeDisabledSetup: "{channel} is disabled. Enable it and continue setup now?",
       select: "Select a channel",
       selectQuickstart: "Select channel (QuickStart)",
       selectedTitle: "Selected channels",

@@ -344,11 +344,14 @@ export async function mountSidebar(
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
-  await (
-    sidebar as unknown as {
-      sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
-    }
-  ).sidebarMenus.preloadMenuRenderer();
+  const sidebarWithPreloads = sidebar as unknown as {
+    preloadCatalogRenderer: () => Promise<unknown>;
+    sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+  };
+  await Promise.all([
+    sidebarWithPreloads.preloadCatalogRenderer(),
+    sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
+  ]);
   await sidebar.updateComplete;
   return { provider, sidebar, context };
 }

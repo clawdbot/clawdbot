@@ -179,7 +179,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: native approval messaging target resolver.
       // +1: shared plugin SecretRef setup plan helper.
       // +1: shared multi-claim ingress lifecycle fan-in.
-      4724,
+      // +17: continuation tracing, live catalog, and hardened system-event compatibility exports.
+      4741,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -204,7 +205,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: channel DM policy factory and its account/patch callbacks.
       // +1: native approval messaging target resolver.
       // +1: shared multi-claim ingress lifecycle fan-in.
-      2862,
+      // +5: continuation tracing, live catalog, and hardened system-event compatibility functions.
+      2867,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -212,7 +214,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
-      1698,
+      // +7: continuation compatibility exports retained by the deprecated infra barrel.
+      1705,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

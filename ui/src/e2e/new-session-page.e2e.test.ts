@@ -7,6 +7,8 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -192,7 +194,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await gateway.waitForRequest("chat.history");
@@ -330,7 +332,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await composer.fill(message);
       await pastePng(composer);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await gateway.waitForRequest("chat.history");
@@ -582,7 +584,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await page.getByRole("button", { name: "Start thread" }).click();
       await page.waitForURL(
-        (url) => url.searchParams.get("session") === "agent:main:preview-cleanup",
+        (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
       );
       await expect.poll(async () => await proof()).toEqual({ created: 4, revoked: 4 });
     } finally {
@@ -836,8 +838,8 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
 
       await expect
-        .poll(() => new URL(page.url()).search)
-        .toContain(`session=${encodeURIComponent("agent:main:draft-e2e")}`);
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:draft-e2e"));
     } finally {
       await context.close();
     }
@@ -1492,9 +1494,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         ts: Date.now(),
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-      await page.goto(
-        `${server.baseUrl}chat?session=${encodeURIComponent("agent:cloud:neutral-e2e")}`,
-      );
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:cloud:neutral-e2e"));
       const managedSessionKey = "agent:cloud:managed-e2e";
       const sessionRow = page.locator(`[data-session-key="${managedSessionKey}"]`);
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
@@ -1733,7 +1733,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         message,
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
     } finally {
@@ -1921,6 +1921,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Start thread" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
       const firstKey = (firstCreate.params as { key?: string }).key;
+      if (!firstKey) {
+        throw new Error("expected the first recovery create to include a session key");
+      }
       expect(firstKey).toMatch(/^agent:cloud:dashboard:/);
 
       await page.reload();
@@ -1939,7 +1942,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
         params: { key: firstKey, agentId: "cloud", message },
       });
-      await page.waitForURL((url) => url.searchParams.get("session") === firstKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(firstKey), {
         timeout: 30_000,
       });
     } finally {
@@ -2139,7 +2142,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
       await page.getByRole("button", { name: "Start thread" }).click();
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
 
@@ -2311,9 +2314,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         agentId: "main",
         message: "create during refresh",
       });
-      await expect
-        .poll(() => new URL(page.url()).search)
-        .toContain(`session=${encodeURIComponent(sessionKey)}`);
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
 
       await gateway.resolveDeferred("sessions.list", listResponse);
     } finally {
@@ -3124,7 +3125,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
           )
           .waitFor();
-        expect(new URL(page.url()).searchParams.get("session")).toBeNull();
+        expect(new URL(page.url()).pathname).toBe("/new");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       } finally {
         await context.close();
@@ -3304,7 +3305,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       const retry = (await gateway.getRequests("sessions.create")).at(-1);
       expect(retry?.params).toMatchObject({ message: submittedMessage });
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
     } finally {
@@ -3384,7 +3385,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
 
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await expect
@@ -3458,7 +3459,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await pastePng(composer);
       await page.getByRole("button", { name: "Start thread" }).click();
 
-      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });
       await expect
