@@ -14,3 +14,35 @@ export function normalizeHttpWebhookUrl(value: unknown): string | null {
   }
   return trimmed;
 }
+
+function normalizeWebhookTokenHosts(hosts: unknown): string[] {
+  if (!Array.isArray(hosts)) {
+    return [];
+  }
+  const normalized: string[] = [];
+  for (const host of hosts) {
+    if (typeof host !== "string") {
+      continue;
+    }
+    const entry = host.trim().toLowerCase().replace(/\.+$/, "");
+    if (entry && !normalized.includes(entry)) {
+      normalized.push(entry);
+    }
+  }
+  return normalized;
+}
+
+export function isCronWebhookTokenHostAllowed(url: string, allowedHosts: unknown): boolean {
+  const entries = normalizeWebhookTokenHosts(allowedHosts);
+  if (entries.length === 0) {
+    return false;
+  }
+  if (entries.includes("*")) {
+    return true;
+  }
+  try {
+    return entries.includes(new URL(url).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
