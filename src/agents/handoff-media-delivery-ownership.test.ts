@@ -128,3 +128,50 @@ describe("enforceHandoffMediaDeliveryOwnership", () => {
     expect(enforceHandoffMediaDeliveryOwnership({ payloads, handoffMediaUrls })).toBe(payloads);
   });
 });
+
+describe("equivalent spellings inside one payload", () => {
+  it("attaches an owned artifact once when a single payload lists two spellings", () => {
+    const payloads = [
+      { text: "here you go", mediaUrls: ["/tmp/generated-dog.png", "/tmp/./generated-dog.png"] },
+    ] as ReplyPayload[];
+
+    const out = enforceHandoffMediaDeliveryOwnership({
+      payloads,
+      handoffMediaUrls: ["/tmp/generated-dog.png"],
+    });
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.mediaUrls).toStrictEqual(["/tmp/generated-dog.png"]);
+  });
+
+  it("does not collapse two spellings of media the handoff does not own", () => {
+    const payloads = [
+      { text: "chart", mediaUrls: ["/tmp/chart.png", "/tmp/./chart.png"] },
+    ] as ReplyPayload[];
+
+    const out = enforceHandoffMediaDeliveryOwnership({
+      payloads,
+      handoffMediaUrls: ["/tmp/generated-dog.png"],
+    });
+
+    expect(out[0]?.mediaUrls).toStrictEqual(["/tmp/chart.png", "/tmp/./chart.png"]);
+  });
+
+  it("keeps mediaUrl and drops an equivalent entry in the same payload's mediaUrls", () => {
+    const payloads = [
+      {
+        text: "here you go",
+        mediaUrl: "/tmp/generated-dog.png",
+        mediaUrls: ["/tmp/./generated-dog.png"],
+      },
+    ] as ReplyPayload[];
+
+    const out = enforceHandoffMediaDeliveryOwnership({
+      payloads,
+      handoffMediaUrls: ["/tmp/generated-dog.png"],
+    });
+
+    expect(out[0]?.mediaUrl).toBe("/tmp/generated-dog.png");
+    expect(out[0]?.mediaUrls).toBeUndefined();
+  });
+});

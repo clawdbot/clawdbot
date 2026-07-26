@@ -102,8 +102,24 @@ export function enforceHandoffMediaDeliveryOwnership(params: {
       decisions.set(key, keep);
       return keep;
     };
-    const mediaUrl = payload.mediaUrl && keepMedia(payload.mediaUrl) ? payload.mediaUrl : undefined;
-    const mediaUrls = payload.mediaUrls?.filter((url) => keepMedia(url));
+    // `decisions` keeps mediaUrl and mediaUrls consistent for the same key, which
+    // also means every equivalent spelling inside one payload would be kept. Merging
+    // upstream only dedupes byte-identical strings, so `/tmp/x.png` alongside
+    // `/tmp/./x.png` would attach the same artifact twice to one message. Claim each
+    // owned artifact once per payload as well as once per batch.
+    const seenInPayload = new Set<string>();
+    const takeOnce = (url: string): boolean => {
+      const key = normalizeMediaReferenceForComparison(url);
+      if (owned.has(key)) {
+        if (seenInPayload.has(key)) {
+          return false;
+        }
+        seenInPayload.add(key);
+      }
+      return keepMedia(url);
+    };
+    const mediaUrl = payload.mediaUrl && takeOnce(payload.mediaUrl) ? payload.mediaUrl : undefined;
+    const mediaUrls = payload.mediaUrls?.filter((url) => takeOnce(url));
     if (mediaUrl === payload.mediaUrl && mediaUrls?.length === payload.mediaUrls?.length) {
       constrained.push(payload);
       continue;
