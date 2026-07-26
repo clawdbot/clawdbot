@@ -32,14 +32,13 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
     | "resetForStatusFilter"
   >;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
-  readonly onUpdateSessionSectionOrder?: (order: string[]) => void;
-  readonly sessionSectionOrder: readonly string[];
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
+  knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
   reconciledSidebarZone(): { sidebarEntries: readonly string[] };
   replaceCurrentSession(sessionKey: string): void;
@@ -430,9 +429,9 @@ export async function deleteSessionGroup(
   }
 }
 
-export async function reorderSessionGroup(
+export async function reorderSidebarSection(
   host: SessionOrganizerControllerHost,
-  source: string,
+  sourceSectionId: string,
   targetSectionId: string,
   position: "before" | "after",
   scope: SidebarSessionMutationScope,
@@ -445,25 +444,20 @@ export async function reorderSessionGroup(
     // row-discovered categories), so normalize only prunes deleted groups.
     const knownGroups = host.knownSessionGroups();
     const next = moveSessionSection(
-      normalizeSessionSectionOrder(host.sessionSectionOrder, knownGroups),
-      `category:${source}`,
+      normalizeSessionSectionOrder(host.knownSectionOrder(), knownGroups),
+      sourceSectionId,
       targetSectionId,
       position,
     );
     const nextGroups = next.flatMap((token) =>
       token.startsWith("category:") ? [token.slice("category:".length)] : [],
     );
-    const groupOrderChanged =
-      nextGroups.length !== knownGroups.length ||
-      nextGroups.some((group, index) => group !== knownGroups[index]);
-    if (groupOrderChanged) {
-      // The gateway catalog is also the ordering contract for native clients.
-      await scope.sessions.groupsPut(nextGroups);
-    }
+    // No capability gate: the gateway serves this UI from its own dist, so a
+    // newer UI never talks to an older gateway's closed put schema outside dev.
+    await scope.sessions.groupsPut(nextGroups, next);
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
-    host.onUpdateSessionSectionOrder?.(next);
     host.requestUpdate();
   } catch (error) {
     host.sessionData.publishSessionMutationError(scope, error);

@@ -67,6 +67,8 @@ describe("qa scenario catalog channel contracts", () => {
     );
     const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
+    expect(flow).toContain("readSessionTranscriptSummary(env, sessionKey)");
+    expect(flow).not.toContain("waitForAgentHistoryReply");
     expect(completionWaits).toHaveLength(2);
     expect(storeReads).toHaveLength(2);
     expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);

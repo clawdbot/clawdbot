@@ -73,7 +73,6 @@ extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
-extensions/copilot/src/attempt.ts
 extensions/copilot/src/event-bridge.test.ts
 extensions/copilot/src/tool-bridge.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
@@ -495,7 +494,6 @@ src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
 src/agents/subagent-spawn.test.ts
-src/agents/subagent-spawn.ts
 src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
@@ -732,8 +730,6 @@ src/gateway/gateway-models.profiles.live.test.ts
 src/gateway/managed-image-attachments.test.ts
 src/gateway/managed-image-attachments.ts
 src/gateway/mcp-http.test.ts
-src/gateway/model-pricing-cache.test.ts
-src/gateway/model-pricing-cache.ts
 src/gateway/node-registry.test.ts
 src/gateway/node-registry.ts
 src/gateway/openai-http.test.ts

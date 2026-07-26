@@ -1774,6 +1774,7 @@ describe("installPluginFromNpmSpec", () => {
       `${JSON.stringify({ lockfileVersion: 3, packages: {} })}\n`,
       "utf8",
     );
+    fs.writeFileSync(path.join(npmProjectRoot, "npm-shrinkwrap.json"), "{}\n", "utf8");
 
     mockNpmViewAndInstall({
       spec: `${packageName}@1.0.0`,
@@ -1829,6 +1830,7 @@ describe("installPluginFromNpmSpec", () => {
       ),
     ).toBe("old tree");
     expect(fs.existsSync(path.join(quarantineDir, "package-lock.json"))).toBe(true);
+    expect(fs.existsSync(path.join(quarantineDir, "npm-shrinkwrap.json"))).toBe(true);
   });
 
   it("allows rebuilt hoisted dependencies after managed npm project quarantine", async () => {

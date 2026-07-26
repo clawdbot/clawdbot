@@ -125,17 +125,18 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-/** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
+/** Anchors bundled public assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
-  if (!normalized) {
-    return html;
-  }
   let next = html;
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const rootHref = `href="/${asset}"`;
-    const baseHref = `href="${normalized}/${asset}"`;
-    next = next.split(rootHref).join(baseHref);
+    const assetHref = `href="${normalized}/${asset}"`;
+    // Vite's portable ./ base emits relative hrefs, which the browser starts
+    // resolving against a nested route before the UI can correct them.
+    next = next.replaceAll(`href="./${asset}"`, assetHref);
+    if (normalized) {
+      next = next.replaceAll(`href="/${asset}"`, assetHref);
+    }
   }
   return next;
 }

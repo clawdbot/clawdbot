@@ -44,13 +44,11 @@ export type SidebarLifecycleState = HTMLElement & {
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
-  sessionSectionOrder: readonly string[];
   workboardBoards: readonly SidebarWorkboardBoard[];
   workboardBoardsReady: boolean;
   workboardRenderers?: SidebarWorkboardRenderers;
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
-  onUpdateSessionSectionOrder?: (order: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
   onNavigate: (
@@ -158,6 +156,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     error: null,
     deletedSessions: [],
     groups: [],
+    sectionOrder: [],
   };
 }
 

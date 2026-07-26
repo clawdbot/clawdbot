@@ -37,6 +37,7 @@ async function waitForFixtureLogEntry(
   logPath: string,
   predicate: (entry: FixtureLogEntry) => boolean,
   timeoutMs = OUTPUT_TIMEOUT_MS,
+  readPtyOutput?: () => string,
 ) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -48,7 +49,12 @@ async function waitForFixtureLogEntry(
     await sleep(25);
   }
   const entries = await readFixtureLog(logPath);
-  throw new Error(`timed out waiting for fixture log entry\n${JSON.stringify(entries, null, 2)}`);
+  // A swallowed command leaves no RPC behind, so the RPC log alone cannot say
+  // whether the TUI rejected the input; the terminal output carries that reason.
+  const ptyOutput = readPtyOutput?.() ?? "";
+  throw new Error(
+    `timed out waiting for fixture log entry\n${JSON.stringify(entries, null, 2)}\n${ptyOutput}`,
+  );
 }
 
 function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown) {
@@ -526,7 +532,7 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
     run,
     logPath,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
-      await waitForFixtureLogEntry(logPath, predicate, timeoutMs),
+      await waitForFixtureLogEntry(logPath, predicate, timeoutMs, run.output),
     cleanup: async () => {
       await run.dispose();
       await rm(tempDir, { recursive: true, force: true });

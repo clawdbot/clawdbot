@@ -237,12 +237,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sidebarMenus.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
   }
 
-  startSessionGroupDrag(group: string): void {
-    this.sessionOrganizer.startSessionGroupDrag(group);
+  startSidebarSectionDrag(sectionId: string): void {
+    this.sessionOrganizer.startSidebarSectionDrag(sectionId);
   }
 
-  finishSessionGroupDrag(): void {
-    this.sessionOrganizer.finishSessionGroupDrag();
+  finishSidebarSectionDrag(): void {
+    this.sessionOrganizer.finishSidebarSectionDrag();
   }
 
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void {
@@ -327,6 +327,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
       catalogs: {
         catalogs: this.sessionData.sessionCatalogs,
+        refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
         basePath: this.basePath,
         routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,

@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureAuthProfileStore,
@@ -13,6 +15,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { agentExecCommand, classifyAgentExecResult, resolveAgentExecPrompt } from "./agent-exec.js";
 
 const tempRoots: string[] = [];
+const execFileAsync = promisify(execFile);
 
 async function makeTempRoot(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -167,6 +170,44 @@ describe("agent exec strict result classification", () => {
 });
 
 describe("agent exec command composition", () => {
+  it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
+    const source = `
+      import { agentExecCommand } from "./src/commands/agent-exec.ts";
+      import { enableConsoleCapture, routeLogsToStderr } from "./src/logging.ts";
+      import { defaultRuntime } from "./src/runtime.ts";
+
+      routeLogsToStderr();
+      enableConsoleCapture();
+      const result = await agentExecCommand("inspect", {}, defaultRuntime, {
+        runAgent: async () => ({
+          payloads: [{ text: "india" }],
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId: "session-result",
+              provider: "openai",
+              model: "gpt-5.6-sol",
+            },
+          },
+        }),
+      });
+      process.exitCode = result.exitCode;
+    `;
+
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", source],
+      {
+        cwd: path.resolve(import.meta.dirname, "../.."),
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
+      },
+    );
+
+    expect(stdout).toBe("india\n");
+    expect(stderr).not.toContain("india");
+  });
+
   it("treats invalid timeout syntax as an ordinary usage error", async () => {
     const { runtime } = createRuntime();
 
