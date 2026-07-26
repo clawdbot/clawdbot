@@ -256,6 +256,11 @@ class ScorecardDashboardTests(unittest.TestCase):
 
         self.assertIn("No pending scorecard reviews", rendered)
         self.assertIn("Check for Next Review", rendered)
+        self.assertIn("window.alert('Nothing to review.');", rendered)
+        self.assertNotIn(
+            'href="/ai-scorecard"',
+            rendered.split("Check for Next Review")[0].rsplit("<", 1)[-1],
+        )
         self.assertIn("Insufficient evidence", rendered)
         self.assertNotIn("Approve Evaluation", rendered)
         self.assertNotIn("Reject Evaluation", rendered)

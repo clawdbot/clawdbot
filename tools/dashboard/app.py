@@ -2209,10 +2209,11 @@ def ai_scorecard():
   <p>The latest evaluation has been rejected and preserved in the decision
      history. A newly generated evaluation will automatically appear here
      as the next Approve/Reject item.</p>
-  <a href="/ai-scorecard"
-     style="display:inline-block;background:#2563eb;color:white;
-            padding:11px 16px;border-radius:7px;text-decoration:none;
-            font-weight:bold;">Check for Next Review</a>
+  <button type="button"
+     onclick="window.alert('Nothing to review.');"
+     style="display:inline-block;background:#2563eb;color:white;border:0;
+            padding:11px 16px;border-radius:7px;cursor:pointer;
+            font-weight:bold;font-size:16px;">Check for Next Review</button>
 </div>
 <div class="panel">
   <h2>Most Recent Completed Review</h2>
