@@ -143,13 +143,11 @@ export class ChatPage extends OpenClawLightDomElement {
       this.syncRouteToActivePane();
     }
     if (data && routeDraftWasRendered) {
-      // Let the matching child process the route-provided draft once, then stop
-      // later focus changes from handing the same draft to another split pane.
+      // Process the route draft once so later focus changes cannot hand it to another pane.
       queueMicrotask(() => {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
           this.consumedDraftData = data;
-          // Route drafts are one-shot actions. Once the matching pane owns the
-          // text, remove it from history so reload/back cannot replay it.
+          // Remove the one-shot draft from history once the matching pane owns it.
           this.updateRoute(data.sessionKey, true, data.face ?? "chat");
           this.requestUpdate();
         }
@@ -189,8 +187,7 @@ export class ChatPage extends OpenClawLightDomElement {
     if (command.kind !== "split" && command.kind !== "close-pane" && command.kind !== "focus") {
       return;
     }
-    // Narrow viewports render single-pane and disable interactive splitting;
-    // leave programmatic splits unhandled so the host falls back to navigation.
+    // Narrow viewports leave programmatic splits to the host's navigation fallback.
     if (command.kind === "split" && this.narrow) {
       return;
     }
@@ -249,8 +246,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
     if (!pane || !this.contains(pane)) {
-      // Dividers and pane gaps sit between drop targets; keep the last preview
-      // instead of flickering it away while the pointer crosses them.
+      // Keep the last preview while the pointer crosses dividers and pane gaps.
       return;
     }
     this.pendingDragOver = { pane, x: event.clientX, y: event.clientY };
@@ -299,8 +295,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const sessionKey = readSessionDragData(event.dataTransfer);
     const target = event.target instanceof Element ? event.target : null;
     const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
-    // Fall back to the retained preview when the drop lands on a divider or
-    // gap, so the drop always matches what the indicator promised.
+    // A divider or gap uses the retained preview so the drop matches its indicator.
     const indicator =
       (pane && this.contains(pane)
         ? this.resolveDropIndicator(pane, event.clientX, event.clientY)
@@ -351,9 +346,7 @@ export class ChatPage extends OpenClawLightDomElement {
     };
   }
 
-  // Route and active pane mirror each other: route changes land in the active
-  // pane here, and pane-side changes call updateRoute. The equality guards on
-  // both paths are what keep that from looping.
+  // Route and active pane mirror each other; equality guards keep the two paths from looping.
   private syncRouteToActivePane() {
     const layout = this.layout;
     const sessionKey = this.data?.sessionKey?.trim();
@@ -549,17 +542,14 @@ export class ChatPage extends OpenClawLightDomElement {
 
   private routeDraftForActivePane(sessionKey = this.data?.sessionKey): string | undefined {
     const data = this.data;
-    // Route data can render before the split layout catches up. Never hand the
-    // new route's draft to the previously active pane during that transition.
+    // Never hand a new route's draft to the old pane while the split layout catches up.
     if (!data || sessionKey !== data.sessionKey || this.consumedDraftData === data) {
       return undefined;
     }
     return data.draft;
   }
 
-  /** Header + pane travel together so each pane owns its title bar in-flow —
-   * no fixed toolbar layer mirroring the split geometry. The pane renders its
-   * own header so the workspace toggle can read per-pane workspace state. */
+  /** Each pane owns its in-flow header so workspace state stays pane-local. */
   private renderPaneCell(
     pane: ChatSplitPane,
     active: boolean,
@@ -570,9 +560,7 @@ export class ChatPage extends OpenClawLightDomElement {
   ) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     const nativeGateways = nativeGatewaysCapability();
-    // Route keys can be unresolved aliases ("main"); resolve against the
-    // hello defaults and match rows by equivalence like the pane itself
-    // does, or renamed sessions fall back to the generic key-derived title.
+    // Resolve aliases like the pane does so renamed sessions keep their display title.
     const resolvedKey =
       resolveSessionKey(pane.sessionKey, this.context?.gateway?.snapshot?.hello) || pane.sessionKey;
     const title = resolveSessionDisplayName(
