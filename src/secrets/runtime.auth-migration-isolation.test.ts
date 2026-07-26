@@ -79,6 +79,8 @@ describe("auth profile migration isolation", () => {
         profileId: "openai:default",
         lockedProfile: true,
         store: snapshot.authStores.find((entry) => entry.agentDir === healthyAgentDir)?.store,
+        profileId: "openai:default",
+        lockedProfile: true,
       }),
     ).resolves.toMatchObject({ apiKey: "fake-healthy-key" });
   });
