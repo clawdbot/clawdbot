@@ -5,7 +5,11 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
-import { toCssPlacement } from "../../lib/board/grid.ts";
+import {
+  boardChromeRowPx,
+  exactBoardWidgetHeightPx,
+  toCssPlacement,
+} from "../../lib/board/grid.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type {
@@ -64,6 +68,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
 
   @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) rect?: BoardGridRect;
+  @property({ attribute: false }) contentHeightPx?: number;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
@@ -390,10 +395,17 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       bodyScrollable || widget.contentKind === "mcp-app" || widget.contentKind === "plugin";
     const presentation =
       widget.contentKind === "html" ? (widget.presentation ?? "card") : undefined;
+    // While a move/resize gesture runs, the card fills its (preview) cell so
+    // the user manipulates the quantized rect they will actually commit.
+    const exactHeightPx = this.dragging
+      ? undefined
+      : exactBoardWidgetHeightPx(widget, this.contentHeightPx, boardChromeRowPx());
+    const exactHeightStyle =
+      exactHeightPx === undefined ? "" : ` height: ${exactHeightPx}px; align-self: start;`;
     return html`
       <section
         class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}
-        style=${toCssPlacement(rect)}
+        style=${`${toCssPlacement(rect)}${exactHeightStyle}`}
         role="listitem"
         tabindex=${this.focusTabIndex}
         aria-posinset=${this.positionInSet}

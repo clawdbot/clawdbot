@@ -26,7 +26,7 @@ export type SessionRowGroup = {
 };
 
 export type SidebarSessionSection<Row> = {
-  id: "pinned" | "ungrouped" | "groups" | "work" | `category:${string}`;
+  id: "pinned" | "ungrouped" | "groups" | "work" | `category:${string}` | `catalog:${string}`;
   category?: string;
   /** Built-in smart group-conversation section (kind "group" rows). */
   groups?: boolean;
@@ -40,14 +40,22 @@ const DEFAULT_SESSION_SECTION_ORDER = ["ungrouped", "groups", "work"] as const;
 export function normalizeSessionSectionOrder(
   stored: readonly string[],
   knownGroups: readonly string[],
+  knownCatalogIds: readonly string[] = [],
 ): string[] {
   const groups = [...new Set(knownGroups.map((name) => name.trim()).filter(Boolean))];
   const knownGroupSet = new Set(groups);
+  const catalogIds = [
+    ...new Set(knownCatalogIds.map((catalogId) => catalogId.trim()).filter(Boolean)),
+  ];
+  const knownCatalogIdSet = new Set(catalogIds);
   const order = (normalizeSessionSectionOrderTokens(stored) ?? []).filter((token) => {
-    if (!token.startsWith("category:")) {
-      return true;
+    if (token.startsWith("category:")) {
+      return knownGroupSet.has(token.slice("category:".length));
     }
-    return knownGroupSet.has(token.slice("category:".length));
+    if (token.startsWith("catalog:")) {
+      return knownCatalogIdSet.has(token.slice("catalog:".length));
+    }
+    return true;
   });
 
   for (const group of groups) {
@@ -74,6 +82,10 @@ export function normalizeSessionSectionOrder(
     const previousId = DEFAULT_SESSION_SECTION_ORDER[index - 1]!;
     order.splice(order.indexOf(previousId) + 1, 0, sectionId);
   }
+  const unseenCatalogTokens = catalogIds
+    .map((catalogId) => `catalog:${catalogId}`)
+    .filter((token) => !order.includes(token));
+  order.splice(order.indexOf("work") + 1, 0, ...unseenCatalogTokens);
   return order;
 }
 
@@ -197,8 +209,8 @@ type SidebarGroupableRow = {
  * category wins over the smart group/coding classification so manual curation
  * sticks. `grouping: "none"` only disables categories; the kind-based Groups
  * and Coding zones always split so chat threads stay readable. The coding
- * section is always emitted (even empty) because the renderer appends CLI
- * catalog sessions into it.
+ * section is always emitted (even empty) so its ordered position remains a
+ * stable sibling of any catalog sections.
  */
 export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   rows: readonly Row[],
@@ -206,6 +218,7 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
     knownGroups?: readonly string[];
     grouping?: SidebarSessionsGrouping;
     sectionOrder?: readonly string[];
+    catalogIds?: readonly string[];
   } = {},
 ): SidebarSessionSection<Row>[] {
   const grouping = options.grouping ?? "category";
@@ -271,9 +284,21 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
     orderedSections.push({ id: "groups", groups: true, rows: groups });
   }
   orderedSections.push({ id: "work", work: true, rows: coding });
+  const catalogIds = [
+    ...new Set((options.catalogIds ?? []).map((catalogId) => catalogId.trim()).filter(Boolean)),
+  ];
+  orderedSections.push(
+    ...catalogIds.map(
+      (catalogId): SidebarSessionSection<Row> => ({ id: `catalog:${catalogId}`, rows: [] }),
+    ),
+  );
   if (options.sectionOrder) {
     const sectionsById = new Map(orderedSections.map((section) => [section.id, section]));
-    for (const sectionId of normalizeSessionSectionOrder(options.sectionOrder, orderedCategories)) {
+    for (const sectionId of normalizeSessionSectionOrder(
+      options.sectionOrder,
+      orderedCategories,
+      catalogIds,
+    )) {
       const section = sectionsById.get(sectionId as SidebarSessionSection<Row>["id"]);
       if (section) {
         sections.push(section);

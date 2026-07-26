@@ -761,10 +761,9 @@ describe("running-tasks status row", () => {
     const row = container.querySelector(".chat-tasks-status");
     expect(row).not.toBeNull();
     expect(row?.querySelector("openclaw-elapsed-time")).not.toBeNull();
-    // The ticking timer must stay outside the polite live region.
-    expect(row?.querySelector(".chat-tasks-status__time")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
+    const liveStatus = row?.querySelector('[role="status"]');
+    expect(liveStatus?.textContent?.trim()).toBe("1 running task");
+    expect(liveStatus?.querySelector("openclaw-elapsed-time")).toBeNull();
     const link = row?.querySelector<HTMLButtonElement>(".chat-tasks-status__link");
     expect(link?.textContent?.trim()).toBe("1 running task");
     link?.click();
@@ -812,7 +811,8 @@ describe("running-tasks status row", () => {
     );
 
     const preview = container.querySelector("openclaw-tooltip.chat-tasks-status__preview");
-    expect(preview?.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
+    expect(preview?.firstElementChild?.classList.contains("chat-tasks-status__link")).toBe(true);
+    expect(container.querySelector(".chat-tasks-status")?.id).toBe("chat-tasks-status-test");
     expect(preview?.querySelector('.chat-tasks-preview[slot="content"]')).not.toBeNull();
     const titles = [...container.querySelectorAll(".chat-tasks-preview__title")].map((el) =>
       el.textContent?.trim(),

@@ -12,7 +12,11 @@ import type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { createEmbeddingProvider } from "./embeddings.js";
+import {
+  createEmbeddingProvider,
+  type EmbeddingProvider,
+  type EmbeddingProviderRuntime,
+} from "./embeddings.js";
 import {
   cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
@@ -33,6 +37,7 @@ import {
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
   type MemoryIndexMeta,
+  type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import { MEMORY_INDEX_META_KEY, type MemorySyncProgressState } from "./manager-sync-base.js";
@@ -44,9 +49,56 @@ import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
+type MemorySyncProviderGenerationBase = {
+  providerKey: string;
+  identities: MemoryIndexProviderIdentity[];
+};
+
+export type MemorySyncProviderGeneration =
+  | (MemorySyncProviderGenerationBase & { kind: "fts-only"; provider: null })
+  | (MemorySyncProviderGenerationBase & {
+      kind: "semantic";
+      provider: EmbeddingProvider;
+      runtime?: EmbeddingProviderRuntime;
+    });
+
+export type MemorySemanticProviderGeneration = Extract<
+  MemorySyncProviderGeneration,
+  { kind: "semantic" }
+>;
+
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
+  private fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
+
+  protected beginSyncProviderGeneration(): void {}
+  protected endSyncProviderGeneration(): void {}
+
+  protected override shouldDeferSourceWideBatch(): boolean {
+    const generation = this.syncProviderGeneration;
+    const provider = generation ? generation.provider : this.provider;
+    const providerRuntime = generation
+      ? generation.kind === "semantic"
+        ? generation.runtime
+        : undefined
+      : this.providerRuntime;
+    return Boolean(
+      this.batch.enabled &&
+      provider &&
+      providerRuntime?.batchEmbed &&
+      providerRuntime.sourceWideBatchEmbed === true,
+    );
+  }
+
+  protected async retireCurrentProvider(): Promise<void> {
+    const provider = this.provider;
+    this.provider = null;
+    this.providerRuntime = undefined;
+    await provider?.close?.();
+  }
+
   private createSyncProgress(
     onProgress: (update: MemorySyncProgressUpdate) => void,
   ): MemorySyncProgressState {
@@ -73,7 +125,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   private assertFtsOnlySyncAllowed(): void {
-    if (this.provider) {
+    const provider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+    if (provider) {
       return;
     }
     this.assertRequiredProviderAvailable("sync");
@@ -122,12 +177,20 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
+    const syncProvider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+    const syncProviderKey = this.syncProviderGeneration
+      ? this.syncProviderGeneration.providerKey
+      : this.providerKey;
+    const syncProviderIdentities =
+      this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
     const indexIdentity = resolveMemoryIndexIdentityState({
       meta,
       // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
-      provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
-      providerKey: this.providerKey ?? undefined,
-      providerAliases: this.resolveProviderIndexIdentities().slice(1),
+      provider: syncProvider ? { id: syncProvider.id, model: syncProvider.model } : null,
+      providerKey: syncProviderKey ?? undefined,
+      providerAliases: syncProviderIdentities.slice(1),
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
@@ -156,12 +219,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const needsFtsOnlyClassification =
       indexIdentity.status === "missing" &&
       hasIndexedChunks &&
-      this.provider === null &&
+      syncProvider === null &&
       Boolean(this.settings.provider) &&
       this.settings.provider !== "none";
     const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
     const canRebuildMissingIdentity =
-      this.provider !== null ||
+      syncProvider !== null ||
       !this.settings.provider ||
       this.settings.provider === "none" ||
       hasOnlyFtsChunks;
@@ -202,7 +265,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           await this.syncArchiveFiles(targetedParams);
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
-        activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
+        activateFallbackProvider: async (reason) => {
+          this.endSyncProviderGeneration();
+          return await this.activateFallbackProvider(reason);
+        },
       });
       if (targetedSessionSync.handled) {
         this.sessionsDirty = targetedSessionSync.sessionsDirty;
@@ -260,10 +326,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       }
     } catch (err) {
       const reason = formatErrorMessage(err);
-      const activated =
-        this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
+      const shouldFallback = this.shouldFallbackOnError(err);
+      if (shouldFallback) {
+        // A failed generation cannot wait on its own sync lease while activating fallback.
+        this.endSyncProviderGeneration();
+      }
+      const activated = shouldFallback && (await this.activateFallbackProvider(reason));
       if (activated) {
         if (needsFullReindex && !hasTargetArchiveFiles) {
+          this.beginSyncProviderGeneration();
           await this.runInPlaceReindex({
             reason: params?.reason ?? "fallback",
             force: true,
@@ -310,6 +381,29 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async activateFallbackProvider(reason: string): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
+    const pending = this.fallbackProviderInitPromise;
+    if (pending) {
+      return await pending;
+    }
+    const activation = this.activateFallbackProviderOnce(reason);
+    this.fallbackProviderInitPromise = activation;
+    try {
+      return await activation;
+    } finally {
+      if (this.fallbackProviderInitPromise === activation) {
+        this.fallbackProviderInitPromise = null;
+      }
+    }
+  }
+
+  protected getPendingFallbackProviderInitialization(): Promise<boolean> | null {
+    return this.fallbackProviderInitPromise;
+  }
+
+  private async activateFallbackProviderOnce(reason: string): Promise<boolean> {
     const currentProviderId = resolveFallbackCurrentProviderId({
       provider: this.provider,
       lifecycle: this.providerLifecycle,
@@ -326,22 +420,45 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    const fallbackResult = await createEmbeddingProvider({
-      config: this.cfg,
-      agentDir: resolveAgentDir(this.cfg, this.agentId),
-      ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
-      ...fallbackRequest,
-    });
+    const currentState = {
+      provider: this.provider,
+      fallbackFrom: this.fallbackFrom,
+      fallbackReason: this.fallbackReason,
+      providerUnavailableReason: undefined,
+      providerRuntime: this.providerRuntime,
+      lifecycle: this.providerLifecycle,
+    };
+    this.providerLifecycle = {
+      mode: "degraded",
+      providerId: currentProviderId,
+      reason,
+    };
+    await this.retireCurrentProvider();
+    if (this.closed) {
+      return false;
+    }
+
+    let fallbackResult;
+    try {
+      fallbackResult = await createEmbeddingProvider({
+        config: this.cfg,
+        agentDir: resolveAgentDir(this.cfg, this.agentId),
+        ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
+        ...fallbackRequest,
+      });
+    } catch (err) {
+      // Retirement already removed the primary before fallback construction.
+      // Make the configured provider retryable instead of stranding FTS-only mode.
+      this.resetProviderInitializationForRetry();
+      throw err;
+    }
+    if (!fallbackResult.provider) {
+      this.resetProviderInitializationForRetry();
+      return false;
+    }
 
     const fallbackState = applyMemoryFallbackProviderState({
-      current: {
-        provider: this.provider,
-        fallbackFrom: this.fallbackFrom,
-        fallbackReason: this.fallbackReason,
-        providerUnavailableReason: undefined,
-        providerRuntime: this.providerRuntime,
-        lifecycle: this.providerLifecycle,
-      },
+      current: currentState,
       fallbackFrom: currentProviderId,
       reason,
       result: fallbackResult,
@@ -448,10 +565,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         this.clearMemoryRetryState();
       }
       const vectorIndexComplete = this.vector.available === true;
+      const syncProvider = this.syncProviderGeneration
+        ? this.syncProviderGeneration.provider
+        : this.provider;
       const nextMeta: MemoryIndexMeta = {
-        model: this.provider?.model ?? "fts-only",
-        provider: this.provider?.id ?? "none",
-        providerKey: this.providerKey!,
+        model: syncProvider?.model ?? "fts-only",
+        provider: syncProvider?.id ?? "none",
+        providerKey: this.syncProviderGeneration
+          ? this.syncProviderGeneration.providerKey
+          : this.providerKey!,
         sources: resolveConfiguredSourcesForMeta(this.sources),
         scopeHash: resolveConfiguredScopeHash({
           workspaceDir: this.workspaceDir,

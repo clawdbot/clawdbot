@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -25,7 +27,48 @@ const loadMemoryHostCoreModule = createLazyRuntimeModule(
 
 export type Embeddings = {
   embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
+  close?(): Promise<void>;
 };
+
+type ProviderAdapterLifecycleState = {
+  retainedProviders: Set<MemoryEmbeddingProvider>;
+  tail: Promise<void>;
+};
+
+const PROVIDER_ADAPTER_LIFECYCLE = resolveGlobalSingleton<ProviderAdapterLifecycleState>(
+  Symbol.for("openclaw.memoryLanceDbEmbeddingProviderLifecycle.v1"),
+  // Plugin reload replaces the service instance. Retain failed closes process-wide so
+  // the next instance cannot create a provider before its predecessor retires.
+  () => ({ retainedProviders: new Set(), tail: Promise.resolve() }),
+);
+
+function runProviderAdapterLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+  const result = PROVIDER_ADAPTER_LIFECYCLE.tail.then(operation, operation);
+  PROVIDER_ADAPTER_LIFECYCLE.tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async function drainRetainedProviders(): Promise<void> {
+  let firstError: unknown;
+  let closeFailed = false;
+  for (const provider of PROVIDER_ADAPTER_LIFECYCLE.retainedProviders) {
+    try {
+      await provider.close?.();
+      PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.delete(provider);
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+    }
+  }
+  if (closeFailed) {
+    throw toErrorObject(firstError, "memory-lancedb embedding provider retirement failed");
+  }
+}
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
   private clientPromise: Promise<OpenAiEmbeddingClient>;
@@ -152,6 +195,10 @@ function truncateEmbeddingVector(embedding: number[], dimensions: number, model:
 
 class ProviderAdapterEmbeddings implements Embeddings {
   private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
+  private closePromise: Promise<void> | null = null;
+  private closed = false;
+  private activeUses = 0;
+  private idleWaiters = new Set<() => void>();
 
   constructor(
     private api: OpenClawPluginApi,
@@ -168,7 +215,45 @@ class ProviderAdapterEmbeddings implements Embeddings {
     return this.providerPromise;
   }
 
+  private acquireUse(): () => void {
+    if (this.closed) {
+      throw new Error("memory-lancedb embeddings are closed");
+    }
+    this.activeUses += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.activeUses -= 1;
+      if (this.activeUses === 0) {
+        const waiters = Array.from(this.idleWaiters);
+        this.idleWaiters.clear();
+        for (const resolve of waiters) {
+          resolve();
+        }
+      }
+    };
+  }
+
+  private async awaitIdle(): Promise<void> {
+    if (this.activeUses === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.idleWaiters.add(resolve);
+    });
+  }
+
   private async createProvider(): Promise<MemoryEmbeddingProvider> {
+    return await runProviderAdapterLifecycle(async () => {
+      await drainRetainedProviders();
+      return await this.createProviderAfterRetirement();
+    });
+  }
+
+  private async createProviderAfterRetirement(): Promise<MemoryEmbeddingProvider> {
     const cfg = (this.api.runtime.config?.current?.() ?? this.api.config) as OpenClawConfig;
     const providerId = this.embedding.provider;
     const { getMemoryEmbeddingProvider } = await loadMemoryEmbeddingProviderModule();
@@ -204,24 +289,70 @@ class ProviderAdapterEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    const provider = await this.getProvider();
-    if (!options?.timeoutMs) {
-      return await provider.embedQuery(text);
-    }
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const releaseUse = this.acquireUse();
     try {
-      timer = setTimeout(
-        () => controller.abort(new Error("memory-lancedb embedding timed out")),
-        resolveTimerTimeoutMs(options.timeoutMs, 1),
-      );
-      timer.unref?.();
-      return await provider.embedQuery(text, { signal: controller.signal });
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
+      const provider = await this.getProvider();
+      if (!options?.timeoutMs) {
+        return await provider.embedQuery(text);
       }
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        timer = setTimeout(
+          () => controller.abort(new Error("memory-lancedb embedding timed out")),
+          resolveTimerTimeoutMs(options.timeoutMs, 1),
+        );
+        timer.unref?.();
+        return await provider.embedQuery(text, { signal: controller.signal });
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+    } finally {
+      releaseUse();
     }
+  }
+
+  async close(): Promise<void> {
+    const existingClose = this.closePromise;
+    if (existingClose) {
+      await existingClose;
+      return;
+    }
+    const closeOperation = this.closeOnce();
+    this.closePromise = closeOperation;
+    try {
+      await closeOperation;
+    } catch (err) {
+      if (this.closePromise === closeOperation) {
+        this.closePromise = null;
+      }
+      throw err;
+    }
+  }
+
+  private async closeOnce(): Promise<void> {
+    this.closed = true;
+    const providerPromise = this.providerPromise;
+    await runProviderAdapterLifecycle(async () => {
+      // Close intent is queued before waiting. Replacement instances therefore remain
+      // behind this owner while already-admitted embeddings drain to completion.
+      await this.awaitIdle();
+      const provider = await providerPromise?.catch(() => null);
+      if (provider) {
+        PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.add(provider);
+      }
+      try {
+        await drainRetainedProviders();
+      } finally {
+        // Ownership moved to the process-global retained set before draining. Clear the
+        // instance even when another retained provider fails, so successful closes stay final.
+        if (this.providerPromise === providerPromise) {
+          this.providerPromise = undefined;
+        }
+      }
+    });
   }
 }
 

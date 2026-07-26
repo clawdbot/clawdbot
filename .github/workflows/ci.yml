@@ -1089,7 +1089,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v4-
 
@@ -2075,8 +2075,8 @@ jobs:
           - check_name: check-guards
             task: guards
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-shrinkwrap
-            task: shrinkwrap
+          - check_name: check-npm-lock
+            task: npm-lock
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-bundled-channel-config-metadata
             task: bundled-channel-config-metadata
@@ -2198,8 +2198,15 @@ jobs:
               pnpm lint:auth:pairing-account-scope
               pnpm check:import-cycles
               ;;
-            shrinkwrap)
-              pnpm deps:shrinkwrap:check
+            npm-lock)
+              if has_package_script "deps:npm-lock:check"; then
+                pnpm deps:npm-lock:check
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the deps:npm-lock:check package script." >&2
+                exit 1
+              else
+                echo "[skip] historical target predates the transient npm lock contract"
+              fi
               ;;
             bundled-channel-config-metadata)
               pnpm check:bundled-channel-config-metadata

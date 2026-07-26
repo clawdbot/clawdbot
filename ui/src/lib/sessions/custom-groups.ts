@@ -14,6 +14,14 @@ export function readSessionCustomGroupNames(payload: unknown): string[] {
   );
 }
 
+export function readSidebarSectionOrder(payload: unknown): string[] {
+  return (
+    normalizeSessionSectionOrderTokens(
+      (payload as { sectionOrder?: unknown } | null)?.sectionOrder,
+    ) ?? []
+  );
+}
+
 /** Validate and deduplicate a persisted partial section order. */
 export function normalizeSessionSectionOrderTokens(value: unknown): string[] | null {
   if (!Array.isArray(value)) {
@@ -24,11 +32,24 @@ export function normalizeSessionSectionOrderTokens(value: unknown): string[] | n
     if (typeof entry !== "string") {
       continue;
     }
+    const trimmed = entry.trim();
+    // Catalog-backed sections (session catalog providers) order alongside the
+    // built-ins and custom categories, so their ids must survive normalization.
+    const catalogName = trimmed.startsWith("catalog:")
+      ? trimmed.slice("catalog:".length).trim()
+      : "";
+    if (catalogName) {
+      const catalogSectionId = `catalog:${catalogName}`;
+      if (!normalized.includes(catalogSectionId)) {
+        normalized.push(catalogSectionId);
+      }
+      continue;
+    }
     let token: string | null = null;
-    if (BUILT_IN_SESSION_SECTION_IDS.has(entry)) {
-      token = entry;
-    } else if (entry.startsWith("category:")) {
-      const name = entry.slice("category:".length).trim();
+    if (BUILT_IN_SESSION_SECTION_IDS.has(trimmed)) {
+      token = trimmed;
+    } else if (trimmed.startsWith("category:")) {
+      const name = trimmed.slice("category:".length).trim();
       token = name ? `category:${name}` : null;
     }
     if (token && !normalized.includes(token)) {

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 321325,
-  "reason": "Account for the current Control UI startup chunk set after session hydration scoping",
+  "startupJsGzipBytes": 321792,
+  "reason": "multi-gateway footer subtitle plus accumulated main drift since last record; owner-approved landing (PR #114059); recorded on Linux (CI truth)",
   "updatedAt": "2026-07-26"
 }

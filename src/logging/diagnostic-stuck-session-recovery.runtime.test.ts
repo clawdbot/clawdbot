@@ -187,6 +187,27 @@ describe("stuck session recovery", () => {
     expect(outcome.status).toBe("aborted");
     expect(warnLogMessages().some((m) => m.includes("reclaiming stale active run"))).toBe(true);
   });
+
+  it("reclaims an orphaned handle once classification age is stale without an activity record", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("orphaned-session");
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({});
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "orphaned-session",
+      sessionKey: "agent:main:main",
+      ageMs: 10 * 60_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("orphaned-session");
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      activeSessionId: "orphaned-session",
+    });
+  });
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
@@ -472,6 +493,31 @@ describe("stuck session recovery", () => {
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session reason=deferred_maintenance_wait",
     ]);
+  });
+
+  it("keeps a reply queued on the global lane instead of reclaiming it", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("waiting_for_global_lane");
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 15 * 60_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "global_lane_wait",
+      activeSessionId: "queued-reply-session",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("releases the session lane when abort+drain succeeds but queued messages remain (ghost run + queued messages)", async () => {

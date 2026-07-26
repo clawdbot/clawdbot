@@ -25,6 +25,7 @@ import {
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
 } from "./app-sidebar-render.ts";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
 import type {
@@ -73,6 +74,20 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
+  private readonly nativeGatewaysChanged = () => this.requestUpdate();
+
+  // Catalog rows are non-startup content. Load their renderer through the same
+  // idle boundary as other sidebar chrome, then repaint when the chunk arrives.
+  private catalogRenderer: SessionCatalogGroupsRenderer | null = null;
+  private readonly catalogRendererImport = createIdleImport(
+    () => import("./app-sidebar-session-catalog-render.ts"),
+    (module) => {
+      this.catalogRenderer = module.renderSessionCatalogGroups;
+      if (this.isConnected) {
+        this.requestUpdate();
+      }
+    },
+  );
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
@@ -122,7 +137,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   override disconnectedCallback() {
+    window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     this.narration?.disconnect();
+    this.catalogRendererImport.dispose();
     super.disconnectedCallback();
   }
 
@@ -203,9 +220,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override connectedCallback() {
     super.connectedCallback();
+    window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
     sidebarChromeImport.schedule();
+    this.catalogRendererImport.schedule();
   }
 
   protected override firstUpdated() {
@@ -237,12 +256,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sidebarMenus.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
   }
 
-  startSessionGroupDrag(group: string): void {
-    this.sessionOrganizer.startSessionGroupDrag(group);
+  startSidebarSectionDrag(sectionId: string): void {
+    this.sessionOrganizer.startSidebarSectionDrag(sectionId);
   }
 
-  finishSessionGroupDrag(): void {
-    this.sessionOrganizer.finishSessionGroupDrag();
+  finishSidebarSectionDrag(): void {
+    this.sessionOrganizer.finishSidebarSectionDrag();
   }
 
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void {
@@ -285,6 +304,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionData.dismissSessionMutationError();
   }
 
+  preloadCatalogRenderer() {
+    return this.catalogRendererImport.load();
+  }
+
   setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
@@ -318,15 +341,24 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       }
     }
     const { sections } = this.zonedVisibleSections(visibleSessions);
+    if (
+      !this.catalogRenderer &&
+      (this.sessionData.sessionCatalogs.length > 0 ||
+        this.sessionData.sessionCatalogRefreshStatus.error !== null)
+    ) {
+      void this.preloadCatalogRenderer().catch(() => undefined);
+    }
     return renderSessionList({
       host: this,
       empty: visibleSessions.length === 0,
       sections,
+      catalogRenderer: this.catalogRenderer,
       showDraft:
         Boolean(this.draftSessionAgentId) &&
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
       catalogs: {
         catalogs: this.sessionData.sessionCatalogs,
+        refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
         basePath: this.basePath,
         routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
