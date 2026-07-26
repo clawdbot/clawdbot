@@ -7,7 +7,10 @@
  *   3. Otherwise → id-only placeholder so the pipeline still knows it's a reply
  */
 
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import {
+  evaluateSupplementalContextVisibility,
+  resolveChannelContextVisibilityMode,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveQQBotEffectivePolicies } from "../../access/resolve-policy.js";
 import { normalizeQQBotSenderId } from "../../access/sender-match.js";
@@ -148,9 +151,29 @@ async function shouldIncludeQuoteContext(params: {
   senderId?: string;
   senderIsCurrentAccountBot?: boolean;
 }): Promise<boolean> {
-  const visibilityPolicy = resolveQuoteVisibilityPolicy(params.event, params.deps.account.config);
-  if (params.senderIsCurrentAccountBot || !visibilityPolicy.requiresSenderCheck) {
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: params.deps.cfg,
+    channel: "qqbot",
+    accountId: params.deps.account.accountId,
+  });
+  if (
+    params.senderIsCurrentAccountBot ||
+    evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: false,
+    }).include
+  ) {
     return true;
+  }
+
+  const visibilityPolicy = resolveQuoteVisibilityPolicy(params.event, params.deps.account.config);
+  if (!visibilityPolicy.requiresSenderCheck) {
+    return evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: true,
+    }).include;
   }
 
   let senderAllowed = false;
@@ -170,7 +193,7 @@ async function shouldIncludeQuoteContext(params: {
   }
 
   return evaluateSupplementalContextVisibility({
-    mode: "allowlist",
+    mode: contextVisibilityMode,
     kind: "quote",
     senderAllowed,
   }).include;

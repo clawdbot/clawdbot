@@ -51,6 +51,10 @@ const account: GatewayAccount = {
   config: {},
 };
 
+const allowlistQuoteVisibilityCfg = {
+  channels: { qqbot: { contextVisibility: "allowlist" as const } },
+};
+
 const emptyAllowlist: QQBotInboundAccess["state"]["allowlists"]["dm"] = {
   rawEntryCount: 0,
   normalizedEntries: [],
@@ -292,6 +296,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
       isBot: true,
     });
     const deps = makeDeps({
+      cfg: allowlistQuoteVisibilityCfg,
       account: {
         ...account,
         config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
@@ -321,6 +326,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
       isBot: true,
     });
     const deps = makeDeps({
+      cfg: allowlistQuoteVisibilityCfg,
       account: {
         ...account,
         config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
@@ -347,6 +353,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
 
   it("omits cache-miss quoted content when restricted policy cannot verify the quoted sender", async () => {
     const deps = makeDeps({
+      cfg: allowlistQuoteVisibilityCfg,
       account: {
         ...account,
         config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
@@ -395,6 +402,58 @@ describe("buildInboundContext bot self-echo suppression", () => {
     expect(inbound.agentBody).toContain("quoted open content");
   });
 
+  it("keeps cache-miss quoted content for all visibility under restricted sender policy", async () => {
+    const deps = makeDeps({
+      cfg: { channels: { qqbot: { contextVisibility: "all" } } },
+      account: {
+        ...account,
+        config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
+      },
+    });
+
+    const inbound = await buildInboundContext(
+      makeEvent({
+        refMsgIdx: "REF_ALL",
+        msgType: MSG_TYPE_QUOTE,
+        msgElements: [{ msg_idx: "REF_ALL", content: "quoted all-mode content" }],
+      }),
+      deps,
+    );
+
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_ALL",
+      body: "quoted all-mode content",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("quoted all-mode content");
+  });
+
+  it("keeps cache-miss quoted content for quote visibility under restricted sender policy", async () => {
+    const deps = makeDeps({
+      cfg: { channels: { qqbot: { contextVisibility: "allowlist_quote" } } },
+      account: {
+        ...account,
+        config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
+      },
+    });
+
+    const inbound = await buildInboundContext(
+      makeEvent({
+        refMsgIdx: "REF_QUOTE",
+        msgType: MSG_TYPE_QUOTE,
+        msgElements: [{ msg_idx: "REF_QUOTE", content: "quoted quote-mode content" }],
+      }),
+      deps,
+    );
+
+    expect(inbound.replyTo).toStrictEqual({
+      id: "REF_QUOTE",
+      body: "quoted quote-mode content",
+      isQuote: true,
+    });
+    expect(inbound.agentBody).toContain("quoted quote-mode content");
+  });
+
   it("omits cached quoted content when open DM policy is narrowed by allowFrom", async () => {
     getRefIndexMock.mockReturnValue({
       content: "quoted narrowed outsider",
@@ -402,6 +461,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
       timestamp: 1,
     });
     const deps = makeDeps({
+      cfg: allowlistQuoteVisibilityCfg,
       account: {
         ...account,
         config: { allowFrom: ["user-openid"], dmPolicy: "open" },
@@ -433,6 +493,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
       timestamp: 1,
     });
     const deps = makeDeps({
+      cfg: allowlistQuoteVisibilityCfg,
       account: {
         ...account,
         config: { groupAllowFrom: ["user-openid"], groupPolicy: "open" },
@@ -479,6 +540,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
       timestamp: 1,
     });
     const deps = makeDeps({
+      cfg: allowlistQuoteVisibilityCfg,
       account: {
         ...account,
         config: { allowFrom: ["user-openid"], dmPolicy: "allowlist" },
