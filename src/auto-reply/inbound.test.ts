@@ -595,6 +595,31 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("keeps the first item window for the whole buffered batch", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; windowMs: number }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDebounceMs: (item) => item.windowMs,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", windowMs: 100 });
+    await vi.advanceTimersByTimeAsync(40);
+    await debouncer.enqueue({ key: "a", id: "2", windowMs: 10 });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(calls).toStrictEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
   it("keeps later same-key work behind a timer-backed flush that already started", async () => {
     const started: string[] = [];
     const finished: string[] = [];

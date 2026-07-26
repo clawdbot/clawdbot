@@ -505,7 +505,9 @@ export async function attachWebInboxToSocket(
     options.shouldDebounce?.(msg) ?? true;
   const resolveInboundDebounceWindowMs = (msg: AdmittedWebInboundCallbackMessage): number => {
     const resolved = options.resolveDebounceMs?.(msg);
-    return Math.max(0, Math.trunc(resolved ?? inboundDebounceMs));
+    return typeof resolved === "number" && Number.isFinite(resolved)
+      ? Math.max(0, Math.trunc(resolved))
+      : inboundDebounceMs;
   };
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {

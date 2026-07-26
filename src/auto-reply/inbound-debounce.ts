@@ -285,7 +285,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const existing = buffers.get(key);
     if (existing) {
       existing.items.push(item);
-      existing.debounceMs = debounceMs;
+      // One buffered batch keeps the window selected by its first item.
+      // Later aliases or config reloads must not change when that batch flushes.
       scheduleFlush(key, existing);
       return;
     }
