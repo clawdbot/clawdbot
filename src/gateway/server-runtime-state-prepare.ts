@@ -10,6 +10,7 @@ import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
@@ -464,7 +465,13 @@ export async function prepareGatewayKernelState(params: {
   const getRestoredOwnerReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
-    getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
+    // The restored-start fence intentionally closes public work admission.
+    // Only a one-way restart drain blocks internal owner reconciliation.
+    getGatewayDraining: isGatewayRestartDraining,
+    getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    shouldSkipChannelReadiness: () =>
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
