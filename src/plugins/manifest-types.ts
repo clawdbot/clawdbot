@@ -53,7 +53,7 @@ export type PluginManifestChannelConfig = {
   commands?: PluginManifestChannelCommandDefaults;
 };
 
-export type PluginManifestChannelReload = {
+type PluginManifestChannelReload = {
   configPrefixes?: string[];
   noopPrefixes?: string[];
   accountIndexReloadPaths?: string[];
