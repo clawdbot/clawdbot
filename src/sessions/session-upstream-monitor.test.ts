@@ -4,7 +4,7 @@ import {
   appendTranscriptMessage,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { importSessionCatalogHistory } from "../plugins/session-catalog.js";
+import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import {
   closeOpenClawStateDatabaseForTest,
