@@ -19,7 +19,7 @@ export function isDefaultChatLanding(
   return sessionRouteNamespaceFromPath(location.pathname, basePath) === null;
 }
 
-export function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
+function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
   // Session aliases are canonicalized into the pathname before this guard;
   // the removed query-based session identity needs no separate comparison.
   return (
@@ -46,7 +46,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   });
 }
 
-export function startModelSetupFirstRunRedirect(params: {
+function startModelSetupFirstRunRedirect(params: {
   context: ApplicationContext<RouteId>;
   isStillDefaultLanding: () => boolean;
 }): () => void {

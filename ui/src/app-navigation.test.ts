@@ -14,15 +14,11 @@ import {
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
+  pathForRoute,
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
-import {
-  createApplicationRouter,
-  pathForRoute,
-  routeIdFromPath,
-  type RouteId,
-} from "./app-routes.ts";
+import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { pathForSession } from "./app-session-path-builder.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";

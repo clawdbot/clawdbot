@@ -4,11 +4,21 @@ import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
-import {
-  isDefaultChatLanding,
-  locationsMatch,
-  startModelSetupFirstRunRedirect,
-} from "./first-run.ts";
+import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } from "./first-run.ts";
+
+const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
+
+async function startRedirect(
+  context: ApplicationContext<RouteId>,
+  currentLocation = defaultLanding,
+): Promise<() => void> {
+  return startModelSetupFirstRunRedirectAfterLocation({
+    context,
+    enabled: true,
+    history: { location: () => currentLocation, replace: () => undefined },
+    initialLocationReady: Promise.resolve(defaultLanding),
+  });
+}
 
 describe("model setup first-run redirect", () => {
   it("recognizes only the implicit chat landing without a session deep link", () => {
@@ -35,12 +45,6 @@ describe("model setup first-run redirect", () => {
         routeIdFromPath,
       ),
     ).toBe(false);
-  });
-
-  it("compares the canonical route location directly", () => {
-    const expected = { pathname: "/chat/main", search: "", hash: "" };
-    expect(locationsMatch({ ...expected }, expected)).toBe(true);
-    expect(locationsMatch({ pathname: "/chat/other", search: "", hash: "" }, expected)).toBe(false);
   });
 
   it("detects once, caches the result, and redirects once", async () => {
@@ -74,7 +78,7 @@ describe("model setup first-run redirect", () => {
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
-    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    await startRedirect(context);
     expect(listener).not.toBeNull();
     listener!(snapshot as Parameters<GatewayListener>[0]);
     listener!(snapshot as Parameters<GatewayListener>[0]);
@@ -121,7 +125,7 @@ describe("model setup first-run redirect", () => {
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
-    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => false });
+    await startRedirect(context, { pathname: "/chat/other", search: "", hash: "" });
     listener!(snapshot as Parameters<GatewayListener>[0]);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
@@ -129,7 +133,7 @@ describe("model setup first-run redirect", () => {
     expect(consumeCachedModelSetupDetection(client)).toEqual(result);
   });
 
-  it("does not detect without admin scope or an advertised setup method", () => {
+  it("does not detect without admin scope or an advertised setup method", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
@@ -145,7 +149,7 @@ describe("model setup first-run redirect", () => {
       replace: vi.fn(),
     } as unknown as ApplicationContext<RouteId>;
 
-    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    await startRedirect(context);
     listener!({
       phase: "connected" as const,
       client,

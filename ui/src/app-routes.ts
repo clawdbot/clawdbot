@@ -175,7 +175,6 @@ export {
   APP_ROUTE_IDS,
   isRouteId,
   locationForRoute,
-  pathForRoute,
   routeIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";

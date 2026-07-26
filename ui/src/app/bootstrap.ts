@@ -412,7 +412,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
-  let stopModelSetupRedirect = () => undefined;
+  let stopModelSetupRedirect: () => void = () => undefined;
   return {
     context,
     router,
