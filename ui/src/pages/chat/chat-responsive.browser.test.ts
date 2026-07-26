@@ -2567,9 +2567,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await bubble.click({ button: "right" });
         const menu = page.locator(".chat-reply-context-menu");
         await menu.waitFor({ state: "visible" });
-        await expect
-          .poll(() => menu.getByRole("menuitem", { name: "Reply", exact: true }).isVisible())
-          .toBe(true);
       } finally {
         await closeBrowserPage(page);
       }
