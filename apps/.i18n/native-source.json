@@ -29803,7 +29803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 762,
+      "line": 767,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host)",
       "surface": "apple",
@@ -29811,7 +29811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 762,
+      "line": 767,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host):\\(port)",
       "surface": "apple",
@@ -30715,7 +30715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 115,
+      "line": 116,
       "path": "apps/macos/Sources/OpenClaw/ControlChannel.swift",
       "source": "degraded: \\(message)",
       "surface": "apple",
@@ -30723,7 +30723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 362,
+      "line": 363,
       "path": "apps/macos/Sources/OpenClaw/ControlChannel.swift",
       "source": "unknown gateway error",
       "surface": "apple",
@@ -31555,7 +31555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 148,
+      "line": 205,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard reconnecting",
       "surface": "apple",
@@ -31563,7 +31563,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 149,
+      "line": 206,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "The selected Gateway changed.",
       "surface": "apple",
@@ -31571,7 +31571,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 150,
+      "line": 207,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Waiting for a fresh authenticated connection.",
       "surface": "apple",
@@ -31579,7 +31579,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 251,
+      "line": 345,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard unavailable",
       "surface": "apple",
@@ -31587,15 +31587,47 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 253,
+      "line": 347,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "surface": "apple",
       "id": "native.apple.3ed077c15e06c140"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 546,
+      "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
+      "source": "Could Not Switch Gateway",
+      "surface": "apple",
+      "id": "native.apple.224e2db353f3a459"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 573,
+      "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
+      "source": "Could Not Open Gateway Window",
+      "surface": "apple",
+      "id": "native.apple.213d824f2205d071"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 593,
+      "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
+      "source": "Could Not Set Primary Gateway",
+      "surface": "apple",
+      "id": "native.apple.f821306f90ed7692"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 881,
+      "line": 703,
+      "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
+      "source": "\\(base)-\\(UUID().uuidString)",
+      "surface": "apple",
+      "id": "native.apple.11ffe8832b728acd"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 905,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
