@@ -574,4 +574,3 @@ export async function finishGatewayStartup(params: {
   }
   return { startupSettled: postAttachHandles.startupSettled };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized startup orchestrator. */
