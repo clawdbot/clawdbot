@@ -22,6 +22,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -32,6 +33,7 @@ type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
+  refreshStatus: PanelRefreshStatus;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -313,40 +315,48 @@ function renderSessionCatalogs(params: {
   snapshot: SessionCatalogRenderSnapshot;
 }) {
   const { host, snapshot } = params;
-  return renderSessionCatalogGroups({
-    catalogs: snapshot.catalogs,
-    connected: host.connected,
-    basePath: snapshot.basePath,
-    routeSessionKey: snapshot.routeSessionKey,
-    newSessionAgentId: snapshot.newSessionAgentId,
-    collapsedSections: host.collapsedSessionSections,
-    loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
-    projectGrouping: snapshot.projectGrouping,
-    liveRows: snapshot.liveRows,
-    creatorId: snapshot.creatorId,
-    renderLiveRow: (row, display) =>
-      renderRecentSession({
-        host,
-        session: snapshot.sidebarRowsByKey.get(row.key)!,
-        display,
-      }),
-    onToggleSection: (sectionId) => host.toggleSection(sectionId),
-    // aria-expanded must land on the one header whose menu is open, so the
-    // catalog id rides on the trigger's data attribute instead of a global flag.
-    viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition
-      ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute("data-session-catalog-view-menu") ??
-        null)
-      : null,
-    creatorFilterActive: host.sessionCreatorFilterActive,
-    onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
-    onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
-    onOpenNewSession: host.onOpenNewSession,
-    onNavigate: host.onNavigate,
-    catalogOpenTarget: snapshot.catalogOpenTarget,
-    terminalAvailable: snapshot.terminalAvailable,
-    onOpenTerminal: openCatalogSessionInTerminal,
-    onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
-  });
+  return html`
+    ${renderPanelRefreshStatus({
+      status: snapshot.refreshStatus,
+      onRetry: () => void host.sessionData.refreshSessionCatalogs(),
+      className: "sidebar-session-error sidebar-session-catalog-error",
+    })}
+    ${renderSessionCatalogGroups({
+      catalogs: snapshot.catalogs,
+      connected: host.connected,
+      basePath: snapshot.basePath,
+      routeSessionKey: snapshot.routeSessionKey,
+      newSessionAgentId: snapshot.newSessionAgentId,
+      collapsedSections: host.collapsedSessionSections,
+      loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
+      projectGrouping: snapshot.projectGrouping,
+      liveRows: snapshot.liveRows,
+      creatorId: snapshot.creatorId,
+      renderLiveRow: (row, display) =>
+        renderRecentSession({
+          host,
+          session: snapshot.sidebarRowsByKey.get(row.key)!,
+          display,
+        }),
+      onToggleSection: (sectionId) => host.toggleSection(sectionId),
+      // aria-expanded must land on the one header whose menu is open, so the
+      // catalog id rides on the trigger's data attribute instead of a global flag.
+      viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition
+        ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute(
+            "data-session-catalog-view-menu",
+          ) ?? null)
+        : null,
+      creatorFilterActive: host.sessionCreatorFilterActive,
+      onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
+      onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
+      onOpenNewSession: host.onOpenNewSession,
+      onNavigate: host.onNavigate,
+      catalogOpenTarget: snapshot.catalogOpenTarget,
+      terminalAvailable: snapshot.terminalAvailable,
+      onOpenTerminal: openCatalogSessionInTerminal,
+      onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
+    })}
+  `;
 }
 
 function renderSessionListBody(params: {
@@ -443,7 +453,8 @@ export function renderSessionList(params: {
               ? nothing
               : html`${renderSessionCatalogs({ host, snapshot: params.catalogs })}`,
           codingTrailingPresent:
-            host.sessionsStatusFilter !== "archived" && params.catalogs.catalogs.length > 0,
+            host.sessionsStatusFilter !== "archived" &&
+            (params.catalogs.catalogs.length > 0 || params.catalogs.refreshStatus.error !== null),
         })}
         ${host.sessionsStatusFilter === "archived" && params.empty
           ? html`<span class="sidebar-session-empty-hint"

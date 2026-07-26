@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
+  drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
   clearSessionSuspensionTimers: vi.fn(() => 0),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -61,6 +62,10 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
     "../agents/agent-bundle-lsp-runtime.js",
   )),
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
+}));
+
+vi.mock("./embeddings-http.js", () => ({
+  drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
 }));
 
 vi.mock("../agents/session-suspension.js", () => ({
@@ -162,6 +167,8 @@ describe("createGatewayCloseHandler", () => {
     mocks.triggerInternalHook.mockResolvedValue(undefined);
     mocks.disposeAllBundleLspRuntimes.mockClear();
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
+    mocks.drainRetainedEmbeddingProviders.mockClear();
+    mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
     mocks.clearSessionSuspensionTimers.mockReset();
     mocks.clearSessionSuspensionTimers.mockReturnValue(0);
   });
@@ -1402,6 +1409,10 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
+    const closeOrder: string[] = [];
+    mocks.drainRetainedEmbeddingProviders.mockImplementation(async () => {
+      closeOrder.push("embedding-providers");
+    });
     const lifecycleUnsub = vi.fn();
     const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
@@ -1412,6 +1423,13 @@ describe("createGatewayCloseHandler", () => {
         lifecycleUnsub,
         taskUnsub,
         transcriptUnsub,
+        httpServer: {
+          close: (callback: (err?: Error | null) => void) => {
+            closeOrder.push("http-server");
+            callback(null);
+          },
+          closeIdleConnections: vi.fn(),
+        } as never,
       }),
     );
 
@@ -1424,6 +1442,8 @@ describe("createGatewayCloseHandler", () => {
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledTimes(1);
+    expect(mocks.drainRetainedEmbeddingProviders).toHaveBeenCalledTimes(1);
+    expect(closeOrder).toEqual(["http-server", "embedding-providers"]);
   });
 
   it("starts bundle MCP and LSP runtime disposal concurrently", async () => {
@@ -1484,6 +1504,23 @@ describe("createGatewayCloseHandler", () => {
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("bundle-lsp runtime disposal exceeded 5000ms"),
+      ),
+    ).toBe(true);
+  });
+
+  it("continues shutdown when retained embedding provider cleanup hangs", async () => {
+    vi.useFakeTimers();
+    mocks.drainRetainedEmbeddingProviders.mockReturnValue(new Promise(() => {}));
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const closePromise = close({ reason: "test shutdown" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await closePromise;
+
+    expect(result.warnings).toContain("embedding-providers");
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("embedding-providers runtime disposal exceeded 5000ms"),
       ),
     ).toBe(true);
   });

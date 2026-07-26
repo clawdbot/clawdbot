@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
   pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
-  writeConfigFile: vi.fn(async (_nextConfig?: unknown) => {}),
+  writeConfigFile: vi.fn(async (_nextConfig?: unknown, _writeOptions?: unknown) => {}),
   omitConfigMutationResult: false,
   ensureAgentWorkspace: vi.fn(
     async (params?: { dir?: string }): Promise<{ dir: string; identityPathCreated: boolean }> => ({
@@ -112,6 +112,7 @@ vi.mock("../../config/config.js", async () => {
       snapshot: { sourceConfig: mocks.loadConfigReturn },
     }),
     mutateConfigFileWithRetry: async (params: {
+      writeOptions?: unknown;
       mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
     }) => {
       const draft = structuredClone(mocks.loadConfigReturn);
@@ -120,7 +121,7 @@ vi.mock("../../config/config.js", async () => {
         previousHash: "test-hash",
         attempt: 0,
       });
-      await mocks.writeConfigFile(draft);
+      await mocks.writeConfigFile(draft, params.writeOptions);
       return {
         path: "/tmp/openclaw/config.json",
         previousHash: "test-hash",
@@ -2746,6 +2747,9 @@ describe("agents.delete", () => {
       ]),
     );
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(expect.anything(), {
+      allowedAgentRosterRemovals: ["test-agent"],
+    });
     expect(mocks.movePathToTrash).toHaveBeenCalled();
   });
 

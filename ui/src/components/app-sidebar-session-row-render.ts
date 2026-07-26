@@ -48,6 +48,8 @@ export interface SessionListHost {
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
     | "presencePayload"
+    | "refreshSessionCatalogs"
+    | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
   >;
   readonly fullyShownChildSessionKeys: ReadonlySet<string>;

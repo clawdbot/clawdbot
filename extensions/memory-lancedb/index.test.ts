@@ -566,14 +566,19 @@ describe("memory plugin e2e", () => {
     ]);
   });
 
-  test("uses provider adapter auth when embedding apiKey is omitted", async () => {
+  test("uses provider adapter auth and drains cleanup before service replacement", async () => {
     const embedQuery = vi.fn(async () => [0.1, 0.2, 0.3]);
+    const closeProvider = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("provider close failed"))
+      .mockResolvedValue(undefined);
     const createProvider = vi.fn(async (options: Record<string, unknown>) => ({
       provider: {
         id: "openai",
         model: options.model,
         embedQuery,
         embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
+        close: closeProvider,
       },
     }));
     const getMemoryEmbeddingProvider = vi.fn(() => ({
@@ -586,12 +591,14 @@ describe("memory plugin e2e", () => {
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
+        close: vi.fn(),
         openTable: vi.fn(async () => ({
           schema: createAgentScopedSchemaMock(),
           vectorSearch,
           countRows: vi.fn(async () => 0),
           add: vi.fn(async () => undefined),
           delete: vi.fn(async () => undefined),
+          close: vi.fn(),
         })),
       })),
     }));
@@ -621,6 +628,7 @@ describe("memory plugin e2e", () => {
         },
       };
       const registerTool = vi.fn();
+      const registerService = vi.fn();
       const mockApi = {
         id: "memory-lancedb",
         name: "Memory (LanceDB)",
@@ -649,7 +657,7 @@ describe("memory plugin e2e", () => {
         },
         registerTool,
         registerCli: vi.fn(),
-        registerService: vi.fn(),
+        registerService,
         on: vi.fn(),
         resolvePath: (filePath: string) => filePath,
       };
@@ -676,9 +684,43 @@ describe("memory plugin e2e", () => {
       expect(providerOptions.fallback).toBe("none");
       expect(providerOptions.model).toBe("text-embedding-3-small");
       expect(providerOptions).not.toHaveProperty("remote");
+      const service = firstObjectArg(registerService as unknown as MockCallSource, "service");
+      const stop = service.stop as () => Promise<void>;
+      await expect(stop()).rejects.toThrow("provider close failed");
+
+      const replacementRegisterTool = vi.fn();
+      const replacementRegisterService = vi.fn();
+      registerTestPlugin(dynamicMemoryPlugin, {
+        ...mockApi,
+        registerTool: replacementRegisterTool,
+        registerService: replacementRegisterService,
+      });
+      const replacementRecallTool = replacementRegisterTool.mock.calls
+        .map(([tool]) => materializeRegisteredTool(tool))
+        .find((tool) => tool.name === "memory_recall");
+      if (!replacementRecallTool) {
+        throw new Error("expected replacement memory_recall tool registration");
+      }
+      await replacementRecallTool.execute("call-2", { query: "replacement memory" });
+
+      expect(closeProvider).toHaveBeenCalledTimes(2);
+      expect(createProvider).toHaveBeenCalledTimes(2);
       expect(embedQuery).toHaveBeenCalledWith("project memory", {
         signal: expect.any(AbortSignal),
       });
+      expect(
+        expectDefined(closeProvider.mock.invocationCallOrder[1], "retained provider close order"),
+      ).toBeLessThan(
+        expectDefined(
+          createProvider.mock.invocationCallOrder[1],
+          "replacement provider create order",
+        ),
+      );
+      const replacementService = firstObjectArg(
+        replacementRegisterService as unknown as MockCallSource,
+        "replacement service",
+      );
+      await (replacementService.stop as () => Promise<void>)();
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
       vi.doUnmock("openai");
