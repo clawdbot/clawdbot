@@ -409,12 +409,18 @@ export function resolveExistingUsageSessionFile(params: {
     typeof legacySessionFile === "string" ? legacySessionFile : undefined,
   );
   const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  if (explicitMarker && sessionId && explicitMarker.sessionId !== sessionId) {
+  const matchingEntryMarker =
+    entryMarker && (!sessionId || entryMarker.sessionId === sessionId) ? entryMarker : undefined;
+  const matchingExplicitMarker =
+    explicitMarker &&
+    explicitMarker.agentId === params.agentId &&
+    (!sessionId || explicitMarker.sessionId === sessionId)
+      ? explicitMarker
+      : undefined;
+  if (!matchingEntryMarker && explicitMarker && !matchingExplicitMarker) {
     return undefined;
   }
-  const sqliteMarker =
-    explicitMarker ??
-    (entryMarker && (!sessionId || entryMarker.sessionId === sessionId) ? entryMarker : undefined);
+  const sqliteMarker = matchingEntryMarker ?? matchingExplicitMarker;
   const targetKeyAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
   const targetKeyEntry =
     target?.sessionKey && sqliteMarker && !completeTarget

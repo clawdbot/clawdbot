@@ -300,6 +300,7 @@ describe("createEmbeddedAttemptSessionLockController", () => {
   });
 
   it("rejects a late SDK prompt handoff after disposal", async () => {
+    const write = vi.fn();
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
       lockOptions: { sessionFile: "agent:main:main" },
@@ -309,6 +310,13 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     await expect(controller.releaseForPrompt()).rejects.toThrow(
       "attempt disposed before prompt submission",
     );
+    expect(() => controller.withOwnedSessionFileWrite(write)).toThrow(
+      "attempt disposed before transcript write",
+    );
+    await expect(controller.withSessionWriteLock(write)).rejects.toThrow(
+      "attempt disposed before transcript write",
+    );
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("keeps sessions_yield abort release non-terminal for a delayed prompt", async () => {
@@ -326,13 +334,16 @@ describe("createEmbeddedAttemptSessionLockController", () => {
   });
 
   it("lets cleanup settle a completed prompt when the SDK omits reacquire", async () => {
+    const reloadPromptReleasedSessionFile = vi.fn(async () => undefined);
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: vi.fn(async () => ({ release: async () => undefined })),
       lockOptions: { sessionFile: "agent:main:main" },
+      reloadPromptReleasedSessionFile,
     });
 
     await controller.releaseForPrompt();
     await expect(controller.acquireForCleanup()).resolves.toBeDefined();
+    expect(reloadPromptReleasedSessionFile).toHaveBeenCalledOnce();
     await expect(controller.releaseForPrompt()).rejects.toThrow(
       "attempt cleanup started before prompt submission",
     );

@@ -47,6 +47,18 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     });
   });
 
+  it("rejects a legacy SQLite marker outside the active store", () => {
+    const state = promptState();
+
+    expect(() =>
+      applyEmbeddedAttemptSessionIdentity({
+        sessionPromptState: state,
+        sessionIdUsed: "session-after",
+        sessionFileUsed: "sqlite:main:session-after:/tmp/other-sessions.json",
+      }),
+    ).toThrow("successor target changed the active session binding");
+  });
+
   it.each(["sqlite:other:session-after:/tmp/sessions.json", "agent:other:main"])(
     "rejects a cross-agent legacy successor identity: %s",
     (sessionFileUsed) => {

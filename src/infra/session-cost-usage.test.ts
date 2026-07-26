@@ -143,6 +143,28 @@ describe("session cost usage", () => {
         }),
       ).toBe(sqliteMarker);
 
+      const entryPreferredMarker = `sqlite:main:${sessionId}:${path.join(root, "entry-store.json")}`;
+      const conflictingExplicitMarker = `sqlite:main:${sessionId}:${path.join(root, "explicit-store.json")}`;
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: entryPreferredMarker,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionFile: conflictingExplicitMarker,
+          sessionId,
+        }),
+      ).toBe(entryPreferredMarker);
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionFile: `sqlite:other:${sessionId}:${storePath}`,
+          sessionId,
+        }),
+      ).toBeUndefined();
+
       expect(
         resolveExistingUsageSessionFile({
           agentId: "main",

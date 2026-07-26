@@ -472,7 +472,8 @@ export async function runSetupInferenceTest(params: {
   const sessionId = runId;
   const sessionFile = `in-memory:${sessionId}`;
   const sessionManager = SessionManager.inMemory(tempDir);
-  const sessionKey = `agent:${plan.agentId ?? "openclaw"}:setup-inference:incognito-${runId}`;
+  const effectiveAgentId = plan.routeAgentId ?? plan.agentId ?? "openclaw";
+  const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
   let successfulAuth: AgentExecutionAuthBinding | undefined;
@@ -499,7 +500,7 @@ export async function runSetupInferenceTest(params: {
         sessionId,
         sessionKey,
         sessionManager,
-        agentId: plan.routeAgentId ?? plan.agentId ?? "openclaw",
+        agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -528,7 +529,7 @@ export async function runSetupInferenceTest(params: {
         sessionId,
         sessionKey,
         sessionManager,
-        agentId: plan.routeAgentId ?? plan.agentId ?? "openclaw",
+        agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,

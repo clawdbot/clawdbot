@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -87,6 +88,17 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
     nextSessionTarget = sessionPromptState.sessionTarget
       ? { ...sessionPromptState.sessionTarget, sessionId: sessionIdUsed }
       : undefined;
+  }
+  if (
+    sessionFileChanged &&
+    nextSessionTarget &&
+    sessionPromptState.sessionTarget &&
+    (nextSessionTarget.agentId !== sessionPromptState.sessionTarget.agentId ||
+      nextSessionTarget.sessionKey !== sessionPromptState.sessionTarget.sessionKey ||
+      path.resolve(nextSessionTarget.storePath) !==
+        path.resolve(sessionPromptState.sessionTarget.storePath))
+  ) {
+    throw new Error("Legacy context-engine successor target changed the active session binding");
   }
   sessionPromptState.adoptSessionId(adoptedSessionId);
   if (sessionFileUsed && sessionFileChanged) {

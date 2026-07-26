@@ -122,6 +122,26 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       release();
     }
   };
+  const reloadPromptReleasedState = async (): Promise<void> => {
+    if (reloadFailed) {
+      throw reloadFailure;
+    }
+    try {
+      await params.reloadPromptReleasedSessionFile?.();
+    } catch (error) {
+      reloadFailed = true;
+      reloadFailure = error;
+      if (error instanceof EmbeddedAttemptSessionTakeoverError) {
+        takeoverDetected = true;
+      }
+      throw error;
+    }
+  };
+  const settlePromptRelease = (): void => {
+    promptReleased = false;
+    settlePrompt?.();
+    settlePrompt = undefined;
+  };
   return {
     canAdvanceSessionEntryCache: () => false,
     publishOwnedSessionFileSnapshot: () => false,
@@ -149,47 +169,46 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       promptReleased = false;
     },
     refreshAfterOwnedSessionWrite: () => {},
-    withOwnedSessionFileWrite: (run) => run(),
+    withOwnedSessionFileWrite: (run) => {
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return run();
+    },
     reacquireAfterPrompt: async () =>
       await serializeLifecycle(async () => {
         try {
           if (disposed || promptAborted) {
             return;
           }
-          if (reloadFailed) {
-            throw reloadFailure;
-          }
-          try {
-            await params.reloadPromptReleasedSessionFile?.();
-          } catch (error) {
-            reloadFailed = true;
-            reloadFailure = error;
-            if (error instanceof EmbeddedAttemptSessionTakeoverError) {
-              takeoverDetected = true;
-            }
-            throw error;
-          }
+          await reloadPromptReleasedState();
         } finally {
-          promptReleased = false;
-          settlePrompt?.();
-          settlePrompt = undefined;
+          settlePromptRelease();
         }
       }),
     waitForSessionEvents: async () => {},
-    withSessionWriteLock: async (run) =>
-      await serializeLifecycle(async () => {
+    withSessionWriteLock: async (run) => {
+      if (disposed) {
+        throw new Error("attempt disposed before transcript write");
+      }
+      return await serializeLifecycle(async () => {
         if (reloadFailed) {
           throw reloadFailure;
         }
         return await run();
-      }),
+      });
+    },
     acquireForCleanup: async () => {
-      await serializeLifecycle(() => {
+      await serializeLifecycle(async () => {
         cleanupStarted = true;
         if (promptReleased) {
-          promptReleased = false;
-          settlePrompt?.();
-          settlePrompt = undefined;
+          try {
+            if (!disposed) {
+              await reloadPromptReleasedState();
+            }
+          } finally {
+            settlePromptRelease();
+          }
         }
       });
       await serializeLifecycle(() => {});
