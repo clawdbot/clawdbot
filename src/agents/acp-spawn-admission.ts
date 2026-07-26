@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import { getSubagentRunByChildSessionKey } from "./subagent-registry.js";
 
-export function isActiveTaskStatus(status: string | undefined): boolean {
+function isActiveTaskStatus(status: string | undefined): boolean {
   return status === "queued" || status === "running";
 }
 

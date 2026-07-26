@@ -42,7 +42,7 @@ export type AcpSpawnRequesterState = {
   origin: ReturnType<typeof normalizeDeliveryContext>;
 };
 
-export type AcpSpawnStreamPlan = {
+type AcpSpawnStreamPlan = {
   implicitStreamToParent: boolean;
   effectiveStreamToParent: boolean;
 };
@@ -176,7 +176,7 @@ export function resolveAcpSpawnStreamPlan(params: {
   };
 }
 
-export function sessionEntryMatchesAcpResumeSessionId(
+function sessionEntryMatchesAcpResumeSessionId(
   acp: SessionAcpMeta | undefined,
   resumeSessionId: string,
 ): boolean {
@@ -187,7 +187,7 @@ export function sessionEntryMatchesAcpResumeSessionId(
   );
 }
 
-export function sessionEntryIsOwnedByRequester(params: {
+function sessionEntryIsOwnedByRequester(params: {
   sessionKey: string;
   entry: SessionEntry | undefined;
   requesterSessionKey: string;

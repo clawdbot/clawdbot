@@ -47,7 +47,7 @@ export function resolveTargetAcpAgentId(params: {
   };
 }
 
-export function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
+function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return (cfg.acp?.allowedAgents ?? []).some((entry) => {
     if (entry.trim() === "*") {
       return true;

@@ -48,7 +48,7 @@ export function isHeartbeatEnabledForSessionAgent(params: {
   }
 }
 
-export function resolveHeartbeatConfigForAgent(params: {
+function resolveHeartbeatConfigForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"] {

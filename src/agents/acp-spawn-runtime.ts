@@ -77,13 +77,13 @@ export type AcpSpawnInitializedRuntime = {
   storePath: string;
 };
 
-export type AcpSpawnRuntimeOptions = {
+type AcpSpawnRuntimeOptions = {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
 };
 
-export function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
+function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
   if (!runTimeoutSeconds) {
     return undefined;
   }
