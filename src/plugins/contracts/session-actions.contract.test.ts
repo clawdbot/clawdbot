@@ -14,6 +14,10 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimePluginScope,
+} from "../runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -364,6 +368,45 @@ describe("plugin session actions", () => {
 
     const denyAll = await callSchemaAction("deny-all", { payload: { rejected: true } });
     expect(requireHookError(denyAll).code).toBe("INVALID_REQUEST");
+  });
+
+  it("scopes session action handlers to their plugin and session agent", async () => {
+    const observedScopes: Array<{ pluginId?: string; agentId?: string }> = [];
+    const { registry } = registerActionFixture({
+      id: "scoped-session-action-fixture",
+      register(api) {
+        api.registerSessionAction({
+          id: "inspect-scope",
+          handler: async () => {
+            await Promise.resolve();
+            const scope = getPluginRuntimeGatewayRequestScope();
+            observedScopes.push({ pluginId: scope?.pluginId, agentId: scope?.agentId });
+            return { result: { scoped: true } };
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await withPluginRuntimePluginScope(
+      { pluginId: "ambient-plugin", agentId: "ambient-agent" },
+      async () => {
+        await callRegisteredSessionActionForTest({
+          pluginId: "scoped-session-action-fixture",
+          actionId: "inspect-scope",
+          extra: { sessionKey: "agent:work:main" },
+        });
+        await callRegisteredSessionActionForTest({
+          pluginId: "scoped-session-action-fixture",
+          actionId: "inspect-scope",
+        });
+      },
+    );
+
+    expect(observedScopes).toEqual([
+      { pluginId: "scoped-session-action-fixture", agentId: "work" },
+      { pluginId: "scoped-session-action-fixture", agentId: undefined },
+    ]);
   });
 
   it("validates plugin session action results before returning gateway payloads", async () => {

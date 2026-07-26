@@ -16,11 +16,13 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -158,7 +160,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      if (params.payload !== undefined && !isPluginJsonValue(params.payload)) {
+      const payload = params.payload;
+      if (payload !== undefined && !isPluginJsonValue(payload)) {
         respond(
           false,
           undefined,
@@ -189,7 +192,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         const validation = validateJsonSchemaValue({
           schema: registration.action.schema as JsonSchemaValue,
           cacheKey: `plugin-session-action:${pluginId}:${actionId}`,
-          value: params.payload,
+          value: payload,
         });
         if (!validation.ok) {
           respond(
@@ -203,16 +206,26 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           return;
         }
       }
-      const result = await registration.action.handler({
-        pluginId,
-        actionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(params.payload !== undefined ? { payload: params.payload } : {}),
-        client: {
-          ...(client?.connId ? { connId: client.connId } : {}),
-          scopes: [...scopes],
+      // The registration owns plugin identity; canonical session keys own agent identity.
+      // Clear agent scope for session-less actions so nested callers cannot leak their agent.
+      const result = await withPluginRuntimePluginScope(
+        {
+          pluginId: registration.pluginId,
+          agentId: parseAgentSessionKey(sessionKey)?.agentId ?? null,
+          pluginSource: registration.source,
         },
-      });
+        () =>
+          registration.action.handler({
+            pluginId,
+            actionId,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(payload !== undefined ? { payload } : {}),
+            client: {
+              ...(client?.connId ? { connId: client.connId } : {}),
+              scopes: [...scopes],
+            },
+          }),
+      );
       if (result !== undefined && !isRecord(result)) {
         respond(
           false,
