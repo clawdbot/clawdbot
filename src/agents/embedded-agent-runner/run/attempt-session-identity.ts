@@ -93,7 +93,13 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
     sessionFileChanged &&
     nextSessionTarget &&
     sessionPromptState.sessionTarget &&
-    (nextSessionTarget.agentId !== sessionPromptState.sessionTarget.agentId ||
+    (!nextSessionTarget.agentId ||
+      !nextSessionTarget.sessionKey ||
+      !nextSessionTarget.storePath ||
+      !sessionPromptState.sessionTarget.agentId ||
+      !sessionPromptState.sessionTarget.sessionKey ||
+      !sessionPromptState.sessionTarget.storePath ||
+      nextSessionTarget.agentId !== sessionPromptState.sessionTarget.agentId ||
       nextSessionTarget.sessionKey !== sessionPromptState.sessionTarget.sessionKey ||
       path.resolve(nextSessionTarget.storePath) !==
         path.resolve(sessionPromptState.sessionTarget.storePath))
