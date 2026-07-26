@@ -18,6 +18,7 @@ import {
 
 type TasksProps = {
   basePath: string;
+  agentId: string;
   mainKey: string;
   connected: boolean;
   canCancel: boolean;
@@ -34,7 +35,14 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
   if (!sessionKey) {
     return nothing;
   }
-  const href = pathForSessionKey("chat", sessionKey, props.basePath, undefined, props.mainKey);
+  const href = pathForSessionKey(
+    "chat",
+    sessionKey,
+    props.agentId,
+    props.basePath,
+    undefined,
+    props.mainKey,
+  );
   return html`<a
     class="session-link"
     href=${href}

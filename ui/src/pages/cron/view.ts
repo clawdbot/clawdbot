@@ -51,6 +51,7 @@ export type CronDetailTab = "settings" | "history";
 
 type CronProps = {
   basePath: string;
+  agentId: string;
   loading: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;

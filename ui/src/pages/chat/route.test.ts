@@ -48,6 +48,19 @@ function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
 }
 
 describe("loadChatRoute", () => {
+  it("leaves a bare namespace unresolved instead of inventing a main session", async () => {
+    const { context, list } = contextFor(result([]), "workspace");
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: "/chat", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
     const { context, list } = contextFor(result([row()]));
     list

@@ -290,7 +290,7 @@ describe("chat page split layout host", () => {
     expect(split.defaultPrevented).toBe(true);
     expect(getLayout(page)?.columns.at(1)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
     expect(navigation.replace).toHaveBeenLastCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY),
+      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
     });
 
     window.dispatchEvent(
@@ -361,7 +361,7 @@ describe("chat page split layout host", () => {
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
     expect(navigation.replace).toHaveBeenCalledOnce();
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", "main"),
+      pathname: pathForSessionKey("chat", "main", "main"),
     });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
@@ -605,7 +605,7 @@ describe("chat page split layout host", () => {
     expect(getLayout(page)).toBeUndefined();
     expect(loadSettings().chatSplitLayout).toBeUndefined();
     expect(navigation.navigate).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY),
+      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
     });
     expect(navigation.replace).not.toHaveBeenCalled();
   });
@@ -625,7 +625,7 @@ describe("chat page split layout host", () => {
     expect(layout?.activePaneId).toBe("p2");
     expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY),
+      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
     });
   });
 
@@ -645,7 +645,7 @@ describe("chat page split layout host", () => {
     expect(layout?.activePaneId).toBe("p3");
     expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY),
+      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
     });
   });
 
@@ -662,7 +662,7 @@ describe("chat page split layout host", () => {
     expect(layout?.activePaneId).toBe("p1");
     expect(loadSettings().chatSplitLayout).toEqual(layout);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY),
+      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
     });
   });
 
@@ -718,7 +718,7 @@ describe("chat page split layout host", () => {
       "main",
     ]);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY),
+      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
     });
   });
 
@@ -800,7 +800,7 @@ describe("chat page split layout host", () => {
 
     expect(getLayout(page)?.columns.at(0)?.panes.at(0)?.sessionKey).toBe(WORK_SESSION_KEY);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: pathForSessionKey("chat", WORK_SESSION_KEY),
+      pathname: pathForSessionKey("chat", WORK_SESSION_KEY, "main"),
     });
   });
 });

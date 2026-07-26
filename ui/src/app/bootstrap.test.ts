@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
-import { normalizeInitialApplicationLocation } from "./bootstrap-location.ts";
+import {
+  normalizeInitialApplicationLocation,
+  resolveInitialApplicationLocation,
+} from "./bootstrap-location.ts";
 import type { ApplicationContext } from "./context.ts";
 
 describe("normalizeInitialApplicationLocation", () => {
@@ -13,13 +16,86 @@ describe("normalizeInitialApplicationLocation", () => {
         { pathname: "/", search: "", hash: "" },
         "",
         "telegram:12345",
+        "main",
       ),
     ).toEqual({ pathname: "/chat/main/telegram/12345", search: "", hash: "" });
   });
 
   it("leaves the initial location unchanged when a malformed key has no path", () => {
     const location = { pathname: "/", search: "?draft=hello", hash: "" };
-    expect(normalizeInitialApplicationLocation(location, "", "agent::broken")).toBe(location);
+    expect(normalizeInitialApplicationLocation(location, "", "agent::broken", "main")).toBe(
+      location,
+    );
+  });
+
+  it("waits for the configured default agent before normalizing a persisted alias", async () => {
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    let snapshot = {
+      phase: "connecting",
+      client: null,
+      hello: null,
+    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+    const gateway = {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe: (next: GatewayListener) => {
+        listener = next;
+        return () => undefined;
+      },
+    };
+    const pending = resolveInitialApplicationLocation({
+      location: { pathname: "/", search: "", hash: "" },
+      basePath: "",
+      sessionKey: "main",
+      gateway,
+      agentsList: () => null,
+      signal: new AbortController().signal,
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    snapshot = {
+      phase: "connected",
+      client: {},
+      hello: {
+        snapshot: {
+          sessionDefaults: { defaultAgentId: "research", mainKey: "workspace" },
+        },
+      },
+    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
+    const connectedListener = listener as GatewayListener | null;
+    if (!connectedListener) {
+      throw new Error("expected gateway readiness subscription");
+    }
+    connectedListener(snapshot);
+
+    await expect(pending).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
+  });
+
+  it("does not wait for gateway defaults on an explicit startup route", async () => {
+    const subscribe = vi.fn(() => () => undefined);
+    const location = { pathname: "/settings/general", search: "", hash: "" };
+
+    await expect(
+      resolveInitialApplicationLocation({
+        location,
+        basePath: "",
+        sessionKey: "main",
+        gateway: {
+          snapshot: { phase: "connecting", client: null, hello: null },
+          subscribe,
+        } as unknown as ApplicationContext<RouteId>["gateway"],
+        agentsList: () => null,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBe(location);
+    expect(subscribe).not.toHaveBeenCalled();
   });
 
   it("starts the first-run redirect after installing the persisted session location", async () => {
@@ -27,6 +103,7 @@ describe("normalizeInitialApplicationLocation", () => {
       { pathname: "/", search: "", hash: "" },
       "",
       "agent:main:main",
+      "main",
     );
     expect(canonicalLocation).toEqual({ pathname: "/chat/main", search: "", hash: "" });
 
@@ -53,7 +130,10 @@ describe("normalizeInitialApplicationLocation", () => {
     });
     const replaceRoute = vi.fn();
     const context = {
-      gateway: { subscribe },
+      gateway: {
+        snapshot: { phase: "connecting", client: null, hello: null },
+        subscribe,
+      },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 

@@ -13,6 +13,7 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
@@ -254,17 +255,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     : import("@openclaw/session-url-contract").then((contract) => {
         setSessionPathBuilder(contract.buildControlUiSessionPath);
       });
-  const initialLocationReady = documentMode
-    ? Promise.resolve(startup.location)
-    : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
-        ([, location]) => {
-          return location.normalizeInitialApplicationLocation(
-            startup.location,
-            basePath,
-            startup.settings.sessionKey,
-          );
-        },
-      );
 
   const settings = startup.settings;
   const gateway = createApplicationGateway(
@@ -275,6 +265,25 @@ export function bootstrapApplication(): ApplicationRuntime {
     { persistDefaultConnectionSettings: documentMode === null },
   );
   const agents = createAgentCapability(gateway);
+  const initialLocationAbort = new AbortController();
+  const deferInitialLocationUntilGateway =
+    documentMode === null &&
+    firstRunDefaultLanding &&
+    settings.sessionKey.trim() !== "" &&
+    !parseAgentSessionKey(settings.sessionKey);
+  const initialLocationReady = documentMode
+    ? Promise.resolve(startup.location)
+    : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
+        ([, location]) =>
+          location.resolveInitialApplicationLocation({
+            location: startup.location,
+            basePath,
+            sessionKey: settings.sessionKey,
+            gateway,
+            agentsList: () => agents.state.agentsList,
+            signal: initialLocationAbort.signal,
+          }),
+      );
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
@@ -413,6 +422,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
   let stopModelSetupRedirect: () => void = () => undefined;
+  let stopped = false;
   return {
     context,
     router,
@@ -423,20 +433,57 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: async () => {
-      stopModelSetupRedirect = await startModelSetupFirstRunRedirectAfterLocation({
-        context,
-        enabled: firstRunDefaultLanding,
-        history,
-        initialLocationReady,
-      });
+      gateway.start();
+      await sessionPathBuilderReady;
+      if (!deferInitialLocationUntilGateway) {
+        stopModelSetupRedirect = await startModelSetupFirstRunRedirectAfterLocation({
+          context,
+          enabled: firstRunDefaultLanding,
+          history,
+          initialLocationReady,
+        });
+      }
       void config.refresh({ skipWithoutAuthCandidate: true });
       const routerStart = documentMode
         ? Promise.resolve()
         : startApplicationRouter(router, history, basePath, context);
-      gateway.start();
       await routerStart;
+      if (deferInitialLocationUntilGateway) {
+        // The bare /chat route remains not-found while disconnected. Its shell
+        // fallback is gated on the same connected defaults, so both paths converge.
+        void startModelSetupFirstRunRedirectAfterLocation({
+          context,
+          enabled: firstRunDefaultLanding,
+          history,
+          initialLocationReady,
+          installLocation: async (location) => {
+            const routeId = routeIdFromPath(location.pathname, basePath);
+            if (routeId) {
+              await router.navigate(routeId, context, { history: "replace" }, location);
+            } else {
+              history.replace(location);
+            }
+          },
+          shouldInstallLocation: () =>
+            isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+        })
+          .then((stop) => {
+            if (stopped) {
+              stop();
+            } else {
+              stopModelSetupRedirect = stop;
+            }
+          })
+          .catch((error: unknown) => {
+            if (!initialLocationAbort.signal.aborted) {
+              console.error("[openclaw] initial session location failed", error);
+            }
+          });
+      }
     },
     stop: () => {
+      stopped = true;
+      initialLocationAbort.abort();
       stopModelSetupRedirect();
       stopPostConnect();
       router.stop();

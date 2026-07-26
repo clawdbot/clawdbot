@@ -74,6 +74,7 @@ export type SessionsProps = {
   includeUnknown: boolean;
   statusFilter: SessionArchivedFilter;
   basePath: string;
+  agentId: string;
   mainKey: string;
   searchQuery: string;
   transcriptSearchAvailable: boolean;
@@ -1504,7 +1505,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
-    ? pathForSessionKey("chat", row.key, props.basePath, row, props.mainKey)
+    ? pathForSessionKey("chat", row.key, props.agentId, props.basePath, row, props.mainKey)
     : null;
   const displayKind = resolveSessionDisplayKind(row);
   const kindClass = `session-kind session-kind--${displayKind}`;

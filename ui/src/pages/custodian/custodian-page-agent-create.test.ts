@@ -60,6 +60,7 @@ function createContext(request: ReturnType<typeof vi.fn>) {
       state: { agentsList: { mainKey: "main" } },
       refreshList,
     },
+    agentSelection: { state: { selectedId: "main" } },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;

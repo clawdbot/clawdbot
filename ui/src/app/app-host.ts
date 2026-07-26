@@ -59,7 +59,10 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { pathForSessionKey } from "../lib/sessions/index.ts";
-import { sessionRouteNavigationOptions } from "../lib/sessions/route-navigation.ts";
+import {
+  resolveSessionNavigationAgentId,
+  sessionRouteNavigationOptions,
+} from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -820,6 +823,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 pathname: pathForSessionKey(
                   "chat",
                   sessionKey,
+                  this.sessionNavigationAgentId(),
                   context.basePath,
                   undefined,
                   this.sessionMainKey(),
@@ -887,6 +891,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       pathname: pathForSessionKey(
         "chat",
         command.sessionKey,
+        this.sessionNavigationAgentId(),
         context.basePath,
         undefined,
         this.sessionMainKey(),
@@ -978,6 +983,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
   }
 
+  private sessionNavigationAgentId(): string {
+    const context = this.context;
+    return context ? resolveSessionNavigationAgentId(context) : "";
+  }
+
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
     const context = this.context;
     if (!context || !isRouteId(routeId)) {
@@ -991,8 +1001,16 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private replaceChatWithCurrentSession() {
+    const context = this.context;
+    const sessionKey = this.activeSessionKey.trim();
+    if (
+      !context ||
+      (!parseAgentSessionKey(sessionKey) && context.gateway.snapshot.phase !== "connected")
+    ) {
+      return;
+    }
     const face = this.routeState.routeId === "dashboard" ? "dashboard" : "chat";
-    this.context?.replace(face, this.chatNavigationOptions(face));
+    context.replace(face, this.chatNavigationOptions(face));
   }
 
   private isSettingsTakeover(): boolean {
@@ -1342,7 +1360,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     // Keep Chat's in-place draft path fast; other routes hand the draft through navigation.
     const navigation = this.chatNavigationOptions("chat");
-    const search = new URLSearchParams();
+    const search = new URLSearchParams(navigation?.search ?? "");
     search.set("draft", command.endsWith(" ") ? command : `${command} `);
     this.navigate("chat", { ...navigation, search: `?${search.toString()}` });
   };
@@ -1743,6 +1761,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 pathname: pathForSessionKey(
                   "chat",
                   sessionKey,
+                  this.sessionNavigationAgentId(),
                   context.basePath,
                   undefined,
                   this.sessionMainKey(),

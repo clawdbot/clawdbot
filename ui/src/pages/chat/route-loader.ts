@@ -6,6 +6,7 @@ import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
 import { sessionRefFromPath, type SessionPathTarget } from "../../app-session-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
   buildCatalogSessionKey,
@@ -101,54 +102,12 @@ function sessionPrefixMatches(result: SessionsListResult, shortId: string): Gate
   });
 }
 
-function abortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new DOMException("Session route load aborted", "AbortError");
-}
-
-function waitForGatewayClient(
-  context: ApplicationContext,
-  signal: AbortSignal,
-): Promise<GatewayBrowserClient> {
-  const current = context.gateway.snapshot.client;
-  if (current && context.gateway.snapshot.phase === "connected") {
-    return Promise.resolve(current);
-  }
-  return new Promise((resolve, reject) => {
-    let unsubscribe: () => void = () => undefined;
-    let settled = false;
-    const cleanup = () => {
-      unsubscribe();
-      signal.removeEventListener("abort", onAbort);
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(abortError(signal));
-    };
-    unsubscribe = context.gateway.subscribe((snapshot) => {
-      if (snapshot.phase === "connected" && snapshot.client) {
-        settled = true;
-        cleanup();
-        resolve(snapshot.client);
-      }
-    });
-    if (settled) {
-      unsubscribe();
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  });
-}
-
 async function querySessionPrefix(
   context: ApplicationContext,
   shortId: string,
   signal: AbortSignal,
 ): Promise<SessionPrefixResolution> {
-  const client = await waitForGatewayClient(context, signal);
+  const client = await waitForGatewayClient(context.gateway, signal);
   let cache = resolutionCache.get(client);
   if (!cache) {
     cache = new Map();
@@ -300,7 +259,7 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "main") {
-    await waitForGatewayClient(context, signal);
+    await waitForGatewayClient(context.gateway, signal);
     return {
       kind: "session",
       sessionKey: mainSessionKey(context, target),

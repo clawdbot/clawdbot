@@ -363,11 +363,23 @@ function renderCatalogSessionRow(
   const meta = formatSidebarTimestamp(timestamp);
   const routeId = "chat";
   const sessionPath = session.sessionKey
-    ? pathForSessionKey("chat", session.sessionKey, params.basePath, undefined, params.mainKey)
+    ? pathForSessionKey(
+        "chat",
+        session.sessionKey,
+        params.newSessionAgentId,
+        params.basePath,
+        undefined,
+        params.mainKey,
+      )
     : null;
   const target = sessionPath
     ? { href: sessionPath, navigation: { pathname: sessionPath } }
-    : catalogSessionNavigation(params.newSessionAgentId, catalogKey, params.basePath);
+    : catalogSessionNavigation(
+        params.newSessionAgentId,
+        catalogKey,
+        params.basePath,
+        params.mainKey,
+      );
   const { href, navigation } = target;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";

@@ -123,7 +123,14 @@ export function buildSidebarSessionNavigationState(input: {
       meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
       href:
-        pathForSessionKey("chat", row.key, context?.basePath ?? "", row, mainKey) ||
+        pathForSessionKey(
+          "chat",
+          row.key,
+          navigation.selectedAgentId,
+          context?.basePath ?? "",
+          row,
+          mainKey,
+        ) ||
         (row.key === navigation.currentSessionKey ? globalThis.location?.pathname : "#") ||
         "#",
       active: row.key === navigation.activeRowKey,

@@ -76,6 +76,7 @@ export function createContext(
       state: { agentsList: { mainKey: "main" } },
       refreshList: vi.fn(),
     },
+    agentSelection: { state: { selectedId: "main" } },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;

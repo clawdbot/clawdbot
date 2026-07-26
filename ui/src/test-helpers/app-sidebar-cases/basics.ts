@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
@@ -377,6 +378,29 @@ describe("AppSidebar brand actions", () => {
 });
 
 describe("AppSidebar agent chip", () => {
+  it("qualifies unscoped session rows with the selected agent", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main", "telegram:12345"]),
+      "panel",
+      { ...TWO_AGENTS, defaultId: "research" },
+    );
+    sidebar.sessionKey = "agent:research:main";
+    await sidebar.updateComplete;
+
+    const href = sidebar
+      .querySelector<HTMLAnchorElement>(
+        '[data-session-key="telegram:12345"] .sidebar-recent-session__link',
+      )
+      ?.getAttribute("href");
+    expect(href).toBe("/chat/research/telegram/12345");
+    expect(sessionRefFromPath(href ?? "")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:research:telegram:12345",
+    });
+  });
+
   it("opens an ambiguous one-segment literal session through its escaped path", async () => {
     const sessionKey = "agent:main:release-deadbeef";
     const gateway = createGateway({} as GatewayBrowserClient);

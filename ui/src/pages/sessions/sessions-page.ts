@@ -30,6 +30,7 @@ import {
   scopedAgentParamsForSession,
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
+import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -421,6 +422,10 @@ class SessionsPage extends OpenClawLightDomElement {
       key,
     );
     return agentId;
+  }
+
+  private sessionPathAgentId(key: string, context: ApplicationContext): string {
+    return this.sessionAgentId(key, context) ?? resolveSessionNavigationAgentId(context);
   }
 
   private sessionListOptions() {
@@ -958,7 +963,12 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       if (forkedKey) {
         scope.context.navigate("chat", {
-          pathname: pathForSessionKey("chat", forkedKey, scope.context.basePath),
+          pathname: pathForSessionKey(
+            "chat",
+            forkedKey,
+            agentId ?? this.sessionPathAgentId(forkedKey, scope.context),
+            scope.context.basePath,
+          ),
           hash: "",
         });
       } else if (scope.sessions.state.error) {
@@ -1056,6 +1066,7 @@ class SessionsPage extends OpenClawLightDomElement {
           pathname: pathForSessionKey(
             "chat",
             result.key,
+            this.sessionPathAgentId(result.key, scope.context),
             scope.context.basePath,
             {
               key: result.key,
@@ -1216,6 +1227,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 pathname: pathForSessionKey(
                   "chat",
                   row.key,
+                  this.sessionPathAgentId(row.key, context),
                   context.basePath,
                   row,
                   resolveUiConfiguredMainKey({
@@ -1305,6 +1317,7 @@ class SessionsPage extends OpenClawLightDomElement {
           includeUnknown: this.includeUnknown,
           statusFilter: this.statusFilter,
           basePath: context.basePath,
+          agentId: resolveSessionNavigationAgentId(context),
           mainKey: resolveUiConfiguredMainKey({
             agentsList: context.agents.state.agentsList,
             hello: context.gateway.snapshot.hello,
@@ -1397,6 +1410,7 @@ class SessionsPage extends OpenClawLightDomElement {
               pathname: pathForSessionKey(
                 "chat",
                 sessionKey,
+                this.sessionPathAgentId(sessionKey, context),
                 context.basePath,
                 this.result?.sessions.find((row) => row.key === sessionKey),
                 resolveUiConfiguredMainKey({

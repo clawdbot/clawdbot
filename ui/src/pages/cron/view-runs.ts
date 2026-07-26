@@ -23,6 +23,7 @@ import { pathForSessionKey } from "../../lib/sessions/index.ts";
 // cycle between view.ts and view-runs.ts.
 type CronRunsSectionProps = {
   basePath: string;
+  agentId: string;
   runs: CronRunLogEntry[];
   runsHasMore: boolean;
   runsLoadingMore: boolean;
@@ -230,7 +231,9 @@ export function renderRunsSection(props: CronRunsSectionProps) {
             `
         : html`
             <div class="cron-runs__list">
-              ${runs.map((entry) => renderRun(entry, props.basePath, props.onNavigateToChat))}
+              ${runs.map((entry) =>
+                renderRun(entry, props.agentId, props.basePath, props.onNavigateToChat),
+              )}
             </div>
           `}
       ${props.runsHasMore
@@ -281,12 +284,13 @@ function runDeliveryLabel(value: string): string {
 
 function renderRun(
   entry: CronRunLogEntry,
+  fallbackAgentId: string,
   basePath: string,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? pathForSessionKey("chat", entry.sessionKey, basePath)
+      ? pathForSessionKey("chat", entry.sessionKey, fallbackAgentId, basePath)
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");

@@ -198,6 +198,8 @@ type ShellSessionNavigationState = {
   activeSessionKey: string;
   routeState: { routeId?: RouteId };
   navigate: (routeId: RouteId) => void;
+  handleCommandPaletteSlashCommand: (command: string) => void;
+  replaceChatWithCurrentSession: () => void;
 };
 
 function committedRouterState(
@@ -344,6 +346,7 @@ describe("OpenClaw shell route session commits", () => {
       context: {
         basePath: "",
         agents: { state: { agentsList: { mainKey: "main" } } },
+        agentSelection: { state: { selectedId: "main" } },
         gateway: { snapshot: { hello: null } },
         sessions: { state: { result: null } },
         navigate,
@@ -360,6 +363,61 @@ describe("OpenClaw shell route session commits", () => {
     shell.routeState = { routeId: "dashboard" };
     shell.navigate("chat");
     expect(navigate).toHaveBeenLastCalledWith("chat", { pathname: "/chat/main/12345678" });
+  });
+
+  it("preserves catalog identity when routing a slash-command draft", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSessionNavigationState;
+    shell.runtime = {
+      context: {
+        basePath: "",
+        agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
+        agentSelection: { state: { selectedId: "research" } },
+        gateway: { snapshot: { hello: null } },
+        sessions: { state: { result: null } },
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    shell.activeSessionKey = "catalog:claude:gateway%3Alocal:thread-1";
+    shell.routeState = { routeId: "chat" };
+
+    shell.handleCommandPaletteSlashCommand("/review");
+
+    expect(navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/research",
+      search: "?catalog=claude&host=gateway%3Alocal&thread=thread-1&draft=%2Freview+",
+    });
+  });
+
+  it("defers an unscoped not-found fallback until agent defaults are connected", () => {
+    const replace = vi.fn();
+    const snapshot = { phase: "connecting", hello: null };
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSessionNavigationState;
+    shell.runtime = {
+      context: {
+        basePath: "",
+        agents: {
+          state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
+        },
+        agentSelection: { state: { selectedId: null } },
+        gateway: { snapshot },
+        sessions: { state: { result: null } },
+        replace,
+      } as unknown as ApplicationContext,
+    };
+    shell.activeSessionKey = "main";
+    shell.routeState = { routeId: "chat" };
+
+    shell.replaceChatWithCurrentSession();
+    expect(replace).not.toHaveBeenCalled();
+
+    snapshot.phase = "connected";
+    shell.replaceChatWithCurrentSession();
+    expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 
   it("adopts a resolved chat session after path navigation from Tasks", () => {
@@ -733,6 +791,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         navigation: { update },
         gateway: { setSessionKey, snapshot: { hello: null } },
         agents: { state: { agentsList: { mainKey: "main" } } },
+        agentSelection: { state: { selectedId: "main" } },
         navigate,
       } as unknown as ApplicationContext,
     };

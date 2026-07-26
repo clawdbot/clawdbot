@@ -32,10 +32,19 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   enabled: boolean;
   history: Pick<RouterHistory, "location" | "replace">;
   initialLocationReady: Promise<RouteLocation>;
+  installLocation?: (location: RouteLocation) => void | Promise<void>;
+  shouldInstallLocation?: () => boolean;
 }): Promise<() => void> {
   const initialLocation = await params.initialLocationReady;
-  if (!locationsMatch(params.history.location(), initialLocation)) {
-    params.history.replace(initialLocation);
+  if (
+    !locationsMatch(params.history.location(), initialLocation) &&
+    params.shouldInstallLocation?.() !== false
+  ) {
+    if (params.installLocation) {
+      await params.installLocation(initialLocation);
+    } else {
+      params.history.replace(initialLocation);
+    }
   }
   if (!params.enabled) {
     return () => undefined;
@@ -52,7 +61,9 @@ function startModelSetupFirstRunRedirect(params: {
 }): () => void {
   let attempted = false;
   let redirected = false;
-  return params.context.gateway.subscribe((snapshot) => {
+  const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
+    snapshot,
+  ) => {
     if (
       attempted ||
       redirected ||
@@ -76,5 +87,8 @@ function startModelSetupFirstRunRedirect(params: {
       .catch(() => {
         // First-run guidance is best effort. The page offers an explicit retry.
       });
-  });
+  };
+  const unsubscribe = params.context.gateway.subscribe(handleSnapshot);
+  handleSnapshot(params.context.gateway.snapshot);
+  return unsubscribe;
 }

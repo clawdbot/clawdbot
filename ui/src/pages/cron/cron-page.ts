@@ -33,6 +33,7 @@ import {
   type CronState,
 } from "../../lib/cron/index.ts";
 import { pathForSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -333,6 +334,7 @@ class CronPage extends OpenClawLightDomElement {
 
   override render() {
     const channels = this.context.channels.state;
+    const fallbackAgentId = resolveSessionNavigationAgentId(this.context);
     const suggestions = buildCronSuggestions({
       channels,
       runtimeConfig: this.context.runtimeConfig.state,
@@ -353,6 +355,7 @@ class CronPage extends OpenClawLightDomElement {
       ${renderSettingsWorkspace(
         renderCron({
           basePath: this.context.basePath,
+          agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
           status: this.cron.cronStatus,
           failingCount: this.cron.cronFailingCount,
@@ -467,6 +470,7 @@ class CronPage extends OpenClawLightDomElement {
               pathname: pathForSessionKey(
                 "chat",
                 sessionKey,
+                fallbackAgentId,
                 this.context.basePath,
                 undefined,
                 resolveUiConfiguredMainKey({

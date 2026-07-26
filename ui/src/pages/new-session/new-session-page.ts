@@ -14,6 +14,7 @@ import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { pathForSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -1013,7 +1014,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       }
       context.gateway.setSessionKey(result.key);
       context.navigate("chat", {
-        pathname: pathForSessionKey("chat", result.key, context.basePath),
+        pathname: pathForSessionKey("chat", result.key, this.agentId, context.basePath),
       });
     } finally {
       if (requestId === this.submitRequestToken) {
@@ -1454,6 +1455,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           pathname: pathForSessionKey(
             "chat",
             sessionKey,
+            resolveSessionNavigationAgentId(this.context),
             this.context.basePath,
             undefined,
             resolveUiConfiguredMainKey({

@@ -17,6 +17,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { pathForSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -345,6 +346,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       const href = pathForSessionKey(
         "chat",
         record.ownerId,
+        resolveSessionNavigationAgentId(this.context),
         this.context.basePath,
         undefined,
         resolveUiConfiguredMainKey({
