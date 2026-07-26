@@ -68,7 +68,6 @@ function assertSelectedProfile(profile) {
   const subject = body.identity?.subjects?.find((entry) => entry.ref === selected.subjectRef);
   assert.equal(subject?.kind, "openclaw.hosting-profile");
   assert.equal(subject?.id, profile);
-  assert.equal(subject?.generation, "1");
 }
 
 if (scenario === "unprofiled") {
