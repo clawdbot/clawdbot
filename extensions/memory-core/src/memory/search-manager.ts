@@ -334,9 +334,11 @@ export async function getMemorySearchManager(
   params: MemorySearchManagerParams,
 ): Promise<MemorySearchManagerResult> {
   const scopeKey = buildQmdManagerScopeKey(normalizeAgentId(params.agentId));
+  const resolved = resolveMemoryBackendConfig(params);
   return await runMemorySearchManagerScopeOperation(
     scopeKey,
     async () => await getMemorySearchManagerWithinLifecycle(params),
+    { drainRetained: resolved.backend === "qmd" },
   );
 }
 

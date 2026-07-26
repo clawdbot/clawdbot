@@ -20,6 +20,21 @@ import {
   resolveModelRefOverride,
 } from "./shared.js";
 
+async function closeEmbeddingProviderWithRetry(provider: {
+  close?: () => Promise<void> | void;
+}): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await provider.close?.();
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
 async function runMemoryEmbeddingCreate(params: {
   texts: string[];
   provider?: string;
@@ -54,7 +69,7 @@ async function runMemoryEmbeddingCreate(params: {
   let closeError: unknown;
   let closeFailed = false;
   try {
-    await provider.close?.();
+    await closeEmbeddingProviderWithRetry(provider);
   } catch (err) {
     closeError = err;
     closeFailed = true;

@@ -3093,8 +3093,24 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
     expectRuntimeErrorContains("embedding failed");
+  });
+
+  it("retries embedding provider cleanup before reporting close failure", async () => {
+    closeEmbeddingProviderMock
+      .mockRejectedValueOnce(new Error("close failed"))
+      .mockRejectedValueOnce(new Error("close failed"));
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "embedding", "create", "--text", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(2);
+    expectRuntimeErrorContains("close failed");
   });
 
   it("resolves command SecretRefs before local model capability execution", async () => {

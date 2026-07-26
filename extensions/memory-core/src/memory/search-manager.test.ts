@@ -534,6 +534,27 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
+  it("allows builtin acquisition while failed qmd cleanup remains retained", async () => {
+    const agentId = "retry-agent-retained-cleanup";
+    const qmdCfg = createQmdCfg(agentId);
+    const primary = createQmdManagerInstanceMock();
+    primary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    primary.close.mockRejectedValue(new Error("qmd close failed"));
+    createQmdManagerMock.mockImplementationOnce(
+      async () => primary as unknown as QmdManagerInstance,
+    );
+
+    const first = requireManager(await getMemorySearchManager({ cfg: qmdCfg, agentId }));
+    await expect(first.search("hello")).resolves.toHaveLength(1);
+    await vi.waitFor(() => expect(primary.close).toHaveBeenCalledTimes(1));
+
+    const builtin = await getMemorySearchManager({ cfg: createBuiltinCfg(agentId), agentId });
+    expect(builtin.manager).toBe(fallbackManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+
+    primary.close.mockResolvedValue(undefined);
+  });
+
   it("falls back immediately when the qmd binary is unavailable", async () => {
     const cfg = createQmdCfg("missing-qmd");
     checkQmdBinaryAvailability.mockResolvedValueOnce({
