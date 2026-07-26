@@ -94,7 +94,9 @@ function buildPricingContext(config: OpenClawConfig): PricingContext {
       }
     }
   }
-  const hosted = getRemoteModelCatalogPricing(config) ?? {};
+  // Hosted aliases are policy-resolved against installed manifests. If that metadata is
+  // unavailable, fail closed instead of treating every provider as policy-free.
+  const hosted = snapshot ? (getRemoteModelCatalogPricing(config) ?? {}) : {};
   const normalizedHosted = new Map<string, RemoteModelCatalogPricing>();
   for (const [key, pricing] of Object.entries(hosted).toSorted(([a], [b]) => a.localeCompare(b))) {
     const normalized = normalizedHostedKey(key, snapshot?.plugins);
