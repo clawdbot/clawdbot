@@ -415,6 +415,30 @@ function isMissingCleanupPathError(error: unknown): boolean {
   );
 }
 
+async function resolveAgentPathAllowedRoots(
+  cleanupPath: AgentDeleteCleanupPath,
+): Promise<string[]> {
+  // movePathToTrash defaults allowedRoots to [os.homedir(), os.tmpdir()], which
+  // rejects trash targets that live outside those roots (e.g. a custom stateDir,
+  // container-mounted agent/workspace dirs). Scope allowedRoots to the resolved
+  // parent directory of the target instead, matching the CLI's moveToTrash
+  // helper, so agent deletion succeeds regardless of where state is stored.
+  const allowedRoots = [cleanupPath.parentPath];
+  try {
+    const stat = await fs.lstat(cleanupPath.trashPath);
+    if (stat.isSymbolicLink()) {
+      try {
+        allowedRoots.push(path.dirname(await fs.realpath(cleanupPath.trashPath)));
+      } catch {
+        // Broken symlinks are handled lexically by fs-safe.
+      }
+    }
+  } catch {
+    // Existence was already checked by the caller; ignore races here.
+  }
+  return [...new Set(allowedRoots)];
+}
+
 async function removeAgentPath(
   cleanupPath: AgentDeleteCleanupPath,
 ): Promise<AgentDeletePathOutcome> {
@@ -433,7 +457,8 @@ async function removeAgentPath(
   try {
     // fs-safe pins traversal and identity for validation; Trash has no fd-relative move API, so
     // replacement after this check and before its rename is the accepted residual race bound.
-    await movePathToTrash(trashPath);
+    const allowedRoots = await resolveAgentPathAllowedRoots(cleanupPath);
+    await movePathToTrash(trashPath, { allowedRoots });
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
