@@ -18,6 +18,7 @@ import {
   type InlineAttachmentMount,
 } from "../shared/inline-attachments.js";
 import type {
+  DeliveryQueueCompletionRetention,
   DeliveryQueueEntryLoadResult,
   DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite.js";
@@ -51,7 +52,7 @@ export type ManagedDelegateArtifactDelivery = {
 type SessionDeliveryRetryPolicy = {
   maxRetries?: number;
   /** Retain terminal ownership when the durable producer can replay forever. */
-  completionRetention?: "permanent";
+  completionRetention?: DeliveryQueueCompletionRetention;
 };
 
 export type SessionDeliveryRoute = {
