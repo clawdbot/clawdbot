@@ -1,14 +1,8 @@
-// Dreaming tab of the Memory settings page. The dreaming sweep is one managed
-// cron job over every agent workspace, so its knobs are global and belong on a
-// global page; only the diary/short-term reads below are agent-scoped, which is
-// what the agent picker drives.
-import { consume } from "@lit/context";
+// Pure view for the Dreaming tab of the Memory settings page: the global
+// schedule/storage/phase knobs. The controller (context, config writes, agent
+// picker) lives in memory-dreaming-page.ts, mirroring memory.ts/memory-page.ts.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
-import { state } from "lit/decorators.js";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import "../../components/agent-select-registration.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
 import {
   renderSettingsRow,
   renderSettingsSection,
@@ -16,12 +10,6 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
-import { currentConfigObject } from "../../lib/config/index.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { resolveConfiguredDreaming } from "../agents/memory/dreaming.ts";
-import "../agents/memory/memory-panel.ts";
 
 type DreamingFieldSpec =
   | {
@@ -32,7 +20,14 @@ type DreamingFieldSpec =
       placeholderKey?: string;
     }
   | { kind: "number"; path: readonly string[]; labelKey: string; helpKey: string; step?: number }
-  | { kind: "toggle"; path: readonly string[]; labelKey: string; helpKey: string };
+  | {
+      kind: "toggle";
+      path: readonly string[];
+      labelKey: string;
+      helpKey: string;
+      /** Runtime value for an absent key; see resolveMemoryDreamingConfig. */
+      fallback: boolean;
+    };
 
 type DreamingFieldGroup = {
   titleKey: string;
@@ -43,6 +38,11 @@ type DreamingFieldGroup = {
 // Mirrors the memory-core manifest configSchema/uiHints
 // (extensions/memory-core/openclaw.plugin.json). Everything here previously
 // required hand-editing openclaw.json.
+//
+// Toggle `fallback` and the storage-mode default below restate
+// resolveMemoryDreamingConfig in src/memory-host-sdk/dreaming.ts: an absent
+// key is not "off", so rendering `false` would report the opposite of what the
+// sweep actually does. Keep the two in sync.
 const DREAMING_SCHEDULE_FIELDS: readonly DreamingFieldSpec[] = [
   {
     kind: "text",
@@ -70,6 +70,8 @@ const DREAMING_SCHEDULE_FIELDS: readonly DreamingFieldSpec[] = [
     path: ["verboseLogging"],
     labelKey: "memoryPage.dreaming.verboseLogging.label",
     helpKey: "memoryPage.dreaming.verboseLogging.help",
+    // DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING
+    fallback: false,
   },
 ];
 
@@ -83,6 +85,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         path: ["phases", "light", "enabled"],
         labelKey: "memoryPage.dreaming.phaseFields.enabled",
         helpKey: "memoryPage.dreaming.phaseFields.enabledHelp",
+        fallback: true,
       },
       {
         kind: "number",
@@ -114,6 +117,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         path: ["phases", "deep", "enabled"],
         labelKey: "memoryPage.dreaming.phaseFields.enabled",
         helpKey: "memoryPage.dreaming.phaseFields.enabledHelp",
+        fallback: true,
       },
       {
         kind: "number",
@@ -169,6 +173,7 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
         path: ["phases", "rem", "enabled"],
         labelKey: "memoryPage.dreaming.phaseFields.enabled",
         helpKey: "memoryPage.dreaming.phaseFields.enabledHelp",
+        fallback: true,
       },
       {
         kind: "number",
@@ -196,6 +201,15 @@ const DREAMING_PHASE_GROUPS: readonly DreamingFieldGroup[] = [
 const STORAGE_MODES = ["inline", "separate", "both"] as const;
 type StorageMode = (typeof STORAGE_MODES)[number];
 
+// DEFAULT_MEMORY_DREAMING_STORAGE_MODE in src/memory-host-sdk/dreaming.ts.
+const DEFAULT_STORAGE_MODE: StorageMode = "separate";
+
+export type DreamingSettingsProps = {
+  /** `plugins.entries.<slot owner>.config.dreaming`, or null when unset. */
+  dreaming: Record<string, unknown> | null;
+  onPatch: (path: readonly string[], value: unknown) => void;
+};
+
 function readAtPath(root: Record<string, unknown> | null, path: readonly string[]): unknown {
   let current: Record<string, unknown> | null = root;
   for (const [index, key] of path.entries()) {
@@ -211,208 +225,119 @@ function readAtPath(root: Record<string, unknown> | null, path: readonly string[
   return undefined;
 }
 
-function normalizeStorageMode(value: unknown): StorageMode {
-  return STORAGE_MODES.find((mode) => mode === value) ?? "inline";
+export function normalizeStorageMode(value: unknown): StorageMode {
+  return STORAGE_MODES.find((mode) => mode === value) ?? DEFAULT_STORAGE_MODE;
 }
 
-class MemoryDreamingSettings extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context!: ApplicationContext;
-
-  @state() private selectedAgentId: string | null = null;
-
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-      (agents) => {
-        if (!agents.state.agentsList && !agents.state.agentsLoading) {
-          void agents.ensureList().catch(() => undefined);
-        }
-      },
-    );
-
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    super.disconnectedCallback();
-  }
-
-  private configObject(): Record<string, unknown> | null {
-    return currentConfigObject(this.context.runtimeConfig.state);
-  }
-
-  /** Slot-resolved owner of dreaming config; never a hardcoded plugin id here. */
-  private dreamingPluginId(): string {
-    return resolveConfiguredDreaming(this.configObject()).pluginId;
-  }
-
-  private dreamingConfig(): Record<string, unknown> | null {
-    const plugins = asConfigRecord(this.configObject()?.plugins);
-    const entry = asConfigRecord(asConfigRecord(plugins?.entries)?.[this.dreamingPluginId()]);
-    return asConfigRecord(asConfigRecord(entry?.config)?.dreaming);
-  }
-
-  private writePath(path: readonly string[]): Array<string | number> {
-    return ["plugins", "entries", this.dreamingPluginId(), "config", "dreaming", ...path];
-  }
-
-  private patch(path: readonly string[], value: unknown) {
-    const runtimeConfig = this.context.runtimeConfig;
-    if (value === undefined) {
-      runtimeConfig.removeFormValue(this.writePath(path));
-      return;
-    }
-    runtimeConfig.patchForm(this.writePath(path), value);
-  }
-
-  private resolveAgentId(): string | null {
-    const agentsList = this.context.agents.state.agentsList;
-    const selectable = listSelectableAgents(agentsList?.agents ?? []);
-    if (this.selectedAgentId && selectable.some((agent) => agent.id === this.selectedAgentId)) {
-      return this.selectedAgentId;
-    }
-    return agentsList?.defaultId ?? selectable[0]?.id ?? null;
-  }
-
-  private renderField(spec: DreamingFieldSpec, dreaming: Record<string, unknown> | null) {
-    const value = readAtPath(dreaming, spec.path);
-    if (spec.kind === "toggle") {
-      return renderSettingsToggleRow({
-        title: t(spec.labelKey),
-        description: t(spec.helpKey),
-        checked: value === true,
-        onChange: (checked) => this.patch(spec.path, checked),
-      });
-    }
-    const text =
-      spec.kind === "number"
-        ? typeof value === "number"
-          ? String(value)
-          : ""
-        : typeof value === "string"
-          ? value
-          : "";
-    return renderSettingsRow({
+function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
+  const value = readAtPath(props.dreaming, spec.path);
+  if (spec.kind === "toggle") {
+    return renderSettingsToggleRow({
       title: t(spec.labelKey),
       description: t(spec.helpKey),
-      control: html`
-        <input
-          class="settings-input"
-          type=${spec.kind === "number" ? "number" : "text"}
-          step=${spec.kind === "number" && spec.step !== undefined ? String(spec.step) : nothing}
-          spellcheck="false"
-          aria-label=${t(spec.labelKey)}
-          .value=${text}
-          placeholder=${spec.kind === "text" && spec.placeholderKey ? t(spec.placeholderKey) : ""}
-          @change=${(event: Event) => {
-            const next = (event.currentTarget as HTMLInputElement).value.trim();
-            if (!next) {
-              this.patch(spec.path, undefined);
-              return;
-            }
-            if (spec.kind === "number") {
-              const parsed = Number(next);
-              this.patch(spec.path, Number.isFinite(parsed) ? parsed : undefined);
-              return;
-            }
-            this.patch(spec.path, next);
-          }}
-        />
-      `,
+      checked: typeof value === "boolean" ? value : spec.fallback,
+      onChange: (checked) => props.onPatch(spec.path, checked),
     });
   }
-
-  private renderAgentPicker(agentId: string | null): TemplateResult {
-    const agents = listSelectableAgents(this.context.agents.state.agentsList?.agents ?? []);
-    const options: AgentSelectOption[] = agents.map((agent) => ({
-      value: agent.id,
-      label: normalizeAgentLabel(agent),
-      agent,
-    }));
-    return renderSettingsSection(
-      {
-        title: t("memoryPage.dreaming.agentScope.title"),
-        description: t("memoryPage.dreaming.agentScope.description"),
-      },
-      renderSettingsRow({
-        title: t("memoryPage.dreaming.agentScope.rowTitle"),
-        control: html`
-          <openclaw-agent-select
-            .options=${options}
-            .value=${agentId ?? ""}
-            .accessibleLabel=${t("memoryPage.dreaming.agentScope.rowTitle")}
-            .onSelect=${(value: string) => {
-              this.selectedAgentId = value || null;
-            }}
-          ></openclaw-agent-select>
-        `,
-      }),
-    );
-  }
-
-  override render() {
-    const dreaming = this.dreamingConfig();
-    const agentId = this.resolveAgentId();
-    const storageMode = normalizeStorageMode(readAtPath(dreaming, ["storage", "mode"]));
-    return html`
-      <div class="settings-page">
-        <p class="settings-page__intro">
-          ${t("memoryPage.dreaming.intro", { plugin: this.dreamingPluginId() })}
-        </p>
-        ${renderSettingsSection(
-          {
-            title: t("memoryPage.dreaming.schedule.title"),
-            description: t("memoryPage.dreaming.schedule.description"),
-          },
-          DREAMING_SCHEDULE_FIELDS.map((spec) => this.renderField(spec, dreaming)),
-        )}
-        ${renderSettingsSection(
-          {
-            title: t("memoryPage.dreaming.storage.title"),
-            description: t("memoryPage.dreaming.storage.description"),
-          },
-          html`
-            ${renderSettingsRow({
-              title: t("memoryPage.dreaming.storage.modeLabel"),
-              description: t("memoryPage.dreaming.storage.modeHelp"),
-              stacked: true,
-              control: renderSettingsSegmented<StorageMode>({
-                value: storageMode,
-                options: STORAGE_MODES.map((mode) => ({
-                  value: mode,
-                  label: t(`memoryPage.dreaming.storage.modes.${mode}`),
-                })),
-                ariaLabel: t("memoryPage.dreaming.storage.modeLabel"),
-                onChange: (mode) => this.patch(["storage", "mode"], mode),
-              }),
-            })}
-            ${renderSettingsToggleRow({
-              title: t("memoryPage.dreaming.storage.separateReportsLabel"),
-              description: t("memoryPage.dreaming.storage.separateReportsHelp"),
-              checked: readAtPath(dreaming, ["storage", "separateReports"]) === true,
-              onChange: (checked) => this.patch(["storage", "separateReports"], checked),
-            })}
-          `,
-        )}
-        ${DREAMING_PHASE_GROUPS.map((group) =>
-          renderSettingsSection(
-            { title: t(group.titleKey), description: t(group.descriptionKey) },
-            group.fields.map((spec) => this.renderField(spec, dreaming)),
-          ),
-        )}
-        ${this.renderAgentPicker(agentId)}
-      </div>
-      ${agentId
-        ? html`<openclaw-agent-memory-panel .agentId=${agentId}></openclaw-agent-memory-panel>`
-        : nothing}
-    `;
-  }
+  const text =
+    spec.kind === "number"
+      ? typeof value === "number"
+        ? String(value)
+        : ""
+      : typeof value === "string"
+        ? value
+        : "";
+  return renderSettingsRow({
+    title: t(spec.labelKey),
+    description: t(spec.helpKey),
+    control: html`
+      <input
+        class="settings-input"
+        type=${spec.kind === "number" ? "number" : "text"}
+        step=${spec.kind === "number" && spec.step !== undefined ? String(spec.step) : nothing}
+        spellcheck="false"
+        aria-label=${t(spec.labelKey)}
+        .value=${text}
+        placeholder=${spec.kind === "text" && spec.placeholderKey ? t(spec.placeholderKey) : ""}
+        @change=${(event: Event) => {
+          const next = (event.currentTarget as HTMLInputElement).value.trim();
+          if (!next) {
+            props.onPatch(spec.path, undefined);
+            return;
+          }
+          if (spec.kind === "number") {
+            const parsed = Number(next);
+            props.onPatch(spec.path, Number.isFinite(parsed) ? parsed : undefined);
+            return;
+          }
+          props.onPatch(spec.path, next);
+        }}
+      />
+    `,
+  });
 }
 
-if (!customElements.get("openclaw-memory-dreaming")) {
-  customElements.define("openclaw-memory-dreaming", MemoryDreamingSettings);
+/** The global dreaming knobs, editable only when the slot owner stores them. */
+export function renderDreamingSettings(props: DreamingSettingsProps): TemplateResult {
+  const storageMode = normalizeStorageMode(readAtPath(props.dreaming, ["storage", "mode"]));
+  return html`
+    ${renderSettingsSection(
+      {
+        title: t("memoryPage.dreaming.schedule.title"),
+        description: t("memoryPage.dreaming.schedule.description"),
+      },
+      DREAMING_SCHEDULE_FIELDS.map((spec) => renderField(props, spec)),
+    )}
+    ${renderSettingsSection(
+      {
+        title: t("memoryPage.dreaming.storage.title"),
+        description: t("memoryPage.dreaming.storage.description"),
+      },
+      html`
+        ${renderSettingsRow({
+          title: t("memoryPage.dreaming.storage.modeLabel"),
+          description: t("memoryPage.dreaming.storage.modeHelp"),
+          stacked: true,
+          control: renderSettingsSegmented<StorageMode>({
+            value: storageMode,
+            options: STORAGE_MODES.map((mode) => ({
+              value: mode,
+              label: t(`memoryPage.dreaming.storage.modes.${mode}`),
+            })),
+            ariaLabel: t("memoryPage.dreaming.storage.modeLabel"),
+            onChange: (mode) => props.onPatch(["storage", "mode"], mode),
+          }),
+        })}
+        ${renderField(props, {
+          kind: "toggle",
+          path: ["storage", "separateReports"],
+          labelKey: "memoryPage.dreaming.storage.separateReportsLabel",
+          helpKey: "memoryPage.dreaming.storage.separateReportsHelp",
+          // DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS
+          fallback: false,
+        })}
+      `,
+    )}
+    ${DREAMING_PHASE_GROUPS.map((group) =>
+      renderSettingsSection(
+        { title: t(group.titleKey), description: t(group.descriptionKey) },
+        group.fields.map((spec) => renderField(props, spec)),
+      ),
+    )}
+  `;
+}
+
+/**
+ * Shown instead of the knobs when the slot-owning plugin's config schema has no
+ * `dreaming` child: writing these fields would be rejected by the gateway, so
+ * the page must not pretend they are editable.
+ */
+export function renderDreamingUnsupported(pluginId: string): TemplateResult {
+  return renderSettingsSection(
+    { title: t("memoryPage.dreaming.unsupported.title") },
+    renderSettingsRow({
+      title: t("memoryPage.dreaming.unsupported.rowTitle"),
+      description: t("memoryPage.dreaming.unsupported.description", { plugin: pluginId }),
+    }),
+  );
 }

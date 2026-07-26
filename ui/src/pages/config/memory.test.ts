@@ -17,8 +17,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
       { id: "memory-core", label: "Memory Core" },
       { id: "memory-lancedb", label: "Memory LanceDB" },
     ],
-    selectedEngineId: "memory-core",
-    engineAuto: true,
+    engineSelection: { kind: "auto", engineId: "memory-core" },
     engineBusy: false,
     onEngineChange: vi.fn(),
     backend: "builtin",
@@ -58,11 +57,31 @@ describe("renderMemory", () => {
   });
 
   it("reports whether the engine came from config or was auto-selected", () => {
-    const auto = renderInto(createProps({ engineAuto: true }));
+    const auto = renderInto(createProps({ engineSelection: { kind: "auto", engineId: null } }));
     expect(auto.textContent).toContain("first enabled memory plugin");
 
-    const pinned = renderInto(createProps({ engineAuto: false }));
-    expect(pinned.textContent).toContain("plugins.slots.memory");
+    const pinned = renderInto(
+      createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),
+    );
+    expect(pinned.textContent).toContain("pinned in config");
+  });
+
+  it("selects the Off option and says so for an explicit plugins.slots.memory none", () => {
+    const container = renderInto(createProps({ engineSelection: { kind: "off" } }));
+
+    const active = container.querySelector("wa-radio.settings-segmented__btn--active");
+    expect(active?.getAttribute("value")).toBe("");
+    expect(container.textContent).toContain("switched off");
+    expect(container.textContent).not.toContain("pinned in config");
+  });
+
+  it("hides the retrieval backend row for an engine that owns its own retrieval", () => {
+    expect(renderInto(createProps({ backend: "builtin" })).textContent).toContain(
+      "Retrieval backend",
+    );
+    expect(renderInto(createProps({ backend: null })).textContent).not.toContain(
+      "Retrieval backend",
+    );
   });
 
   it("renders add-on layering with per-plugin state and a Plugins link", () => {
@@ -91,6 +110,8 @@ describe("memorySchemaKeysForTab", () => {
     expect(memorySchemaKeysForTab("overview", "builtin")).toEqual(["citations"]);
     expect(memorySchemaKeysForTab("overview", "qmd")).toEqual(["citations", "qmd"]);
     expect(memorySchemaKeysForTab("search", "qmd")).toEqual(["search"]);
+    // No applicable backend: qmd's sub-config belongs to a backend nothing reads.
+    expect(memorySchemaKeysForTab("overview", null)).toEqual(["citations"]);
   });
 });
 

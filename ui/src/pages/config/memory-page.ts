@@ -14,13 +14,15 @@ import {
 } from "../../lib/plugins/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import "./memory-dreaming.ts";
+import "./memory-dreaming-page.ts";
 import {
   memorySchemaKeysForTab,
   renderMemory,
+  selectedEngineId,
   type MemoryAddonRow,
   type MemoryBackend,
   type MemoryEngineOption,
+  type MemoryEngineSelection,
   type MemoryTab,
 } from "./memory.ts";
 
@@ -32,9 +34,14 @@ const MEMORY_ADDON_PLUGINS = [
   { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
 ] as const;
 
-// Mirrors DEFAULT_SLOT_BY_KEY in src/plugins/slots.ts: an unset slot resolves to
-// memory-core, so the picker must show that instead of "off".
-const IMPLICIT_MEMORY_SLOT_ID = "memory-core";
+// memory-core is both the implicit slot owner (DEFAULT_SLOT_BY_KEY in
+// src/plugins/slots.ts) and the only plugin registering the memory runtime that
+// resolves `memory.backend`, so an unset slot shows it and other engines hide
+// the backend row.
+const MEMORY_CORE_PLUGIN_ID = "memory-core";
+
+/** Explicit-off sentinel; normalizeSlotValue maps it to a null slot. */
+const MEMORY_SLOT_OFF = "none";
 
 type MemoryPageProps = {
   configObject: Record<string, unknown>;
@@ -44,14 +51,21 @@ type MemoryPageProps = {
   buildEditor: (keys: readonly string[]) => TemplateResult;
 };
 
+type ConfiguredMemorySlot = { kind: "unset" } | { kind: "off" } | { kind: "engine"; id: string };
+
 function resolveBackend(configObject: Record<string, unknown>): MemoryBackend {
   return asConfigRecord(configObject.memory)?.backend === "qmd" ? "qmd" : "builtin";
 }
 
-function resolveConfiguredSlotId(configObject: Record<string, unknown>): string | null {
+function resolveConfiguredSlot(configObject: Record<string, unknown>): ConfiguredMemorySlot {
   const slots = asConfigRecord(asConfigRecord(configObject.plugins)?.slots);
   const configured = typeof slots?.memory === "string" ? slots.memory.trim() : "";
-  return configured.length > 0 ? configured : null;
+  if (configured.length === 0) {
+    return { kind: "unset" };
+  }
+  return configured.toLowerCase() === MEMORY_SLOT_OFF
+    ? { kind: "off" }
+    : { kind: "engine", id: configured };
 }
 
 function isMemoryEngine(plugin: PluginCatalogItem): boolean {
@@ -72,6 +86,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   @state() private engineBusy = false;
 
   private catalogClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
+  private catalogConnected = false;
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
@@ -81,6 +96,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.catalogClient = null;
+    this.catalogConnected = false;
     this.catalog = [];
     super.disconnectedCallback();
   }
@@ -89,10 +105,14 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     client: ApplicationContext["gateway"]["snapshot"]["client"],
     connected: boolean,
   ) {
-    if (client === this.catalogClient) {
+    // The connecting -> connected transition keeps the same client object, so
+    // keying only on client identity would strand the catalog empty for a page
+    // mounted before the handshake finished.
+    if (client === this.catalogClient && connected === this.catalogConnected) {
       return;
     }
     this.catalogClient = client;
+    this.catalogConnected = connected;
     this.catalog = [];
     if (client && connected) {
       void this.loadCatalog(client);
@@ -123,19 +143,22 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       .toSorted((left, right) => left.label.localeCompare(right.label));
   }
 
-  private selectedEngineId(options: readonly MemoryEngineOption[]): string | null {
-    const configured = resolveConfiguredSlotId(this.configObject);
-    if (configured) {
-      return configured;
+  private engineSelection(options: readonly MemoryEngineOption[]): MemoryEngineSelection {
+    const configured = resolveConfiguredSlot(this.configObject);
+    if (configured.kind === "off") {
+      return { kind: "off" };
+    }
+    if (configured.kind === "engine") {
+      return { kind: "pinned", engineId: configured.id };
     }
     // No explicit slot: the first enabled memory-kind plugin owns it.
     const enabled = this.catalog.find((plugin) => isMemoryEngine(plugin) && plugin.enabled);
     if (enabled) {
-      return enabled.id;
+      return { kind: "auto", engineId: enabled.id };
     }
     // Only a readable catalog proves the slot is empty; without one, report the
     // implicit default rather than claiming memory is switched off.
-    return options.length === 0 ? IMPLICIT_MEMORY_SLOT_ID : null;
+    return { kind: "auto", engineId: options.length === 0 ? MEMORY_CORE_PLUGIN_ID : null };
   }
 
   private addonRows(): MemoryAddonRow[] {
@@ -181,19 +204,21 @@ class MemorySettingsPage extends OpenClawLightDomElement {
 
   override render() {
     const runtimeConfig = this.context.runtimeConfig;
-    const backend = resolveBackend(this.configObject);
     const options = this.engineOptions();
-    const selectedEngineId = this.selectedEngineId(options);
+    const engineSelection = this.engineSelection(options);
+    const engineId = selectedEngineId(engineSelection);
+    // Only memory-core's runtime reads memory.backend; under another engine the
+    // row would save a value nothing consumes.
+    const backend = engineId === MEMORY_CORE_PLUGIN_ID ? resolveBackend(this.configObject) : null;
     return renderMemory({
       activeTab: this.activeTab,
       onTabChange: (tab) => {
         this.activeTab = tab;
       },
       engineOptions: options,
-      selectedEngineId,
-      engineAuto: resolveConfiguredSlotId(this.configObject) === null,
+      engineSelection,
       engineBusy: this.engineBusy,
-      onEngineChange: (engineId) => void this.changeEngine(engineId, selectedEngineId),
+      onEngineChange: (nextEngineId) => void this.changeEngine(nextEngineId, engineId),
       backend,
       backendBusy: runtimeConfig.state.configSaving || runtimeConfig.state.configApplying,
       onBackendChange: (next) => runtimeConfig.patchForm(["memory", "backend"], next),

@@ -1,7 +1,7 @@
 // Curated Memory home: engine/backend/add-on rows above the embedded memory
 // schema editor, with Dreaming as a sibling tab (see security.ts for the same
 // curated-rows-above-schema shape).
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderSettingsRow,
@@ -30,17 +30,25 @@ export type MemoryAddonRow = {
   enabled: boolean;
 };
 
+/**
+ * How `plugins.slots.memory` reads today. `off` is the explicit `none` sentinel
+ * (normalizeSlotValue in src/plugins/config-normalization-shared.ts), which is a
+ * different statement from an unset slot that happened to resolve to nothing.
+ */
+export type MemoryEngineSelection =
+  | { kind: "auto"; engineId: string | null }
+  | { kind: "off" }
+  | { kind: "pinned"; engineId: string };
+
 export type MemoryViewProps = {
   activeTab: MemoryTab;
   onTabChange: (tab: MemoryTab) => void;
   engineOptions: readonly MemoryEngineOption[];
-  /** Resolved slot owner; null means the memory slot is switched off. */
-  selectedEngineId: string | null;
-  /** True when no explicit `plugins.slots.memory` exists and the slot was auto-filled. */
-  engineAuto: boolean;
+  engineSelection: MemoryEngineSelection;
   engineBusy: boolean;
   onEngineChange: (engineId: string | null) => void;
-  backend: MemoryBackend;
+  /** null when the slot owner runs its own retrieval, so this row does not apply. */
+  backend: MemoryBackend | null;
   backendBusy: boolean;
   onBackendChange: (backend: MemoryBackend) => void;
   addons: readonly MemoryAddonRow[];
@@ -56,17 +64,34 @@ export const MEMORY_PANEL_ID = "memory-settings-panel";
 
 const MEMORY_ENGINE_OFF = "";
 
+/** The plugin that currently owns the slot, or null when nothing does. */
+export function selectedEngineId(selection: MemoryEngineSelection): string | null {
+  return selection.kind === "off" ? null : selection.engineId;
+}
+
+function engineHintKey(selection: MemoryEngineSelection): string {
+  switch (selection.kind) {
+    case "auto":
+      return "memoryPage.engine.autoHint";
+    case "off":
+      return "memoryPage.engine.offHint";
+    case "pinned":
+      return "memoryPage.engine.explicitHint";
+  }
+}
+
 function renderEngineSection(props: MemoryViewProps) {
   // The slot is exclusive (resolveMemorySlotDecisionShared): only one memory-kind
   // plugin loads. A segmented control states that up front instead of leaving it
   // to a post-save toast.
+  const engineId = selectedEngineId(props.engineSelection);
   if (props.engineOptions.length === 0) {
     return renderSettingsSection(
       { title: t("memoryPage.engine.title"), description: t("memoryPage.engine.description") },
       renderSettingsRow({
         title: t("memoryPage.engine.rowTitle"),
         description: t("memoryPage.engine.catalogUnavailable"),
-        control: renderSettingsValue(props.selectedEngineId ?? t("memoryPage.engine.off"), {
+        control: renderSettingsValue(engineId ?? t("memoryPage.engine.off"), {
           mono: true,
         }),
       }),
@@ -81,12 +106,10 @@ function renderEngineSection(props: MemoryViewProps) {
     html`
       ${renderSettingsRow({
         title: t("memoryPage.engine.rowTitle"),
-        description: props.engineAuto
-          ? t("memoryPage.engine.autoHint")
-          : t("memoryPage.engine.explicitHint"),
+        description: t(engineHintKey(props.engineSelection)),
         stacked: true,
         control: renderSettingsSegmented({
-          value: props.selectedEngineId ?? MEMORY_ENGINE_OFF,
+          value: engineId ?? MEMORY_ENGINE_OFF,
           options,
           disabled: props.engineBusy,
           ariaLabel: t("memoryPage.engine.rowTitle"),
@@ -98,6 +121,12 @@ function renderEngineSection(props: MemoryViewProps) {
 }
 
 function renderBackendSection(props: MemoryViewProps) {
+  // builtin/qmd is resolved by the memory runtime the slot owner registers
+  // (resolveActiveMemoryBackendConfig in src/plugins/memory-runtime.ts). An
+  // engine that registers none ignores it, so the row must not appear there.
+  if (props.backend === null) {
+    return nothing;
+  }
   return renderSettingsSection(
     { title: t("memoryPage.backend.title"), description: t("memoryPage.backend.description") },
     renderSettingsRow({
@@ -236,7 +265,10 @@ export function narrowMemorySchema(schema: unknown, keys: readonly string[]): un
 }
 
 /** Which `memory.*` children the embedded editor shows for a tab. */
-export function memorySchemaKeysForTab(tab: MemoryTab, backend: MemoryBackend): readonly string[] {
+export function memorySchemaKeysForTab(
+  tab: MemoryTab,
+  backend: MemoryBackend | null,
+): readonly string[] {
   if (tab === "search") {
     return ["search"];
   }

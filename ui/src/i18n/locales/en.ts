@@ -2122,6 +2122,7 @@ export const en: TranslationMap = {
       off: "Off",
       autoHint: "No engine is pinned in config, so the first enabled memory plugin owns the slot.",
       explicitHint: "This engine is pinned in config under plugins.slots.memory.",
+      offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
       catalogUnavailable: "Connect to the gateway to change the memory engine.",
     },
     backend: {
@@ -2237,6 +2238,12 @@ export const en: TranslationMap = {
         description:
           "The settings above are global. The dream diary, short-term counts, and maintenance actions below belong to one agent.",
         rowTitle: "Agent",
+      },
+      unsupported: {
+        title: "Dreaming settings",
+        rowTitle: "Not available for this engine",
+        description:
+          "The {plugin} plugin owns the memory slot and its config schema has no dreaming section, so these settings cannot be stored. Switch the engine on the Overview tab to edit them.",
       },
     },
   },

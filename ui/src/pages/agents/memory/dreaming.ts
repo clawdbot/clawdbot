@@ -1208,29 +1208,44 @@ function lookupDisallowsUnknownProperties(value: unknown): boolean {
   return schema?.additionalProperties === false;
 }
 
+export type DreamingConfigPathSupport = "supported" | "unsupported";
+
+/**
+ * Whether the slot-owning memory plugin's config schema can hold `dreaming`.
+ * Only a closed schema without the child proves it cannot, so an unreachable or
+ * unknown schema stays "supported" and lets the gateway have the final say.
+ * Shared by the enablement toggle and the Memory page's Dreaming tab.
+ */
+export async function resolveDreamingConfigPathSupport(
+  config: Pick<DreamingConfigCapability, "lookupSchemaPath" | "state">,
+  pluginId: string,
+): Promise<DreamingConfigPathSupport> {
+  if (!config.state.client || !config.state.connected) {
+    return "supported";
+  }
+  try {
+    const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
+    if (lookupIncludesDreamingProperty(lookup)) {
+      return "supported";
+    }
+    return lookupDisallowsUnknownProperties(lookup) ? "unsupported" : "supported";
+  } catch {
+    return "supported";
+  }
+}
+
 async function ensureDreamingPathSupported(
   state: DreamingState,
   config: DreamingConfigCapability,
   pluginId: string,
 ): Promise<boolean> {
-  if (!config.state.client || !config.state.connected) {
+  if ((await resolveDreamingConfigPathSupport(config, pluginId)) === "supported") {
     return true;
   }
-  try {
-    const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
-    if (lookupIncludesDreamingProperty(lookup)) {
-      return true;
-    }
-    if (lookupDisallowsUnknownProperties(lookup)) {
-      const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
-      state.dreamingStatusError = message;
-      state.lastError = message;
-      return false;
-    }
-  } catch {
-    return true;
-  }
-  return true;
+  const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
+  state.dreamingStatusError = message;
+  state.lastError = message;
+  return false;
 }
 
 export async function updateDreamingEnabled(
