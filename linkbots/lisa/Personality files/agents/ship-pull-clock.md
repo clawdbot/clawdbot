@@ -77,11 +77,20 @@ When a ship/pull cron fires:
 4. On spawn failure: quote the error; set status line to `WAVE: Issues`; send Telegram + email one-liners; stop.
 5. On success: ensure status file has the one-liner Cursor wrote (or write it yourself if Cursor could not).
 6. **Telegram:** final cron reply is **only** that one line (Clear or Issues).
-7. **Email (required side-effect, separate from heartbeat):** write the same one line to `scratch/pipeline_status_email.txt`, then:
+7. **Email (required side-effect, separate from heartbeat):** write the same one line to `scratch/pipeline_status_email.txt`, then run **exactly one** unpiped `exec` (no pipes, no `ls`, no multi-step plans):
    ```bash
    tools/bin/lisa-safe email-send --to calusa@linktrend.media --subject "<WAVE> status" --body-file scratch/pipeline_status_email.txt
    ```
-   Subject examples: `Ship 05 status`, `Pull 07 status`. Body is exactly one line (`WAVE: Clear` or `WAVE: Issues`) — no lists, no links, no Battery content. Send for **both** Clear and Issues after the wave finishes across the repo list. If email fails, keep Telegram delivery; note email failure only if needed for ops (do not dump drafts into Telegram).
+   Subject examples: `Ship 05 status`, `Pull 07 status`. Body is exactly one line (`WAVE: Clear` or `WAVE: Issues`) — no lists, no links, no Battery content. Send for **both** Clear and Issues after the wave finishes across the repo list. If email fails once, **keep Telegram delivery** and finish with the one-line status — do not abort the cron or invent Clear/Issues from an email failure alone.
+
+### HARD RULES — `lisa-safe` (Pull 07 2026-07-26 failure)
+
+`tools/bin/lisa-safe` is a **script file**, not a directory.
+
+1. **Never** `ls` / list / explore / “list files in” `tools/bin/lisa-safe` or `~/.openclaw-lisa/workspace/tools/bin/lisa-safe`.
+2. **Never** multi-step exec plans such as `list files in … → print text → print text`.
+3. **Do not** probe or verify the binary before use. Invoke `email-send` directly once, exactly as above.
+4. Order: ACP spawn → status file → Telegram one-liner → email last. Do not start the run by exploring `tools/bin`.
 
 ## ACP prompt — Shipper
 

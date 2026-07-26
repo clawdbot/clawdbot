@@ -30,6 +30,8 @@
 
 Match flags used by existing `lisa-morning-digest` / `lisa-heartbeat-45`: isolated session, `agentId: lisa-cron`, announce → Telegram `1123023078`. Message body should instruct: read and run `agents/ship-pull-clock.md` for that wave (spawn Cursor ACP with the shipper or puller prompt; Telegram + email one-liner after completion).
 
+**Email exec HARD (2026-07-26):** cron messages must say `tools/bin/lisa-safe` is a **script file** — never list/explore it; invoke `email-send` once, unpiped. Pull 07 failed when the agent ran `list files in …/lisa-safe` via `exec`.
+
 ### Tool allowlist (required — 2026-07-25 fix)
 
 Ship/Pull jobs already set `payload.toolsAllow` including `sessions_spawn`. That is **not enough** alone: OpenClaw intersects cron `toolsAllow` with `agents.list[lisa-cron].tools.allow`. If `sessions_spawn` is missing from the agent allowlist, the live cron run will not expose the tool (Ship 16 2026-07-25 failed this way even though the job JSON listed it).
