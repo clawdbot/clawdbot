@@ -9,6 +9,7 @@ type SessionCatalogListCoordinatorOptions = {
   staleTtlMs: number;
   maxCacheEntries: number;
   maxConcurrentLoads: number;
+  maxQueuedLoads?: number;
   now?: () => number;
 };
 
@@ -27,6 +28,10 @@ export class SessionCatalogListBusyError extends Error {
     this.name = "SessionCatalogListBusyError";
   }
 }
+
+type QueuedLoad = {
+  resolve: () => void;
+};
 
 export function buildSessionCatalogListCacheKey(input: SessionCatalogListCacheKeyInput): string {
   return JSON.stringify([
@@ -48,11 +53,14 @@ export function buildSessionCatalogListCacheKey(input: SessionCatalogListCacheKe
 export class SessionCatalogListCoordinator<T> {
   private readonly cache = new Map<string, CacheEntry<T>>();
   private readonly inFlight = new Map<string, Promise<T>>();
+  private readonly queuedLoads: QueuedLoad[] = [];
   private readonly now: () => number;
+  private readonly maxQueuedLoads: number;
   private activeLoads = 0;
 
   constructor(private readonly options: SessionCatalogListCoordinatorOptions) {
     this.now = options.now ?? Date.now;
+    this.maxQueuedLoads = options.maxQueuedLoads ?? options.maxConcurrentLoads * 8;
   }
 
   async run(params: {
@@ -75,7 +83,8 @@ export class SessionCatalogListCoordinator<T> {
       if (stale !== undefined) {
         return stale;
       }
-      throw new SessionCatalogListBusyError();
+      await this.waitForAdmission();
+      return this.run(params);
     }
 
     this.activeLoads += 1;
@@ -90,9 +99,23 @@ export class SessionCatalogListCoordinator<T> {
       .finally(() => {
         this.activeLoads -= 1;
         this.inFlight.delete(params.key);
+        this.releaseQueuedLoad();
       });
     this.inFlight.set(params.key, pendingLoad);
     return pendingLoad;
+  }
+
+  private waitForAdmission(): Promise<void> {
+    if (this.queuedLoads.length >= this.maxQueuedLoads) {
+      throw new SessionCatalogListBusyError();
+    }
+    return new Promise((resolve) => {
+      this.queuedLoads.push({ resolve });
+    });
+  }
+
+  private releaseQueuedLoad() {
+    this.queuedLoads.shift()?.resolve();
   }
 
   private readCache(key: string, requireFresh: boolean): T | undefined {

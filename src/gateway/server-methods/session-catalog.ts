@@ -39,12 +39,14 @@ const SESSION_CATALOG_CACHE_FRESH_TTL_MS = 1_500;
 const SESSION_CATALOG_CACHE_STALE_TTL_MS = 15_000;
 const SESSION_CATALOG_CACHE_MAX_ENTRIES = 128;
 const SESSION_CATALOG_MAX_CONCURRENT_LOADS = 4;
+const SESSION_CATALOG_MAX_QUEUED_LOADS = 32;
 
 const sessionCatalogListCoordinator = new SessionCatalogListCoordinator<SessionCatalog[]>({
   freshTtlMs: SESSION_CATALOG_CACHE_FRESH_TTL_MS,
   staleTtlMs: SESSION_CATALOG_CACHE_STALE_TTL_MS,
   maxCacheEntries: SESSION_CATALOG_CACHE_MAX_ENTRIES,
   maxConcurrentLoads: SESSION_CATALOG_MAX_CONCURRENT_LOADS,
+  maxQueuedLoads: SESSION_CATALOG_MAX_QUEUED_LOADS,
 });
 
 const sessionCatalogProviderCacheIds = new WeakMap<SessionCatalogProvider, number>();

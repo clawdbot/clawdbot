@@ -280,7 +280,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("returns unavailable when distinct catalog requests saturate admission", async () => {
+  it("queues distinct catalog requests when admission is saturated", async () => {
     const releaseList: Array<() => void> = [];
     const list = vi.fn(async () => {
       await new Promise<void>((resolve) => {
@@ -301,17 +301,19 @@ describe("session catalog Gateway methods", () => {
     try {
       await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(4));
 
-      const rejected = await call("sessions.catalog.list", { search: "saturating-overflow" });
+      const queued = call("sessions.catalog.list", { search: "saturating-queued" });
+      await Promise.resolve();
 
       expect(list).toHaveBeenCalledTimes(4);
-      expect(rejected).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.UNAVAILABLE,
-          message: "session catalog is busy; retry shortly",
-        }),
-      );
+      releaseList[0]?.();
+      await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(5));
+
+      releaseList.slice(1).forEach((release) => release());
+      const queuedRespond = await queued;
+
+      expect(queuedRespond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "codex", hosts: [] })],
+      });
     } finally {
       releaseList.forEach((release) => release());
       await Promise.allSettled(activeRequests);

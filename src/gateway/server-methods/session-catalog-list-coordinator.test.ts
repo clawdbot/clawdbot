@@ -71,12 +71,56 @@ describe("SessionCatalogListCoordinator", () => {
     await expect(
       state.run({ key: "cached", load: async () => "new", cacheable: () => true }),
     ).resolves.toBe("old");
-    await expect(
-      state.run({ key: "uncached", load: async () => "new", cacheable: () => true }),
-    ).rejects.toBeInstanceOf(SessionCatalogListBusyError);
 
     blocker.resolve("done");
     await active;
+  });
+
+  it("queues uncached loads when admission is saturated", async () => {
+    const state = coordinator(() => 0, 1);
+    const blocker = deferred<string>();
+    const active = state.run({
+      key: "active",
+      load: () => blocker.promise,
+      cacheable: () => true,
+    });
+    const queuedLoad = vi.fn(async () => "queued-result");
+
+    const queued = state.run({ key: "queued", load: queuedLoad, cacheable: () => true });
+    await Promise.resolve();
+    expect(queuedLoad).not.toHaveBeenCalled();
+
+    blocker.resolve("active-result");
+
+    await expect(queued).resolves.toBe("queued-result");
+    await expect(active).resolves.toBe("active-result");
+    expect(queuedLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when the bounded admission queue is full", async () => {
+    const state = new SessionCatalogListCoordinator<string>({
+      freshTtlMs: 1_000,
+      staleTtlMs: 10_000,
+      maxCacheEntries: 2,
+      maxConcurrentLoads: 1,
+      maxQueuedLoads: 1,
+      now: () => 0,
+    });
+    const blocker = deferred<string>();
+    const active = state.run({
+      key: "active",
+      load: () => blocker.promise,
+      cacheable: () => true,
+    });
+    const queued = state.run({ key: "queued", load: async () => "queued", cacheable: () => true });
+
+    await expect(
+      state.run({ key: "overflow", load: async () => "overflow", cacheable: () => true }),
+    ).rejects.toBeInstanceOf(SessionCatalogListBusyError);
+
+    blocker.resolve("active");
+    await active;
+    await queued;
   });
 
   it("does not cache provider-error results", async () => {
