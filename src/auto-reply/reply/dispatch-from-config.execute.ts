@@ -548,9 +548,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       payload: visiblePayload,
                       explicitCommandTurn: false,
                     });
+                    const visiblePayloadMetadata = getReplyPayloadMetadata(visiblePayload);
                     const canBypassSourceSuppression =
                       suppressAutomaticSourceDelivery &&
                       isOperationalPayload &&
+                      visiblePayloadMetadata?.deliverDespiteSourceReplySuppression === true &&
+                      !visiblePayloadMetadata.sourceReplyTranscriptMirror &&
                       ctx.InboundEventKind !== "room_event";
                     if (suppressDelivery && (sendPolicyDenied || !canBypassSourceSuppression)) {
                       return;

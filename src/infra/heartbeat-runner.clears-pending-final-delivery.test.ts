@@ -208,6 +208,54 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
     });
   });
 
+  it("keeps heartbeat pending-final state retryable when redirect fails", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = {
+        ...createHeartbeatConfig(storePath),
+        messages: {
+          operationalReplies: { policy: "redirect" },
+        },
+      } as unknown as OpenClawConfig;
+      const NOW = Date.now();
+      const operationalText = "usage limit reached";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        updatedAt: NOW - 60_000,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: operationalText,
+        pendingFinalDeliveryCreatedAt: NOW,
+        pendingFinalDeliveryAttemptCount: 1,
+      });
+      await patchEntry(storePath, sessionKey, {
+        pendingFinalDeliveryIntentId: "intent-redirect-retry",
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: operationalText,
+          isError: true,
+        }),
+      );
+      const sendTelegram = vi.fn();
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
+
+      expect(result).toMatchObject({
+        status: "failed",
+        reason: expect.stringContaining("redirectSessionKey is required"),
+      });
+      expect(sendTelegram).not.toHaveBeenCalled();
+      const entry = await readEntry(storePath, sessionKey);
+      expect(entry?.pendingFinalDelivery).toBe(true);
+      expect(entry?.pendingFinalDeliveryIntentId).toBe("intent-redirect-retry");
+      expect(entry?.updatedAt).toBe(NOW - 60_000);
+    });
+  });
+
   it("releases operational once reservations when heartbeat channel readiness fails", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = {

@@ -736,6 +736,36 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("keeps unmarked operational block payloads private in message-tool-only mode", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+      }),
+      cfg: {
+        ...emptyConfig,
+        messages: { operationalReplies: { policy: "once" } },
+      },
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({
+          text: "agent-authored status block",
+          isStatusNotice: true,
+        });
+        return { text: "ordinary final reply" };
+      },
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("keeps missing-final recovery when policy silence is mixed with a hidden ordinary final", async () => {
     setNoAbort();
     const cfg = {

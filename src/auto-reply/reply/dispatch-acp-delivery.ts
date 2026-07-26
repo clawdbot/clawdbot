@@ -574,13 +574,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           return false;
         }
         if (result.suppressed) {
-          if (kind === "final") {
-            state.deliveredFinalReply = true;
-          }
-          if (tracksVisibleText) {
-            state.deliveredVisibleText = true;
-          }
-          return true;
+          return false;
         }
         const policySettle = settleOperationalPolicy(true);
         if (policySettle) {

@@ -142,8 +142,6 @@ type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 function resolveFollowupOperationalReplySourceEventKey(params: {
   queued: FollowupRun;
-  kind: ReplyDispatchKind;
-  payloadIndex: number;
   runId?: string;
 }): string {
   const sourceMessageKey =
@@ -152,7 +150,7 @@ function resolveFollowupOperationalReplySourceEventKey(params: {
     params.runId ??
     params.queued.run.sessionId ??
     "queued-followup";
-  return `${sourceMessageKey}:${params.kind}:${params.payloadIndex}`;
+  return sourceMessageKey;
 }
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
@@ -449,11 +447,7 @@ export function createFollowupRunner(params: {
           isOperationalReplyPayload({ payload, explicitCommandTurn: false })),
     );
     const replyKind = options.kind ?? "final";
-    const applyFollowupPayloadPolicy = async (
-      payload: ReplyPayload,
-      payloadIndex: number,
-      kind: ReplyDispatchKind,
-    ) =>
+    const applyFollowupPayloadPolicy = async (payload: ReplyPayload) =>
       await applyOperationalReplyPolicy({
         cfg: runtimeConfig,
         payload,
@@ -463,8 +457,6 @@ export function createFollowupRunner(params: {
         sourceStorePath: storePath,
         sourceEventKey: resolveFollowupOperationalReplySourceEventKey({
           queued,
-          kind,
-          payloadIndex,
           runId: options.runId,
         }),
         sourceChannel: queued.originatingChannel ?? queued.run.messageProvider,
@@ -517,7 +509,7 @@ export function createFollowupRunner(params: {
                 ? "dispatcher"
                 : undefined;
       if (!deliveryRoute) {
-        const policyResult = await applyFollowupPayloadPolicy(payload, payloadIndex, replyKind);
+        const policyResult = await applyFollowupPayloadPolicy(payload);
         if (policyResult.shouldDeliver) {
           await markOperationalReplyPolicyDelivered(policyResult, false);
           defaultRuntime.error?.(
@@ -534,7 +526,7 @@ export function createFollowupRunner(params: {
         deliveredAnyPayload = delivered || deliveredAnyPayload;
         continue;
       }
-      const policyResult = await applyFollowupPayloadPolicy(payload, payloadIndex, replyKind);
+      const policyResult = await applyFollowupPayloadPolicy(payload);
       if (!policyResult.shouldDeliver) {
         continue;
       }

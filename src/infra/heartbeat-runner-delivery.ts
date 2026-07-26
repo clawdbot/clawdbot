@@ -354,25 +354,33 @@ export async function finalizeHeartbeatOutcome(params: {
         mediaUrls,
       })
     : { text: normalized.text, mediaUrls };
-  const policyResult = await applyOperationalReplyPolicy({
-    cfg,
-    payload: mainDeliveryPayload,
-    explicitCommandTurn: false,
-    sendPolicyDenied: false,
-    sourceSessionKey: sessionKey,
-    sourceStorePath: storePath,
-    sourceEventKey: `heartbeat:${startedAt}:0`,
-    sourceChannel: delivery.channel,
-    provider: params.prepared.hasExecCompletion
-      ? "exec-event"
-      : params.prepared.hasCronEvents
-        ? "cron-event"
-        : "heartbeat",
-    chatType: delivery.chatType,
-    inboundEventKind: "heartbeat",
-    messageKey: params.opts.reason,
-    logPrefix: "heartbeat",
-  });
+  let policyResult: Awaited<ReturnType<typeof applyOperationalReplyPolicy>>;
+  try {
+    policyResult = await applyOperationalReplyPolicy({
+      cfg,
+      payload: mainDeliveryPayload,
+      explicitCommandTurn: false,
+      sendPolicyDenied: false,
+      sourceSessionKey: sessionKey,
+      sourceStorePath: storePath,
+      sourceEventKey: `heartbeat:${startedAt}`,
+      sourceChannel: delivery.channel,
+      provider: params.prepared.hasExecCompletion
+        ? "exec-event"
+        : params.prepared.hasCronEvents
+          ? "cron-event"
+          : "heartbeat",
+      chatType: delivery.chatType,
+      inboundEventKind: "heartbeat",
+      messageKey: params.opts.reason,
+      logPrefix: "heartbeat",
+    });
+  } catch (error) {
+    // Redirect failures did not visibly deliver the pending heartbeat.
+    // Restore activity so the same pending final remains eligible for retry.
+    await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+    throw error;
+  }
   if (!policyResult.shouldDeliver) {
     await clearHeartbeatPendingFinalDeliveryIfOwned({
       storePath,
