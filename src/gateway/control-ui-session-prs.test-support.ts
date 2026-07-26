@@ -2,7 +2,7 @@
 import { vi } from "vitest";
 import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 
-export type GitContext = { owner: string; repo: string; branch: string };
+type GitContext = { owner: string; repo: string; branch: string };
 
 export function githubJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
