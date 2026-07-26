@@ -187,7 +187,7 @@ function pathIsWithin(root: string, candidate: string): boolean {
   );
 }
 
-export function parsePiJsonLines(content: string): Record<string, unknown>[] {
+function parsePiJsonLines(content: string): Record<string, unknown>[] {
   return content.split(/\r?\n/u).flatMap((line) => {
     if (!line.trim()) {
       return [];
