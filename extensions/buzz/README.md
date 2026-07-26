@@ -86,6 +86,11 @@ name. For a new profile it uses the explicit Buzz account name, then the
 identity name of the single agent routed to the configured rooms, and finally
 `OpenClaw`. A configured NIP-OA `authTag` is preserved in that profile so Buzz
 can display its verified owner.
+OpenClaw also registers the public identity in Buzz's agent directory while
+preserving any existing directory profile and channel-add policy. Buzz can then
+recognize the identity as an agent and assign the **Bot** role when it is added
+to more rooms. Those rooms still require explicit OpenClaw configuration before
+the Gateway accepts messages from them.
 While the Gateway remains connected, OpenClaw also refreshes the bot's Buzz
 presence so room members see it as online. Buzz clears that presence when the
 last Gateway connection for the bot identity closes.

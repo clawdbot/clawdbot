@@ -114,6 +114,13 @@ account name, then the identity name of the single agent routed to the
 configured Buzz rooms, and finally `OpenClaw`. This replaces the shortened
 public key in Buzz after its profile cache refreshes.
 
+OpenClaw also registers the same public identity in Buzz's agent directory. It
+preserves an existing agent-directory profile and channel-add policy; for a new
+profile it allows authorized Buzz users to add the identity. This lets Buzz
+assign the **Bot** role when the identity is invited to additional rooms
+instead of treating it as a normal member. OpenClaw still receives messages
+only from rooms explicitly selected in `channels.buzz.groups`.
+
 Buzz displays `owner unavailable` when the bot profile has no valid NIP-OA
 owner attestation. This does not mean room access failed. When
 `channels.buzz.authTag` is configured, OpenClaw includes that attestation in the

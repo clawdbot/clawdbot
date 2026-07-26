@@ -1,7 +1,10 @@
 import { finalizeEvent, type Event, type Relay } from "nostr-tools";
 
 const PROFILE_KIND = 0;
+const AGENT_PROFILE_KIND = 10_100;
 const PROFILE_QUERY_TIMEOUT_MS = 5_000;
+const DEFAULT_CHANNEL_ADD_POLICY = "anyone";
+const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
 
 export type BuzzProfileSyncResult =
   | { status: "unchanged" }
@@ -37,14 +40,19 @@ function hasConfiguredAuthTag(event: Event | undefined, authTag: string[] | unde
   return authTags.length === 1 && JSON.stringify(authTags[0]) === JSON.stringify(authTag);
 }
 
-async function queryCurrentProfile(params: {
+function readNonEmptyString(content: Record<string, unknown>, key: string): string | undefined {
+  const value = content[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+async function queryCurrentProfiles(params: {
   relay: Relay;
   publicKey: string;
   signal?: AbortSignal;
-}): Promise<Event | undefined> {
+}): Promise<Map<number, Event>> {
   params.signal?.throwIfAborted();
-  return await new Promise<Event | undefined>((resolve, reject) => {
-    const events: Event[] = [];
+  return await new Promise<Map<number, Event>>((resolve, reject) => {
+    const latestByKind = new Map<number, Event>();
     const state: {
       settled: boolean;
       timeout?: ReturnType<typeof setTimeout>;
@@ -66,12 +74,7 @@ async function queryCurrentProfile(params: {
         );
         return;
       }
-      resolve(
-        events.reduce<Event | undefined>(
-          (latest, event) => (!latest || event.created_at > latest.created_at ? event : latest),
-          undefined,
-        ),
-      );
+      resolve(latestByKind);
     };
     const onAbort = () => finish(params.signal?.reason ?? new Error("Buzz profile query aborted"));
     params.signal?.addEventListener("abort", onAbort, { once: true });
@@ -80,9 +83,17 @@ async function queryCurrentProfile(params: {
       PROFILE_QUERY_TIMEOUT_MS,
     );
     state.subscription = params.relay.subscribe(
-      [{ kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 }],
+      [
+        { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+        { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+      ],
       {
-        onevent: (event) => events.push(event),
+        onevent: (event) => {
+          const current = latestByKind.get(event.kind);
+          if (!current || event.created_at > current.created_at) {
+            latestByKind.set(event.kind, event);
+          }
+        },
         oneose: () => finish(),
         onclose: (reason) => {
           if (reason !== "profile query complete") {
@@ -95,6 +106,25 @@ async function queryCurrentProfile(params: {
       state.subscription.close("profile query complete");
     }
   });
+}
+
+function buildProfileEvent(params: {
+  kind: number;
+  content: Record<string, unknown>;
+  current?: Event;
+  tags: string[][];
+  secretKey: Uint8Array;
+}): Event {
+  const now = Math.floor(Date.now() / 1000);
+  return finalizeEvent(
+    {
+      kind: params.kind,
+      content: JSON.stringify(params.content),
+      created_at: params.current ? Math.max(now, params.current.created_at + 1) : now,
+      tags: params.tags,
+    },
+    params.secretKey,
+  );
 }
 
 export async function syncBuzzProfile(params: {
@@ -110,29 +140,70 @@ export async function syncBuzzProfile(params: {
     return { status: "unchanged" };
   }
 
-  const current = await queryCurrentProfile(params);
-  const content = parseProfileContent(current);
-  const currentDisplayName =
-    typeof content.display_name === "string" ? content.display_name.trim() : "";
-  const resolvedDisplayName = currentDisplayName || displayName;
+  const currentProfiles = await queryCurrentProfiles(params);
+  const currentMetadata = currentProfiles.get(PROFILE_KIND);
+  const currentAgentProfile = currentProfiles.get(AGENT_PROFILE_KIND);
+  const metadataContent = parseProfileContent(currentMetadata);
+  const agentContent = parseProfileContent(currentAgentProfile);
+  const resolvedDisplayName =
+    readNonEmptyString(metadataContent, "display_name") ??
+    readNonEmptyString(agentContent, "display_name") ??
+    readNonEmptyString(agentContent, "name") ??
+    displayName;
+  const events: Event[] = [];
+
   if (
-    content.display_name === resolvedDisplayName &&
-    hasConfiguredAuthTag(current, params.authTag)
+    metadataContent.display_name !== resolvedDisplayName ||
+    !hasConfiguredAuthTag(currentMetadata, params.authTag)
   ) {
-    return { status: "unchanged" };
+    metadataContent.display_name = resolvedDisplayName;
+    events.push(
+      buildProfileEvent({
+        kind: PROFILE_KIND,
+        content: metadataContent,
+        current: currentMetadata,
+        tags: resolveProfileTags(currentMetadata, params.authTag),
+        secretKey: params.secretKey,
+      }),
+    );
   }
 
-  content.display_name = resolvedDisplayName;
-  const now = Math.floor(Date.now() / 1000);
-  const event = finalizeEvent(
-    {
-      kind: PROFILE_KIND,
-      content: JSON.stringify(content),
-      created_at: current ? Math.max(now, current.created_at + 1) : now,
-      tags: resolveProfileTags(current, params.authTag),
-    },
-    params.secretKey,
-  );
-  await params.relay.publish(event);
-  return { status: "published", eventId: event.id };
+  let agentProfileChanged = false;
+  if (!readNonEmptyString(agentContent, "name")) {
+    agentContent.name = resolvedDisplayName;
+    agentProfileChanged = true;
+  }
+  if (!readNonEmptyString(agentContent, "display_name")) {
+    agentContent.display_name = resolvedDisplayName;
+    agentProfileChanged = true;
+  }
+  if (
+    typeof agentContent.channel_add_policy !== "string" ||
+    !CHANNEL_ADD_POLICIES.has(agentContent.channel_add_policy)
+  ) {
+    // OpenClaw accepts messages only from configured Bot-role rooms, so allowing
+    // room admins to add this public identity does not expand Gateway ingress.
+    agentContent.channel_add_policy = DEFAULT_CHANNEL_ADD_POLICY;
+    agentProfileChanged = true;
+  }
+  if (agentProfileChanged) {
+    events.push(
+      buildProfileEvent({
+        kind: AGENT_PROFILE_KIND,
+        content: agentContent,
+        current: currentAgentProfile,
+        tags: currentAgentProfile?.tags.map((tag) => [...tag]) ?? [],
+        secretKey: params.secretKey,
+      }),
+    );
+  }
+
+  if (events.length === 0) {
+    return { status: "unchanged" };
+  }
+  for (const event of events) {
+    await params.relay.publish(event);
+  }
+  const lastEvent = events.at(-1);
+  return lastEvent ? { status: "published", eventId: lastEvent.id } : { status: "unchanged" };
 }

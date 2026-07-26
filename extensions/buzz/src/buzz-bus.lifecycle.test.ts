@@ -241,7 +241,8 @@ describe("Buzz bus lifecycle", () => {
     await vi.waitFor(() => expect(onMessageError).toHaveBeenCalledWith(expect.any(Error)));
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(relayMocks.publish.mock.calls.some(([event]) => event.kind === 0)).toBe(false);
-    expect(onProfilePublished).not.toHaveBeenCalled();
+    expect(relayMocks.publish.mock.calls.some(([event]) => event.kind === 10_100)).toBe(true);
+    expect(onProfilePublished).toHaveBeenCalledOnce();
     expect(onFatalError).not.toHaveBeenCalled();
     await bus.close();
   });
