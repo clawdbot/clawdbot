@@ -279,19 +279,28 @@ export function bootstrapApplication(
     firstRunDefaultLanding &&
     settings.sessionKey.trim() !== "" &&
     !parseAgentSessionKey(settings.sessionKey);
-  const initialLocationReady = documentMode
-    ? Promise.resolve(startup.location)
-    : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
-        ([, location]) =>
-          location.resolveInitialApplicationLocation({
-            location: startup.location,
-            basePath,
-            sessionKey: settings.sessionKey,
-            gateway,
-            agentsList: () => agents.state.agentsList,
-            signal: initialLocationAbort.signal,
-          }),
-      );
+  const initialLocationReady = (
+    documentMode
+      ? Promise.resolve(startup.location)
+      : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
+          ([, location]) =>
+            location.resolveInitialApplicationLocation({
+              location: startup.location,
+              basePath,
+              sessionKey: settings.sessionKey,
+              gateway,
+              agentsList: () => agents.state.agentsList,
+              signal: initialLocationAbort.signal,
+            }),
+        )
+  ).catch((error: unknown) => {
+    // stop() aborts an eager unscoped-session lookup even when start() returns
+    // at the lazy-chunk guard, so consume that teardown-only rejection here.
+    if (initialLocationAbort.signal.aborted) {
+      return startup.location;
+    }
+    throw error;
+  });
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);

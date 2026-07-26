@@ -211,4 +211,34 @@ describe("normalizeInitialApplicationLocation", () => {
       window.history.replaceState({}, "", previousUrl);
     }
   });
+
+  it("consumes an unscoped initial-location abort after stop wins the loader race", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    window.history.replaceState({}, "", "/");
+    const sessionPathBuilder = deferred<void>();
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: sessionPathBuilder.promise });
+    const unhandledRejection = vi.fn((event: PromiseRejectionEvent) => event.preventDefault());
+    window.addEventListener("unhandledrejection", unhandledRejection);
+
+    try {
+      const start = runtime.start();
+      runtime.stop();
+      sessionPathBuilder.resolve();
+      await expect(start).resolves.toBeUndefined();
+      await Promise.resolve();
+
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("unhandledrejection", unhandledRejection);
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
+  });
 });
