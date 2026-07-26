@@ -120,7 +120,7 @@ function dataHandlingFindingsForRule(
             checkId: CHECK_IDS.policyDataHandlingRedactionDisabled,
             message: "Sensitive logging redaction is disabled.",
             requirement: `oc://${policyDocName}/${requirementBase}/sensitiveLogging/requireRedaction`,
-            fixHint: "Set logging.redactSensitive to tools or update policy after review.",
+            fixHint: "Sensitive log redaction is always enabled; update policy after review.",
           }),
         ),
     );
