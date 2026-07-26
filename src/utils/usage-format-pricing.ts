@@ -8,7 +8,7 @@ export type PricingTier = {
   range: [number, number];
 };
 
-export type RawPricingTier = {
+type RawPricingTier = {
   input: number;
   output: number;
   cacheRead: number;
