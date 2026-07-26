@@ -470,7 +470,7 @@ async function getMemorySearchManagerWithinLifecycle(
       cached = undefined;
     }
     const cachedMatchesIdentity = cached?.identityKey === identityKey;
-    if (cachedMatchesIdentity) {
+    if (cachedMatchesIdentity && cached) {
       if (params.purpose === "status") {
         // Status callers often close the manager they receive. Wrap the live
         // full manager with a no-op close so health/status probes do not tear
