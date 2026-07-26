@@ -58,7 +58,7 @@ vi.mock("./runtime.js", () => ({
 
 let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
-let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+let listFeishuThreadMessages: typeof import("./thread-history.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
 let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
@@ -69,12 +69,12 @@ describe("getMessageFeishu", () => {
     ({
       editMessageFeishu,
       getMessageFeishu,
-      listFeishuThreadMessages,
       resolveFeishuCardTemplate,
       sendMarkdownCardFeishu,
       sendMessageFeishu,
       sendStructuredCardFeishu,
     } = await import("./send.js"));
+    ({ listFeishuThreadMessages } = await import("./thread-history.js"));
   });
 
   afterAll(() => {
@@ -508,7 +508,54 @@ describe("getMessageFeishu", () => {
     });
   });
 
-  it("returns text placeholder instead of raw JSON for unsupported message types", async () => {
+  it("surfaces embedded media keys from post messages", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_post_media",
+            chat_id: "oc_post_media",
+            msg_type: "post",
+            body: {
+              content: JSON.stringify({
+                zh_cn: {
+                  title: "Summary",
+                  content: [
+                    [
+                      { tag: "text", text: "post body" },
+                      { tag: "img", image_key: "img_post_1" },
+                      { tag: "media", file_key: "file_post_1", file_name: "clip.mp4" },
+                    ],
+                  ],
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_post_media",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_post_media",
+        chatId: "oc_post_media",
+        contentType: "post",
+        content: "Summary\n\npost body![image][media]",
+        mediaKeys: {
+          imageKeys: ["img_post_1"],
+          mediaKeys: [{ fileKey: "file_post_1", fileName: "clip.mp4" }],
+        },
+      }),
+    );
+  });
+
+  it("returns a file stub and surfaces mediaKeys for file messages", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
       data: {
@@ -518,7 +565,7 @@ describe("getMessageFeishu", () => {
             chat_id: "oc_file",
             msg_type: "file",
             body: {
-              content: JSON.stringify({ file_key: "file_v3_123" }),
+              content: JSON.stringify({ file_key: "file_v3_123", file_name: "report.pdf" }),
             },
           },
         ],
@@ -530,18 +577,46 @@ describe("getMessageFeishu", () => {
       messageId: "om_file",
     });
 
-    expect(result).toEqual({
-      messageId: "om_file",
-      chatId: "oc_file",
-      chatType: undefined,
-      senderId: undefined,
-      senderOpenId: undefined,
-      senderType: undefined,
-      content: "[file message]",
-      contentType: "file",
-      createTime: undefined,
-      threadId: undefined,
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_file",
+        chatId: "oc_file",
+        contentType: "file",
+        content: "[file message] (report.pdf)",
+        mediaKeys: { fileKey: "file_v3_123", fileName: "report.pdf" },
+      }),
+    );
+  });
+
+  it("surfaces image_key on image messages and uses the image stub", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_image",
+            chat_id: "oc_image",
+            msg_type: "image",
+            body: {
+              content: JSON.stringify({ image_key: "img_v2_abc" }),
+            },
+          },
+        ],
+      },
     });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_image",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        contentType: "image",
+        content: "[image message]",
+        mediaKeys: { imageKey: "img_v2_abc" },
+      }),
+    );
   });
 
   it("supports single-object response shape from Feishu API", async () => {
@@ -636,22 +711,22 @@ describe("getMessageFeishu", () => {
       },
     });
     expect(result).toEqual([
-      {
+      expect.objectContaining({
         messageId: "om_file",
         senderId: "ou_1",
         senderType: "user",
         contentType: "file",
         content: "[file message]",
-        createTime: 1710000001000,
-      },
-      {
+        mediaKeys: { fileKey: "file_v3_123" },
+      }),
+      expect.objectContaining({
         messageId: "om_card",
         senderId: "app_1",
         senderType: "app",
         contentType: "interactive",
         content: "hello from card 2.0",
         createTime: 1710000000000,
-      },
+      }),
     ]);
   });
 

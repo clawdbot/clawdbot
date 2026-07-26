@@ -17,6 +17,11 @@ import {
 } from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
+import {
+  extractFeishuMessageMediaKeys,
+  formatFeishuMediaMessageStub,
+  isFeishuMediaMessageType,
+} from "./message-media-keys.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { parsePostContent } from "./post.js";
 import {
@@ -87,7 +92,7 @@ type FeishuMessageSender = {
   sender_type?: string;
 };
 
-type FeishuMessageGetItem = {
+export type FeishuMessageGetItem = {
   message_id?: string;
   chat_id?: string;
   chat_type?: FeishuChatType;
@@ -343,6 +348,10 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
     return parseInteractiveCardContent(parsed);
   }
 
+  if (isFeishuMediaMessageType(msgType)) {
+    return formatFeishuMediaMessageStub(parsed, msgType);
+  }
+
   if (typeof parsed === "string") {
     return parsed;
   }
@@ -359,12 +368,13 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   return `[${msgType || "unknown"} message]`;
 }
 
-function parseFeishuMessageItem(
+export function parseFeishuMessageItem(
   item: FeishuMessageGetItem,
   fallbackMessageId?: string,
 ): FeishuMessageInfo {
   const msgType = item.msg_type ?? "text";
   const rawContent = item.body?.content ?? "";
+  const mediaKeys = extractFeishuMessageMediaKeys(rawContent, msgType);
 
   return {
     messageId: item.message_id ?? fallbackMessageId ?? "",
@@ -383,6 +393,7 @@ function parseFeishuMessageItem(
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,
+    ...(mediaKeys ? { mediaKeys } : {}),
   };
 }
 
@@ -428,99 +439,6 @@ export async function getMessageFeishu(params: {
   } catch {
     return null;
   }
-}
-
-type FeishuThreadMessageInfo = {
-  messageId: string;
-  senderId?: string;
-  senderType?: string;
-  content: string;
-  contentType: string;
-  createTime?: number;
-};
-
-/**
- * List messages in a Feishu thread (topic).
- * Uses container_id_type=thread to directly query thread messages,
- * which includes both the root message and all replies (including bot replies).
- */
-export async function listFeishuThreadMessages(params: {
-  cfg: ClawdbotConfig;
-  threadId: string;
-  currentMessageId?: string;
-  /** Exclude the root message (already provided separately as ThreadStarterBody). */
-  rootMessageId?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuThreadMessageInfo[]> {
-  const { cfg, threadId, currentMessageId, rootMessageId, limit = 20, accountId } = params;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-
-  const response = (await client.im.message.list({
-    params: {
-      container_id_type: "thread",
-      container_id: threadId,
-      // Fetch newest messages first so long threads keep the most recent turns.
-      // Results are reversed below to restore chronological order.
-      sort_type: "ByCreateTimeDesc",
-      page_size: Math.min(limit + 1, 50),
-      card_msg_content_type: "user_card_content",
-    },
-  })) as {
-    code?: number;
-    msg?: string;
-    data?: {
-      items?: Array<
-        {
-          message_id?: string;
-          root_id?: string;
-          parent_id?: string;
-        } & FeishuMessageGetItem
-      >;
-    };
-  };
-
-  if (response.code !== 0) {
-    throw new Error(
-      `Feishu thread list failed: code=${response.code} msg=${response.msg ?? "unknown"}`,
-    );
-  }
-
-  const items = response.data?.items ?? [];
-  const results: FeishuThreadMessageInfo[] = [];
-
-  for (const item of items) {
-    if (currentMessageId && item.message_id === currentMessageId) {
-      continue;
-    }
-    if (rootMessageId && item.message_id === rootMessageId) {
-      continue;
-    }
-
-    const parsed = parseFeishuMessageItem(item);
-
-    results.push({
-      messageId: parsed.messageId,
-      senderId: parsed.senderId,
-      senderType: parsed.senderType,
-      content: parsed.content,
-      contentType: parsed.contentType,
-      createTime: parsed.createTime,
-    });
-
-    if (results.length >= limit) {
-      break;
-    }
-  }
-
-  // Restore chronological order (oldest first) since we fetched newest-first.
-  results.reverse();
-  return results;
 }
 
 type SendFeishuMessageParams = {

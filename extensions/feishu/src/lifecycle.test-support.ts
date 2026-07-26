@@ -179,8 +179,11 @@ vi.mock("./reply-dispatcher.js", () => ({
 vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
   getMessageFeishu: getMessageFeishuMock,
-  listFeishuThreadMessages: listFeishuThreadMessagesMock,
   sendMessageFeishu: sendMessageFeishuMock,
+}));
+
+vi.mock("./thread-history.js", () => ({
+  listFeishuThreadMessages: listFeishuThreadMessagesMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {

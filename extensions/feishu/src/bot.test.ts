@@ -396,6 +396,9 @@ vi.mock("./reasoning-preview.js", () => ({
 vi.mock("./send.js", () => ({
   sendMessageFeishu: mockSendMessageFeishu,
   getMessageFeishu: mockGetMessageFeishu,
+}));
+
+vi.mock("./thread-history.js", () => ({
   listFeishuThreadMessages: mockListFeishuThreadMessages,
 }));
 
@@ -1391,6 +1394,170 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.ReplyToId).toBe("om_parent_001");
     expect(context.RootMessageId).toBe("om_root_001");
     expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
+  });
+
+  it("passes referenced message media into the agent context", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_media",
+      chatId: "oc-dm",
+      content: "[image message]",
+      contentType: "image",
+      mediaKeys: { imageKey: "img_parent_media" },
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("quoted-image"),
+      contentType: "image/png",
+      fileName: "quoted.png",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      id: "quoted.png",
+      path: "/tmp/quoted.png",
+      size: Buffer.byteLength("quoted-image"),
+      contentType: "image/png",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          mediaMaxMb: 2,
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_media",
+        parent_id: "om_parent_media",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "what is in the image?" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const downloadRequest = mockCallArg<{
+      fileKey?: string;
+      maxBytes?: number;
+      messageId?: string;
+    }>(mockDownloadMessageResourceFeishu, 0, 0);
+    expect(downloadRequest.messageId).toBe("om_parent_media");
+    expect(downloadRequest.fileKey).toBe("img_parent_media");
+    expect(downloadRequest.maxBytes).toBe(2 * 1024 * 1024);
+    const context = mockCallArg<{ MediaPaths?: string[]; MediaTypes?: string[] }>(
+      mockFinalizeInboundContext,
+      0,
+      0,
+    );
+    expect(context.MediaPaths).toEqual(["/tmp/quoted.png"]);
+    expect(context.MediaTypes).toEqual(["image/png"]);
+  });
+
+  it("resolves shared thread-history media once for broadcast agents", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:group:oc-group:topic:om_topic_root",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    } as ResolvedAgentRoute);
+    mockListFeishuThreadMessages.mockResolvedValue([
+      {
+        messageId: "om_history_media",
+        senderId: "ou-allowed",
+        senderType: "user",
+        content: "[image message]",
+        contentType: "image",
+        createTime: 1710000000000,
+        mediaKeys: { imageKey: "img_history_shared" },
+      },
+    ]);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("history-image"),
+      contentType: "image/png",
+      fileName: "history.png",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      id: "history.png",
+      path: "/tmp/history.png",
+      size: Buffer.byteLength("history-image"),
+      contentType: "image/png",
+    });
+
+    const cfg: ClawdbotConfig = {
+      agents: {
+        list: [
+          { id: "main", workspace: "/workspace/main" },
+          { id: "observer", workspace: "/workspace/observer" },
+        ],
+      },
+      broadcast: {
+        "oc-group": ["main", "observer"],
+      },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          mediaMaxMb: 2,
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: { sender_id: { open_id: "ou-allowed" } },
+        message: {
+          message_id: "om_broadcast_topic_media",
+          root_id: "om_topic_root",
+          thread_id: "omt_topic_1",
+          chat_id: "oc-group",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "current turn" }),
+        },
+      },
+    });
+
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledTimes(1);
+    expect(mockSaveMediaBuffer).toHaveBeenCalledTimes(1);
+    const contexts = mockFinalizeInboundContext.mock.calls.map(
+      (call) =>
+        call[0] as {
+          MediaPaths?: string[];
+          MediaTypes?: string[];
+          SessionKey?: string;
+        },
+    );
+    const sessionKeys = contexts
+      .map((context) => context.SessionKey)
+      .filter((sessionKey): sessionKey is string => typeof sessionKey === "string")
+      .toSorted((left, right) => left.localeCompare(right));
+    expect(sessionKeys).toEqual([
+      "agent:main:feishu:group:oc-group:topic:om_topic_root",
+      "agent:observer:feishu:group:oc-group:topic:om_topic_root",
+    ]);
+    for (const context of contexts) {
+      expect(context.MediaPaths).toEqual(["/tmp/history.png"]);
+      expect(context.MediaTypes).toEqual(["image/png"]);
+    }
   });
 
   it("uses message create_time as Timestamp instead of Date.now()", async () => {

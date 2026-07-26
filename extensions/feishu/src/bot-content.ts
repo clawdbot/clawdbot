@@ -2,9 +2,9 @@
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
-import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
+import { parseFeishuMediaKeys } from "./message-media-keys.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
@@ -309,37 +309,11 @@ export function normalizeFeishuCommandProbeBody(text: string): string {
     .trim();
 }
 
-function parseMediaKeys(
-  content: string,
-  messageType: string,
-): { imageKey?: string; fileKey?: string; fileName?: string } {
-  try {
-    const parsed = JSON.parse(content);
-    const imageKey = normalizeFeishuExternalKey(parsed.image_key);
-    const fileKey = normalizeFeishuExternalKey(parsed.file_key);
-    switch (messageType) {
-      case "image":
-        return { imageKey, fileName: parsed.file_name };
-      case "file":
-      case "audio":
-      case "sticker":
-        return { fileKey, fileName: parsed.file_name };
-      case "video":
-      case "media":
-        return { fileKey, imageKey, fileName: parsed.file_name };
-      default:
-        return {};
-    }
-  } catch {
-    return {};
-  }
-}
-
-function toMessageResourceType(messageType: string): "image" | "file" {
+export function toMessageResourceType(messageType: string): "image" | "file" {
   return messageType === "image" ? "image" : "file";
 }
 
-async function resolveSavedFeishuMedia(params: {
+export async function resolveSavedFeishuMedia(params: {
   result:
     | Awaited<ReturnType<typeof saveMessageResourceFeishu>>
     | { buffer: Buffer; contentType?: string; fileName?: string };
@@ -361,7 +335,7 @@ async function resolveSavedFeishuMedia(params: {
   );
 }
 
-function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
+export function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
   switch (messageType) {
     case "image":
       return "image";
@@ -460,7 +434,7 @@ export async function resolveFeishuMediaList(params: {
     return out;
   }
 
-  const mediaKeys = parseMediaKeys(content, messageType);
+  const mediaKeys = parseFeishuMediaKeys(content, messageType);
   if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
     return [{ kind: resolveFeishuMediaKind(messageType) }];
   }
