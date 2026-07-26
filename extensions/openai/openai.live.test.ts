@@ -108,10 +108,11 @@ function createLiveConfig(): OpenClawConfig {
         openai: {
           apiKey: OPENAI_API_KEY,
           baseUrl: "https://api.openai.com/v1",
+          models: [],
         },
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function createLiveTtsConfig(): ResolvedTtsConfig {
