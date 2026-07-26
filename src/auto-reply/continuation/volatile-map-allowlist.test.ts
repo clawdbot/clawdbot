@@ -51,7 +51,7 @@ const ALLOWLIST = [
       "Reset to empty on process restart; pending delegate records remain in TaskFlow and rebuild timer state when scheduling resumes.",
   },
   {
-    file: "src/auto-reply/continuation/delegate-dispatch.ts",
+    file: "src/auto-reply/continuation/delegate-dispatch-hedge.ts",
     symbol: "hedgeTimers",
     owner: "continuation delegate dispatcher",
     purpose:
