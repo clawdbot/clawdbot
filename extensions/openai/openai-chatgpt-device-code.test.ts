@@ -18,6 +18,33 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
   });
 }
 
+function createDeviceCodeResponse(interval = "0") {
+  return createJsonResponse({
+    device_auth_id: "device-auth-123",
+    user_code: "CODE-12345",
+    interval,
+  });
+}
+
+function createAuthorizationResponse() {
+  return createJsonResponse({
+    authorization_code: "authorization-code-123",
+    code_verifier: "code-verifier-123",
+  });
+}
+
+function createCredentialsResponse(accessToken: string) {
+  return createJsonResponse({
+    access_token: accessToken,
+    refresh_token: "refresh-token-123",
+    expires_in: 600,
+  });
+}
+
+function resolveRequestUrl(input: RequestInfo | URL): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -295,46 +322,132 @@ describe("loginOpenAICodexDeviceCode", () => {
     });
     let pollAttempts = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const url = resolveRequestUrl(input);
       if (url.endsWith("/api/accounts/deviceauth/usercode")) {
-        return createJsonResponse({
-          device_auth_id: "device-auth-123",
-          user_code: "CODE-12345",
-          interval: "0",
-        });
+        return createDeviceCodeResponse();
       }
       if (url.endsWith("/api/accounts/deviceauth/token")) {
         pollAttempts += 1;
         if (pollAttempts === 1) {
           return await waitForFetchAbort(init);
         }
-        return createJsonResponse({
-          authorization_code: "authorization-code-123",
-          code_verifier: "code-verifier-123",
-        });
+        return createAuthorizationResponse();
       }
       if (url.endsWith("/oauth/token")) {
-        return createJsonResponse({
-          access_token: accessToken,
-          refresh_token: "refresh-token-123",
-          expires_in: 600,
-        });
+        return createCredentialsResponse(accessToken);
       }
       throw new Error(`unexpected OpenAI device-code URL: ${url}`);
     });
 
-    const login = loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock,
-      onVerification: async () => {},
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pollAttempts).toBe(1);
+    try {
+      const login = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pollAttempts).toBe(1);
+      await vi.advanceTimersToNextTimerAsync();
+      expect(pollAttempts).toBe(1);
 
-    const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
-    await vi.advanceTimersByTimeAsync(30_000);
-    await resolved;
-    expect(pollAttempts).toBe(2);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+      const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
+      await vi.advanceTimersToNextTimerAsync();
+      await resolved;
+      expect(pollAttempts).toBe(2);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a transient authorization poll network failure after the poll delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const accessToken = createJwt({
+        exp: Math.floor(Date.now() / 1000) + 600,
+      });
+      let pollAttempts = 0;
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = resolveRequestUrl(input);
+        if (url.endsWith("/api/accounts/deviceauth/usercode")) {
+          return createDeviceCodeResponse("2");
+        }
+        if (url.endsWith("/api/accounts/deviceauth/token")) {
+          pollAttempts += 1;
+          if (pollAttempts === 1) {
+            throw new TypeError("fetch failed", {
+              cause: Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), {
+                code: "ENOTFOUND",
+              }),
+            });
+          }
+          return createAuthorizationResponse();
+        }
+        if (url.endsWith("/oauth/token")) {
+          return createCredentialsResponse(accessToken);
+        }
+        throw new Error(`unexpected OpenAI device-code URL: ${url}`);
+      });
+
+      const login = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pollAttempts).toBe(1);
+
+      const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
+      await vi.advanceTimersToNextTimerAsync();
+      await resolved;
+      expect(pollAttempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries transient authorization poll HTTP status responses", async () => {
+    vi.useFakeTimers();
+    try {
+      const accessToken = createJwt({
+        exp: Math.floor(Date.now() / 1000) + 600,
+      });
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(createDeviceCodeResponse("1"))
+        .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
+        .mockResolvedValueOnce(new Response("bad gateway", { status: 502 }))
+        .mockResolvedValueOnce(createAuthorizationResponse())
+        .mockResolvedValueOnce(createCredentialsResponse(accessToken));
+
+      const login = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersToNextTimerAsync();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
+      await vi.advanceTimersToNextTimerAsync();
+      await resolved;
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still surfaces local authorization poll errors that are not transport failures", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(createDeviceCodeResponse())
+      .mockRejectedValueOnce(new TypeError("undefined is not a function"));
+
+    await expect(
+      loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      }),
+    ).rejects.toThrow("undefined is not a function");
   });
 
   it("aborts device-code polling without another request", async () => {

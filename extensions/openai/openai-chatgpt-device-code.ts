@@ -21,6 +21,10 @@ const OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS = 1_000;
 const OPENAI_CODEX_DEVICE_CALLBACK_URL = `${OPENAI_AUTH_BASE_URL}/deviceauth/callback`;
 const OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES = 256 * 1024;
+const RETRYABLE_DEVICE_CODE_TRANSPORT_ERROR_CODE_RE =
+  /^(?:EAI_AGAIN|ECONNABORTED|ECONNREFUSED|ECONNRESET|EHOSTDOWN|EHOSTUNREACH|ENETRESET|ENETUNREACH|ENOTFOUND|EPIPE|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)$/u;
+const RETRYABLE_DEVICE_CODE_TRANSPORT_ERROR_RE =
+  /\b(?:fetch failed|network error|network request failed|socket hang up|connection (?:aborted|reset|refused|error)|network is unreachable|host is unreachable)\b/i;
 
 function resolveOpenAICodexDeviceCodeHeaders(contentType: string): Record<string, string> {
   const version = process.env.OPENCLAW_VERSION?.trim();
@@ -119,6 +123,44 @@ function resolveDeviceCodePollRequestTimeoutMs(deadlineMs: number): number {
 
 function isDeviceCodeOperationTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+function readErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return undefined;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code.toUpperCase() : undefined;
+}
+
+function isRetryableDeviceCodePollTransportError(
+  error: unknown,
+  visited = new Set<unknown>(),
+): boolean {
+  if (!error || visited.has(error)) {
+    return false;
+  }
+  visited.add(error);
+
+  const code = readErrorCode(error);
+  if (code && RETRYABLE_DEVICE_CODE_TRANSPORT_ERROR_CODE_RE.test(code)) {
+    return true;
+  }
+
+  if (error instanceof Error) {
+    if (RETRYABLE_DEVICE_CODE_TRANSPORT_ERROR_RE.test(error.message)) {
+      return true;
+    }
+    if (isRetryableDeviceCodePollTransportError(error.cause, visited)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isRetryableDeviceCodePollStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status < 600);
 }
 
 function rethrowIfDeviceCodeCallerAborted(signal: AbortSignal | undefined, error: unknown): void {
@@ -299,8 +341,14 @@ async function pollOpenAICodexDeviceCode(params: {
       });
     } catch (error) {
       rethrowIfDeviceCodeCallerAborted(params.signal, error);
-      // A stalled poll is transient; keep the overall 15-minute authorization deadline.
-      if (isDeviceCodeOperationTimeoutError(error)) {
+      if (
+        isDeviceCodeOperationTimeoutError(error) ||
+        isRetryableDeviceCodePollTransportError(error)
+      ) {
+        await waitForDeviceCodePoll(
+          resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
+          params.signal,
+        );
         continue;
       }
       throw error;
@@ -320,6 +368,14 @@ async function pollOpenAICodexDeviceCode(params: {
     }
 
     if (result.status === 403 || result.status === 404) {
+      await waitForDeviceCodePoll(
+        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
+        params.signal,
+      );
+      continue;
+    }
+
+    if (isRetryableDeviceCodePollStatus(result.status)) {
       await waitForDeviceCodePoll(
         resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
         params.signal,
