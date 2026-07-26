@@ -22,7 +22,6 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
-const STABLE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
 const NPM_LOCK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const NPM_LOCK_COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const NPM_LOCK_DEFAULT_JOBS = 4;
@@ -169,43 +168,15 @@ function collectPnpmLockPackageVersions(lockfile) {
   return versionsByName;
 }
 
-function stableVersionParts(version) {
-  const match = version.match(STABLE_VERSION_PATTERN);
-  return match
-    ? {
-        major: Number(match[1]),
-        minor: Number(match[2]),
-        patch: Number(match[3]),
-      }
-    : null;
-}
-
 function pnpmLockOverrideVersionForVersions(versions) {
   const sortedVersions = [...versions].toSorted((left, right) => left.localeCompare(right));
   if (sortedVersions.length === 1) {
     return exactVersionFromOverrideSpec(sortedVersions[0]) === null ? null : sortedVersions[0];
   }
-
-  const parsedVersions = sortedVersions.map((version) => ({
-    version,
-    parts: stableVersionParts(version),
-  }));
-  if (parsedVersions.some(({ parts }) => parts === null)) {
-    return null;
-  }
-
-  const [{ parts: firstParts }] = parsedVersions;
-  if (
-    parsedVersions.some(
-      ({ parts }) => parts.major !== firstParts.major || parts.minor !== firstParts.minor,
-    )
-  ) {
-    return null;
-  }
-
-  // npm patch ranges can float past the pnpm lock. Pin to the newest locked patch
-  // when the lock only contains one major/minor line, but keep true version forks free.
-  return parsedVersions.toSorted((left, right) => right.parts.patch - left.parts.patch)[0].version;
+  // Multiple locked versions can come from exact dependency specs even when
+  // they share a major/minor line. Keep those forks scoped to their parents;
+  // a global override would silently erase the pnpm graph's distinction.
+  return null;
 }
 
 function readPnpmLockVersionOverrides() {
