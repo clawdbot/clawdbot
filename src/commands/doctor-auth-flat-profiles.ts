@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /** Doctor repairs for legacy auth profile JSON stores and OpenAI provider-id migrations. */
 import fs from "node:fs";
 import path from "node:path";
@@ -788,6 +789,39 @@ function archiveVerifiedAuthProfileSource(
   return receipt.archivePath;
 }
 
+function assertAuthProfileMigrationSourcesUnchanged(
+  candidate: AuthProfileSqliteMigrationCandidate,
+  receipts: readonly AuthProfileMigrationSourceReceipt[],
+): void {
+  const receiptByPath = new Map(receipts.map((receipt) => [receipt.sourcePath, receipt]));
+  for (const pathname of [candidate.authPath, candidate.statePath, candidate.legacyPath]) {
+    const receipt = receiptByPath.get(path.resolve(pathname));
+    if (fs.existsSync(pathname) !== Boolean(receipt)) {
+      throw new Error("legacy auth source set changed during migration; retry Doctor");
+    }
+    if (!receipt) {
+      continue;
+    }
+    const currentSha256 = createHash("sha256").update(fs.readFileSync(pathname)).digest("hex");
+    if (currentSha256 !== receipt.sourceSha256) {
+      throw new Error("legacy auth source changed during migration; retry Doctor");
+    }
+  }
+}
+
+function parseAuthProfileMigrationSource(
+  receipt: AuthProfileMigrationSourceReceipt | undefined,
+): unknown {
+  if (!receipt?.sourceBytes) {
+    return null;
+  }
+  try {
+    return JSON.parse(receipt.sourceBytes.toString("utf8")) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 function archivePreviouslyMigratedAuthProfileSource(
   receipt: AuthProfileMigrationSourceReceipt,
   result: LegacyFlatAuthProfileRepairResult,
@@ -1057,11 +1091,11 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   for (const candidate of detected) {
     let releaseSources: (() => void) | undefined;
     try {
-      releaseSources = acquireAuthProfileMigrationSourceLocks(
-        [candidate.authPath, candidate.statePath, candidate.legacyPath].filter((pathname) =>
-          fs.existsSync(pathname),
-        ),
-      );
+      const candidateSourcePaths = [candidate.authPath, candidate.statePath, candidate.legacyPath];
+      for (const pathname of candidateSourcePaths) {
+        fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      }
+      releaseSources = acquireAuthProfileMigrationSourceLocks(candidateSourcePaths);
       const targetDatabasePath = resolveAuthProfileDatabasePath(candidate.agentDir);
       let sourceReceipts = [
         ...(fs.existsSync(candidate.authPath)
@@ -1101,10 +1135,16 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       sourceReceipts = sourceReceipts.filter(
         (receipt) => !archivePreviouslyMigratedAuthProfileSource(receipt, result),
       );
+      assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
       if (sourceReceipts.length === 0 && !configStore) {
         continue;
       }
-      const rawStore = fs.existsSync(candidate.authPath) ? loadJsonFile(candidate.authPath) : null;
+      const receiptByPath = new Map(
+        sourceReceipts.map((receipt) => [receipt.sourcePath, receipt] as const),
+      );
+      const rawStore = parseAuthProfileMigrationSource(
+        receiptByPath.get(path.resolve(candidate.authPath)),
+      );
       const unresolvedSidecarProfileIds = new Set(
         collectUnresolvedLegacyOAuthSidecarProfileIds(rawStore),
       );
@@ -1149,10 +1189,12 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         : null;
       const configCanonicalStore =
         configStore && isDefaultAgentCandidate(candidate, params.cfg, env) ? configStore : null;
-      const legacyStore = coerceLegacyAuthStore(loadJsonFile(candidate.legacyPath));
-      const rawState = fs.existsSync(candidate.statePath)
-        ? loadJsonFile(candidate.statePath)
-        : null;
+      const legacyStore = coerceLegacyAuthStore(
+        parseAuthProfileMigrationSource(receiptByPath.get(path.resolve(candidate.legacyPath))),
+      );
+      const rawState = parseAuthProfileMigrationSource(
+        receiptByPath.get(path.resolve(candidate.statePath)),
+      );
       const state = coerceAuthProfileState(rawState);
       if (
         !canonicalStore &&
@@ -1244,6 +1286,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
             : []),
         ];
         try {
+          assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
           verifiedStore = runAuthProfileWriteTransaction(candidate.agentDir, (database) => {
             const authoritative = loadAuthProfileMigrationTargetStore(
               candidate.agentDir,
@@ -1328,6 +1371,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const archivalReceipts = unresolvedSidecarRawStore
         ? sourceReceipts.filter((receipt) => receipt.sourcePath !== candidate.authPath)
         : sourceReceipts;
+      assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
       const archives = archivalReceipts.map((receipt) =>
         archiveVerifiedAuthProfileSource(receipt, true),
       );

@@ -29,6 +29,8 @@ export type AuthProfileMigrationSourceReceipt = {
   sourceSha256: string;
   sourceSizeBytes: number;
   sourceRecordCount: number;
+  /** In-memory migration snapshot; never serialized into the receipt ledger or diagnostics. */
+  sourceBytes?: Buffer;
   targetDatabasePath: string;
   targetTable: "auth_profile_store" | "auth_profile_state";
   archivePath: string;
@@ -62,6 +64,7 @@ export function createAuthProfileMigrationSourceReceipt(params: {
     sourceSha256,
     sourceSizeBytes: params.sourceBytes.byteLength,
     sourceRecordCount: params.sourceRecordCount,
+    sourceBytes: Buffer.from(params.sourceBytes),
     targetDatabasePath: path.resolve(params.targetDatabasePath),
     targetTable: params.targetTable,
     archivePath: `${sourcePath}.migrated-${stamp}-${randomUUID()}`,

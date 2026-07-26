@@ -233,6 +233,51 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
   });
 
+  it("retries when an absent legacy sibling appears during migration", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "not-a-real",
+        },
+      },
+    });
+    const legacyPath = path.join(state.agentDir(), "auth.json");
+    let recreated = false;
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+      deps: {
+        loadPersistedAuthProfileStore(agentDir, options) {
+          if (!recreated && options?.database === undefined) {
+            recreated = true;
+            fs.writeFileSync(
+              legacyPath,
+              `${JSON.stringify({ xai: { type: "api_key", key: "not-a-real" } })}\n`,
+              "utf8",
+            );
+          }
+          return loadPersistedAuthProfileStore(agentDir, options);
+        },
+      },
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("legacy auth source set changed during migration"),
+    ]);
+    expect(fs.existsSync(authPath)).toBe(true);
+    expect(fs.existsSync(legacyPath)).toBe(true);
+    expectNoMigratedArchive(authPath);
+    expectNoMigratedArchive(legacyPath);
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
+  });
+
   it("archives restored OAuth bytes without replaying a terminal receipt", async () => {
     const state = await makeTestState();
     const oauthPath = await state.writeJson("credentials/oauth.json", {
