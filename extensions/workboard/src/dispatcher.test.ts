@@ -826,6 +826,10 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(run.mock.calls[0]?.[0]?.message).toContain("workboard_complete with the card id");
     expect(run.mock.calls[0]?.[0]?.message).toContain("returned proofId");
     expect(run.mock.calls[0]?.[0]?.message).not.toContain("ownerId and token");
+    // Worker is steered to card-scoped reads: workboard_read for its own card,
+    // never workboard_list (full-board load pegs the single-core event loop).
+    expect(run.mock.calls[0]?.[0]?.message).toContain("workboard_read with the card id");
+    expect(run.mock.calls[0]?.[0]?.message).toContain("Do NOT call workboard_list");
     await expect(store.get(first.id)).resolves.toMatchObject({
       status: "running",
       sessionKey: `agent:codex-main:subagent:workboard-default-${first.id}`,
