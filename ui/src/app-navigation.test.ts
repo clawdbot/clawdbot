@@ -63,7 +63,18 @@ const SESSION_URL_CONTRACT_CASES = [
     mainKey: undefined,
     expectedPath: "/chat/main/control-link",
   },
-  { sessionKey: "agent:main:12345678", agentId: "main", mainKey: undefined, expectedPath: null },
+  {
+    sessionKey: "agent:main:12345678",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/~key/12345678",
+  },
+  {
+    sessionKey: "agent:main:release-deadbeef",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/~key/release-deadbeef",
+  },
   {
     sessionKey: "agent:main:telegram:12345",
     agentId: "main",
@@ -512,7 +523,18 @@ describe("routeIdFromPath", () => {
     expect(pathForSession("chat", "main", "agent:main:not-reserved")).toBe(
       "/chat/main/not-reserved",
     );
-    expect(pathForSession("chat", "main", "agent:main:12345678")).toBeNull();
+    expect(pathForSession("chat", "main", "agent:main:12345678")).toBe("/chat/main/~key/12345678");
+    expect(sessionRefFromPath("/chat/main/~key/12345678")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:12345678",
+    });
+    expect(pathForSession("chat", "main", "agent:main:release-deadbeef")).toBe(
+      "/chat/main/~key/release-deadbeef",
+    );
+    expect(sessionRefFromPath("/chat/main/~key/release-deadbeef")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:release-deadbeef",
+    });
     const collidingMainKey = "deadbeef";
     const collisionPath = pathForSession(
       "chat",
@@ -546,6 +568,11 @@ describe("routeIdFromPath", () => {
     expect(sessionRefFromPath("/chat/main/channel/~~dot")).toMatchObject({
       kind: "literal",
       sessionKey: "agent:main:channel:~dot",
+    });
+    expect(pathForSession("chat", "main", "agent:main:~key")).toBe("/chat/main/~~key");
+    expect(sessionRefFromPath("/chat/main/~~key")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:main:~key",
     });
     expect(routeIdFromPath("/dashboard/main/deploy-12345678")).toBe("dashboard");
     expect(inferBasePathFromPathname("/ui/chat/main/deploy-12345678")).toBe("/ui");

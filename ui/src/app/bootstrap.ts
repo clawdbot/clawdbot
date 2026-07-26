@@ -2,7 +2,6 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createApplicationRouter,
   locationForRoute,
-  pathForRoute,
   routeIdFromPath,
   startApplicationRouter,
   type ApplicationRouter,
@@ -19,8 +18,7 @@ import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-d
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
   isDefaultChatLanding,
-  locationsMatch,
-  startModelSetupFirstRunRedirect,
+  startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
@@ -251,10 +249,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const firstRunDefaultLanding =
     documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
-  let expectedDefaultLanding = {
-    ...startup.location,
-    pathname: pathForRoute("chat", basePath),
-  };
   const sessionPathBuilderReady = documentMode
     ? Promise.resolve()
     : import("@openclaw/session-url-contract").then((contract) => {
@@ -418,12 +412,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
-  const stopModelSetupRedirect = firstRunDefaultLanding
-    ? startModelSetupFirstRunRedirect({
-        context,
-        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
-      })
-    : () => undefined;
+  let stopModelSetupRedirect = () => undefined;
   return {
     context,
     router,
@@ -434,19 +423,12 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: async () => {
-      const initialLocation = await initialLocationReady;
-      expectedDefaultLanding = {
-        ...initialLocation,
-        pathname: pathForRoute("chat", basePath),
-      };
-      const currentLocation = history.location();
-      if (
-        currentLocation.pathname !== initialLocation.pathname ||
-        currentLocation.search !== initialLocation.search ||
-        currentLocation.hash !== initialLocation.hash
-      ) {
-        history.replace(initialLocation);
-      }
+      stopModelSetupRedirect = await startModelSetupFirstRunRedirectAfterLocation({
+        context,
+        enabled: firstRunDefaultLanding,
+        history,
+        initialLocationReady,
+      });
       void config.refresh({ skipWithoutAuthCandidate: true });
       const routerStart = documentMode
         ? Promise.resolve()

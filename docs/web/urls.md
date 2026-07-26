@@ -52,19 +52,17 @@ Every other key uses the literal-key form. Each colon-delimited segment after
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
 browsers cannot collapse them as relative path segments. A literal segment that
 starts with `~` doubles that leading character to keep the encoding reversible.
+When an otherwise literal one-segment rest could be mistaken for a short id,
+the builder inserts `~key` before it, for example
+`agent:main:release-deadbeef` becomes
+`/chat/main/~key/release-deadbeef`. The marker forces literal interpretation
+and appears only when the unescaped form would be ambiguous.
 
 The reserved single-segment literal rest names are `main`, `global`, `boot`,
 and `sessions`. The configured `session.mainKey` joins that set at runtime.
 Exactly one segment after the agent id is literal when it is reserved or does
 not contain a valid short id; otherwise it is a short reference. Two or more
 segments after the agent id are always literal.
-
-Callers such as the agent-facing session tools can mint arbitrary
-single-segment rests. A non-hex rest remains an unambiguous literal. A rest that
-is also eight or more hexadecimal characters cannot be deep-linked because it
-is indistinguishable from a short id; builders fail closed and emit no link
-rather than constructing a URL for the wrong session. There is no escape
-syntax for that known limit.
 
 ### Stability contract
 

@@ -131,7 +131,7 @@ function sessionPath(params: {
   if (segments.length === 1) {
     const segment = segments[0] ?? "";
     if (!isReservedSessionRest(segment, params.mainKey) && SHORT_SESSION_REF_RE.test(segment)) {
-      return null;
+      return `${namespace}/${encodedAgentId}/~key/${encodePathSegment(segment)}`;
     }
   }
   return `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;

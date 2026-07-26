@@ -1,4 +1,4 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { sessionRouteNamespaceFromPath } from "../../app-route-paths.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -25,6 +25,25 @@ export function locationsMatch(left: RouteLocation, right: RouteLocation): boole
   return (
     left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
   );
+}
+
+export async function startModelSetupFirstRunRedirectAfterLocation(params: {
+  context: ApplicationContext<RouteId>;
+  enabled: boolean;
+  history: Pick<RouterHistory, "location" | "replace">;
+  initialLocationReady: Promise<RouteLocation>;
+}): Promise<() => void> {
+  const initialLocation = await params.initialLocationReady;
+  if (!locationsMatch(params.history.location(), initialLocation)) {
+    params.history.replace(initialLocation);
+  }
+  if (!params.enabled) {
+    return () => undefined;
+  }
+  return startModelSetupFirstRunRedirect({
+    context: params.context,
+    isStillDefaultLanding: () => locationsMatch(params.history.location(), initialLocation),
+  });
 }
 
 export function startModelSetupFirstRunRedirect(params: {

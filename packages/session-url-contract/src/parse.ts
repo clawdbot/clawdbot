@@ -95,24 +95,32 @@ export function parseControlUiSessionPath(
     if (!normalizedPath.startsWith(prefix)) {
       continue;
     }
-    const segments = normalizedPath.slice(prefix.length).split("/").map(decodePathSegment);
-    const rawAgentId = segments[0];
-    if (!rawAgentId || segments.some((segment) => segment === null)) {
+    const rawSegments = normalizedPath.slice(prefix.length).split("/");
+    const rawAgentId = decodePathSegment(rawSegments[0] ?? "");
+    if (!rawAgentId) {
       return null;
     }
     const agentId = normalizeAgentId(rawAgentId);
-    if (segments.length === 1) {
+    if (rawSegments.length === 1) {
       return { namespace, kind: "main", agentId };
     }
-    const restSegments = segments.slice(1) as string[];
-    const sessionKey = literalSessionKey(agentId, restSegments);
+    const forceLiteral = rawSegments[1] === "~key";
+    const restSegments = rawSegments.slice(forceLiteral ? 2 : 1).map(decodePathSegment);
+    if (restSegments.some((segment) => segment === null)) {
+      return null;
+    }
+    const literalRestSegments = restSegments as string[];
+    const sessionKey = literalSessionKey(agentId, literalRestSegments);
     if (!sessionKey) {
       return null;
     }
-    if (restSegments.length !== 1) {
+    if (forceLiteral) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
-    const segment = restSegments[0] ?? "";
+    if (literalRestSegments.length !== 1) {
+      return { namespace, kind: "literal", agentId, sessionKey };
+    }
+    const segment = literalRestSegments[0] ?? "";
     if (isReservedSessionRest(segment, mainKey)) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }

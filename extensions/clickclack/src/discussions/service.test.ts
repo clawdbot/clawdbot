@@ -40,7 +40,18 @@ const SESSION_URL_CONTRACT_CASES = [
     mainKey: undefined,
     expectedPath: "/chat/main/control-link",
   },
-  { sessionKey: "agent:main:12345678", agentId: "main", mainKey: undefined, expectedPath: null },
+  {
+    sessionKey: "agent:main:12345678",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/~key/12345678",
+  },
+  {
+    sessionKey: "agent:main:release-deadbeef",
+    agentId: "main",
+    mainKey: undefined,
+    expectedPath: "/chat/main/~key/release-deadbeef",
+  },
   {
     sessionKey: "agent:main:telegram:12345",
     agentId: "main",

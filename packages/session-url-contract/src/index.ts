@@ -141,7 +141,7 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
       !isReservedSessionRest(segment, params.mainKey) &&
       controlUiShortIdFromSessionRef(segment)
     ) {
-      return null;
+      return `${namespace}/${encodedAgentId}/~key/${encodePathSegment(segment)}`;
     }
   }
   return `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;

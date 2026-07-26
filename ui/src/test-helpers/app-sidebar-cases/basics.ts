@@ -377,6 +377,25 @@ describe("AppSidebar brand actions", () => {
 });
 
 describe("AppSidebar agent chip", () => {
+  it("opens an ambiguous one-segment literal session through its escaped path", async () => {
+    const sessionKey = "agent:main:release-deadbeef";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar
+      .querySelector<HTMLAnchorElement>(
+        `[data-session-key="${sessionKey}"] .sidebar-recent-session__link`,
+      )
+      ?.click();
+
+    expect(onNavigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/~key/release-deadbeef",
+    });
+  });
+
   it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
     const taskKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
