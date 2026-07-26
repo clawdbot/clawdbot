@@ -101,19 +101,25 @@ function makeAccessResult(
     },
     ingress: {
       admission: allowed ? "dispatch" : "drop",
-      decision: allowed ? "allow" : "deny",
+      decision: allowed ? "allow" : "block",
       decisiveGateId: allowed ? "activation" : "sender",
-      reasonCode: allowed ? "activation_allowed" : "dm_policy_not_allowlisted",
+      reasonCode: allowed
+        ? "activation_allowed"
+        : isGroup
+          ? "group_policy_not_allowlisted"
+          : "dm_policy_not_allowlisted",
       graph: { gates: [] },
     },
     senderAccess: {
       allowed,
-      decision: allowed ? "allow" : "deny",
+      decision: allowed ? "allow" : "block",
       reasonCode: allowed
         ? isGroup
           ? "group_policy_allowed"
           : "dm_policy_open"
-        : "dm_policy_not_allowlisted",
+        : isGroup
+          ? "group_policy_not_allowlisted"
+          : "dm_policy_not_allowlisted",
       effectiveAllowFrom: [],
       effectiveGroupAllowFrom: [],
       providerMissingFallbackApplied: false,
