@@ -491,7 +491,7 @@ describe("diagnostics.otel.captureContent", () => {
     expect(invalid.success).toBe(false);
   });
 
-  it("accepts boolean and granular OTEL content capture config", () => {
+  it("accepts boolean OTEL content capture config", () => {
     for (const captureContent of [true, false]) {
       const result = OpenClawSchema.safeParse({
         diagnostics: {
