@@ -236,12 +236,17 @@ export async function setupChannels(
     await prompter.note(statusLines.join("\n"), t("wizard.channels.statusTitle"));
   }
 
-  const shouldConfigure = options?.skipConfirm
-    ? true
-    : await prompter.confirm({
-        message: t("wizard.channels.setupConfirm"),
-        initialValue: true,
-      });
+  const targetedChannel =
+    options?.finishAfterInitialSelection && options.initialSelection?.length === 1
+      ? options.initialSelection[0]
+      : undefined;
+  const shouldConfigure =
+    options?.skipConfirm || targetedChannel
+      ? true
+      : await prompter.confirm({
+          message: t("wizard.channels.setupConfirm"),
+          initialValue: true,
+        });
   if (!shouldConfigure) {
     return cfg;
   }
@@ -268,10 +273,6 @@ export async function setupChannels(
 
   const selection: ChannelChoice[] = [];
   let finishSetupRequested = false;
-  const targetedChannel =
-    options?.finishAfterInitialSelection && options.initialSelection?.length === 1
-      ? options.initialSelection[0]
-      : undefined;
   const addSelection = (channel: ChannelChoice) => {
     if (!selection.includes(channel)) {
       selection.push(channel);
@@ -898,9 +899,13 @@ export async function setupChannels(
     return "done";
   };
 
-  if (targetedChannel) {
-    await handleChannelChoice(targetedChannel);
-  } else if (options?.quickstartDefaults) {
+  // Targeted setup finishes after success, but Back must re-enter the shared
+  // picker instead of ending the wizard.
+  const targetedSetupReturnedToPicker = targetedChannel
+    ? (await handleChannelChoice(targetedChannel)) === "retry_selection"
+    : false;
+
+  if (!targetedChannel && options?.quickstartDefaults) {
     const skipValue = "__skip__" as const;
     const quickstartInitialValue = options?.initialSelection?.[0] ?? skipValue;
     while (true) {
@@ -931,7 +936,7 @@ export async function setupChannels(
         break;
       }
     }
-  } else {
+  } else if (!targetedChannel || targetedSetupReturnedToPicker) {
     const doneValue = "__done__" as const;
     const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
     while (true) {
